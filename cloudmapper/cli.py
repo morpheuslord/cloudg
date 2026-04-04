@@ -18,24 +18,39 @@ from cloudmapper import __version__
 
 console = Console()
 
+# Global config reference (set by CLI group)
+_config = None
 
-def setup_logging(verbose: bool = False) -> None:
-    """Configure structured logging with Rich."""
+
+def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
+    """Configure structured logging with Rich + optional file output."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, console=console)],
-    )
+    handlers: list[logging.Handler] = [
+        RichHandler(rich_tracebacks=True, console=console)
+    ]
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        handlers.append(file_handler)
+    logging.basicConfig(level=level, format="%(message)s", datefmt="[%X]", handlers=handlers)
 
 
 @click.group()
 @click.version_option(version=__version__, prog_name="cloudmapper")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
-def cli(verbose: bool) -> None:
+@click.option("-c", "--config", "config_path", default=None, help="Path to config.yaml")
+@click.option("--log-file", default=None, help="Path to log file")
+def cli(verbose: bool, config_path: str | None, log_file: str | None) -> None:
     """☁️  CloudMapper — Cloud Infrastructure Mapping & Security Intelligence Agent."""
-    setup_logging(verbose)
+    global _config
+    from cloudmapper.config import load_config
+
+    _config = load_config(config_path)
+    effective_verbose = verbose or _config.verbose
+    effective_log = log_file or _config.log_file
+    setup_logging(effective_verbose, effective_log)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -331,55 +346,80 @@ def run(
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    from cloudmapper.config import CloudMapperConfig
     from cloudmapper.credentials import CredentialResolver
     from cloudmapper.graph.builder import GraphBuilder
     from cloudmapper.graph.reachability import ReachabilityAnalyzer
     from cloudmapper.normaliser import FindingsNormaliser
+    from cloudmapper.registry import PluginRegistry
     from cloudmapper.renderers.html_report import HTMLReportGenerator
     from cloudmapper.renderers.json_export import JSONExporter
     from cloudmapper.renderers.svg import SVGRenderer
     from cloudmapper.scanners.iam_linter import IAMLinter
     from cloudmapper.schema.models import ScanResult
 
+    # Use global config if loaded, else defaults
+    cfg: CloudMapperConfig = _config or CloudMapperConfig(provider=provider)
+    registry = PluginRegistry()
     resolver = CredentialResolver()
+    coverage_records = []
 
-    # Phase 1: Collect
+    # Phase 1: Collect (multi-account/multi-region when config available)
     console.print("\n[bold]Phase 1: Asset Collection[/]")
 
-    async def _collect():
-        if provider == "aws":
-            from cloudmapper.collectors.aws import AsyncAWSCollector
+    use_multi = (
+        (provider == "aws" and (len(cfg.aws.regions) > 1 or cfg.aws.accounts))
+        or (provider == "azure" and len(cfg.azure.subscription_ids) > 1)
+        or (provider == "gcp" and len(cfg.gcp.project_ids) > 1)
+    )
 
-            creds = resolver.resolve_aws(profile=profile, region=region)
-            collector = AsyncAWSCollector(
-                session=creds.session, region=creds.region, account_id=creds.account_id
-            )
-        elif provider == "azure":
-            from cloudmapper.collectors.azure import AzureCollector
+    if use_multi:
+        from cloudmapper.collectors.multi import MultiAccountCollector
 
-            creds = resolver.resolve_azure(subscription_id=subscription_id)
-            collector = AzureCollector(
-                credential=creds.credential,
-                subscription_id=creds.subscription_id,
-            )
-        elif provider == "gcp":
-            from cloudmapper.collectors.gcp import GCPCollector
+        console.print("  [dim]Multi-account/multi-region mode[/]")
+        multi_collector = MultiAccountCollector(cfg)
 
-            creds = resolver.resolve_gcp(project_id=project_id)
-            collector = GCPCollector(
-                project_id=creds.project_id, credentials=creds.credentials
-            )
-        else:
-            raise click.BadParameter(f"Unknown provider: {provider}")
+        try:
+            assets, edges, coverage_records = asyncio.run(multi_collector.collect_all())
+            console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
+        except Exception as exc:
+            console.print(f"  [red]✗ Collection failed: {exc}[/]")
+            assets, edges = [], []
+    else:
+        async def _collect():
+            if provider == "aws":
+                from cloudmapper.collectors.aws import AsyncAWSCollector
 
-        return await collector.run()
+                creds = resolver.resolve_aws(profile=profile, region=region)
+                collector = AsyncAWSCollector(
+                    session=creds.session, region=creds.region, account_id=creds.account_id
+                )
+            elif provider == "azure":
+                from cloudmapper.collectors.azure import AzureCollector
 
-    try:
-        assets, edges = asyncio.run(_collect())
-        console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
-    except Exception as exc:
-        console.print(f"  [red]✗ Collection failed: {exc}[/]")
-        assets, edges = [], []
+                creds = resolver.resolve_azure(subscription_id=subscription_id)
+                collector = AzureCollector(
+                    credential=creds.credential,
+                    subscription_id=creds.subscription_id,
+                )
+            elif provider == "gcp":
+                from cloudmapper.collectors.gcp import GCPCollector
+
+                creds = resolver.resolve_gcp(project_id=project_id)
+                collector = GCPCollector(
+                    project_id=creds.project_id, credentials=creds.credentials
+                )
+            else:
+                raise click.BadParameter(f"Unknown provider: {provider}")
+
+            return await collector.run()
+
+        try:
+            assets, edges = asyncio.run(_collect())
+            console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
+        except Exception as exc:
+            console.print(f"  [red]✗ Collection failed: {exc}[/]")
+            assets, edges = [], []
 
     # Phase 2: Graph Analysis
     console.print("\n[bold]Phase 2: Graph Analysis[/]")
@@ -387,10 +427,27 @@ def run(
     graph = graph_builder.build(assets, edges)
     graph_json = graph_builder.to_d3_json()
 
+    # Persist graph as GraphML
+    graphml_path = output_dir / "topology.graphml"
+    graph_builder.save_graphml(graphml_path)
+    console.print(f"  [green]✓ GraphML: {graphml_path}[/]")
+
+    # Cytoscape export
+    cytoscape_path = output_dir / "topology-cytoscape.json"
+    with open(cytoscape_path, "w") as f:
+        json.dump(graph_builder.to_cytoscape_json(), f, indent=2, default=str)
+    console.print(f"  [green]✓ Cytoscape: {cytoscape_path}[/]")
+
     analyzer = ReachabilityAnalyzer(graph)
     reachability_findings = analyzer.generate_findings()
     console.print(f"  [green]✓ Graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges[/]")
     console.print(f"  [green]✓ Reachability findings: {len(reachability_findings)}[/]")
+
+    # Attack paths
+    if cfg.graph.compute_attack_paths:
+        lateral_paths = graph_builder.find_lateral_movement_paths()
+        if lateral_paths:
+            console.print(f"  [yellow]⚠ {len(lateral_paths)} lateral movement paths detected[/]")
 
     # Phase 3: Security Scanning
     console.print("\n[bold]Phase 3: Security Scanning[/]")
@@ -430,9 +487,9 @@ def run(
     iam_findings = iam_linter.analyze_policies(assets)
     console.print(f"    [green]{len(iam_findings)} findings[/]")
 
-    # Phase 4: Normalise
+    # Phase 4: Normalise (with external rulesets)
     console.print("\n[bold]Phase 4: Normalisation[/]")
-    normaliser = FindingsNormaliser()
+    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir)
     scan_result = normaliser.normalise(
         reachability_findings, scanner_findings, iam_findings, assets=assets
     )
@@ -467,6 +524,25 @@ def run(
         table.add_row(sev, f"[{color}]{count}[/]")
     table.add_row("Frameworks", ", ".join(summary["compliance_frameworks"]))
     console.print(table)
+
+    # Coverage summary
+    if coverage_records:
+        cov_table = Table(title="📊 Collection Coverage")
+        cov_table.add_column("Region", style="cyan")
+        cov_table.add_column("Account", style="dim")
+        cov_table.add_column("Coverage", style="bold")
+        cov_table.add_column("Failures", style="red")
+        for cov in coverage_records:
+            summary_data = cov.to_summary()
+            failures = ", ".join(f["service"] for f in summary_data["failures"]) or "—"
+            cov_table.add_row(
+                summary_data["region"] or "—",
+                summary_data["account_id"] or "—",
+                f"{summary_data['coverage_pct']}%",
+                failures,
+            )
+        console.print(cov_table)
+
     console.print(f"\n[bold green]✓ All reports saved to {output_dir}[/]")
 
 

@@ -41,17 +41,50 @@ A Python-based pipeline orchestrator that glues proven security tools (Prowler, 
 
 ---
 
-### Credential Resolution
+### Credential Resolution & Reliability
 
 #### [NEW] [credentials.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/credentials.py)
 - `CredentialResolver` class with `resolve_aws()`, `resolve_azure()`, `resolve_gcp()`
-- AWS: uses `boto3.Session` with profile/env var support
+
+#### [NEW] [config.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/config.py)
+- `CloudMapperConfig` — root Pydantic model with nested AWS/Azure/GCP/Scanners/Graph/Report/Rulesets configs
+- `load_config()` — loads from YAML with validation
+
+#### [NEW] [config.yaml](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/config.yaml)
+- Full config template with all options documented
+
+#### [NEW] [retry.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/retry.py)
+- `@with_retry` async decorator with exponential backoff, full jitter, AWS throttle code detection
+
+#### [NEW] [coverage.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/coverage.py)
+- `CollectionCoverage` — per-service success/failure/partial tracking with timing
+
+#### [NEW] [registry.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/registry.py)
+- `PluginRegistry` — discovers collectors/scanners via `importlib.metadata.entry_points()` with built-in fallback
+
+--- AWS: uses `boto3.Session` with profile/env var support
 - Azure: uses `DefaultAzureCredential` from `azure-identity`
 - GCP: uses Application Default Credentials via `google.auth.default()`
 
 ---
 
 ### Collectors
+
+#### [NEW] [base.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/collectors/base.py)
+- `BaseCollector` ABC with `async collect() -> list[CloudAsset]` and `async collect_edges() -> list[NetworkEdge]`
+
+#### [NEW] [aws.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/collectors/aws.py)
+- `AsyncAWSCollector(BaseCollector)` using `aioboto3` with `AioConfig(retries={"mode": "adaptive", "max_attempts": 10})`
+- Collects 15 services: EC2, S3, RDS, VPCs, Subnets, Security Groups, IAM Users/Roles, Lambda, ELBv2, **ECS, DynamoDB, CloudFront, Secrets Manager, KMS**
+- Per-service `CollectionCoverage` tracking with timing and error reporting
+- Uses `asyncio.gather()` for concurrent multi-service calls
+
+#### [NEW] [multi.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/collectors/multi.py)
+- `MultiAccountCollector` — orchestrates collection across multiple accounts/regions
+- AWS: STS `AssumeRole` into target accounts
+- Azure: iterates subscription IDs
+- GCP: iterates project IDs
+- `asyncio.Semaphore` for concurrent API throttling
 
 #### [NEW] [base.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/collectors/base.py)
 - `BaseCollector` ABC with `async collect() -> list[CloudAsset]` and `async collect_edges() -> list[NetworkEdge]`
@@ -81,7 +114,12 @@ A Python-based pipeline orchestrator that glues proven security tools (Prowler, 
 - Nodes store full `CloudAsset` data as attributes
 - Edges store `NetworkEdge` metadata (ports, protocol, cidr)
 - Computes degree/betweenness centrality for blast-radius scoring
+- **GraphML persistence**: `save_graphml()` / `load_graphml()` for offline analysis
+- **Cytoscape export**: `to_cytoscape_json()` for Cytoscape.js visualisation
+- **Attack paths**: `find_attack_paths(source, target)` using `nx.all_simple_paths`
+- **Lateral movement**: `find_lateral_movement_paths()` discovers IAM trust edge traversals
 - `to_d3_json()` — exports `{nodes: [...], links: [...]}` for D3.js
+- Large graph warnings at >10k nodes
 
 #### [NEW] [reachability.py](file:///run/media/morpheuslord/Personal_Files/Projects/cloudmapper/cloudmapper/graph/reachability.py)
 - `ReachabilityAnalyzer` — BFS from `0.0.0.0/0` entry points

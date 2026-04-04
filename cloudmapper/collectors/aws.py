@@ -1,12 +1,14 @@
-"""Async AWS resource collector using aioboto3."""
+"""Async AWS resource collector using aioboto3 with adaptive retries."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from cloudmapper.collectors.base import BaseCollector
+from cloudmapper.coverage import CollectionCoverage, ServiceStatus
 from cloudmapper.schema.models import (
     AssetType,
     CloudAsset,
@@ -18,11 +20,28 @@ from cloudmapper.schema.models import (
 logger = logging.getLogger(__name__)
 
 
+def _get_aio_config() -> Any:
+    """Return AioConfig with adaptive retries."""
+    try:
+        from aiobotocore.config import AioConfig
+        return AioConfig(
+            retries={"mode": "adaptive", "max_attempts": 10},
+            connect_timeout=10,
+            read_timeout=30,
+        )
+    except ImportError:
+        from botocore.config import Config
+        return Config(
+            retries={"mode": "adaptive", "max_attempts": 10},
+        )
+
+
 class AsyncAWSCollector(BaseCollector):
     """Collects AWS resources asynchronously using aioboto3.
 
     Enumerates: EC2, S3, RDS, VPC, Subnets, Security Groups,
-    IAM Users/Roles/Policies, Lambda, ELBv2, EBS, NAT/Internet Gateways.
+    IAM Users/Roles/Policies, Lambda, ELBv2, ECS, DynamoDB,
+    CloudFront, Secrets Manager, KMS.
     """
 
     def __init__(
@@ -35,6 +54,8 @@ class AsyncAWSCollector(BaseCollector):
         self._region = region
         self._account_id = account_id
         self._aioboto3_session: Any = None
+        self._aio_config = _get_aio_config()
+        self.coverage = CollectionCoverage(provider="aws", region=region, account_id=account_id)
 
     def _get_aio_session(self) -> Any:
         """Lazy-init aioboto3 session."""
@@ -398,6 +419,204 @@ class AsyncAWSCollector(BaseCollector):
                     )
         except Exception as exc:
             logger.error("Failed to collect ELBv2 load balancers: %s", exc)
+            self.coverage.record("elbv2", ServiceStatus.FAILED, error=str(exc))
+        return assets
+
+    # ------------------------------------------------------------------
+    # Expanded service collectors (ECS, DynamoDB, CloudFront, Secrets Manager, KMS)
+    # ------------------------------------------------------------------
+
+    async def _collect_ecs(self) -> list[CloudAsset]:
+        """Collect ECS clusters and services."""
+        assets: list[CloudAsset] = []
+        session = self._get_aio_session()
+        start = time.time()
+        try:
+            async with session.client("ecs", region_name=self._region, config=self._aio_config) as ecs:
+                clusters_resp = await ecs.list_clusters()
+                cluster_arns = clusters_resp.get("clusterArns", [])
+                if cluster_arns:
+                    desc = await ecs.describe_clusters(clusters=cluster_arns)
+                    for cluster in desc.get("clusters", []):
+                        assets.append(
+                            CloudAsset(
+                                arn=cluster.get("clusterArn", ""),
+                                name=cluster.get("clusterName", ""),
+                                asset_type=AssetType.ECS_CLUSTER,
+                                provider=CloudProvider.AWS,
+                                region=self._region,
+                                account_id=self._account_id,
+                                metadata={
+                                    "status": cluster.get("status"),
+                                    "running_tasks": cluster.get("runningTasksCount", 0),
+                                    "active_services": cluster.get("activeServicesCount", 0),
+                                    "capacity_providers": cluster.get("capacityProviders", []),
+                                },
+                                raw_data=cluster,
+                            )
+                        )
+            self.coverage.record("ecs", ServiceStatus.SUCCESS, asset_count=len(assets),
+                                 duration_ms=int((time.time() - start) * 1000))
+        except Exception as exc:
+            logger.error("Failed to collect ECS clusters: %s", exc)
+            self.coverage.record("ecs", ServiceStatus.FAILED, error=str(exc))
+        return assets
+
+    async def _collect_dynamodb(self) -> list[CloudAsset]:
+        """Collect DynamoDB tables."""
+        assets: list[CloudAsset] = []
+        session = self._get_aio_session()
+        start = time.time()
+        try:
+            async with session.client("dynamodb", region_name=self._region, config=self._aio_config) as ddb:
+                paginator = ddb.get_paginator("list_tables")
+                async for page in paginator.paginate():
+                    for table_name in page.get("TableNames", []):
+                        try:
+                            desc = await ddb.describe_table(TableName=table_name)
+                            table = desc.get("Table", {})
+                            assets.append(
+                                CloudAsset(
+                                    arn=table.get("TableArn", ""),
+                                    name=table_name,
+                                    asset_type=AssetType.DYNAMODB_TABLE,
+                                    provider=CloudProvider.AWS,
+                                    region=self._region,
+                                    account_id=self._account_id,
+                                    metadata={
+                                        "status": table.get("TableStatus"),
+                                        "item_count": table.get("ItemCount", 0),
+                                        "size_bytes": table.get("TableSizeBytes", 0),
+                                        "billing_mode": table.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED"),
+                                        "encryption": table.get("SSEDescription", {}).get("Status", "DISABLED"),
+                                    },
+                                    raw_data=table,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning("Failed to describe DynamoDB table %s: %s", table_name, exc)
+            self.coverage.record("dynamodb", ServiceStatus.SUCCESS, asset_count=len(assets),
+                                 duration_ms=int((time.time() - start) * 1000))
+        except Exception as exc:
+            logger.error("Failed to collect DynamoDB tables: %s", exc)
+            self.coverage.record("dynamodb", ServiceStatus.FAILED, error=str(exc))
+        return assets
+
+    async def _collect_cloudfront(self) -> list[CloudAsset]:
+        """Collect CloudFront distributions."""
+        assets: list[CloudAsset] = []
+        session = self._get_aio_session()
+        start = time.time()
+        try:
+            async with session.client("cloudfront", region_name="us-east-1", config=self._aio_config) as cf:
+                paginator = cf.get_paginator("list_distributions")
+                async for page in paginator.paginate():
+                    dist_list = page.get("DistributionList", {})
+                    for dist in dist_list.get("Items", []):
+                        assets.append(
+                            CloudAsset(
+                                arn=dist.get("ARN", ""),
+                                name=dist.get("DomainName", dist.get("Id", "")),
+                                asset_type=AssetType.CLOUDFRONT,
+                                provider=CloudProvider.AWS,
+                                region="global",
+                                account_id=self._account_id,
+                                is_internet_exposed=True,
+                                metadata={
+                                    "status": dist.get("Status"),
+                                    "domain_name": dist.get("DomainName"),
+                                    "origins": [o.get("DomainName") for o in dist.get("Origins", {}).get("Items", [])],
+                                    "web_acl_id": dist.get("WebACLId", ""),
+                                    "viewer_protocol_policy": dist.get("DefaultCacheBehavior", {}).get("ViewerProtocolPolicy"),
+                                },
+                                raw_data=dist,
+                            )
+                        )
+            self.coverage.record("cloudfront", ServiceStatus.SUCCESS, asset_count=len(assets),
+                                 duration_ms=int((time.time() - start) * 1000))
+        except Exception as exc:
+            logger.error("Failed to collect CloudFront distributions: %s", exc)
+            self.coverage.record("cloudfront", ServiceStatus.FAILED, error=str(exc))
+        return assets
+
+    async def _collect_secrets_manager(self) -> list[CloudAsset]:
+        """Collect Secrets Manager secrets (metadata only, not values)."""
+        assets: list[CloudAsset] = []
+        session = self._get_aio_session()
+        start = time.time()
+        try:
+            async with session.client("secretsmanager", region_name=self._region, config=self._aio_config) as sm:
+                paginator = sm.get_paginator("list_secrets")
+                async for page in paginator.paginate():
+                    for secret in page.get("SecretList", []):
+                        tags = {t["Key"]: t["Value"] for t in secret.get("Tags", [])}
+                        assets.append(
+                            CloudAsset(
+                                arn=secret.get("ARN", ""),
+                                name=secret.get("Name", ""),
+                                asset_type=AssetType.SECRET,
+                                provider=CloudProvider.AWS,
+                                region=self._region,
+                                account_id=self._account_id,
+                                tags=tags,
+                                metadata={
+                                    "description": secret.get("Description", ""),
+                                    "rotation_enabled": secret.get("RotationEnabled", False),
+                                    "last_accessed": str(secret.get("LastAccessedDate", "")),
+                                    "last_rotated": str(secret.get("LastRotatedDate", "")),
+                                    "kms_key_id": secret.get("KmsKeyId", ""),
+                                },
+                                raw_data=secret,
+                            )
+                        )
+            self.coverage.record("secretsmanager", ServiceStatus.SUCCESS, asset_count=len(assets),
+                                 duration_ms=int((time.time() - start) * 1000))
+        except Exception as exc:
+            logger.error("Failed to collect Secrets Manager secrets: %s", exc)
+            self.coverage.record("secretsmanager", ServiceStatus.FAILED, error=str(exc))
+        return assets
+
+    async def _collect_kms(self) -> list[CloudAsset]:
+        """Collect KMS keys."""
+        assets: list[CloudAsset] = []
+        session = self._get_aio_session()
+        start = time.time()
+        try:
+            async with session.client("kms", region_name=self._region, config=self._aio_config) as kms:
+                paginator = kms.get_paginator("list_keys")
+                async for page in paginator.paginate():
+                    for key_entry in page.get("Keys", []):
+                        try:
+                            key_desc = await kms.describe_key(KeyId=key_entry["KeyId"])
+                            key_meta = key_desc.get("KeyMetadata", {})
+                            # Skip AWS-managed keys
+                            if key_meta.get("KeyManager") == "AWS":
+                                continue
+                            assets.append(
+                                CloudAsset(
+                                    arn=key_meta.get("Arn", ""),
+                                    name=key_meta.get("KeyId", ""),
+                                    asset_type=AssetType.KMS_KEY,
+                                    provider=CloudProvider.AWS,
+                                    region=self._region,
+                                    account_id=self._account_id,
+                                    metadata={
+                                        "key_state": key_meta.get("KeyState"),
+                                        "key_usage": key_meta.get("KeyUsage"),
+                                        "key_manager": key_meta.get("KeyManager"),
+                                        "origin": key_meta.get("Origin"),
+                                        "rotation_enabled": key_meta.get("KeyRotationStatus", False),
+                                    },
+                                    raw_data=key_meta,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning("Failed to describe KMS key %s: %s", key_entry["KeyId"], exc)
+            self.coverage.record("kms", ServiceStatus.SUCCESS, asset_count=len(assets),
+                                 duration_ms=int((time.time() - start) * 1000))
+        except Exception as exc:
+            logger.error("Failed to collect KMS keys: %s", exc)
+            self.coverage.record("kms", ServiceStatus.FAILED, error=str(exc))
         return assets
 
     # ------------------------------------------------------------------
@@ -426,12 +645,14 @@ class AsyncAWSCollector(BaseCollector):
                         else str(from_port)
                     )
 
+                    # Cap port list to avoid OOM on wide ranges (e.g., 0-65535)
+                    port_count = min(to_port - from_port + 1, 100)
                     edges.append(
                         NetworkEdge(
                             source_id=cidr,
                             target_id=sg_id,
                             edge_type=EdgeType.SECURITY_GROUP_RULE,
-                            ports=list(range(from_port, min(to_port + 1, from_port + 100))),
+                            ports=list(range(from_port, from_port + port_count)),
                             port_range=port_range,
                             protocol="ALL" if protocol == "-1" else protocol.upper(),
                             cidr=cidr,
@@ -489,21 +710,46 @@ class AsyncAWSCollector(BaseCollector):
     # Main interface
     # ------------------------------------------------------------------
 
+    async def _run_service_collector(
+        self, name: str, coro: Any
+    ) -> list[CloudAsset]:
+        """Run a service collector with coverage tracking."""
+        start = time.time()
+        try:
+            result = await coro
+            duration_ms = int((time.time() - start) * 1000)
+            self.coverage.record(name, ServiceStatus.SUCCESS, asset_count=len(result), duration_ms=duration_ms)
+            return result
+        except Exception as exc:
+            duration_ms = int((time.time() - start) * 1000)
+            logger.error("Collector %s failed: %s", name, exc)
+            self.coverage.record(name, ServiceStatus.FAILED, error=str(exc), duration_ms=duration_ms)
+            return []
+
     async def collect(self) -> list[CloudAsset]:
         """Collect all AWS assets concurrently."""
         logger.info("Starting AWS asset collection in %s", self._region)
 
+        service_tasks = {
+            "ec2": self._collect_ec2(),
+            "s3": self._collect_s3(),
+            "rds": self._collect_rds(),
+            "vpc": self._collect_vpcs(),
+            "subnets": self._collect_subnets(),
+            "security_groups": self._collect_security_groups(),
+            "iam_users": self._collect_iam_users(),
+            "iam_roles": self._collect_iam_roles(),
+            "lambda": self._collect_lambda(),
+            "elbv2": self._collect_elbv2(),
+            "ecs": self._collect_ecs(),
+            "dynamodb": self._collect_dynamodb(),
+            "cloudfront": self._collect_cloudfront(),
+            "secretsmanager": self._collect_secrets_manager(),
+            "kms": self._collect_kms(),
+        }
+
         results = await asyncio.gather(
-            self._collect_ec2(),
-            self._collect_s3(),
-            self._collect_rds(),
-            self._collect_vpcs(),
-            self._collect_subnets(),
-            self._collect_security_groups(),
-            self._collect_iam_users(),
-            self._collect_iam_roles(),
-            self._collect_lambda(),
-            self._collect_elbv2(),
+            *(self._run_service_collector(name, coro) for name, coro in service_tasks.items()),
             return_exceptions=True,
         )
 
@@ -514,7 +760,11 @@ class AsyncAWSCollector(BaseCollector):
             elif isinstance(result, list):
                 all_assets.extend(result)
 
-        logger.info("Collected %d AWS assets", len(all_assets))
+        logger.info(
+            "Collected %d AWS assets (%s coverage)",
+            len(all_assets),
+            f"{self.coverage.coverage_pct}%",
+        )
         self._cached_assets = all_assets
         return all_assets
 
