@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "cloudmapper"
+version = "0.1.0"
+description = "Cloud Infrastructure Mapping & Security Intelligence Agent"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "CloudMapper Team"}
+]
+
+dependencies = [
+    # Core
+    "pydantic>=2.0,<3.0",
+    "click>=8.0",
+    "rich>=13.0",
+
+    # AWS
+    "aioboto3>=12.0",
+    "boto3>=1.28",
+
+    # Azure
+    "azure-identity>=1.14",
+    "azure-mgmt-compute>=30.0",
+    "azure-mgmt-network>=25.0",
+    "azure-mgmt-storage>=21.0",
+    "azure-mgmt-resource>=23.0",
+    "azure-mgmt-sql>=4.0",
+    "azure-mgmt-keyvault>=10.0",
+
+    # GCP
+    "google-cloud-asset>=3.20",
+    "google-auth>=2.22",
+
+    # Graph
+    "networkx>=3.1",
+
+    # IAM Analysis
+    "parliament>=1.6",
+
+    # Visualisation
+    "jinja2>=3.1",
+    "svgwrite>=1.4",
+
+    # Async
+    "aiofiles>=23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "moto[all]>=4.2",
+    "ruff>=0.1",
+]
+full = [
+    "diagrams>=0.23",
+    "weasyprint>=60.0",
+    "policy-sentry>=0.12",
+]
+
+[project.scripts]
+cloudmapper = "cloudmapper.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["cloudmapper*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

@@ -1,0 +1,134 @@
+# ─────────────────────────────────────────────────────────────────
+# NIST 800-53 Rev 5 — Control Family Mappings
+# Source: NIST SP 800-53 Rev 5 (public domain, U.S. government)
+#
+# FALLBACK rulesets — used only for findings that arrive
+# without scanner-native compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: NIST-800-53
+version: "Rev5"
+source: "NIST SP 800-53 Revision 5"
+
+controls:
+  # AC — Access Control
+  - id: "AC-2"
+    title: "Account Management"
+    patterns:
+      - "iam.*user"
+      - "account.*manage"
+      - "access.*control"
+      - "unused.*account"
+    severity: MEDIUM
+
+  - id: "AC-3"
+    title: "Access Enforcement"
+    patterns:
+      - "permission"
+      - "authorization"
+      - "access.*denied"
+    severity: HIGH
+
+  - id: "AC-6"
+    title: "Least Privilege"
+    patterns:
+      - "wildcard"
+      - "admin.*access"
+      - "overly.*permissive"
+      - "Action.*\\*"
+      - "Resource.*\\*"
+    severity: HIGH
+
+  # AU — Audit and Accountability
+  - id: "AU-2"
+    title: "Event Logging"
+    patterns:
+      - "logging"
+      - "cloudtrail"
+      - "audit.*trail"
+      - "flow.*log"
+    severity: MEDIUM
+
+  - id: "AU-6"
+    title: "Audit Record Review, Analysis, and Reporting"
+    patterns:
+      - "log.*review"
+      - "monitor"
+      - "alarm"
+    severity: MEDIUM
+
+  # CM — Configuration Management
+  - id: "CM-6"
+    title: "Configuration Settings"
+    patterns:
+      - "default.*config"
+      - "misconfigur"
+      - "hardening"
+    severity: MEDIUM
+
+  # IA — Identification and Authentication
+  - id: "IA-2"
+    title: "Identification and Authentication"
+    patterns:
+      - "mfa"
+      - "multi.factor"
+      - "authentication"
+      - "password.*policy"
+    severity: HIGH
+
+  - id: "IA-5"
+    title: "Authenticator Management"
+    patterns:
+      - "key.*rotat"
+      - "credential.*rotat"
+      - "password.*expir"
+    severity: MEDIUM
+
+  # SC — System and Communications Protection
+  - id: "SC-7"
+    title: "Boundary Protection"
+    patterns:
+      - "security.*group"
+      - "firewall"
+      - "network.*acl"
+      - "nacl"
+      - "internet.*exposed"
+      - "0\\.0\\.0\\.0"
+    severity: HIGH
+
+  - id: "SC-8"
+    title: "Transmission Confidentiality and Integrity"
+    patterns:
+      - "ssl"
+      - "tls"
+      - "https"
+      - "transit.*encrypt"
+    severity: MEDIUM
+
+  - id: "SC-28"
+    title: "Protection of Information at Rest"
+    patterns:
+      - "encrypt.*rest"
+      - "encrypt.*enabl"
+      - "storage.*encrypt"
+      - "kms"
+    severity: HIGH
+
+  # SI — System and Information Integrity
+  - id: "SI-2"
+    title: "Flaw Remediation"
+    patterns:
+      - "vulnerability"
+      - "cve"
+      - "patch"
+      - "update.*required"
+    severity: HIGH
+
+  - id: "SI-4"
+    title: "System Monitoring"
+    patterns:
+      - "guardduty"
+      - "security.*hub"
+      - "intrusion"
+      - "detect"
+    severity: MEDIUM

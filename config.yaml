@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────
+# CloudMapper Configuration File
+# ─────────────────────────────────────────────────────────────────
+# Copy to config.yaml and customise for your environment.
+
+provider: aws  # aws | azure | gcp
+
+# ── AWS ──
+aws:
+  regions:
+    - us-east-1
+    - eu-west-1
+  accounts: []           # Leave empty for single-account; add account IDs for multi-account
+  role_name: CloudMapperReadOnly  # IAM role to assume in target accounts
+  profile: null          # AWS CLI profile name (null = default)
+  max_retries: 10
+  retry_mode: adaptive   # legacy | standard | adaptive
+
+# ── Azure ──
+azure:
+  subscription_ids: []   # List of subscription IDs to scan
+  tenant_id: null
+
+# ── GCP ──
+gcp:
+  project_ids: []        # List of project IDs to scan
+  organization_id: null
+
+# ── Scanners ──
+scanners:
+  enabled:
+    - prowler
+    - checkov
+  prowler_extra_args: []
+  checkov_frameworks:
+    - terraform
+    - cloudformation
+  trivy_images: []
+  iac_directories: []
+  timeout_seconds: 3600
+
+# ── Graph Engine ──
+graph:
+  persist_graphml: true
+  max_nodes_warn: 10000
+  compute_attack_paths: true
+  export_cytoscape: false
+
+# ── Reports ──
+report:
+  formats:
+    - html
+    - json
+    - svg
+  inline_js: true        # Bundle JS inline (no CDN) for air-gapped environments
+  output_dir: ./reports
+
+# ── External Rulesets ──
+rulesets:
+  rules_dir: ./rules     # Directory containing YAML rulesets
+  load_external: true
+
+# ── General ──
+log_file: null            # null = console only; set path for file logging
+verbose: false
+concurrency_limit: 5      # Max concurrent API calls per provider

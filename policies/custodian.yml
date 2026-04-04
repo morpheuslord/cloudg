@@ -1,0 +1,131 @@
+# ─────────────────────────────────────────────────────────────────
+# Cloud Custodian Efficiency & Governance Policies
+# ─────────────────────────────────────────────────────────────────
+# Usage:
+#   pip install c7n
+#   custodian run --output-dir ./custodian-output policies/custodian.yml
+
+policies:
+
+  # ── Unattached EBS Volumes ──
+  - name: unattached-ebs-volumes
+    resource: ebs
+    description: "Find EBS volumes that are not attached to any instance"
+    filters:
+      - type: value
+        key: Attachments
+        value: empty
+    actions:
+      - type: notify
+        subject: "Unattached EBS volume detected"
+        violation_desc: "EBS volume is not attached to any instance and may be wasting costs."
+        action_desc: "Review and delete if no longer needed, or snapshot for backup."
+
+  # ── Idle Load Balancers ──
+  - name: idle-load-balancers
+    resource: app-elb
+    description: "Find ALBs with zero healthy targets"
+    filters:
+      - type: metrics
+        name: HealthyHostCount
+        statistics: Average
+        days: 7
+        value: 0
+        op: equal
+    actions:
+      - type: notify
+        subject: "Idle load balancer detected"
+        violation_desc: "ALB has had 0 healthy targets for 7+ days."
+        action_desc: "Review and remove if no longer serving traffic."
+
+  # ── Stopped EC2 Instances (30+ days) ──
+  - name: stopped-instances-30-days
+    resource: ec2
+    description: "Find EC2 instances stopped for 30+ days"
+    filters:
+      - type: instance-age
+        op: greater-than
+        days: 30
+      - type: value
+        key: State.Name
+        value: stopped
+    actions:
+      - type: notify
+        subject: "Long-stopped EC2 instance"
+        violation_desc: "EC2 instance has been stopped for 30+ days."
+        action_desc: "Terminate instance or create AMI backup and terminate."
+
+  # ── Unused Elastic IPs ──
+  - name: unused-elastic-ips
+    resource: network-addr
+    description: "Find Elastic IPs not associated with a running instance"
+    filters:
+      - type: value
+        key: AssociationId
+        value: absent
+    actions:
+      - type: notify
+        subject: "Unused Elastic IP"
+        violation_desc: "Elastic IP is not associated and incurs hourly charges."
+        action_desc: "Release the Elastic IP if no longer needed."
+
+  # ── Untagged Resources ──
+  - name: untagged-resources-ec2
+    resource: ec2
+    description: "Find EC2 instances missing required tags"
+    filters:
+      - or:
+          - "tag:Owner": absent
+          - "tag:Environment": absent
+          - "tag:CostCentre": absent
+    actions:
+      - type: notify
+        subject: "Untagged EC2 instance"
+        violation_desc: "EC2 instance is missing required tags (Owner, Environment, CostCentre)."
+        action_desc: "Add the required tags for cost tracking and governance."
+
+  - name: untagged-resources-rds
+    resource: rds
+    description: "Find RDS instances missing required tags"
+    filters:
+      - or:
+          - "tag:Owner": absent
+          - "tag:Environment": absent
+    actions:
+      - type: notify
+        subject: "Untagged RDS instance"
+        violation_desc: "RDS instance is missing required tags."
+        action_desc: "Add Owner and Environment tags."
+
+  - name: untagged-resources-s3
+    resource: s3
+    description: "Find S3 buckets missing required tags"
+    filters:
+      - or:
+          - "tag:Owner": absent
+          - "tag:Environment": absent
+    actions:
+      - type: notify
+        subject: "Untagged S3 bucket"
+        violation_desc: "S3 bucket is missing required tags."
+        action_desc: "Add Owner and Environment tags."
+
+  # ── Oversized Instances ──
+  - name: oversized-instances
+    resource: ec2
+    description: "Flag instances with <5% CPU over 14 days"
+    filters:
+      - type: metrics
+        name: CPUUtilization
+        statistics: Average
+        days: 14
+        value: 5
+        op: less-than
+      - type: value
+        key: State.Name
+        value: running
+    actions:
+      - type: notify
+        subject: "Oversized EC2 instance"
+        violation_desc: "Instance has <5% average CPU utilisation over 14 days."
+        action_desc: "Consider downsizing the instance type or migrating to a smaller instance."
