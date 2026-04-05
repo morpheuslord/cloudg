@@ -308,12 +308,15 @@ def report(input_file: str, output: str, fmt: str) -> None:
 @cli.command()
 @click.option(
     "-p", "--provider",
-    type=click.Choice(["aws", "azure", "gcp"], case_sensitive=False),
+    type=click.Choice(["aws", "azure", "gcp", "all"], case_sensitive=False),
+    multiple=True,
     required=True,
-    help="Cloud provider",
+    help="Cloud provider(s) to scan. Use multiple times or 'all' for simultaneous scanning.",
 )
-@click.option("--profile", default=None, help="AWS profile name")
-@click.option("--region", default="us-east-1", help="AWS region")
+@click.option("--profile", default=None, help="AWS profile name (fallback if no direct keys)")
+@click.option("--aws-key", default=None, help="AWS access key ID (direct credential)")
+@click.option("--aws-secret", default=None, help="AWS secret access key (direct credential)")
+@click.option("--region", default=None, help="AWS region (ignored if --regions is set)")
 @click.option("--subscription-id", default=None, help="Azure subscription ID")
 @click.option("--project-id", default=None, help="GCP project ID")
 @click.option("--iac-dir", default=None, help="IaC directory for Checkov")
@@ -328,18 +331,40 @@ def report(input_file: str, output: str, fmt: str) -> None:
     default="prowler,checkov",
     help="Scanners to run (comma-separated)",
 )
+@click.option("--ontology/--no-ontology", default=True, help="Build semantic ontology graph")
+@click.option("--rag-export/--no-rag-export", default=True, help="Generate RAG-ready chunks")
+@click.option("--terraform/--no-terraform", default=False, help="Generate Terraform .tf.json recreation files")
+@click.option(
+    "--regions",
+    "scan_regions",
+    default=None,
+    help="Regions to scan: 'all' for auto-discovery, or comma-separated list (e.g. 'us-east-1,eu-west-1')",
+)
 def run(
-    provider: str,
+    provider: tuple[str, ...],
     profile: str | None,
-    region: str,
+    aws_key: str | None,
+    aws_secret: str | None,
+    region: str | None,
     subscription_id: str | None,
     project_id: str | None,
     iac_dir: str | None,
     images: str | None,
     output: str,
     scanners: str,
+    ontology: bool,
+    rag_export: bool,
+    terraform: bool,
+    scan_regions: str | None,
 ) -> None:
-    """Run the full pipeline: collect → scan → normalise → render."""
+    """Run the full pipeline: collect → scan → normalise → render.
+
+    Supports multi-provider scanning:
+        cloudmapper run -p aws -p azure
+        cloudmapper run -p all
+        cloudmapper run -p aws --regions all
+        cloudmapper run -p aws --aws-key AKIAXX --aws-secret yyy
+    """
     console.print("[bold cyan]🚀 CloudMapper Full Pipeline[/]")
     console.print("=" * 50)
 
@@ -359,67 +384,64 @@ def run(
     from cloudmapper.schema.models import ScanResult
 
     # Use global config if loaded, else defaults
-    cfg: CloudMapperConfig = _config or CloudMapperConfig(provider=provider)
+    cfg: CloudMapperConfig = _config or CloudMapperConfig()
+
+    # Resolve providers from CLI flags
+    providers_list = list(provider)
+    if "all" in providers_list:
+        providers_list = ["aws", "azure", "gcp"]
+    cfg.providers = providers_list
+
+    # Resolve regions from CLI flag
+    if scan_regions:
+        if scan_regions.lower() == "all":
+            region_list = ["ALL"]
+        else:
+            region_list = [r.strip() for r in scan_regions.split(",")]
+        cfg.aws.regions = region_list
+        cfg.azure.regions = region_list
+        cfg.gcp.regions = region_list
+    elif region:
+        cfg.aws.regions = [region]
+
+    # Inject subscription/project IDs from CLI flags
+    if subscription_id:
+        cfg.azure.subscription_ids = [subscription_id]
+    if project_id:
+        cfg.gcp.project_ids = [project_id]
+    if profile:
+        cfg.aws.profile = profile
+    if aws_key:
+        cfg.aws.access_key_id = aws_key
+    if aws_secret:
+        cfg.aws.secret_access_key = aws_secret
+
     registry = PluginRegistry()
-    resolver = CredentialResolver()
     coverage_records = []
 
-    # Phase 1: Collect (multi-account/multi-region when config available)
+    console.print(f"\n[bold]Providers:[/] {', '.join(cfg.providers)}")
+    console.print(f"[bold]AWS regions:[/] {cfg.aws.regions}")
+    if "azure" in cfg.providers:
+        console.print(f"[bold]Azure regions:[/] {cfg.azure.regions}")
+    if "gcp" in cfg.providers:
+        console.print(f"[bold]GCP regions:[/] {cfg.gcp.regions}")
+
+    # Phase 1: Asset Collection (always uses multi-provider orchestrator)
     console.print("\n[bold]Phase 1: Asset Collection[/]")
 
-    use_multi = (
-        (provider == "aws" and (len(cfg.aws.regions) > 1 or cfg.aws.accounts))
-        or (provider == "azure" and len(cfg.azure.subscription_ids) > 1)
-        or (provider == "gcp" and len(cfg.gcp.project_ids) > 1)
-    )
+    from cloudmapper.collectors.multi import MultiAccountCollector
 
-    if use_multi:
-        from cloudmapper.collectors.multi import MultiAccountCollector
+    multi_collector = MultiAccountCollector(cfg)
 
-        console.print("  [dim]Multi-account/multi-region mode[/]")
-        multi_collector = MultiAccountCollector(cfg)
-
-        try:
-            assets, edges, coverage_records = asyncio.run(multi_collector.collect_all())
-            console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
-        except Exception as exc:
-            console.print(f"  [red]✗ Collection failed: {exc}[/]")
-            assets, edges = [], []
-    else:
-        async def _collect():
-            if provider == "aws":
-                from cloudmapper.collectors.aws import AsyncAWSCollector
-
-                creds = resolver.resolve_aws(profile=profile, region=region)
-                collector = AsyncAWSCollector(
-                    session=creds.session, region=creds.region, account_id=creds.account_id
-                )
-            elif provider == "azure":
-                from cloudmapper.collectors.azure import AzureCollector
-
-                creds = resolver.resolve_azure(subscription_id=subscription_id)
-                collector = AzureCollector(
-                    credential=creds.credential,
-                    subscription_id=creds.subscription_id,
-                )
-            elif provider == "gcp":
-                from cloudmapper.collectors.gcp import GCPCollector
-
-                creds = resolver.resolve_gcp(project_id=project_id)
-                collector = GCPCollector(
-                    project_id=creds.project_id, credentials=creds.credentials
-                )
-            else:
-                raise click.BadParameter(f"Unknown provider: {provider}")
-
-            return await collector.run()
-
-        try:
-            assets, edges = asyncio.run(_collect())
-            console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
-        except Exception as exc:
-            console.print(f"  [red]✗ Collection failed: {exc}[/]")
-            assets, edges = [], []
+    try:
+        assets, edges, coverage_records = asyncio.run(multi_collector.collect_all())
+        console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
+        if hasattr(multi_collector, '_resolved_regions'):
+            for prov, regs in multi_collector._resolved_regions.items():
+                console.print(f"    {prov}: {len(regs)} regions")
+    except Exception as exc:
+        console.print(f"  [red]✗ Collection failed: {exc}[/]")
+        assets, edges = [], []
 
     # Phase 2: Graph Analysis
     console.print("\n[bold]Phase 2: Graph Analysis[/]")
@@ -449,43 +471,144 @@ def run(
         if lateral_paths:
             console.print(f"  [yellow]⚠ {len(lateral_paths)} lateral movement paths detected[/]")
 
+    # Phase 2b: Semantic Ontology
+    if ontology and cfg.ontology.enabled:
+        console.print("\n[bold]Phase 2b: Semantic Ontology[/]")
+        try:
+            from cloudmapper.graph.ontology import CloudOntology
+
+            cloud_ontology = CloudOntology()
+            cloud_ontology.build(assets, edges)
+            stats = cloud_ontology.stats()
+            console.print(f"  [green]✓ Ontology: {stats['total_triples']} triples, "
+                          f"{stats['classes_used']} classes, {stats['individuals']} individuals[/]")
+
+            for fmt in cfg.ontology.export_formats:
+                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
+                ext = ext_map.get(fmt, "ttl")
+                onto_path = cloud_ontology.save(output_dir / f"ontology.{ext}", fmt=fmt)
+                console.print(f"  [green]✓ Ontology ({fmt}): {onto_path}[/]")
+
+            # Group summary
+            for group, count in stats['relation_group_counts'].items():
+                console.print(f"    {group}: {count} relations")
+        except Exception as exc:
+            console.print(f"  [red]✗ Ontology build failed: {exc}[/]")
+
+    # Phase 2c: RAG Export
+    if rag_export and cfg.rag.enabled:
+        console.print("\n[bold]Phase 2c: RAG Export[/]")
+        try:
+            from cloudmapper.graph.rag_export import RAGExporter
+
+            rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
+            rag_paths = rag.export_all(
+                assets, edges, graph,
+                findings=reachability_findings,
+                output_dir=output_dir,
+            )
+            console.print(f"  [green]✓ RAG chunks: {rag_paths['chunks']}[/]")
+            console.print(f"  [green]✓ RAG index: {rag_paths['index']}[/]")
+        except Exception as exc:
+            console.print(f"  [red]✗ RAG export failed: {exc}[/]")
+
+    # Phase 2d: Terraform Recreation
+    if terraform or cfg.terraform.enabled:
+        console.print("\n[bold]Phase 2d: Terraform Recreation[/]")
+        try:
+            from cloudmapper.renderers.terraform_export import TerraformExporter
+
+            tf_dir = cfg.terraform.output_dir or str(output_dir / "terraform")
+            tf_exporter = TerraformExporter(output_dir=tf_dir)
+            preview = tf_exporter.preview(assets)
+            console.print(f"  [dim]Preview: {preview['total_mapped']} resources mappable, "
+                          f"{preview['total_unmapped']} unmapped[/]")
+
+            tf_paths = tf_exporter.export(assets, edges)
+            console.print(f"  [green]✓ Provider: {tf_paths['provider']}[/]")
+            console.print(f"  [green]✓ Variables: {tf_paths['variables']}[/]")
+            console.print(f"  [green]✓ Main: {tf_paths['main']}[/]")
+            console.print(f"  [green]✓ Import: {tf_paths['import_commands']}[/]")
+        except Exception as exc:
+            console.print(f"  [red]✗ Terraform export failed: {exc}[/]")
+
+    import concurrent.futures
+    
     # Phase 3: Security Scanning
-    console.print("\n[bold]Phase 3: Security Scanning[/]")
+    console.print("\n[bold]Phase 3: Security Scanning[/bold] (Running in parallel)")
     scanner_list = [s.strip().lower() for s in scanners.split(",")]
     scanner_findings: list[Any] = []
-
-    if "prowler" in scanner_list:
+    
+    def run_prowler(prov: str) -> list[Any]:
         from cloudmapper.scanners.prowler import ProwlerScanner
-
-        console.print("  → Prowler...")
-        s = ProwlerScanner(provider=provider, profile=profile, output_dir=str(output_dir / "prowler"))
+        console.print(f"  → [cyan]Prowler ({prov})[/cyan] started...")
+        prowler_region = cfg.aws.regions[0] if cfg.aws.regions else None
+        s = ProwlerScanner(
+            provider=prov,
+            profile=profile,
+            output_dir=str(output_dir / "prowler" / prov),
+            aws_access_key_id=cfg.aws.access_key_id if prov == "aws" else None,
+            aws_secret_access_key=cfg.aws.secret_access_key if prov == "aws" else None,
+            aws_region=prowler_region if prov == "aws" else None,
+        )
         findings = s.run()
-        scanner_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+        console.print(f"  [green]✓ Prowler ({prov}):[/green] {len(findings)} findings")
+        return findings
 
-    if "checkov" in scanner_list and iac_dir:
+    def run_checkov() -> list[Any]:
         from cloudmapper.scanners.checkov import CheckovScanner
-
-        console.print("  → Checkov...")
+        console.print("  → [cyan]Checkov[/cyan] started...")
         s = CheckovScanner(target_dir=iac_dir)
         findings = s.run()
-        scanner_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+        console.print(f"  [green]✓ Checkov:[/green] {len(findings)} findings")
+        return findings
 
-    if "trivy" in scanner_list and images:
+    def run_trivy() -> list[Any]:
         from cloudmapper.scanners.trivy import TrivyScanner
-
-        console.print("  → Trivy...")
+        console.print("  → [cyan]Trivy[/cyan] started...")
         s = TrivyScanner()
         findings = s.scan_images([i.strip() for i in images.split(",")])
-        scanner_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+        console.print(f"  [green]✓ Trivy:[/green] {len(findings)} findings")
+        return findings
 
-    # IAM Linting
-    console.print("  → IAM Lint...")
-    iam_linter = IAMLinter()
-    iam_findings = iam_linter.analyze_policies(assets)
-    console.print(f"    [green]{len(iam_findings)} findings[/]")
+    def run_iam_linter() -> list[Any]:
+        from cloudmapper.scanners.iam_linter import IAMLinter
+        console.print("  → [cyan]IAM Lint[/cyan] started...")
+        iam_linter = IAMLinter()
+        findings = iam_linter.analyze_policies(assets)
+        console.print(f"  [green]✓ IAM Lint:[/green] {len(findings)} findings")
+        return findings
+
+    # Execute scanners concurrently
+    iam_findings = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_scanner = {}
+        
+        if "prowler" in scanner_list:
+            for prov in cfg.providers:
+                if prov in ["aws", "azure", "gcp"]:
+                    future_to_scanner[executor.submit(run_prowler, prov)] = f"Prowler ({prov})"
+                    
+        if "checkov" in scanner_list and iac_dir:
+            future_to_scanner[executor.submit(run_checkov)] = "Checkov"
+            
+        if "trivy" in scanner_list and images:
+            future_to_scanner[executor.submit(run_trivy)] = "Trivy"
+            
+        # IAM Linting is internal and doesn't map directly to a "scanner_list" name, 
+        # but it analyzes assets so let's always run it in parallel if we have assets
+        future_to_scanner[executor.submit(run_iam_linter)] = "IAM Linter"
+
+        for future in concurrent.futures.as_completed(future_to_scanner):
+            scanner_name = future_to_scanner[future]
+            try:
+                findings = future.result()
+                if scanner_name == "IAM Linter":
+                    iam_findings.extend(findings)
+                else:
+                    scanner_findings.extend(findings)
+            except Exception as exc:
+                console.print(f"  [red]✗ {scanner_name} failed:[/red] {exc}")
 
     # Phase 4: Normalise (with external rulesets)
     console.print("\n[bold]Phase 4: Normalisation[/]")
@@ -507,7 +630,7 @@ def run(
     svg_path = svg_renderer.render(assets, edges)
     console.print(f"  [green]✓ SVG: {svg_path}[/]")
 
-    html_gen = HTMLReportGenerator(output_dir=str(output_dir))
+    html_gen = HTMLReportGenerator(template_dir="./templates", output_dir=str(output_dir))
     html_path = html_gen.generate(scan_result, graph_json=graph_json)
     console.print(f"  [green]✓ HTML: {html_path}[/]")
 

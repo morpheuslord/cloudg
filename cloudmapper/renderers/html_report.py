@@ -13,8 +13,21 @@ from cloudmapper.schema.models import ScanResult
 
 logger = logging.getLogger(__name__)
 
-# Fallback template directory
-_TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
+# Fallback template directory — try multiple paths for Docker compatibility
+_TEMPLATE_DIR_CANDIDATES = [
+    Path(__file__).parent.parent.parent / "templates",  # dev: cloudmapper/../templates
+    Path("/app/templates"),                              # Docker runtime
+    Path("./templates"),                                 # CWD fallback
+]
+
+
+def _resolve_template_dir() -> Path:
+    """Find the first template directory that contains report.html.j2."""
+    for candidate in _TEMPLATE_DIR_CANDIDATES:
+        if (candidate / "report.html.j2").exists():
+            return candidate
+    # Fall back to first candidate (will trigger fallback report)
+    return _TEMPLATE_DIR_CANDIDATES[0]
 
 
 class HTMLReportGenerator:
@@ -33,7 +46,7 @@ class HTMLReportGenerator:
         template_dir: str | None = None,
         output_dir: str = ".",
     ) -> None:
-        self._template_dir = Path(template_dir) if template_dir else _TEMPLATE_DIR
+        self._template_dir = Path(template_dir) if template_dir else _resolve_template_dir()
         self._output_dir = Path(output_dir)
 
     def generate(

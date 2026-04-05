@@ -1,0 +1,65 @@
+# ── Python ──
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ── Virtual Environments ──
+.venv/
+venv/
+env/
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ── Testing ──
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ── Poetry ──
+poetry.lock
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Reports (generated output) ──
+reports/
+*.graphml
+
+# ── Terraform output ──
+*.tf.json
+.terraform/
+terraform.tfstate*
+
+# ── Secrets (NEVER commit) ──
+.env
+.env.*
+config.yaml
+!config.yaml.example
+
+# ── Ontology/RAG output ──
+*.ttl
+*.jsonld
+*.nt
+rag_chunks/

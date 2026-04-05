@@ -58,14 +58,33 @@ class AsyncAWSCollector(BaseCollector):
         self.coverage = CollectionCoverage(provider="aws", region=region, account_id=account_id)
 
     def _get_aio_session(self) -> Any:
-        """Lazy-init aioboto3 session."""
+        """Lazy-init aioboto3 session, propagating credentials from the boto3 session.
+
+        Credential priority:
+        1. Direct credentials extracted from the boto3 session (access key / secret)
+        2. Profile name from the boto3 session
+        3. Default credential chain (env vars, instance metadata, etc.)
+        """
         if self._aioboto3_session is None:
             import aioboto3
 
-            self._aioboto3_session = aioboto3.Session(
-                region_name=self._region,
-                profile_name=self._boto3_session.profile_name,
-            )
+            session_kwargs: dict[str, str | None] = {
+                "region_name": self._region,
+            }
+
+            # Extract credentials from the boto3 session
+            creds = self._boto3_session.get_credentials()
+            if creds is not None:
+                resolved = creds.get_frozen_credentials()
+                session_kwargs["aws_access_key_id"] = resolved.access_key
+                session_kwargs["aws_secret_access_key"] = resolved.secret_key
+                if resolved.token:
+                    session_kwargs["aws_session_token"] = resolved.token
+            elif self._boto3_session.profile_name:
+                # Fallback to profile if no direct credentials
+                session_kwargs["profile_name"] = self._boto3_session.profile_name
+
+            self._aioboto3_session = aioboto3.Session(**session_kwargs)
         return self._aioboto3_session
 
     # ------------------------------------------------------------------

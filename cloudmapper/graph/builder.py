@@ -146,7 +146,16 @@ class GraphBuilder:
         """
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        nx.write_graphml(self._graph, str(output))
+
+        # Patch numpy 2.0 compatibility (np.float_ removed)
+        try:
+            import numpy as np
+            if not hasattr(np, 'float_'):
+                np.float_ = np.float64  # type: ignore[attr-defined]
+        except ImportError:
+            pass
+
+        nx.write_graphml_xml(self._graph, str(output))
         logger.info("Saved graph to %s", output)
         return output
 

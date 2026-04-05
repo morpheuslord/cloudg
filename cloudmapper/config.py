@@ -16,8 +16,11 @@ class AWSConfig(BaseModel):
 
     regions: list[str] = Field(default=["us-east-1"])
     accounts: list[str] = Field(default_factory=list, description="Account IDs for multi-account scanning")
-    role_name: str = Field(default="CloudMapperReadOnly", description="IAM role to assume in target accounts")
-    profile: str | None = None
+    access_key_id: str | None = Field(default=None, description="AWS access key ID (direct credential)")
+    secret_access_key: str | None = Field(default=None, description="AWS secret access key (direct credential)")
+    session_token: str | None = Field(default=None, description="AWS session token (for temporary credentials)")
+    profile: str | None = Field(default=None, description="AWS CLI profile name (fallback if no direct keys)")
+    role_name: str | None = Field(default=None, description="IAM role to assume in target accounts (optional, for cross-account)")
     max_retries: int = Field(default=10, ge=1, le=30)
     retry_mode: str = Field(default="adaptive", pattern="^(legacy|standard|adaptive)$")
 
@@ -27,6 +30,10 @@ class AzureConfig(BaseModel):
 
     subscription_ids: list[str] = Field(default_factory=list)
     tenant_id: str | None = None
+    regions: list[str] = Field(
+        default=["ALL"],
+        description="Azure locations to scan. Use ['ALL'] for auto-discovery.",
+    )
 
 
 class GCPConfig(BaseModel):
@@ -34,6 +41,10 @@ class GCPConfig(BaseModel):
 
     project_ids: list[str] = Field(default_factory=list)
     organization_id: str | None = None
+    regions: list[str] = Field(
+        default=["ALL"],
+        description="GCP regions to scan. Use ['ALL'] for auto-discovery.",
+    )
 
 
 class ScannerConfig(BaseModel):
@@ -56,6 +67,33 @@ class GraphConfig(BaseModel):
     export_cytoscape: bool = Field(default=False)
 
 
+class OntologyConfig(BaseModel):
+    """Ontology engine configuration."""
+
+    enabled: bool = Field(default=True)
+    export_formats: list[str] = Field(default=["turtle", "json-ld"])
+    include_raw_metadata: bool = Field(default=False)
+
+
+class RAGConfig(BaseModel):
+    """RAG export configuration."""
+
+    enabled: bool = Field(default=True)
+    chunk_strategy: str = Field(
+        default="hybrid",
+        pattern="^(entity|community|relation_group|hybrid)$",
+        description="Chunking strategy: entity, community, relation_group, or hybrid (all)",
+    )
+    max_chunk_tokens: int = Field(default=2000, ge=100)
+
+
+class TerraformConfig(BaseModel):
+    """Terraform export configuration."""
+
+    enabled: bool = Field(default=False)
+    output_dir: str = Field(default="./reports/terraform")
+
+
 class ReportConfig(BaseModel):
     """Report generation configuration."""
 
@@ -74,17 +112,35 @@ class RulesetConfig(BaseModel):
 class CloudMapperConfig(BaseModel):
     """Root configuration model."""
 
-    provider: str = Field(default="aws", pattern="^(aws|azure|gcp)$")
+    # Multi-provider support: list of providers to scan simultaneously
+    providers: list[str] = Field(
+        default=["aws"],
+        description="Providers to scan: aws, azure, gcp. Use multiple for simultaneous scanning.",
+    )
+    # Backward-compat alias — single provider string is auto-wrapped
+    provider: str | None = Field(
+        default=None,
+        exclude=True,
+        description="Deprecated: use 'providers' list. Kept for backward compat.",
+    )
     aws: AWSConfig = Field(default_factory=AWSConfig)
     azure: AzureConfig = Field(default_factory=AzureConfig)
     gcp: GCPConfig = Field(default_factory=GCPConfig)
     scanners: ScannerConfig = Field(default_factory=ScannerConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
+    ontology: OntologyConfig = Field(default_factory=OntologyConfig)
+    rag: RAGConfig = Field(default_factory=RAGConfig)
+    terraform: TerraformConfig = Field(default_factory=TerraformConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     rulesets: RulesetConfig = Field(default_factory=RulesetConfig)
     log_file: str | None = None
     verbose: bool = False
     concurrency_limit: int = Field(default=5, ge=1, le=50, description="Max concurrent API calls")
+
+    def model_post_init(self, __context: Any) -> None:
+        """Handle backward-compat: if 'provider' is set but 'providers' is default, migrate."""
+        if self.provider is not None and self.providers == ["aws"]:
+            self.providers = [self.provider]
 
 
 def load_config(config_path: str | Path | None = None) -> CloudMapperConfig:

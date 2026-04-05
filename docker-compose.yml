@@ -1,0 +1,26 @@
+services:
+  cloudmapper:
+    build: .
+    image: cloudmapper:latest
+    container_name: cloudmapper
+    volumes:
+      # Mount reports directory so output persists on host
+      - ./reports:/app/reports
+      # Mount config if you want to use a config file
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      # Pass AWS credentials via environment variables
+      # Set these when running: docker compose run cloudmapper ...
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      # Azure (optional)
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      # GCP (optional — mount service account JSON)
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+    entrypoint: ["cloudmapper"]
+    command: ["--help"]

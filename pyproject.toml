@@ -1,86 +1,85 @@
-[build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
-
-[project]
+[tool.poetry]
 name = "cloudmapper"
-version = "0.2.0"
+version = "0.3.0"
 description = "Cloud Infrastructure Mapping & Security Intelligence Agent"
 readme = "README.md"
-license = {text = "MIT"}
-requires-python = ">=3.11"
-authors = [
-    {name = "CloudMapper Team"}
-]
+license = "MIT"
+authors = ["CloudMapper Team"]
+packages = [{include = "cloudmapper"}]
 
-dependencies = [
-    # Core
-    "pydantic>=2.0,<3.0",
-    "click>=8.0",
-    "rich>=13.0",
-    "pyyaml>=6.0",
-
-    # AWS
-    "aioboto3>=12.0",
-    "boto3>=1.28",
-
-    # Azure
-    "azure-identity>=1.14",
-    "azure-mgmt-compute>=30.0",
-    "azure-mgmt-network>=25.0",
-    "azure-mgmt-storage>=21.0",
-    "azure-mgmt-resource>=23.0",
-    "azure-mgmt-sql>=4.0",
-    "azure-mgmt-keyvault>=10.0",
-
-    # GCP
-    "google-cloud-asset>=3.20",
-    "google-auth>=2.22",
-
-    # Graph
-    "networkx>=3.1",
-
-    # IAM Analysis
-    "parliament>=1.6",
-
-    # Visualisation
-    "jinja2>=3.1",
-    "svgwrite>=1.4",
-
-    # Async
-    "aiofiles>=23.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
-    "moto[all]>=4.2",
-    "ruff>=0.1",
-]
-full = [
-    "diagrams>=0.23",
-    "weasyprint>=60.0",
-    "policy-sentry>=0.12",
-]
-
-[project.scripts]
+[tool.poetry.scripts]
 cloudmapper = "cloudmapper.cli:cli"
 
-[project.entry-points."cloudmapper.collectors"]
+[tool.poetry.plugins."cloudmapper.collectors"]
 aws = "cloudmapper.collectors.aws:AsyncAWSCollector"
 azure = "cloudmapper.collectors.azure:AzureCollector"
 gcp = "cloudmapper.collectors.gcp:GCPCollector"
 
-[project.entry-points."cloudmapper.scanners"]
+[tool.poetry.plugins."cloudmapper.scanners"]
 prowler = "cloudmapper.scanners.prowler:ProwlerScanner"
 scoutsuite = "cloudmapper.scanners.scoutsuite:ScoutSuiteScanner"
 checkov = "cloudmapper.scanners.checkov:CheckovScanner"
 trivy = "cloudmapper.scanners.trivy:TrivyScanner"
 iam = "cloudmapper.scanners.iam_linter:IAMLinter"
 
-[tool.setuptools.packages.find]
-include = ["cloudmapper*"]
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+
+# Core
+pydantic = ">=2.0,<3.0"
+click = ">=8.0"
+rich = ">=13.0"
+pyyaml = ">=6.0"
+
+# AWS
+aioboto3 = ">=12.0"
+boto3 = ">=1.28"
+
+# Azure
+azure-identity = ">=1.14"
+azure-mgmt-compute = ">=30.0"
+azure-mgmt-network = ">=25.0"
+azure-mgmt-storage = ">=21.0"
+azure-mgmt-resource = ">=23.0"
+azure-mgmt-sql = ">=3.0"
+azure-mgmt-keyvault = ">=10.0"
+
+# GCP
+google-cloud-asset = ">=3.0"
+google-auth = ">=2.22"
+
+# Graph & Ontology
+networkx = ">=3.1"
+rdflib = ">=7.0"
+python-louvain = ">=0.16"
+
+# IAM Analysis
+parliament = ">=1.6"
+
+# Visualisation
+jinja2 = ">=3.1"
+svgwrite = ">=1.4"
+
+# Async
+aiofiles = ">=23.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-asyncio = ">=0.21"
+moto = {version = ">=4.2", extras = ["all"]}
+ruff = ">=0.1"
+
+[tool.poetry.group.full]
+optional = true
+
+[tool.poetry.group.full.dependencies]
+diagrams = ">=0.23"
+weasyprint = ">=60.0"
+policy-sentry = ">=0.12"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

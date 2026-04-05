@@ -3,28 +3,55 @@
 # ─────────────────────────────────────────────────────────────────
 # Copy to config.yaml and customise for your environment.
 
-provider: aws  # aws | azure | gcp
+# ── Providers ──
+# Specify one or more providers to scan simultaneously.
+# Options: aws, azure, gcp
+providers:
+  - aws
+  # - azure  # Uncomment to scan Azure alongside AWS
+  # - gcp    # Uncomment to scan GCP alongside AWS
 
 # ── AWS ──
 aws:
   regions:
     - us-east-1
     - eu-west-1
-  accounts: []           # Leave empty for single-account; add account IDs for multi-account
-  role_name: CloudMapperReadOnly  # IAM role to assume in target accounts
-  profile: null          # AWS CLI profile name (null = default)
+    # - ALL              # Uncomment to auto-discover and scan ALL enabled regions
+
+  # Direct credentials (recommended for third-party access)
+  # Provide access keys directly — no IAM role needed.
+  # Can also be set via env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+  access_key_id: null      # Your AWS access key ID
+  secret_access_key: null  # Your AWS secret access key
+  session_token: null      # Optional: for temporary/STS credentials
+
+  # Alternative: use an AWS CLI profile
+  profile: null            # AWS CLI profile name (used if no direct keys)
+
+  # Cross-account (optional, rarely needed)
+  accounts: []             # Target account IDs (only if cross-account scanning)
+  role_name: null          # IAM role to assume (only if accounts are specified)
+
   max_retries: 10
-  retry_mode: adaptive   # legacy | standard | adaptive
+  retry_mode: adaptive     # legacy | standard | adaptive
 
 # ── Azure ──
 azure:
-  subscription_ids: []   # List of subscription IDs to scan
+  subscription_ids: []     # List of subscription IDs to scan
   tenant_id: null
+  regions:
+    - ALL                  # Auto-discover all Azure locations (default)
+    # - eastus             # Or specify individual locations
+    # - westeurope
 
 # ── GCP ──
 gcp:
-  project_ids: []        # List of project IDs to scan
+  project_ids: []          # List of project IDs to scan
   organization_id: null
+  regions:
+    - ALL                  # Auto-discover all GCP regions (default)
+    # - us-central1        # Or specify individual regions
+    # - europe-west1
 
 # ── Scanners ──
 scanners:
@@ -46,21 +73,40 @@ graph:
   compute_attack_paths: true
   export_cytoscape: false
 
+# ── Ontology ──
+ontology:
+  enabled: true
+  export_formats:
+    - turtle
+    - json-ld
+  include_raw_metadata: false
+
+# ── RAG Export ──
+rag:
+  enabled: true
+  chunk_strategy: hybrid   # entity | community | relation_group | hybrid
+  max_chunk_tokens: 2000
+
+# ── Terraform Recreation ──
+terraform:
+  enabled: false
+  output_dir: ./reports/terraform
+
 # ── Reports ──
 report:
   formats:
     - html
     - json
     - svg
-  inline_js: true        # Bundle JS inline (no CDN) for air-gapped environments
+  inline_js: true          # Bundle JS inline (no CDN) for air-gapped environments
   output_dir: ./reports
 
 # ── External Rulesets ──
 rulesets:
-  rules_dir: ./rules     # Directory containing YAML rulesets
+  rules_dir: ./rules       # Directory containing YAML rulesets
   load_external: true
 
 # ── General ──
-log_file: null            # null = console only; set path for file logging
+log_file: null             # null = console only; set path for file logging
 verbose: false
-concurrency_limit: 5      # Max concurrent API calls per provider
+concurrency_limit: 5       # Max concurrent API calls per provider

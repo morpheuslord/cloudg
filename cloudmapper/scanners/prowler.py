@@ -50,11 +50,17 @@ class ProwlerScanner:
         profile: str | None = None,
         output_dir: str | None = None,
         extra_args: list[str] | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_region: str | None = None,
     ) -> None:
         self._provider = provider
         self._profile = profile
         self._output_dir = output_dir or tempfile.mkdtemp(prefix="prowler_")
         self._extra_args = extra_args or []
+        self._aws_access_key_id = aws_access_key_id
+        self._aws_secret_access_key = aws_secret_access_key
+        self._aws_region = aws_region
 
     @staticmethod
     def is_available() -> bool:
@@ -64,9 +70,15 @@ class ProwlerScanner:
     def run(self) -> list[Finding]:
         """Execute Prowler scan and return normalised findings.
 
+        Streams stdout/stderr live for real-time progress output.
+
         Returns:
             List of Finding objects parsed from Prowler ASFF JSON output.
         """
+        import os
+        import time
+        import threading
+
         if not self.is_available():
             logger.warning(
                 "Prowler is not installed. Install with: pip install prowler. "
@@ -86,25 +98,64 @@ class ProwlerScanner:
 
         cmd.extend(self._extra_args)
 
-        logger.info("Running Prowler: %s", " ".join(cmd))
+        logger.info("[Prowler] Starting: %s", " ".join(cmd))
+
+        # Build environment with AWS credentials for the subprocess
+        env = os.environ.copy()
+        if self._aws_access_key_id:
+            env["AWS_ACCESS_KEY_ID"] = self._aws_access_key_id
+        if self._aws_secret_access_key:
+            env["AWS_SECRET_ACCESS_KEY"] = self._aws_secret_access_key
+        if self._aws_region:
+            env["AWS_DEFAULT_REGION"] = self._aws_region
+
+        start_time = time.time()
 
         try:
-            result = subprocess.run(
+            # Use Popen for live streaming instead of blocking subprocess.run
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=3600,  # 1 hour timeout
-                check=False,
+                env=env,
+                bufsize=1,  # line-buffered
             )
 
-            if result.returncode != 0:
-                logger.warning("Prowler exited with code %d: %s", result.returncode, result.stderr[:500])
+            # Stream output in a reader thread
+            def _stream_output():
+                check_count = 0
+                for line in proc.stdout:
+                    stripped = line.rstrip()
+                    if not stripped:
+                        continue
+                    # Count checks for progress reporting
+                    if "PASS" in stripped or "FAIL" in stripped or "WARNING" in stripped:
+                        check_count += 1
+                        if check_count % 25 == 0:
+                            elapsed = int(time.time() - start_time)
+                            logger.info("[Prowler] %d checks completed (%ds elapsed)", check_count, elapsed)
+                    elif "Executing" in stripped or "Service" in stripped:
+                        logger.info("[Prowler] %s", stripped[:120])
+
+            reader = threading.Thread(target=_stream_output, daemon=True)
+            reader.start()
+
+            proc.wait(timeout=3600)
+            reader.join(timeout=5)
+
+            elapsed = int(time.time() - start_time)
+            if proc.returncode != 0:
+                logger.warning("[Prowler] Exited with code %d after %ds", proc.returncode, elapsed)
+            else:
+                logger.info("[Prowler] Completed successfully in %ds", elapsed)
 
         except subprocess.TimeoutExpired:
-            logger.error("Prowler scan timed out")
+            logger.error("[Prowler] Scan timed out after 3600s — killing process")
+            proc.kill()
             return []
         except Exception as exc:
-            logger.error("Failed to run Prowler: %s", exc)
+            logger.error("[Prowler] Failed to run: %s", exc)
             return []
 
         return self._parse_output()
