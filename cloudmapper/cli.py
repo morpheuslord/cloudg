@@ -152,7 +152,7 @@ def collect(
 @cli.command()
 @click.option("-p", "--provider", default="aws", help="Cloud provider")
 @click.option("--profile", default=None, help="AWS profile name")
-@click.option("--iac-dir", default=None, help="IaC directory for Checkov")
+@click.option("--iac-dir", default=None, help="IaC directory for Checkov (defaults to '.')")
 @click.option("--images", default=None, help="Comma-separated container images for Trivy")
 @click.option(
     "-o", "--output",
@@ -173,6 +173,8 @@ def scan(
     scanners: str,
 ) -> None:
     """Run security scanners and generate findings."""
+    import concurrent.futures
+
     console.print("[bold cyan]🔍 Running security scans...[/]")
 
     output_dir = Path(output)
@@ -180,42 +182,61 @@ def scan(
     scanner_list = [s.strip().lower() for s in scanners.split(",")]
     all_findings: list[Any] = []
 
-    if "prowler" in scanner_list:
+    resolved_iac_dir = iac_dir or "."
+    resolved_images = [i.strip() for i in images.split(",")] if images else []
+
+    console.print(f"  [bold]Scanners:[/] {', '.join(scanner_list)}")
+
+    def _run_prowler() -> list[Any]:
         from cloudmapper.scanners.prowler import ProwlerScanner
-
         console.print("  → Running Prowler...")
-        scanner = ProwlerScanner(provider=provider, profile=profile, output_dir=str(output_dir / "prowler"))
-        findings = scanner.run()
-        all_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+        s = ProwlerScanner(provider=provider, profile=profile, output_dir=str(output_dir / "prowler"))
+        return s.run()
 
-    if "scoutsuite" in scanner_list:
+    def _run_scoutsuite() -> list[Any]:
         from cloudmapper.scanners.scoutsuite import ScoutSuiteScanner
-
         console.print("  → Running ScoutSuite...")
-        scanner = ScoutSuiteScanner(provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite"))
-        findings = scanner.run()
-        all_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+        s = ScoutSuiteScanner(provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite"))
+        return s.run()
 
-    if "checkov" in scanner_list and iac_dir:
+    def _run_checkov() -> list[Any]:
         from cloudmapper.scanners.checkov import CheckovScanner
+        console.print(f"  → Running Checkov (target: {resolved_iac_dir})...")
+        s = CheckovScanner(target_dir=resolved_iac_dir)
+        return s.run()
 
-        console.print("  → Running Checkov...")
-        scanner = CheckovScanner(target_dir=iac_dir)
-        findings = scanner.run()
-        all_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
-
-    if "trivy" in scanner_list and images:
+    def _run_trivy() -> list[Any]:
         from cloudmapper.scanners.trivy import TrivyScanner
+        console.print(f"  → Running Trivy ({len(resolved_images)} images)...")
+        s = TrivyScanner()
+        return s.scan_images(resolved_images)
 
-        console.print("  → Running Trivy...")
-        scanner = TrivyScanner()
-        image_list = [i.strip() for i in images.split(",")]
-        findings = scanner.scan_images(image_list)
-        all_findings.extend(findings)
-        console.print(f"    [green]{len(findings)} findings[/]")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(scanner_list) + 1) as executor:
+        future_to_name: dict[concurrent.futures.Future, str] = {}
+
+        if "prowler" in scanner_list:
+            future_to_name[executor.submit(_run_prowler)] = "Prowler"
+
+        if "scoutsuite" in scanner_list:
+            future_to_name[executor.submit(_run_scoutsuite)] = "ScoutSuite"
+
+        if "checkov" in scanner_list:
+            future_to_name[executor.submit(_run_checkov)] = "Checkov"
+
+        if "trivy" in scanner_list:
+            if resolved_images:
+                future_to_name[executor.submit(_run_trivy)] = "Trivy"
+            else:
+                console.print("  [yellow]⊘ Trivy: no images specified (use --images)[/yellow]")
+
+        for future in concurrent.futures.as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                findings = future.result(timeout=3600)
+                all_findings.extend(findings)
+                console.print(f"    [green]{len(findings)} findings from {name}[/]")
+            except Exception as exc:
+                console.print(f"    [red]✗ {name} failed: {exc}[/]")
 
     # Save raw findings
     findings_path = output_dir / "raw-findings.json"
@@ -328,8 +349,8 @@ def report(input_file: str, output: str, fmt: str) -> None:
 )
 @click.option(
     "--scanners",
-    default="prowler,checkov",
-    help="Scanners to run (comma-separated)",
+    default=None,
+    help="Scanners to run (comma-separated: prowler,scoutsuite,checkov,trivy,iam). Defaults to config.yaml scanners.enabled.",
 )
 @click.option("--ontology/--no-ontology", default=True, help="Build semantic ontology graph")
 @click.option("--rag-export/--no-rag-export", default=True, help="Generate RAG-ready chunks")
@@ -351,7 +372,7 @@ def run(
     iac_dir: str | None,
     images: str | None,
     output: str,
-    scanners: str,
+    scanners: str | None,
     ontology: bool,
     rag_export: bool,
     terraform: bool,
@@ -419,12 +440,34 @@ def run(
     registry = PluginRegistry()
     coverage_records = []
 
+    # ── Resolve scanner list from CLI flag or config ──
+    if scanners is not None:
+        scanner_list = [s.strip().lower() for s in scanners.split(",")]
+    else:
+        scanner_list = [s.strip().lower() for s in cfg.scanners.enabled]
     console.print(f"\n[bold]Providers:[/] {', '.join(cfg.providers)}")
+    console.print(f"[bold]Scanners:[/]  {', '.join(scanner_list)}")
     console.print(f"[bold]AWS regions:[/] {cfg.aws.regions}")
     if "azure" in cfg.providers:
         console.print(f"[bold]Azure regions:[/] {cfg.azure.regions}")
     if "gcp" in cfg.providers:
         console.print(f"[bold]GCP regions:[/] {cfg.gcp.regions}")
+
+    # ── Resolve IaC directories: CLI flag → config → default "." ──
+    resolved_iac_dirs: list[str] = []
+    if iac_dir:
+        resolved_iac_dirs = [iac_dir]
+    elif cfg.scanners.iac_directories:
+        resolved_iac_dirs = list(cfg.scanners.iac_directories)
+    else:
+        resolved_iac_dirs = ["."]
+
+    # ── Resolve container images: CLI flag → config ──
+    resolved_images: list[str] = []
+    if images:
+        resolved_images = [i.strip() for i in images.split(",")]
+    elif cfg.scanners.trivy_images:
+        resolved_images = list(cfg.scanners.trivy_images)
 
     # Phase 1: Asset Collection (always uses multi-provider orchestrator)
     console.print("\n[bold]Phase 1: Asset Collection[/]")
@@ -533,12 +576,11 @@ def run(
             console.print(f"  [red]✗ Terraform export failed: {exc}[/]")
 
     import concurrent.futures
-    
-    # Phase 3: Security Scanning
+
+    # Phase 3: Security Scanning (all scanners in parallel)
     console.print("\n[bold]Phase 3: Security Scanning[/bold] (Running in parallel)")
-    scanner_list = [s.strip().lower() for s in scanners.split(",")]
     scanner_findings: list[Any] = []
-    
+
     def run_prowler(prov: str) -> list[Any]:
         from cloudmapper.scanners.prowler import ProwlerScanner
         console.print(f"  → [cyan]Prowler ({prov})[/cyan] started...")
@@ -547,6 +589,7 @@ def run(
             provider=prov,
             profile=profile,
             output_dir=str(output_dir / "prowler" / prov),
+            extra_args=cfg.scanners.prowler_extra_args or [],
             aws_access_key_id=cfg.aws.access_key_id if prov == "aws" else None,
             aws_secret_access_key=cfg.aws.secret_access_key if prov == "aws" else None,
             aws_region=prowler_region if prov == "aws" else None,
@@ -555,19 +598,37 @@ def run(
         console.print(f"  [green]✓ Prowler ({prov}):[/green] {len(findings)} findings")
         return findings
 
-    def run_checkov() -> list[Any]:
+    def run_scoutsuite(prov: str) -> list[Any]:
+        from cloudmapper.scanners.scoutsuite import ScoutSuiteScanner
+        console.print(f"  → [cyan]ScoutSuite ({prov})[/cyan] started...")
+        s = ScoutSuiteScanner(
+            provider=prov,
+            profile=profile if prov == "aws" else None,
+            report_dir=str(output_dir / "scoutsuite" / prov),
+            extra_args=cfg.scanners.scoutsuite_extra_args or [],
+        )
+        findings = s.run()
+        console.print(f"  [green]✓ ScoutSuite ({prov}):[/green] {len(findings)} findings")
+        return findings
+
+    def run_checkov(target_dir: str) -> list[Any]:
         from cloudmapper.scanners.checkov import CheckovScanner
-        console.print("  → [cyan]Checkov[/cyan] started...")
-        s = CheckovScanner(target_dir=iac_dir)
+        console.print(f"  → [cyan]Checkov[/cyan] started (target: {target_dir})...")
+        framework = cfg.scanners.checkov_frameworks[0] if cfg.scanners.checkov_frameworks else None
+        s = CheckovScanner(
+            target_dir=target_dir,
+            framework=framework,
+            extra_args=cfg.scanners.checkov_extra_args or [],
+        )
         findings = s.run()
         console.print(f"  [green]✓ Checkov:[/green] {len(findings)} findings")
         return findings
 
-    def run_trivy() -> list[Any]:
+    def run_trivy(image_list: list[str]) -> list[Any]:
         from cloudmapper.scanners.trivy import TrivyScanner
-        console.print("  → [cyan]Trivy[/cyan] started...")
-        s = TrivyScanner()
-        findings = s.scan_images([i.strip() for i in images.split(",")])
+        console.print(f"  → [cyan]Trivy[/cyan] started ({len(image_list)} images)...")
+        s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
+        findings = s.scan_images(image_list)
         console.print(f"  [green]✓ Trivy:[/green] {len(findings)} findings")
         return findings
 
@@ -579,34 +640,58 @@ def run(
         console.print(f"  [green]✓ IAM Lint:[/green] {len(findings)} findings")
         return findings
 
-    # Execute scanners concurrently
-    iam_findings = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_scanner = {}
-        
+    # Execute ALL enabled scanners concurrently
+    iam_findings: list[Any] = []
+    max_workers = len(scanner_list) + len(cfg.providers) + 1  # +1 for IAM linter
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
+        future_to_scanner: dict[concurrent.futures.Future, str] = {}
+
+        # Prowler — one instance per provider
         if "prowler" in scanner_list:
             for prov in cfg.providers:
-                if prov in ["aws", "azure", "gcp"]:
+                if prov in ("aws", "azure", "gcp"):
                     future_to_scanner[executor.submit(run_prowler, prov)] = f"Prowler ({prov})"
-                    
-        if "checkov" in scanner_list and iac_dir:
-            future_to_scanner[executor.submit(run_checkov)] = "Checkov"
-            
-        if "trivy" in scanner_list and images:
-            future_to_scanner[executor.submit(run_trivy)] = "Trivy"
-            
-        # IAM Linting is internal and doesn't map directly to a "scanner_list" name, 
-        # but it analyzes assets so let's always run it in parallel if we have assets
-        future_to_scanner[executor.submit(run_iam_linter)] = "IAM Linter"
+        else:
+            console.print("  [dim]⊘ Prowler: not enabled[/dim]")
+
+        # ScoutSuite — one instance per provider
+        if "scoutsuite" in scanner_list:
+            for prov in cfg.providers:
+                if prov in ("aws", "azure", "gcp"):
+                    future_to_scanner[executor.submit(run_scoutsuite, prov)] = f"ScoutSuite ({prov})"
+        else:
+            console.print("  [dim]⊘ ScoutSuite: not enabled[/dim]")
+
+        # Checkov — always runs against resolved IaC directories
+        if "checkov" in scanner_list:
+            for d in resolved_iac_dirs:
+                future_to_scanner[executor.submit(run_checkov, d)] = f"Checkov ({d})"
+        else:
+            console.print("  [dim]⊘ Checkov: not enabled[/dim]")
+
+        # Trivy — runs if images are available
+        if "trivy" in scanner_list:
+            if resolved_images:
+                future_to_scanner[executor.submit(run_trivy, resolved_images)] = "Trivy"
+            else:
+                console.print("  [yellow]⊘ Trivy: enabled but no images configured (use --images or config.scanners.trivy_images)[/yellow]")
+        else:
+            console.print("  [dim]⊘ Trivy: not enabled[/dim]")
+
+        # IAM Linter — always runs internally to analyze collected assets
+        if "iam" in scanner_list or assets:
+            future_to_scanner[executor.submit(run_iam_linter)] = "IAM Linter"
 
         for future in concurrent.futures.as_completed(future_to_scanner):
             scanner_name = future_to_scanner[future]
             try:
-                findings = future.result()
+                findings = future.result(timeout=cfg.scanners.timeout_seconds)
                 if scanner_name == "IAM Linter":
                     iam_findings.extend(findings)
                 else:
                     scanner_findings.extend(findings)
+            except concurrent.futures.TimeoutError:
+                console.print(f"  [red]✗ {scanner_name} timed out after {cfg.scanners.timeout_seconds}s[/red]")
             except Exception as exc:
                 console.print(f"  [red]✗ {scanner_name} failed:[/red] {exc}")
 

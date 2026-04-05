@@ -52,6 +52,9 @@ class ScannerConfig(BaseModel):
 
     enabled: list[str] = Field(default=["prowler", "checkov"])
     prowler_extra_args: list[str] = Field(default_factory=list)
+    scoutsuite_extra_args: list[str] = Field(default_factory=list)
+    checkov_extra_args: list[str] = Field(default_factory=list)
+    trivy_extra_args: list[str] = Field(default_factory=list)
     checkov_frameworks: list[str] = Field(default=["terraform", "cloudformation"])
     trivy_images: list[str] = Field(default_factory=list)
     iac_directories: list[str] = Field(default_factory=list)

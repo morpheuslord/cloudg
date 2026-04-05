@@ -242,14 +242,34 @@ class CloudMapperEngine:
         self,
         assets: list[CloudAsset],
         edges: list[NetworkEdge],
+        iac_dir: str | None = None,
+        images: list[str] | None = None,
+        profile: str | None = None,
+        output_dir: str | Path = "./reports",
     ) -> list[Finding]:
         """Run security scanners and graph analysis.
+
+        Runs all scanners enabled in config.scanners.enabled in parallel.
+
+        Args:
+            assets: Collected cloud assets.
+            edges: Network edges between assets.
+            iac_dir: IaC directory for Checkov (falls back to config).
+            images: Container images for Trivy (falls back to config).
+            profile: AWS profile name for scanner auth.
+            output_dir: Directory for scanner output files.
 
         Returns:
             List of all findings.
         """
+        import concurrent.futures
+
         self._emit_phase_start("scanning")
         all_findings: list[Finding] = []
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        scanner_list = [s.strip().lower() for s in self.config.scanners.enabled]
 
         # Graph-based reachability analysis
         try:
@@ -265,16 +285,106 @@ class CloudMapperEngine:
             logger.error("Graph analysis failed: %s", exc)
             self._emit_error("graph_analysis", exc)
 
-        # IAM linting
-        try:
+        # Resolve IaC directories
+        resolved_iac_dirs: list[str] = []
+        if iac_dir:
+            resolved_iac_dirs = [iac_dir]
+        elif self.config.scanners.iac_directories:
+            resolved_iac_dirs = list(self.config.scanners.iac_directories)
+        else:
+            resolved_iac_dirs = ["."]
+
+        # Resolve images
+        resolved_images: list[str] = images or list(self.config.scanners.trivy_images)
+
+        # Run all scanners concurrently
+        def _run_prowler(prov: str) -> list[Finding]:
+            from cloudmapper.scanners.prowler import ProwlerScanner
+
+            region = self.config.aws.regions[0] if self.config.aws.regions else None
+            scanner = ProwlerScanner(
+                provider=prov,
+                profile=profile,
+                output_dir=str(out / "prowler" / prov),
+                extra_args=self.config.scanners.prowler_extra_args or [],
+                aws_access_key_id=self.config.aws.access_key_id if prov == "aws" else None,
+                aws_secret_access_key=self.config.aws.secret_access_key if prov == "aws" else None,
+                aws_region=region if prov == "aws" else None,
+            )
+            return scanner.run()
+
+        def _run_scoutsuite(prov: str) -> list[Finding]:
+            from cloudmapper.scanners.scoutsuite import ScoutSuiteScanner
+
+            scanner = ScoutSuiteScanner(
+                provider=prov,
+                profile=profile if prov == "aws" else None,
+                report_dir=str(out / "scoutsuite" / prov),
+                extra_args=self.config.scanners.scoutsuite_extra_args or [],
+            )
+            return scanner.run()
+
+        def _run_checkov(target_dir: str) -> list[Finding]:
+            from cloudmapper.scanners.checkov import CheckovScanner
+
+            fw = self.config.scanners.checkov_frameworks[0] if self.config.scanners.checkov_frameworks else None
+            scanner = CheckovScanner(
+                target_dir=target_dir,
+                framework=fw,
+                extra_args=self.config.scanners.checkov_extra_args or [],
+            )
+            return scanner.run()
+
+        def _run_trivy(image_list: list[str]) -> list[Finding]:
+            from cloudmapper.scanners.trivy import TrivyScanner
+
+            scanner = TrivyScanner(extra_args=self.config.scanners.trivy_extra_args or [])
+            return scanner.scan_images(image_list)
+
+        def _run_iam_linter() -> list[Finding]:
             from cloudmapper.scanners.iam_linter import IAMLinter
 
             linter = IAMLinter()
-            iam_findings = linter.analyze_policies(assets)
-            all_findings.extend(iam_findings)
-        except Exception as exc:
-            logger.error("IAM linting failed: %s", exc)
-            self._emit_error("iam_linting", exc)
+            return linter.analyze_policies(assets)
+
+        scanner_findings: list[Finding] = []
+        max_workers = len(scanner_list) + len(self.config.providers) + 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
+            future_to_name: dict[concurrent.futures.Future, str] = {}
+
+            if "prowler" in scanner_list:
+                for prov in self.config.providers:
+                    future_to_name[executor.submit(_run_prowler, prov)] = f"prowler-{prov}"
+
+            if "scoutsuite" in scanner_list:
+                for prov in self.config.providers:
+                    future_to_name[executor.submit(_run_scoutsuite, prov)] = f"scoutsuite-{prov}"
+
+            if "checkov" in scanner_list:
+                for d in resolved_iac_dirs:
+                    future_to_name[executor.submit(_run_checkov, d)] = f"checkov-{d}"
+
+            if "trivy" in scanner_list and resolved_images:
+                future_to_name[executor.submit(_run_trivy, resolved_images)] = "trivy"
+
+            # IAM linter always runs if assets exist
+            if assets:
+                future_to_name[executor.submit(_run_iam_linter)] = "iam"
+
+            for future in concurrent.futures.as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    findings = future.result(timeout=self.config.scanners.timeout_seconds)
+                    scanner_findings.extend(findings)
+                    logger.info("[%s] %d findings", name, len(findings))
+                except concurrent.futures.TimeoutError:
+                    logger.error("[%s] timed out after %ds", name, self.config.scanners.timeout_seconds)
+                    self._emit_error(name, TimeoutError(f"{name} timed out"))
+                except Exception as exc:
+                    logger.error("[%s] failed: %s", name, exc)
+                    self._emit_error(name, exc)
+
+        all_findings.extend(scanner_findings)
 
         # Emit per-finding callbacks
         if self.on_finding:
@@ -414,8 +524,8 @@ class CloudMapperEngine:
         # Phase 1: Collect
         collection = await self.collect()
 
-        # Phase 2: Scan
-        findings = await self.scan(collection.assets, collection.edges)
+        # Phase 2: Scan (all enabled scanners in parallel)
+        findings = await self.scan(collection.assets, collection.edges, output_dir=out)
 
         # Phase 3: Analyse
         analysis = await self.analyze(
