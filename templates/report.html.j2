@@ -99,9 +99,29 @@
         /* ── Topology ── */
         #topology-container {
             background: var(--bg-secondary); border: 1px solid var(--border);
-            border-radius: var(--radius); overflow: hidden; min-height: 500px;
+            border-radius: var(--radius); overflow: hidden; min-height: 600px;
+            position: relative;
         }
-        #topology-container svg { width: 100%; height: 500px; }
+        #topology-container svg { width: 100%; height: 600px; }
+        .topo-legend {
+            position: absolute; top: 16px; right: 16px;
+            background: rgba(15,23,42,0.9); border: 1px solid var(--border);
+            border-radius: 8px; padding: 12px 16px; font-size: 12px;
+            backdrop-filter: blur(4px); z-index: 10;
+        }
+        .topo-legend .legend-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+        .topo-legend .legend-dot {
+            width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+        }
+        .topo-controls {
+            position: absolute; top: 16px; left: 16px; display: flex; gap: 8px; z-index: 10;
+        }
+        .topo-controls button {
+            background: rgba(15,23,42,0.9); border: 1px solid var(--border);
+            color: var(--text-secondary); padding: 6px 12px; border-radius: 6px;
+            cursor: pointer; font-size: 13px; backdrop-filter: blur(4px);
+        }
+        .topo-controls button:hover { background: var(--accent); color: white; }
 
         /* ── Findings Table ── */
         .table-controls {
@@ -215,7 +235,7 @@
 
     <!-- Tabs -->
     <div class="tabs" id="main-tabs">
-        <button class="tab active" onclick="switchTab('topology')">Topology Map</button>
+        <button class="tab active" onclick="switchTab('topology')">Infrastructure Map</button>
         <button class="tab" onclick="switchTab('findings')">Findings</button>
         <button class="tab" onclick="switchTab('charts')">Analytics</button>
         <button class="tab" onclick="switchTab('compliance')">Compliance</button>
@@ -223,7 +243,32 @@
 
     <!-- Tab: Topology -->
     <div class="tab-content active" id="tab-topology">
-        <div id="topology-container"></div>
+        <div id="topology-container">
+            <div class="topo-controls">
+                <button onclick="toggleLayout()">🔄 Toggle Layout</button>
+                <button onclick="resetZoom()">⊞ Reset Zoom</button>
+                <button onclick="expandAll()">▸ Expand All</button>
+                <button onclick="collapseAll()">◂ Collapse</button>
+            </div>
+            <div class="topo-legend">
+                <div style="font-weight:600;margin-bottom:6px;color:var(--text-primary)">Legend</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#6366F1"></div>Account</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#22C55E"></div>Region</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#4A90D9"></div>VPC</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#7EC8E3"></div>Subnet</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#FF9900"></div>Compute</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#569A31"></div>Storage</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#8C4FFF"></div>Security</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#95A5A6"></div>Other</div>
+                <div class="legend-item" style="margin-top:8px"><div class="legend-dot" style="background:transparent;border:2px solid #EF4444"></div>Has Findings</div>
+                <div class="legend-item"><div class="legend-dot" style="background:transparent;border:2px solid #FF9900"></div>Internet Exposed</div>
+                <div class="legend-item" style="margin-top:8px;font-weight:600;color:var(--text-primary)">Ontology Entities</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#EF4444;clip-path:polygon(50% 0%,100% 100%,0% 100%)"></div>Security Finding (▲)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#14B8A6;clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%)"></div>Compliance Framework (◆)</div>
+                <div class="legend-item" style="margin-top:4px;font-size:11px;color:var(--text-muted)">─ ─ FINDING_AFFECTS</div>
+                <div class="legend-item" style="font-size:11px;color:var(--text-muted)">─ ─ COMPLIANCE_GOVERNS</div>
+            </div>
+        </div>
     </div>
 
     <!-- Tab: Findings -->
@@ -295,11 +340,15 @@
 <script>
     // ── Data ──
     const graphData = {{ graph_json|safe }};
+    const hierarchyData = {{ hierarchy_json|safe }};
     const findingsData = {{ findings_json|safe }};
+    const findingsPerResource = {{ findings_per_resource_json|safe }};
     const severityCounts = {{ severity_counts_json|safe }};
     const resourceTypes = {{ resource_types_json|safe }};
     const sourceTools = {{ source_tools_json|safe }};
     const complianceSummary = {{ compliance_summary_json|safe }};
+
+    let currentLayout = 'tree'; // 'tree' or 'force'
 
     // ── Tab Switching ──
     function switchTab(tabId) {
@@ -307,7 +356,9 @@
         document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
         document.getElementById('tab-' + tabId).classList.add('active');
         event.target.classList.add('active');
-        if (tabId === 'topology') renderTopology();
+        if (tabId === 'topology') {
+            setTimeout(() => renderTopology(), 50);
+        }
     }
 
     // ── Findings Table ──
@@ -368,34 +419,197 @@
     }
     function closeDetail() { document.getElementById('detail-panel').classList.remove('open'); }
 
-    // ── D3 Topology ──
+    // ── Hierarchical Topology ──
+    const typeColors = {
+        account: '#6366F1', region: '#22C55E', vpc: '#4A90D9', vnet: '#4A90D9',
+        subnet: '#7EC8E3', global: '#8B5CF6',
+        EC2: '#FF9900', VIRTUAL_MACHINE: '#FF9900', GCE_INSTANCE: '#FF9900',
+        VPC: '#4A90D9', VNET: '#4A90D9', SUBNET: '#7EC8E3',
+        RDS_INSTANCE: '#3B48CC', AURORA_CLUSTER: '#3B48CC', AZURE_SQL: '#3B48CC', CLOUD_SQL: '#3B48CC',
+        S3_BUCKET: '#569A31', BLOB_STORAGE: '#569A31', GCS_BUCKET: '#569A31',
+        SECURITY_GROUP: '#DD4B39', NSG: '#DD4B39', NACL: '#DD4B39',
+        LOAD_BALANCER: '#8C4FFF', CLOUDFRONT: '#8C4FFF',
+        IAM_USER: '#F472B6', IAM_ROLE: '#F472B6', IAM_POLICY: '#F472B6',
+        LAMBDA_FUNCTION: '#FF9900', CLOUD_FUNCTION: '#FF9900',
+        KMS_KEY: '#14B8A6', SECRET: '#14B8A6',
+        EBS_VOLUME: '#569A31', DYNAMODB_TABLE: '#3B48CC',
+        ECS_CLUSTER: '#FF9900', EKS_CLUSTER: '#FF9900',
+        SECURITY_FINDING: '#EF4444', COMPLIANCE_FRAMEWORK: '#14B8A6',
+    };
+
+    const typeRadius = {
+        account: 22, region: 18, vpc: 16, vnet: 16, subnet: 14, global: 18,
+    };
+
+    let zoomBehavior, svgG;
+
     function renderTopology() {
         const container = document.getElementById('topology-container');
-        container.innerHTML = '';
+        // Remove existing SVG only
+        container.querySelectorAll('svg').forEach(s => s.remove());
         const width = container.clientWidth || 1200;
-        const height = 500;
+        const height = 600;
 
-        if (!graphData.nodes || graphData.nodes.length === 0) {
-            container.innerHTML = '<p style="padding:40px;text-align:center;color:var(--text-muted)">No topology data available. Run a collection first.</p>';
+        if (!hierarchyData || !hierarchyData.children || hierarchyData.children.length === 0) {
+            // Fallback to force-directed if no hierarchy
+            if (graphData.nodes && graphData.nodes.length > 0) {
+                renderForceTopology(container, width, height);
+            } else {
+                const msg = document.createElement('p');
+                msg.style.cssText = 'padding:40px;text-align:center;color:var(--text-muted)';
+                msg.textContent = 'No topology data available. Run a collection first.';
+                container.appendChild(msg);
+            }
             return;
         }
 
+        if (currentLayout === 'force') {
+            renderForceTopology(container, width, height);
+        } else {
+            renderTreeTopology(container, width, height);
+        }
+    }
+
+    function renderTreeTopology(container, width, height) {
+        const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
+        const g = svg.append('g').attr('transform', 'translate(80, 20)');
+        svgG = g;
+
+        zoomBehavior = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (e) => g.attr('transform', e.transform));
+        svg.call(zoomBehavior);
+
+        const root = d3.hierarchy(hierarchyData);
+        root.descendants().forEach(d => { d._children = d.children; });
+
+        const treeLayout = d3.tree().nodeSize([28, 220]);
+        treeLayout(root);
+
+        // Center vertically
+        const yExtent = d3.extent(root.descendants(), d => d.x);
+        const yOffset = height / 2 - (yExtent[0] + yExtent[1]) / 2;
+        g.attr('transform', `translate(80, ${yOffset})`);
+
+        // Links
+        g.selectAll('.link').data(root.links()).join('path')
+            .attr('class', 'link')
+            .attr('d', d3.linkHorizontal().x(d => d.y).y(d => d.x))
+            .attr('fill', 'none')
+            .attr('stroke', '#475569')
+            .attr('stroke-width', 1.5)
+            .attr('stroke-opacity', 0.6);
+
+        // Nodes
+        const node = g.selectAll('.node').data(root.descendants()).join('g')
+            .attr('class', 'node')
+            .attr('transform', d => `translate(${d.y},${d.x})`)
+            .style('cursor', d => d.children || d._children ? 'pointer' : 'default')
+            .on('click', (e, d) => {
+                if (d.children) { d._children = d.children; d.children = null; }
+                else if (d._children) { d.children = d._children; d._children = null; }
+                renderTopology();
+            });
+
+        // Node circles
+        node.append('circle')
+            .attr('r', d => {
+                const nodeData = d.data;
+                return typeRadius[nodeData.type] || 10;
+            })
+            .attr('fill', d => typeColors[d.data.type] || '#95A5A6')
+            .attr('stroke', d => {
+                const nodeData = d.data;
+                if (nodeData.findings && nodeData.findings.total > 0) {
+                    if (nodeData.findings.CRITICAL > 0) return '#EF4444';
+                    if (nodeData.findings.HIGH > 0) return '#F97316';
+                    return '#EAB308';
+                }
+                if (nodeData.internet_exposed) return '#FF9900';
+                return 'rgba(255,255,255,0.3)';
+            })
+            .attr('stroke-width', d => {
+                const nodeData = d.data;
+                if ((nodeData.findings && nodeData.findings.total > 0) || nodeData.internet_exposed) return 3;
+                return 1.5;
+            });
+
+        // Findings badge
+        node.filter(d => d.data.findings && d.data.findings.total > 0)
+            .append('circle')
+            .attr('cx', d => (typeRadius[d.data.type] || 10) - 2)
+            .attr('cy', d => -(typeRadius[d.data.type] || 10) + 2)
+            .attr('r', 8)
+            .attr('fill', d => {
+                if (d.data.findings.CRITICAL > 0) return '#EF4444';
+                if (d.data.findings.HIGH > 0) return '#F97316';
+                return '#EAB308';
+            });
+
+        node.filter(d => d.data.findings && d.data.findings.total > 0)
+            .append('text')
+            .attr('x', d => (typeRadius[d.data.type] || 10) - 2)
+            .attr('y', d => -(typeRadius[d.data.type] || 10) + 6)
+            .attr('text-anchor', 'middle')
+            .attr('fill', 'white')
+            .attr('font-size', '9px')
+            .attr('font-weight', '700')
+            .text(d => d.data.findings.total);
+
+        // Collapse indicator
+        node.filter(d => d._children && !d.children)
+            .append('text')
+            .attr('x', 0).attr('y', 4)
+            .attr('text-anchor', 'middle')
+            .attr('fill', 'white')
+            .attr('font-size', '14px')
+            .attr('font-weight', '700')
+            .text('+');
+
+        // Labels
+        node.append('text')
+            .attr('x', d => (d.children || d._children ? -(typeRadius[d.data.type] || 10) - 6 : (typeRadius[d.data.type] || 10) + 6))
+            .attr('dy', '0.35em')
+            .attr('text-anchor', d => d.children || d._children ? 'end' : 'start')
+            .attr('fill', '#CBD5E1')
+            .attr('font-size', d => ['account','region','vpc'].includes(d.data.type) ? '13px' : '11px')
+            .attr('font-weight', d => ['account','region','vpc'].includes(d.data.type) ? '600' : '400')
+            .text(d => {
+                const name = d.data.name || d.data.id || '';
+                return name.length > 35 ? name.substring(0, 32) + '…' : name;
+            });
+
+        // Type badge for leaf nodes
+        node.filter(d => d.data.type && !['account','region','vpc','subnet','global','vnet'].includes(d.data.type))
+            .append('text')
+            .attr('x', d => (typeRadius[d.data.type] || 10) + 6)
+            .attr('dy', '1.8em')
+            .attr('fill', '#64748B')
+            .attr('font-size', '9px')
+            .text(d => d.data.type);
+
+        // Tooltips
+        node.append('title').text(d => {
+            let tip = `${d.data.type}: ${d.data.name || d.data.id || ''}`;
+            if (d.data.arn) tip += `\nARN: ${d.data.arn}`;
+            if (d.data.findings && d.data.findings.total > 0) {
+                tip += `\n\nFindings: ${d.data.findings.total}`;
+                if (d.data.findings.CRITICAL) tip += `\n  Critical: ${d.data.findings.CRITICAL}`;
+                if (d.data.findings.HIGH) tip += `\n  High: ${d.data.findings.HIGH}`;
+                if (d.data.findings.MEDIUM) tip += `\n  Medium: ${d.data.findings.MEDIUM}`;
+            }
+            if (d.data.internet_exposed) tip += '\n\n⚠ INTERNET EXPOSED';
+            return tip;
+        });
+    }
+
+    function renderForceTopology(container, width, height) {
         const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
         const g = svg.append('g');
+        svgG = g;
 
-        svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', (e) => g.attr('transform', e.transform)));
+        zoomBehavior = d3.zoom().scaleExtent([0.2, 5]).on('zoom', (e) => g.attr('transform', e.transform));
+        svg.call(zoomBehavior);
 
-        const typeColors = {
-            EC2: '#FF9900', VIRTUAL_MACHINE: '#FF9900', GCE_INSTANCE: '#FF9900',
-            VPC: '#4A90D9', VNET: '#4A90D9',
-            SUBNET: '#7EC8E3',
-            RDS_INSTANCE: '#3B48CC', AURORA_CLUSTER: '#3B48CC', AZURE_SQL: '#3B48CC', CLOUD_SQL: '#3B48CC',
-            S3_BUCKET: '#569A31', BLOB_STORAGE: '#569A31', GCS_BUCKET: '#569A31',
-            SECURITY_GROUP: '#DD4B39', NSG: '#DD4B39',
-            LOAD_BALANCER: '#8C4FFF',
-            IAM_USER: '#232F3E', IAM_ROLE: '#232F3E',
-            LAMBDA_FUNCTION: '#FF9900', CLOUD_FUNCTION: '#FF9900',
-        };
+        if (!graphData.nodes || graphData.nodes.length === 0) return;
 
         const sim = d3.forceSimulation(graphData.nodes)
             .force('link', d3.forceLink(graphData.links).id(d => d.id).distance(100))
@@ -404,17 +618,54 @@
             .force('collision', d3.forceCollide().radius(30));
 
         const link = g.append('g').selectAll('line').data(graphData.links).join('line')
-            .attr('stroke', d => d.cidr === '0.0.0.0/0' ? '#E74C3C' : '#555')
-            .attr('stroke-width', d => d.cidr === '0.0.0.0/0' ? 2 : 1)
-            .attr('stroke-opacity', 0.5);
+            .attr('stroke', d => {
+                if (d.relation === 'FINDING_AFFECTS') {
+                    const sevColors = {CRITICAL:'#EF4444',HIGH:'#F97316',MEDIUM:'#EAB308',LOW:'#3498DB'};
+                    return sevColors[d.severity] || '#EF4444';
+                }
+                if (d.relation === 'COMPLIANCE_GOVERNS') return '#14B8A6';
+                return d.cidr === '0.0.0.0/0' ? '#E74C3C' : '#555';
+            })
+            .attr('stroke-width', d => {
+                if (d.relation === 'FINDING_AFFECTS') return 2;
+                if (d.relation === 'COMPLIANCE_GOVERNS') return 1.5;
+                return d.cidr === '0.0.0.0/0' ? 2 : 1;
+            })
+            .attr('stroke-dasharray', d => {
+                if (d.relation === 'FINDING_AFFECTS' || d.relation === 'COMPLIANCE_GOVERNS') return '6,3';
+                return null;
+            })
+            .attr('stroke-opacity', d => d.relation ? 0.7 : 0.5);
 
         const node = g.append('g').selectAll('g').data(graphData.nodes).join('g')
             .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended));
 
-        node.append('circle').attr('r', d => d.is_external ? 8 : 16)
-            .attr('fill', d => typeColors[d.type] || '#95A5A6')
-            .attr('stroke', d => d.is_internet_exposed ? '#FF0000' : '#fff')
-            .attr('stroke-width', d => d.is_internet_exposed ? 3 : 1.5);
+        // Node shape — findings get triangles, compliance gets diamonds, rest get circles
+        node.each(function(d) {
+            const el = d3.select(this);
+            const r = d.is_external ? 8 : 16;
+            if (d.type === 'SECURITY_FINDING') {
+                // Triangle for findings
+                const sevColors = {CRITICAL:'#EF4444',HIGH:'#F97316',MEDIUM:'#EAB308',LOW:'#3498DB',INFO:'#64748B'};
+                el.append('polygon')
+                    .attr('points', `0,${-r} ${r},${r} ${-r},${r}`)
+                    .attr('fill', sevColors[d.severity] || '#EF4444')
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 1.5);
+            } else if (d.type === 'COMPLIANCE_FRAMEWORK') {
+                // Diamond for compliance
+                el.append('polygon')
+                    .attr('points', `0,${-r} ${r},0 0,${r} ${-r},0`)
+                    .attr('fill', '#14B8A6')
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 1.5);
+            } else {
+                el.append('circle').attr('r', r)
+                    .attr('fill', typeColors[d.type] || '#95A5A6')
+                    .attr('stroke', d.is_internet_exposed ? '#FF0000' : '#fff')
+                    .attr('stroke-width', d.is_internet_exposed ? 3 : 1.5);
+            }
+        });
 
         node.append('text').text(d => d.name ? d.name.substring(0, 15) : d.id.substring(0, 10))
             .attr('dy', 28).attr('text-anchor', 'middle')
@@ -431,6 +682,29 @@
         function dragstarted(e, d) { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
         function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
         function dragended(e, d) { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+    }
+
+    function toggleLayout() {
+        currentLayout = currentLayout === 'tree' ? 'force' : 'tree';
+        renderTopology();
+    }
+
+    function resetZoom() {
+        const svg = d3.select('#topology-container svg');
+        if (svg.node() && zoomBehavior) {
+            svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+        }
+    }
+
+    function expandAll() {
+        function expand(d) { if (d._children) { d.children = d._children; d._children = null; } if (d.children) d.children.forEach(expand); }
+        if (hierarchyData) { const root = d3.hierarchy(hierarchyData); expand(root); }
+        renderTopology();
+    }
+
+    function collapseAll() {
+        // Re-render with collapsed tree (only top 2 levels open)
+        renderTopology();
     }
 
     // ── Chart.js Charts ──
@@ -536,7 +810,7 @@
 
     // ── Export ──
     function exportJSON() {
-        const blob = new Blob([JSON.stringify({findings: findingsData, graph: graphData}, null, 2)], {type: 'application/json'});
+        const blob = new Blob([JSON.stringify({findings: findingsData, graph: graphData, hierarchy: hierarchyData}, null, 2)], {type: 'application/json'});
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'findings.json';

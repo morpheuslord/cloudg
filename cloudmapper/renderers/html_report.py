@@ -130,6 +130,24 @@ class HTMLReportGenerator:
             else:
                 compliance_summary[result.framework]["fail"] += 1
 
+        # Findings per resource (for topology badges)
+        findings_per_resource: dict[str, dict[str, int]] = {}
+        for finding in scan_result.findings:
+            rid = finding.resource_id or finding.resource_arn or ""
+            if rid not in findings_per_resource:
+                findings_per_resource[rid] = {"total": 0, "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+            findings_per_resource[rid]["total"] += 1
+            findings_per_resource[rid][finding.severity.value] += 1
+
+        # Build hierarchical topology data
+        hierarchy = self._build_hierarchy(scan_result, findings_per_resource)
+
+        # Enrich graph with findings as nodes + ontology edges
+        enriched_graph = self._enrich_graph_with_findings(
+            graph_json or {"nodes": [], "links": []},
+            scan_result,
+        )
+
         return {
             "scan_id": scan_result.scan_id,
             "provider": scan_result.provider.value if scan_result.provider else "Multi-Cloud",
@@ -156,8 +174,154 @@ class HTMLReportGenerator:
                 [a.model_dump(exclude={"raw_data"}, mode="json") for a in scan_result.assets],
                 default=str,
             ),
-            "graph_json": json.dumps(graph_json or {"nodes": [], "links": []}, default=str),
+            "graph_json": json.dumps(enriched_graph, default=str),
+            "hierarchy_json": json.dumps(hierarchy, default=str),
+            "findings_per_resource_json": json.dumps(findings_per_resource, default=str),
         }
+
+    def _build_hierarchy(
+        self,
+        scan_result: ScanResult,
+        findings_per_resource: dict[str, dict[str, int]],
+    ) -> dict[str, Any]:
+        """Build hierarchical tree: Account → Region → VPC → Subnet → Resources."""
+        from collections import defaultdict
+
+        # Group assets by region → VPC → subnet
+        regions: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(list))
+        )
+        ungrouped: list[dict[str, Any]] = []
+
+        for asset in scan_result.assets:
+            asset_data = {
+                "id": asset.id,
+                "name": asset.name,
+                "type": asset.asset_type.value,
+                "arn": asset.arn or "",
+                "internet_exposed": asset.is_internet_exposed,
+                "findings": findings_per_resource.get(asset.id, findings_per_resource.get(asset.arn or "", {})),
+            }
+            region = asset.region or "global"
+            vpc_id = asset.metadata.get("vpc_id", "")
+            subnet_id = asset.metadata.get("subnet_id", "")
+
+            if asset.asset_type.value in ("VPC", "VNET"):
+                vpc_id = asset.metadata.get("vpc_id", asset.name)
+                regions[region][vpc_id]["_vpc_meta"] = []  # type: ignore[assignment]
+                regions[region][vpc_id]["_vpc_meta"].append(asset_data)
+            elif asset.asset_type.value == "SUBNET":
+                regions[region][vpc_id or "_no_vpc"][subnet_id or asset.name].append(asset_data)
+            elif vpc_id or subnet_id:
+                regions[region][vpc_id or "_no_vpc"][subnet_id or "_no_subnet"].append(asset_data)
+            else:
+                ungrouped.append(asset_data)
+
+        # Build tree structure
+        tree: dict[str, Any] = {
+            "name": scan_result.account_id or "Cloud Account",
+            "type": "account",
+            "children": [],
+        }
+        for region_name, vpcs in sorted(regions.items()):
+            region_node: dict[str, Any] = {"name": region_name, "type": "region", "children": []}
+            for vpc_name, subnets in sorted(vpcs.items()):
+                vpc_node: dict[str, Any] = {"name": vpc_name, "type": "vpc", "children": []}
+                for subnet_name, resources in sorted(subnets.items()):
+                    if subnet_name == "_vpc_meta":
+                        continue
+                    subnet_node: dict[str, Any] = {"name": subnet_name, "type": "subnet", "children": resources}
+                    vpc_node["children"].append(subnet_node)
+                region_node["children"].append(vpc_node)
+            tree["children"].append(region_node)
+
+        if ungrouped:
+            tree["children"].append({"name": "Global / Ungrouped", "type": "global", "children": ungrouped})
+
+        return tree
+
+    def _enrich_graph_with_findings(
+        self,
+        graph: dict[str, Any],
+        scan_result: ScanResult,
+    ) -> dict[str, Any]:
+        """Inject findings + compliance frameworks as visible nodes in the D3 graph.
+
+        - Each finding becomes a SecurityFinding node linked to its resource via FINDING_AFFECTS
+        - Each compliance framework becomes a ComplianceFramework node linked via COMPLIANCE_GOVERNS
+        """
+        nodes = list(graph.get("nodes", []))
+        links = list(graph.get("links", []))
+        existing_ids = {n.get("id") for n in nodes}
+
+        # Map resource ARNs → node IDs for connecting findings
+        arn_to_node_id: dict[str, str] = {}
+        for n in nodes:
+            if n.get("arn"):
+                arn_to_node_id[n["arn"]] = n["id"]
+            arn_to_node_id[n.get("id", "")] = n["id"]
+
+        # Track compliance frameworks for dedup
+        fw_nodes_added: set[str] = set()
+
+        for finding in scan_result.findings:
+            finding_id = f"finding_{finding.id}"
+            if finding_id in existing_ids:
+                continue
+
+            # Finding node
+            nodes.append({
+                "id": finding_id,
+                "name": (finding.title or "")[:60],
+                "type": "SECURITY_FINDING",
+                "severity": finding.severity.value,
+                "source_tool": finding.source_tool,
+                "risk_score": finding.risk_score,
+                "is_external": False,
+                "is_internet_exposed": False,
+                "region": "",
+                "arn": "",
+            })
+            existing_ids.add(finding_id)
+
+            # FINDING_AFFECTS edge → resource
+            target_id = arn_to_node_id.get(finding.resource_arn or "") or \
+                        arn_to_node_id.get(finding.resource_id or "")
+            if target_id:
+                links.append({
+                    "source": finding_id,
+                    "target": target_id,
+                    "relation": "FINDING_AFFECTS",
+                    "severity": finding.severity.value,
+                })
+
+            # Compliance framework nodes + COMPLIANCE_GOVERNS edges
+            for fw in (finding.compliance_frameworks or []):
+                fw_id = f"compliance_{fw}"
+                if fw_id not in fw_nodes_added:
+                    nodes.append({
+                        "id": fw_id,
+                        "name": fw,
+                        "type": "COMPLIANCE_FRAMEWORK",
+                        "severity": "",
+                        "source_tool": "",
+                        "risk_score": 0,
+                        "is_external": False,
+                        "is_internet_exposed": False,
+                        "region": "",
+                        "arn": "",
+                    })
+                    fw_nodes_added.add(fw_id)
+                    existing_ids.add(fw_id)
+
+                # COMPLIANCE_GOVERNS → finding
+                links.append({
+                    "source": fw_id,
+                    "target": finding_id,
+                    "relation": "COMPLIANCE_GOVERNS",
+                })
+
+        return {"nodes": nodes, "links": links}
 
     def _fallback_report(self, data: dict[str, Any]) -> str:
         """Generate a simple fallback HTML report if Jinja2 template is missing."""

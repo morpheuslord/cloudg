@@ -57,11 +57,17 @@ gcp:
 scanners:
   enabled:
     - prowler
+    - scoutsuite
     - checkov
+    - trivy
+    - iam
   prowler_extra_args: []
+  scoutsuite_extra_args: []
+  checkov_extra_args: []
   checkov_frameworks:
     - terraform
     - cloudformation
+  trivy_extra_args: []
   trivy_images: []
   iac_directories: []
   timeout_seconds: 3600

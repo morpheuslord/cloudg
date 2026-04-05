@@ -1,28 +1,23 @@
 Phase 3: Security Scanning (Running in parallel)
+  ⊘ Trivy: enabled but no images configured (use --images or 
+config.scanners.trivy_images)
   → IAM Lint started...
+  → ScoutSuite (aws) started...
+  → Checkov started (target: .)...
+           INFO     Running Checkov: checkov -d . --output json    checkov.py:67
+                    --quiet --framework terraform                               
   → Prowler (aws) started...
+           WARNING  ScoutSuite is not installed. Install with:  scoutsuite.py:54
+                    pip install scoutsuite. Skipping ScoutSuite                 
+                    scan.                                                       
+  ✓ ScoutSuite (aws): 0 findings
            INFO     [Prowler] Starting: prowler aws -M json-asff  prowler.py:101
                     -o reports/prowler/aws                                      
-           WARNING  parliament not installed. Install with: pip iam_linter.py:32
+[12:49:31] WARNING  parliament not installed. Install with: pip iam_linter.py:32
                     install parliament                                          
            INFO     IAM linter produced 0 findings              iam_linter.py:78
   ✓ IAM Lint: 0 findings
-[08:54:22] INFO     [Prowler] Executing 573 checks, please     prowler.py:139
-                    wait...                                                  
-run all scanners in parallel 
-
-Phase 3: Security Scanning (Running in parallel)
-  → IAM Lint started...
-  → Prowler (aws) started...
-           INFO     [Prowler] Starting: prowler aws -M json-asff  prowler.py:101
-                    -o reports/prowler/aws                                      
-           WARNING  parliament not installed. Install with: pip iam_linter.py:32
-                    install parliament                                          
-           INFO     IAM linter produced 0 findings              iam_linter.py:78
-  ✓ IAM Lint: 0 findings
-[08:54:22] INFO     [Prowler] Executing 573 checks, please     prowler.py:139
-                    wait...                                                  
-
-
-
-where is checkov scoutsuite running here
+[12:49:46] INFO     Parsed 0 findings from Checkov                checkov.py:107
+  ✓ Checkov: 0 findings
+[12:49:54] INFO     [Prowler] Executing 573 checks, please     prowler.py:139
+                    wait...        

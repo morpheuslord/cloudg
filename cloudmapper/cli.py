@@ -514,29 +514,8 @@ def run(
         if lateral_paths:
             console.print(f"  [yellow]⚠ {len(lateral_paths)} lateral movement paths detected[/]")
 
-    # Phase 2b: Semantic Ontology
-    if ontology and cfg.ontology.enabled:
-        console.print("\n[bold]Phase 2b: Semantic Ontology[/]")
-        try:
-            from cloudmapper.graph.ontology import CloudOntology
-
-            cloud_ontology = CloudOntology()
-            cloud_ontology.build(assets, edges)
-            stats = cloud_ontology.stats()
-            console.print(f"  [green]✓ Ontology: {stats['total_triples']} triples, "
-                          f"{stats['classes_used']} classes, {stats['individuals']} individuals[/]")
-
-            for fmt in cfg.ontology.export_formats:
-                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
-                ext = ext_map.get(fmt, "ttl")
-                onto_path = cloud_ontology.save(output_dir / f"ontology.{ext}", fmt=fmt)
-                console.print(f"  [green]✓ Ontology ({fmt}): {onto_path}[/]")
-
-            # Group summary
-            for group, count in stats['relation_group_counts'].items():
-                console.print(f"    {group}: {count} relations")
-        except Exception as exc:
-            console.print(f"  [red]✗ Ontology build failed: {exc}[/]")
+    # Phase 2b: Semantic Ontology — deferred to after scanner phase
+    # (so security/compliance findings can be included in the ontology)
 
     # Phase 2c: RAG Export
     if rag_export and cfg.rag.enabled:
@@ -694,6 +673,48 @@ def run(
                 console.print(f"  [red]✗ {scanner_name} timed out after {cfg.scanners.timeout_seconds}s[/red]")
             except Exception as exc:
                 console.print(f"  [red]✗ {scanner_name} failed:[/red] {exc}")
+
+    # Combine all findings for downstream phases
+    all_security_findings = scanner_findings + iam_findings + reachability_findings
+    console.print(f"\n  [bold green]✓ Phase 3 complete:[/bold green] {len(all_security_findings)} total findings")
+
+    # Phase 3b: Semantic Ontology (runs AFTER scanners so findings are included)
+    if ontology and cfg.ontology.enabled:
+        console.print("\n[bold]Phase 3b: Semantic Ontology (with security findings)[/]")
+        try:
+            from cloudmapper.graph.ontology import CloudOntology
+
+            cloud_ontology = CloudOntology()
+            cloud_ontology.build(assets, edges, findings=all_security_findings)
+            stats = cloud_ontology.stats()
+            console.print(f"  [green]✓ Ontology: {stats['total_triples']} triples, "
+                          f"{stats['classes_used']} classes, {stats['individuals']} individuals[/]")
+            console.print(f"  [green]✓ Security findings in ontology: {len(all_security_findings)}[/]")
+
+            for fmt in cfg.ontology.export_formats:
+                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
+                ext = ext_map.get(fmt, "ttl")
+                onto_path = cloud_ontology.save(output_dir / f"ontology.{ext}", fmt=fmt)
+                console.print(f"  [green]✓ Ontology ({fmt}): {onto_path}[/]")
+
+            # Group summary
+            for group, count in stats['relation_group_counts'].items():
+                console.print(f"    {group}: {count} relations")
+        except Exception as exc:
+            console.print(f"  [red]✗ Ontology build failed: {exc}[/]")
+
+    # Also update RAG export with all findings
+    if rag_export and cfg.rag.enabled:
+        try:
+            from cloudmapper.graph.rag_export import RAGExporter
+            rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
+            rag_paths = rag.export_all(
+                assets, edges, graph,
+                findings=all_security_findings,
+                output_dir=output_dir,
+            )
+        except Exception:
+            pass  # RAG already ran in Phase 2c, this is an update pass
 
     # Phase 4: Normalise (with external rulesets)
     console.print("\n[bold]Phase 4: Normalisation[/]")
