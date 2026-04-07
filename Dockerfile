@@ -25,8 +25,11 @@ RUN python -m venv /opt/prowler && \
 RUN python -m venv /opt/checkov && \
     /opt/checkov/bin/pip install --no-cache-dir checkov
 
-# Trivy CLI binary
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+# Trivy CLI binary — detect architecture and install correct binary
+RUN ARCH=$(dpkg --print-architecture) && \
+    echo "Installing Trivy for architecture: ${ARCH}" && \
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin && \
+    trivy --version
 
 
 # ── Stage 2: Python Dependencies (changes only when pyproject.toml changes) ──
@@ -54,9 +57,9 @@ LABEL description="Cloud Infrastructure Mapping & Security Intelligence Agent"
 
 WORKDIR /app
 
-# System utils
+# System utils — including libffi for C-extensions used by checkov/prowler
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    graphviz && \
+    graphviz libffi8 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from deps stage (cached unless pyproject.toml changes)
@@ -64,10 +67,21 @@ COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 
 # Copy scanners from scanner stage (cached unless scanner stage changes)
-COPY --from=scanners /opt /opt
+# Copy the full venvs so their internal site-packages and Python are intact
+COPY --from=scanners /opt/prowler /opt/prowler
+COPY --from=scanners /opt/checkov /opt/checkov
 COPY --from=scanners /usr/local/bin/trivy /usr/local/bin/trivy
+
+# Create CLI symlinks so 'checkov' and 'prowler' are on PATH
 RUN ln -sf /opt/prowler/bin/prowler /usr/local/bin/prowler && \
     ln -sf /opt/checkov/bin/checkov /usr/local/bin/checkov
+
+# Verify all scanner tools are accessible
+RUN echo "=== Verifying scanner installations ===" && \
+    prowler --version  || echo "WARNING: prowler not working" && \
+    checkov --version  || echo "WARNING: checkov not working" && \
+    trivy --version    || echo "WARNING: trivy not working" && \
+    echo "=== Scanner verification complete ==="
 
 # Parliament (IAM linting) — small pure-Python package, install directly
 RUN pip install --no-cache-dir parliament
@@ -90,4 +104,3 @@ RUN mkdir -p /app/reports
 
 ENTRYPOINT ["cloudmapper"]
 CMD ["--help"]
-

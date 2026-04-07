@@ -96,6 +96,135 @@ class TrivyScanner:
             all_findings.extend(self.scan_image(image))
         return all_findings
 
+    def scan_filesystem(self, directories: list[str]) -> list[Finding]:
+        """Scan filesystem directories for misconfigurations and vulnerabilities.
+
+        Uses 'trivy fs' to scan IaC files, lock files, and other artifacts
+        without requiring container images.
+
+        Args:
+            directories: List of directory paths to scan.
+
+        Returns:
+            Combined list of Finding objects.
+        """
+        if not self.is_available():
+            logger.warning(
+                "Trivy is not installed. Install from: https://trivy.dev/. "
+                "Skipping Trivy filesystem scan."
+            )
+            return []
+
+        all_findings: list[Finding] = []
+        for directory in directories:
+            cmd = [
+                "trivy",
+                "fs",
+                "--format", "json",
+                "--quiet",
+                "--scanners", "vuln,misconfig,secret",
+                *self._extra_args,
+                directory,
+            ]
+
+            logger.info("Running Trivy filesystem scan: %s", " ".join(cmd))
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error("Trivy filesystem scan timed out for %s", directory)
+                continue
+            except Exception as exc:
+                logger.error("Failed to run Trivy fs for %s: %s", directory, exc)
+                continue
+
+            findings = self._parse_fs_output(result.stdout, directory)
+            all_findings.extend(findings)
+
+        return all_findings
+
+    def _parse_fs_output(self, stdout: str, directory: str) -> list[Finding]:
+        """Parse Trivy filesystem scan JSON output."""
+        findings: list[Finding] = []
+
+        if not stdout.strip():
+            logger.warning("Trivy fs produced no output for %s", directory)
+            return []
+
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to parse Trivy fs JSON: %s", exc)
+            return []
+
+        results = data.get("Results", [])
+        for result in results:
+            target = result.get("Target", "")
+            target_type = result.get("Type", "")
+
+            # Vulnerabilities (from lock files, package manifests)
+            for vuln in result.get("Vulnerabilities", []):
+                finding = self._parse_vulnerability(vuln, directory, target, target_type)
+                if finding:
+                    findings.append(finding)
+
+            # Misconfigurations (from IaC files)
+            for misconfig in result.get("Misconfigurations", []):
+                finding = self._parse_misconfig(misconfig, directory, target)
+                if finding:
+                    findings.append(finding)
+
+            # Secret findings
+            for secret in result.get("Secrets", []):
+                finding = self._parse_secret(secret, directory, target)
+                if finding:
+                    findings.append(finding)
+
+        logger.info("Parsed %d findings from Trivy fs for %s", len(findings), directory)
+        return findings
+
+    def _parse_misconfig(
+        self,
+        misconfig: dict[str, Any],
+        directory: str,
+        target: str,
+    ) -> Finding | None:
+        """Parse a single Trivy misconfiguration finding."""
+        try:
+            severity_str = misconfig.get("Severity", "UNKNOWN").upper()
+            severity = _SEVERITY_MAP.get(severity_str, Severity.MEDIUM)
+
+            misconfig_id = misconfig.get("ID", "")
+            title = misconfig.get("Title", "")
+            description = misconfig.get("Description", "")
+            if len(description) > 500:
+                description = description[:500] + "..."
+
+            resolution = misconfig.get("Resolution", "")
+            primary_url = misconfig.get("PrimaryURL", "")
+
+            return Finding(
+                resource_id=directory,
+                resource_arn=directory,
+                severity=severity,
+                title=f"[Trivy/IaC] {misconfig_id}: {title}",
+                description=description,
+                evidence=f"Directory: {directory}, Target: {target}",
+                remediation=resolution if resolution else primary_url or f"See Trivy check {misconfig_id}",
+                source_tool="trivy",
+                source_finding_id=misconfig_id,
+                compliance_frameworks=["CIS"],
+            )
+        except Exception as exc:
+            logger.debug("Failed to parse Trivy misconfiguration: %s", exc)
+            return None
+
     def _parse_output(self, stdout: str, image: str) -> list[Finding]:
         """Parse Trivy JSON output."""
         findings: list[Finding] = []

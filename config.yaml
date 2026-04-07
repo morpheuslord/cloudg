@@ -64,9 +64,12 @@ scanners:
   prowler_extra_args: []
   scoutsuite_extra_args: []
   checkov_extra_args: []
-  checkov_frameworks:
-    - terraform
-    - cloudformation
+  checkov_frameworks: []     # Empty = auto-detect all frameworks (recommended)
+    # Uncomment below to restrict to specific frameworks:
+    # - terraform
+    # - cloudformation
+    # - arm
+    # - kubernetes
   trivy_extra_args: []
   trivy_images: []
   iac_directories: []

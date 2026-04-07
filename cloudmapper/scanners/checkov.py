@@ -31,11 +31,11 @@ class CheckovScanner:
     def __init__(
         self,
         target_dir: str = ".",
-        framework: str | None = None,
+        frameworks: list[str] | None = None,
         extra_args: list[str] | None = None,
     ) -> None:
         self._target_dir = target_dir
-        self._framework = framework
+        self._frameworks = frameworks or []
         self._extra_args = extra_args or []
 
     @staticmethod
@@ -44,7 +44,13 @@ class CheckovScanner:
         return shutil.which("checkov") is not None
 
     def run(self) -> list[Finding]:
-        """Execute Checkov scan and return normalised findings."""
+        """Execute Checkov scan and return normalised findings.
+
+        If no frameworks are configured, Checkov auto-detects all applicable
+        frameworks (terraform, cloudformation, arm, kubernetes, etc.) in the
+        target directory — which is the correct behaviour for cloud
+        infrastructure scanning.
+        """
         if not self.is_available():
             logger.warning(
                 "Checkov is not installed. Install with: pip install checkov. "
@@ -59,8 +65,9 @@ class CheckovScanner:
             "--quiet",
         ]
 
-        if self._framework:
-            cmd.extend(["--framework", self._framework])
+        # Pass all frameworks in one shot; omit flag entirely for auto-detect
+        if self._frameworks:
+            cmd.extend(["--framework", *self._frameworks])
 
         cmd.extend(self._extra_args)
 

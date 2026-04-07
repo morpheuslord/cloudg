@@ -211,6 +211,12 @@ def scan(
         s = TrivyScanner()
         return s.scan_images(resolved_images)
 
+    def _run_trivy_fs() -> list[Any]:
+        from cloudmapper.scanners.trivy import TrivyScanner
+        console.print(f"  → Running Trivy filesystem scan (target: {resolved_iac_dir})...")
+        s = TrivyScanner()
+        return s.scan_filesystem([resolved_iac_dir])
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(scanner_list) + 1) as executor:
         future_to_name: dict[concurrent.futures.Future, str] = {}
 
@@ -227,7 +233,8 @@ def scan(
             if resolved_images:
                 future_to_name[executor.submit(_run_trivy)] = "Trivy"
             else:
-                console.print("  [yellow]⊘ Trivy: no images specified (use --images)[/yellow]")
+                console.print("  [yellow]⊘ Trivy: no images specified, falling back to filesystem scan[/yellow]")
+                future_to_name[executor.submit(_run_trivy_fs)] = "Trivy (filesystem)"
 
         for future in concurrent.futures.as_completed(future_to_name):
             name = future_to_name[future]
@@ -592,11 +599,12 @@ def run(
 
     def run_checkov(target_dir: str) -> list[Any]:
         from cloudmapper.scanners.checkov import CheckovScanner
-        console.print(f"  → [cyan]Checkov[/cyan] started (target: {target_dir})...")
-        framework = cfg.scanners.checkov_frameworks[0] if cfg.scanners.checkov_frameworks else None
+        frameworks = cfg.scanners.checkov_frameworks or []
+        fw_label = ", ".join(frameworks) if frameworks else "auto-detect"
+        console.print(f"  → [cyan]Checkov[/cyan] started (target: {target_dir}, frameworks: {fw_label})...")
         s = CheckovScanner(
             target_dir=target_dir,
-            framework=framework,
+            frameworks=frameworks if frameworks else None,
             extra_args=cfg.scanners.checkov_extra_args or [],
         )
         findings = s.run()
@@ -608,7 +616,15 @@ def run(
         console.print(f"  → [cyan]Trivy[/cyan] started ({len(image_list)} images)...")
         s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
         findings = s.scan_images(image_list)
-        console.print(f"  [green]✓ Trivy:[/green] {len(findings)} findings")
+        console.print(f"  [green]✓ Trivy (images):[/green] {len(findings)} findings")
+        return findings
+
+    def run_trivy_fs(target_dirs: list[str]) -> list[Any]:
+        from cloudmapper.scanners.trivy import TrivyScanner
+        console.print(f"  → [cyan]Trivy (filesystem)[/cyan] started ({len(target_dirs)} directories)...")
+        s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
+        findings = s.scan_filesystem(target_dirs)
+        console.print(f"  [green]✓ Trivy (filesystem):[/green] {len(findings)} findings")
         return findings
 
     def run_iam_linter() -> list[Any]:
@@ -648,12 +664,13 @@ def run(
         else:
             console.print("  [dim]⊘ Checkov: not enabled[/dim]")
 
-        # Trivy — runs if images are available
+        # Trivy — runs against container images if available, otherwise falls back to filesystem scan
         if "trivy" in scanner_list:
             if resolved_images:
-                future_to_scanner[executor.submit(run_trivy, resolved_images)] = "Trivy"
+                future_to_scanner[executor.submit(run_trivy, resolved_images)] = "Trivy (images)"
             else:
-                console.print("  [yellow]⊘ Trivy: enabled but no images configured (use --images or config.scanners.trivy_images)[/yellow]")
+                console.print("  [yellow]⊘ Trivy: no images configured, falling back to filesystem scan[/yellow]")
+                future_to_scanner[executor.submit(run_trivy_fs, resolved_iac_dirs)] = "Trivy (filesystem)"
         else:
             console.print("  [dim]⊘ Trivy: not enabled[/dim]")
 

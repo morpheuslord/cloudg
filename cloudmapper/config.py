@@ -50,12 +50,15 @@ class GCPConfig(BaseModel):
 class ScannerConfig(BaseModel):
     """Scanner selection and configuration."""
 
-    enabled: list[str] = Field(default=["prowler", "checkov"])
+    enabled: list[str] = Field(default=["prowler", "scoutsuite", "checkov", "trivy", "iam"])
     prowler_extra_args: list[str] = Field(default_factory=list)
     scoutsuite_extra_args: list[str] = Field(default_factory=list)
     checkov_extra_args: list[str] = Field(default_factory=list)
     trivy_extra_args: list[str] = Field(default_factory=list)
-    checkov_frameworks: list[str] = Field(default=["terraform", "cloudformation"])
+    checkov_frameworks: list[str] = Field(
+        default_factory=list,
+        description="Checkov frameworks to scan. Empty = auto-detect all (recommended for cloud infra).",
+    )
     trivy_images: list[str] = Field(default_factory=list)
     iac_directories: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(default=3600, ge=60)
