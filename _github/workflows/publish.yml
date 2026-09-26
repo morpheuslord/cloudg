@@ -1,0 +1,57 @@
+name: Publish to PyPI
+
+# Runs when a GitHub release is published, or manually from the Actions tab.
+# Uses PyPI trusted publishing (OIDC) — no API token secret needed, but the
+# publisher must be registered once on PyPI (see notes at the bottom).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Smoke-test the wheel
+        run: |
+          uv venv /tmp/smoke
+          uv pip install --python /tmp/smoke/bin/python dist/cloudg-*.whl
+          /tmp/smoke/bin/python -c "import cloudg; print('cloudg', cloudg.__version__)"
+          /tmp/smoke/bin/cloudg --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI trusted publishing (OIDC)
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+# One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
+#   Project name:  cloudg
+#   Owner:         morpheuslord
+#   Repository:    cloudmapper
+#   Workflow:      publish.yml
+#   Environment:   pypi
+# Also create the "pypi" environment under the repo's Settings -> Environments.
