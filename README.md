@@ -255,6 +255,3 @@ Python 3.11 or newer. The moto/aiobotocore incompatibility around async response
 
 ---
 
-## License
-
-MIT
