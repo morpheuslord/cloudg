@@ -1,524 +1,195 @@
-# ☁️ CloudMapper — Cloud Infrastructure Mapping & Security Intelligence Agent
+<p align="center">
+  <img src="assets/logo.svg" width="400" alt="cloudg logo">
+</p>
 
-A production-grade Python pipeline that simultaneously maps multi-cloud infrastructure (AWS + Azure + GCP), builds semantic knowledge graphs with ontological reasoning, runs security scanners, generates RAG-ready outputs for LLM integration, and produces Terraform recreation files — all from a single CLI or programmatic API.
+# cloudg
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+cloudg (short for cloud graphing) maps cloud infrastructure across AWS, Azure and GCP, builds a graph of what it finds, runs security scanners over the same inventory, and writes everything out as reports you can actually use: an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
----
+It started as a single-account AWS mapper and grew into a pipeline. One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks.
 
-## Architecture
+## Install
 
-```mermaid
-graph TB
-    subgraph INPUT["🔑 Credential Input"]
-        direction LR
-        AWS_CREDS["AWS Access Keys<br/>or Profile"]
-        AZ_CREDS["Azure<br/>DefaultCredential"]
-        GCP_CREDS["GCP Service Account<br/>or ADC"]
-    end
-
-    subgraph DISCOVERY["🌍 Region Discovery"]
-        direction LR
-        RD["RegionDiscovery"]
-        RD_AWS["ec2.describe_regions"]
-        RD_AZ["list_locations"]
-        RD_GCP["compute.regions.list"]
-        RD --> RD_AWS & RD_AZ & RD_GCP
-    end
-
-    subgraph ORCHESTRATOR["⚡ MultiAccountCollector — asyncio.gather"]
-        direction TB
-
-        subgraph AWS_COLLECT["AWS Collector"]
-            direction TB
-            AWS_STS["STS CallerIdentity"]
-            AWS_EC2["EC2"]
-            AWS_S3["S3"]
-            AWS_RDS["RDS"]
-            AWS_VPC["VPC / Subnets / SGs"]
-            AWS_IAM["IAM Users / Roles"]
-            AWS_LAMBDA["Lambda"]
-            AWS_ELB["ELBv2"]
-            AWS_ECS["ECS"]
-            AWS_DDB["DynamoDB"]
-            AWS_CF["CloudFront"]
-            AWS_SM["Secrets Manager"]
-            AWS_KMS["KMS"]
-        end
-
-        subgraph AZ_COLLECT["Azure Collector"]
-            direction TB
-            AZ_VM["VMs"]
-            AZ_NET["VNets / NSGs"]
-            AZ_STORE["Storage"]
-            AZ_SQL["SQL Databases"]
-            AZ_KV["Key Vault"]
-        end
-
-        subgraph GCP_COLLECT["GCP Collector"]
-            direction TB
-            GCP_ASSET["Cloud Asset Inventory"]
-        end
-    end
-
-    subgraph SCHEMA["📦 Unified Schema — Pydantic v2"]
-        ASSETS["CloudAsset[]"]
-        EDGES["NetworkEdge[]"]
-        COVERAGE["CollectionCoverage[]"]
-    end
-
-    subgraph GRAPH_ENGINE["🔬 Graph & Intelligence Engine"]
-        direction TB
-
-        subgraph GRAPH["NetworkX Graph"]
-            BUILDER["GraphBuilder"]
-            REACH["ReachabilityAnalyzer"]
-            ATTACK["Attack Path Discovery"]
-            LATERAL["Lateral Movement Detection"]
-            BLAST["Blast Radius Scoring"]
-        end
-
-        subgraph ONTOLOGY["Semantic Ontology — rdflib RDF/OWL"]
-            ONT_BUILD["CloudOntology"]
-            ONT_NET["Network Relations<br/>ingress_allows, egress_denies,<br/>only_https, peered_with ..."]
-            ONT_IAM["IAM Relations<br/>assumes_role, has_policy,<br/>cross_account_trust ..."]
-            ONT_SEC["Security Relations<br/>encrypted_by, exposed_to_internet,<br/>publicly_accessible ..."]
-            ONT_GOV["Governance Relations<br/>tagged_with, compliant_with,<br/>member_of_org ..."]
-            ONT_CONT["Containment Relations<br/>hosted_in_vpc, deployed_to_subnet,<br/>runs_in_region ..."]
-            ONT_DATA["Data Flow Relations<br/>reads_from, writes_to,<br/>replicates_to ..."]
-            ONT_COMP["Compute Relations<br/>backed_by_image, scales_with,<br/>load_balanced_by ..."]
-        end
-
-        subgraph RAG["RAG Export Engine"]
-            RAG_ENT["Entity-Centric Chunks<br/>1-hop subgraph per asset"]
-            RAG_COM["Community Detection<br/>Louvain clustering"]
-            RAG_REL["Relation-Group Chunks<br/>semantic domain grouping"]
-            RAG_OUT["JSONL + Metadata Index"]
-        end
-
-        subgraph TF["Terraform Recreation"]
-            TF_MAP["25+ Asset Type Mappings"]
-            TF_JSON[".tf.json Generator"]
-            TF_IMPORT["Import Script Generator"]
-        end
-    end
-
-    subgraph SCANNERS["🔒 Security Scanners"]
-        direction LR
-        PROWLER["Prowler<br/>580+ CIS/NIST checks"]
-        CHECKOV["Checkov<br/>IaC policy engine"]
-        TRIVY["Trivy<br/>CVE scanner"]
-        SCOUT["ScoutSuite"]
-        PARLIAMENT["Parliament<br/>IAM linter"]
-    end
-
-    subgraph NORMALISE["📊 Normalisation"]
-        NORM["FindingsNormaliser"]
-        RULE1["1. Scanner-Native IDs"]
-        RULE2["2. YAML Rulesets"]
-        RULE3["3. Fallback Regex"]
-        NORM --> RULE1 --> RULE2 --> RULE3
-    end
-
-    subgraph OUTPUT["📁 Output Layer"]
-        direction LR
-        HTML["report.html<br/>Interactive D3.js + Chart.js"]
-        SVG["topology.svg"]
-        GML["topology.graphml"]
-        CYTO["cytoscape.json"]
-        JSON["findings.json"]
-        TTL["ontology.ttl / .jsonld"]
-        RAG_FILE["rag_chunks.jsonl"]
-        TF_FILE["*.tf.json"]
-    end
-
-    subgraph API["🔌 Integration API"]
-        ENGINE["CloudMapperEngine"]
-        HOOKS["Event Hooks<br/>on_finding, on_phase_start,<br/>on_error, on_scan_complete"]
-        RESULT["PipelineResult"]
-    end
-
-    INPUT --> DISCOVERY
-    DISCOVERY --> ORCHESTRATOR
-    ORCHESTRATOR --> SCHEMA
-    SCHEMA --> GRAPH_ENGINE
-    SCHEMA --> SCANNERS
-    SCANNERS --> NORMALISE
-    GRAPH_ENGINE --> OUTPUT
-    NORMALISE --> OUTPUT
-    ENGINE --> ORCHESTRATOR
-    ENGINE --> HOOKS
-    ENGINE --> RESULT
-```
-
----
-
-## Features
-
-| Category | Details |
-|---|---|
-| **Multi-Cloud** | AWS (15 services), Azure (VMs, VNets, NSGs, Storage, SQL, Key Vault), GCP (Cloud Asset Inventory) |
-| **Multi-Provider** | Simultaneous scanning of AWS + Azure + GCP via `asyncio.gather` |
-| **Multi-Account** | AWS STS AssumeRole, Azure subscription iteration, GCP project iteration |
-| **Multi-Region** | Auto-discovery of all regions per provider, or `--regions all` sentinel |
-| **Direct Credentials** | Accept access keys directly — no IAM roles needed for third-party scanning |
-| **Semantic Ontology** | ~62 relation types across 7 domains (Network, IAM, Security, Governance, Containment, Data Flow, Compute) via RDF/OWL |
-| **RAG-Ready** | 3 chunking strategies (entity-centric, community-detection, relation-group) with JSONL + metadata index |
-| **Terraform Recreation** | `.tf.json` generator for 25+ asset types with `terraform import` script |
-| **Security Scanning** | Prowler, ScoutSuite, Checkov, Trivy, Parliament (IAM linting) |
-| **Graph Analysis** | NetworkX reachability, attack path discovery, lateral movement detection, blast radius scoring |
-| **Compliance** | CIS, NIST 800-53, PCI-DSS, GDPR, SOC2, HIPAA — scanner-native + loadable YAML rulesets |
-| **Integration API** | `CloudMapperEngine` with event hooks for embedding into SIEM/SOAR/larger systems |
-| **Reports** | Interactive HTML (D3.js + Chart.js), SVG topology, GraphML, Cytoscape JSON |
-| **Docker** | Multi-stage Dockerfile for immutable OS / CI/CD deployment |
-| **Extensibility** | Plugin registry via `importlib.metadata` entry points |
-
----
-
-## Quick Start
-
-### Install with Poetry
+With uv, which is what I use for development:
 
 ```bash
 git clone https://github.com/morpheuslord/cloudmapper.git
 cd cloudmapper
-poetry install
-eval $(poetry env activate)
+uv venv && source .venv/bin/activate
+uv pip install -e ".[all,dev]"
 ```
 
-### Install with pip
+Plain pip works too: `pip install -e ".[all]"`. The cloud SDKs are extras, so `pip install cloudg[aws]` pulls only boto3/aioboto3, `[azure]` and `[gcp]` do the same for their SDKs, and `[all]` installs the lot. The core package with no extras still gives you the graph engine, the ontology, the normaliser and the report renderers.
+
+The external scanners (Prowler, Checkov, Trivy, ScoutSuite) are separate executables, not Python dependencies. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up everything including the scanners and the cloud CLIs. Docker is the lazy path, since the image bundles all four scanners:
 
 ```bash
-pip install -e ".[dev]"
+docker build -t cloudg:latest .
+docker compose run --rm cloudg run -p aws --regions us-east-1
 ```
 
-### Docker (recommended for immutable OS / CI)
+## Quick start
 
 ```bash
-# Build
-docker build -t cloudmapper:latest .
+# one provider, one region
+cloudg run -p aws --regions us-east-1
 
-# Run a scan
-docker run --rm -v $(pwd)/reports:/app/reports \
-  cloudmapper:latest run -p aws \
-  --aws-key YOUR_KEY --aws-secret YOUR_SECRET \
-  --regions us-east-1
+# everything, everywhere
+cloudg run -p all --regions all
 
-# Or via environment variables (more secure)
-export AWS_ACCESS_KEY_ID=YOUR_KEY
-export AWS_SECRET_ACCESS_KEY=YOUR_SECRET
-docker compose run --rm cloudmapper run -p aws --regions us-east-1
+# with Terraform recreation files
+cloudg run -p aws --regions us-east-1 --terraform
 ```
 
----
+Reports land in `./reports`. Open `report.html` first.
 
-## Usage
+## Authentication
 
-### Full Pipeline
+Every provider supports several auth methods, resolved in a fixed priority order. The same config works on a laptop, in CI, and on cloud compute.
+
+### AWS
+
+1. Direct keys: `--aws-key` / `--aws-secret` (plus `--aws-session-token` for temporary credentials), or the standard env vars.
+2. OIDC web identity federation: `--aws-role-arn` together with `--aws-web-identity-token-file`. This is the GitHub Actions / GitLab CI / EKS service account pattern, no long-lived keys anywhere.
+3. A named CLI profile via `--profile`, including SSO profiles.
+4. Nothing at all: the default chain picks up env vars, cached SSO credentials, or the EC2/ECS instance role, so a scan running on cloud compute inherits its host's role.
+
+On top of any of these you can layer STS role assumption with `--aws-role-arn` and, for the third-party auditor pattern, `--aws-external-id`. Multi-account fan-out uses `accounts` plus `role_name` in the config file, and cloudg assumes that role in each account before collecting.
+
+### Azure
+
+1. Workload identity federation: `--azure-tenant-id`, `--azure-client-id` and `--azure-federated-token-file` (AKS workload identity, GitHub OIDC).
+2. Service principal with a client secret: `--azure-client-secret`.
+3. Service principal with a certificate: `--azure-cert-path`.
+4. Managed identity: `--azure-managed-identity`, with `managed_identity_client_id` in the config for user-assigned identities.
+5. The DefaultAzureCredential chain, which also covers `az login` sessions.
+
+### GCP
+
+1. A credentials file via `--gcp-credentials-file`: either a service account key JSON or a workload identity federation (`external_account`) config.
+2. Application default credentials: `GOOGLE_APPLICATION_CREDENTIALS`, gcloud user credentials, or the GCE/GKE metadata server.
+
+`--gcp-impersonate-sa` layers service account impersonation on top of either, which is handy when your user account may impersonate a read-only scanner service account.
+
+The full set of fields lives in `config.yaml` with comments for each method.
+
+## What the pipeline does
+
+```mermaid
+graph LR
+    A[Collect<br/>AWS + Azure + GCP] --> B[Graph<br/>reachability, attack paths]
+    A --> C[Scanners<br/>Prowler, Checkov, Trivy, ScoutSuite]
+    B --> D[Ontology + RAG + Terraform]
+    C --> E[Normalise<br/>dedupe, score, map to frameworks]
+    D --> F[Reports]
+    E --> F
+```
+
+Collection runs all providers concurrently with asyncio, iterating accounts and regions per provider (regions are auto-discovered when you pass `--regions all`). Assets and network edges go into a directed graph, where BFS from the internet node finds exposed resources and blast radius scoring estimates what an attacker could reach from each node.
+
+The same inventory feeds three other exports. The ontology module infers about 62 typed relations (`exposed_to_internet`, `assumes_role`, `encrypted_by`, `hosted_in_vpc` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
+
+Scanner findings are deduplicated by resource and title, rescored against CVSS, and mapped to compliance controls.
+
+## Compliance rules
+
+Findings are tagged with framework controls in four tiers, most precise first:
+
+1. Whatever the scanner itself reports (Prowler ASFF, Checkov check IDs).
+2. Exact check-ID lookup against the shipped rulesets. These are generated from Prowler's public compliance data (Apache-2.0) and cover 28 frameworks with 4,166 controls and 10,236 check mappings across AWS, Azure and GCP: CIS 5.0 for each cloud, NIST 800-53 rev 5, NIST CSF 2.0, PCI DSS 4.0, SOC 2, HIPAA, GDPR, ISO 27001:2022, MITRE ATT&CK, and the AWS Foundational Security Best Practices.
+3. Regex pattern rules for scanners that emit no compliance metadata.
+4. A small built-in fallback table.
+
+The rulesets ship inside the package (`cloudg/rules/`). To refresh them against a newer Prowler release:
 
 ```bash
-# Single provider, single region
-cloudmapper run -p aws --aws-key YOUR_KEY --aws-secret YOUR_SECRET --regions us-east-1
-
-# Multi-provider, all regions
-cloudmapper run -p aws -p azure -p gcp --regions all
-
-# Scan all 3 providers simultaneously
-cloudmapper run -p all --regions all --terraform
-
-# With a config file
-cloudmapper -c config.yaml run -p aws
+git clone --depth 1 https://github.com/prowler-cloud/prowler /tmp/prowler
+python scripts/import_prowler_compliance.py /tmp/prowler
 ```
 
-### Individual Commands
-
-```bash
-# Collect assets only
-cloudmapper collect -p aws --region us-east-1
-
-# Run scanners only
-cloudmapper scan -p aws --scanners prowler,checkov --iac-dir ./infra
-
-# Generate reports from existing findings
-cloudmapper report --input ./reports/findings.json --format all
-```
-
-### CLI Flags
-
-| Flag | Description |
-|---|---|
-| `-p, --provider` | Provider(s) to scan: `aws`, `azure`, `gcp`, `all`. Repeatable: `-p aws -p azure` |
-| `--aws-key` | AWS access key ID (direct credential) |
-| `--aws-secret` | AWS secret access key (direct credential) |
-| `--profile` | AWS CLI profile name (fallback if no direct keys) |
-| `--regions` | Regions to scan: `all` for auto-discovery, or comma-separated list |
-| `--region` | Single AWS region (legacy, ignored if `--regions` is set) |
-| `--subscription-id` | Azure subscription ID |
-| `--project-id` | GCP project ID |
-| `--ontology / --no-ontology` | Build semantic ontology graph (default: on) |
-| `--rag-export / --no-rag-export` | Generate RAG-ready chunks (default: on) |
-| `--terraform / --no-terraform` | Generate Terraform `.tf.json` files (default: off) |
-| `-o, --output` | Output directory (default: `./reports`) |
-| `--scanners` | Scanners to run, comma-separated (default: `prowler,checkov`) |
-
----
-
-## Configuration
-
-Copy and customise `config.yaml`:
+Adding your own framework is a YAML file in the rules directory:
 
 ```yaml
-# Scan multiple providers simultaneously
-providers:
-  - aws
-  - azure
-
-aws:
-  regions:
-    - ALL                    # Auto-discover all enabled regions
-  access_key_id: null        # Direct access key (or use --aws-key CLI flag)
-  secret_access_key: null    # Direct secret key (or use --aws-secret CLI flag)
-  profile: null              # AWS CLI profile (fallback)
-  accounts: []               # Cross-account IDs (optional)
-  role_name: null            # IAM role for cross-account (optional)
-
-azure:
-  subscription_ids: []
-  regions:
-    - ALL                    # Auto-discover all Azure locations
-
-gcp:
-  project_ids: []
-  regions:
-    - ALL                    # Auto-discover all GCP regions
-
-ontology:
-  enabled: true
-  export_formats: [turtle, json-ld]
-
-rag:
-  enabled: true
-  chunk_strategy: hybrid     # entity | community | relation_group | hybrid
-
-terraform:
-  enabled: false
-  output_dir: ./reports/terraform
-
-graph:
-  persist_graphml: true
-  compute_attack_paths: true
-
-scanners:
-  enabled: [prowler, checkov]
-  timeout_seconds: 3600
-
-concurrency_limit: 5         # Max concurrent API calls per provider
+framework: MY-FRAMEWORK
+controls:
+  - id: "MF-1.1"
+    title: "Storage is encrypted"
+    patterns: ["encrypt.*rest"]        # regex tier
+    checks: ["s3_default_encryption"]  # exact tier, optional
 ```
 
----
+`cloudg/policies/` additionally holds Cloud Custodian policy packs (AWS governance, AWS security, Azure, GCP) you can run with `custodian run` independently of cloudg.
 
-## Programmatic API
+## CLI reference
 
-CloudMapper exposes a `CloudMapperEngine` for embedding into larger systems:
+| Flag | Meaning |
+|---|---|
+| `-p, --provider` | `aws`, `azure`, `gcp` or `all`; repeatable |
+| `--regions` | `all` for auto-discovery, or a comma-separated list |
+| `--aws-key`, `--aws-secret`, `--aws-session-token` | direct AWS credentials |
+| `--aws-role-arn`, `--aws-external-id` | STS role assumption |
+| `--aws-web-identity-token-file` | OIDC token file for web identity federation |
+| `--profile` | AWS CLI profile |
+| `--subscription-id`, `--azure-tenant-id`, `--azure-client-id` | Azure identity |
+| `--azure-client-secret`, `--azure-cert-path` | service principal credentials |
+| `--azure-federated-token-file`, `--azure-managed-identity` | federation / managed identity |
+| `--project-id`, `--gcp-credentials-file`, `--gcp-impersonate-sa` | GCP identity |
+| `--scanners` | comma-separated subset of `prowler,scoutsuite,checkov,trivy,iam` |
+| `--iac-dir` | directory for Checkov to scan |
+| `--images` | container images for Trivy |
+| `--ontology/--no-ontology` | RDF ontology export (on by default) |
+| `--rag-export/--no-rag-export` | RAG chunk export (on by default) |
+| `--terraform/--no-terraform` | Terraform recreation (off by default) |
+| `-o, --output` | output directory, `./reports` by default |
+
+`cloudg collect` and `cloudg scan` run the individual phases; `cloudg report -i findings.json` re-renders reports from a previous run.
+
+## Output files
+
+| File | What it is |
+|---|---|
+| `report.html` | interactive report, D3 topology plus findings table, works offline |
+| `findings.json` | all findings, assets, edges and compliance results |
+| `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | the graph in three formats |
+| `ontology.ttl`, `ontology.jsonld` | the RDF ontology |
+| `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks |
+| `terraform/*.tf.json`, `terraform/import.sh` | recreation files |
+
+## Using it as a library
 
 ```python
-from cloudmapper.api import CloudMapperEngine
-from cloudmapper.config import CloudMapperConfig
+from cloudg import CloudGConfig, CloudGEngine
 
-config = CloudMapperConfig(providers=["aws", "azure"])
-config.aws.access_key_id = "AKIAXX..."
-config.aws.secret_access_key = "..."
+config = CloudGConfig(providers=["aws"])
+config.aws.role_arn = "arn:aws:iam::123456789012:role/scanner"
+config.aws.external_id = "my-external-id"
 
-engine = CloudMapperEngine(config)
+engine = CloudGEngine(config)
+engine.on_finding = lambda f: forward_to_siem(f)
 
-# Event hooks for real-time integration (SIEM, SOAR, etc.)
-engine.on_finding = lambda finding: send_to_splunk(finding)
-engine.on_phase_start = lambda phase: log_progress(phase)
-engine.on_error = lambda phase, exc: alert_slack(phase, exc)
-
-# Run full pipeline
-result = await engine.run_pipeline()
+result = engine.run_pipeline_sync()
 print(result.to_summary())
-# {'total_assets': 57, 'total_findings': 12, 'providers_scanned': ['aws', 'azure'], ...}
-
-# Or run individual phases
-collection = await engine.collect()
-analysis = await engine.analyze(collection)
 ```
 
----
+The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
 
-## Semantic Ontology
-
-CloudMapper builds an RDF/OWL knowledge graph with **~62 semantic relation types** across 7 domains:
-
-| Domain | Example Relations |
-|---|---|
-| **Network** | `ingress_allows`, `egress_denies`, `only_https`, `peered_with`, `nat_gateway_routes` |
-| **IAM** | `assumes_role`, `has_policy`, `cross_account_trust`, `admin_access` |
-| **Security** | `encrypted_by`, `exposed_to_internet`, `publicly_accessible`, `rotation_enabled` |
-| **Governance** | `tagged_with`, `compliant_with`, `member_of_org`, `cost_allocated` |
-| **Containment** | `hosted_in_vpc`, `deployed_to_subnet`, `runs_in_region`, `attached_to` |
-| **Data Flow** | `reads_from`, `writes_to`, `replicates_to`, `cached_by` |
-| **Compute** | `backed_by_image`, `scales_with`, `load_balanced_by`, `container_runs` |
-
-Export formats: Turtle (`.ttl`), JSON-LD (`.jsonld`), RDF/XML, N-Triples.
-
----
-
-## RAG-Ready Export
-
-Three chunking strategies optimised for retrieval-augmented generation:
-
-| Strategy | Description |
-|---|---|
-| **Entity-Centric** | 1-hop subgraph per asset — yields one chunk per asset with all its relations |
-| **Community-Detection** | Louvain clustering — groups tightly-connected assets into logical communities |
-| **Relation-Group** | Groups by semantic domain — e.g., all "network" or "IAM" relations together |
-
-Output: `rag_chunks.jsonl` (one JSON object per line) + `rag_metadata_index.json` (chunk index for retrieval).
-
----
-
-## Terraform Recreation
-
-Generates `.tf.json` files mapping 25+ CloudAsset types to Terraform resources:
-
-```bash
-cloudmapper run -p aws --terraform --regions us-east-1
-# Output: reports/terraform/*.tf.json + reports/terraform/import.sh
-```
-
-Supports: EC2, S3, RDS, VPC, Subnets, Security Groups, IAM, Lambda, ELBv2, ECS, DynamoDB, CloudFront, Secrets Manager, KMS, Azure VMs, VNets, NSGs, Storage, GCP instances, networks, and more.
-
----
-
-## Compliance Rule Sourcing
-
-Three-tier compliance mapping strategy:
-
-| Priority | Source | Example |
-|---|---|---|
-| **1. Scanner-native** | Prowler ASFF, Checkov `check_id` | `CIS-1.5`, `CKV_AWS_18` |
-| **2. External rulesets** | YAML files in `rules/` | `rules/cis_aws_v3.yaml` |
-| **3. Fallback regex** | `_FALLBACK_RULES` in normaliser | Pattern matching (last resort) |
-
-Add new frameworks by dropping YAML into `rules/`:
-
-```yaml
-framework: SOC2
-controls:
-  - id: "SOC2-CC6.1"
-    title: "Access Control"
-    patterns: ["access.*control", "authorization"]
-    severity: HIGH
-```
-
----
-
-## Project Structure
-
-```
-cloudmapper/
-├── cli.py                    # Click CLI — collect, scan, report, run
-├── config.py                 # Pydantic v2 YAML config (multi-provider, regions)
-├── credentials.py            # AWS/Azure/GCP credential resolution
-├── api.py                    # CloudMapperEngine — programmatic integration API
-├── region_discovery.py       # Auto-discover regions (AWS/Azure/GCP + fallbacks)
-├── registry.py               # Plugin discovery via entry_points
-├── retry.py                  # Async retry with exponential backoff
-├── coverage.py               # Per-service collection tracking
-├── normaliser.py             # Three-tier compliance aggregator
-├── schema/
-│   └── models.py             # Pydantic models (CloudAsset, Finding, ScanResult)
-├── collectors/
-│   ├── base.py               # BaseCollector ABC
-│   ├── aws.py                # Async AWS (15 services, aioboto3)
-│   ├── azure.py              # Azure SDK collector
-│   ├── gcp.py                # GCP Cloud Asset Inventory collector
-│   └── multi.py              # Multi-provider parallel orchestrator
-├── scanners/
-│   ├── prowler.py            # Prowler ASFF parser
-│   ├── scoutsuite.py         # ScoutSuite JS parser
-│   ├── checkov.py            # Checkov JSON parser
-│   ├── trivy.py              # Trivy CVE parser
-│   └── iam_linter.py         # Parliament IAM policy linter
-├── graph/
-│   ├── builder.py            # NetworkX graph (GraphML, Cytoscape, attack paths)
-│   ├── reachability.py       # BFS reachability + blast radius analysis
-│   ├── ontology.py           # RDF/OWL semantic ontology (~62 relation types)
-│   └── rag_export.py         # RAG-ready chunking (entity, community, relation)
-└── renderers/
-    ├── svg.py                # SVG topology renderer
-    ├── html_report.py        # Jinja2 HTML report (D3.js + Chart.js)
-    ├── json_export.py        # JSON findings exporter
-    └── terraform_export.py   # .tf.json generator with import scripts
-
-tests/
-├── test_collectors.py        # moto-mocked AWS tests
-├── test_normaliser.py        # Normaliser + graph tests
-├── test_ontology.py          # 19 ontology tests
-├── test_rag_export.py        # 22 RAG export tests
-├── test_terraform_export.py  # 20 Terraform export tests
-├── test_region_discovery.py  # 18 region discovery tests
-└── test_api.py               # 16 API + config tests
-
-config.yaml                   # Configuration file
-Dockerfile                    # Multi-stage Docker build
-docker-compose.yml            # Docker Compose for easy deployment
-```
-
----
-
-## Output Files
-
-| File | Description |
-|---|---|
-| `reports/findings.json` | All findings, assets, edges, compliance results |
-| `reports/topology.svg` | Network topology diagram |
-| `reports/topology.graphml` | GraphML for Gephi/Neo4j import |
-| `reports/topology-cytoscape.json` | Cytoscape.js compatible graph |
-| `reports/report.html` | Interactive HTML report (air-gapped capable) |
-| `reports/ontology.ttl` | RDF/OWL semantic ontology (Turtle format) |
-| `reports/ontology.jsonld` | JSON-LD semantic ontology |
-| `reports/rag_chunks.jsonl` | RAG-ready chunks for LLM retrieval |
-| `reports/rag_metadata_index.json` | Chunk metadata index |
-| `reports/terraform/*.tf.json` | Terraform recreation files |
-| `reports/terraform/import.sh` | Terraform import commands |
-
----
-
-## Extending with Plugins
-
-Register custom collectors or scanners via `pyproject.toml`:
+Custom collectors and scanners register through entry points, no core changes needed:
 
 ```toml
-[tool.poetry.plugins."cloudmapper.collectors"]
-custom = "my_package.collector:MyCollector"
-
-[tool.poetry.plugins."cloudmapper.scanners"]
-custom = "my_package.scanner:MyScanner"
+[project.entry-points."cloudg.collectors"]
+mycloud = "my_package.collector:MyCollector"
 ```
 
-CloudMapper discovers plugins at runtime via `importlib.metadata` — no core code changes needed.
+## Development
 
----
+```bash
+uv pip install -e ".[all,dev]"
+pytest             # 152 tests, moto-mocked AWS included
+ruff check cloudg/ tests/
+uv build           # wheel + sdist for PyPI
+```
 
-## AWS Services Collected
-
-EC2, S3, RDS, VPC, Subnets, Security Groups, IAM Users, IAM Roles, Lambda, ELBv2, ECS, DynamoDB, CloudFront, Secrets Manager, KMS
-
----
-
-## Requirements
-
-- Python 3.11+
-- Docker (recommended for immutable OS / CI)
-- Cloud provider credentials (access keys, service accounts, or CLI profiles)
-- Optional: Prowler, Checkov, Trivy, ScoutSuite, Parliament
-
----
+Python 3.11 or newer. The moto/aiobotocore incompatibility around async response bodies is handled in `tests/conftest.py`, so the suite runs against current versions of both.
 
 ## License
 

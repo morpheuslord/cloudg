@@ -1,12 +1,12 @@
 @echo off
 REM ─────────────────────────────────────────────────────────────────
-REM CloudMapper Auto-Install Script (Windows)
+REM CloudG Auto-Install Script (Windows)
 REM Installs ALL Python deps, system packages, and security scanner tools.
-REM Run from the cloudmapper project root directory.
+REM Run from the cloudg project root directory.
 REM ─────────────────────────────────────────────────────────────────
 setlocal enabledelayedexpansion
 
-echo ☁️  CloudMapper Full Auto-Installer (Windows)
+echo ☁️  CloudG Full Auto-Installer (Windows)
 echo ─────────────────────────────────────────────────
 
 REM ── 1. Python version check ──
@@ -62,12 +62,29 @@ if errorlevel 1 (
     echo [OK]    Graphviz found
 )
 
-REM ── 4. Create virtual environment ──
+REM ── 4. Install uv (package manager) ──
 echo.
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo [INFO]  Installing uv...
+    if %HAS_WINGET%==1 (
+        winget install astral-sh.uv --accept-package-agreements --accept-source-agreements >nul 2>&1
+    ) else (
+        pip install uv --quiet
+    )
+)
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo [FAIL]  uv installation failed. Get it from: https://docs.astral.sh/uv/
+    exit /b 1
+)
+echo [OK]    uv found
+
+REM ── 5. Create virtual environment ──
 set VENV_DIR=.venv
 if not exist "%VENV_DIR%" (
     echo [INFO]  Creating virtual environment...
-    python -m venv %VENV_DIR%
+    uv venv %VENV_DIR%
     echo [OK]    Virtual environment created at %VENV_DIR%
 ) else (
     echo [OK]    Virtual environment already exists
@@ -77,22 +94,17 @@ REM Activate
 call %VENV_DIR%\Scripts\activate.bat
 echo [OK]    Virtual environment activated
 
-REM ── 5. Upgrade pip ──
-echo [INFO]  Upgrading pip, setuptools, wheel...
-pip install --upgrade pip setuptools wheel --quiet
-echo [OK]    Build tools upgraded
-
-REM ── 6. Install CloudMapper ──
+REM ── 6. Install CloudG ──
 echo.
-echo [INFO]  Installing CloudMapper with all dependencies...
-pip install -e ".[dev]" --quiet 2>nul
+echo [INFO]  Installing CloudG with all dependencies...
+uv pip install -e ".[all,dev]" --quiet 2>nul
 if errorlevel 1 (
     echo [WARN]  Editable install failed, installing deps directly...
-    pip install pydantic click rich aioboto3 boto3 networkx jinja2 svgwrite aiofiles parliament pytest pytest-asyncio moto --quiet
+    uv pip install pydantic click rich aioboto3 boto3 networkx jinja2 svgwrite aiofiles parliament pytest pytest-asyncio moto --quiet
 )
-echo [OK]    CloudMapper installed
+echo [OK]    CloudG installed
 
-pip install -e ".[full]" --quiet 2>nul
+uv pip install -e ".[full]" --quiet 2>nul
 if not errorlevel 1 echo [OK]    Full extras installed
 
 REM ── 7. Install Security Scanner Tools ──
@@ -103,7 +115,7 @@ echo ─────────────────────────
 echo [INFO]  Installing Prowler...
 where prowler >nul 2>&1
 if errorlevel 1 (
-    pip install prowler --quiet 2>nul && echo [OK]    Prowler installed || echo [WARN]  Prowler install failed
+    uv pip install prowler --quiet 2>nul && echo [OK]    Prowler installed || echo [WARN]  Prowler install failed
 ) else (
     echo [OK]    Prowler already installed
 )
@@ -111,7 +123,7 @@ if errorlevel 1 (
 echo [INFO]  Installing Checkov...
 where checkov >nul 2>&1
 if errorlevel 1 (
-    pip install checkov --quiet 2>nul && echo [OK]    Checkov installed || echo [WARN]  Checkov install failed
+    uv pip install checkov --quiet 2>nul && echo [OK]    Checkov installed || echo [WARN]  Checkov install failed
 ) else (
     echo [OK]    Checkov already installed
 )
@@ -119,17 +131,17 @@ if errorlevel 1 (
 echo [INFO]  Installing ScoutSuite...
 where scout >nul 2>&1
 if errorlevel 1 (
-    pip install scoutsuite --quiet 2>nul && echo [OK]    ScoutSuite installed || echo [WARN]  ScoutSuite install failed
+    uv pip install scoutsuite --quiet 2>nul && echo [OK]    ScoutSuite installed || echo [WARN]  ScoutSuite install failed
 ) else (
     echo [OK]    ScoutSuite already installed
 )
 
 echo [INFO]  Installing Parliament ^& Policy Sentry...
-pip install parliament --quiet 2>nul && echo [OK]    Parliament installed || echo [WARN]  Parliament install failed
-pip install policy-sentry --quiet 2>nul && echo [OK]    Policy Sentry installed || echo [WARN]  Policy Sentry install failed
+uv pip install parliament --quiet 2>nul && echo [OK]    Parliament installed || echo [WARN]  Parliament install failed
+uv pip install policy-sentry --quiet 2>nul && echo [OK]    Policy Sentry installed || echo [WARN]  Policy Sentry install failed
 
 echo [INFO]  Installing Cloud Custodian...
-pip install c7n --quiet 2>nul && echo [OK]    Cloud Custodian installed || echo [WARN]  Cloud Custodian install failed
+uv pip install c7n --quiet 2>nul && echo [OK]    Cloud Custodian installed || echo [WARN]  Cloud Custodian install failed
 
 REM Trivy (binary)
 echo.
@@ -199,11 +211,11 @@ echo.
 echo Verifying Installation
 echo ─────────────────────────────────────────────────
 
-cloudmapper --version >nul 2>&1
+cloudg --version >nul 2>&1
 if errorlevel 1 (
-    echo [WARN]  CloudMapper CLI not yet on PATH
+    echo [WARN]  CloudG CLI not yet on PATH
 ) else (
-    for /f "tokens=*" %%v in ('cloudmapper --version 2^>^&1') do echo [OK]    cloudmapper %%v
+    for /f "tokens=*" %%v in ('cloudg --version 2^>^&1') do echo [OK]    cloudg %%v
 )
 
 echo.
@@ -211,8 +223,8 @@ echo ✓ Installation complete!
 echo.
 echo Usage:
 echo   %VENV_DIR%\Scripts\activate.bat
-echo   cloudmapper --help
-echo   cloudmapper collect --provider aws --region us-east-1
-echo   cloudmapper run --provider aws -o .\reports
+echo   cloudg --help
+echo   cloudg collect --provider aws --region us-east-1
+echo   cloudg run --provider aws -o .\reports
 
 endlocal

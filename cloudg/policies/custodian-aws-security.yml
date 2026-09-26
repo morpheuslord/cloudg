@@ -1,0 +1,139 @@
+# ─────────────────────────────────────────────────────────────────
+# Cloud Custodian — AWS Security Policies
+# ─────────────────────────────────────────────────────────────────
+# Detection-only policies (notify, never remediate) covering the most
+# common AWS misconfigurations. Aligned with CIS AWS Foundations
+# Benchmark v3.0 controls where noted.
+#
+# Usage:
+#   uv pip install c7n
+#   custodian run --output-dir ./custodian-output cloudg/policies/custodian-aws-security.yml
+
+policies:
+
+  # ── S3 buckets with public ACL grants (CIS 2.1.2) ──
+  - name: s3-public-global-grants
+    resource: s3
+    description: "S3 buckets that grant access to AllUsers or AuthenticatedUsers"
+    filters:
+      - type: global-grants
+    actions:
+      - type: notify
+        subject: "Public S3 bucket detected"
+        violation_desc: "Bucket ACL grants access to everyone or any AWS authenticated user."
+        action_desc: "Remove the public grant and enable S3 Block Public Access."
+
+  # ── Security groups open to the world on SSH (CIS 5.2) ──
+  - name: sg-open-ssh
+    resource: security-group
+    description: "Security groups allowing SSH (22) from 0.0.0.0/0"
+    filters:
+      - type: ingress
+        Ports: [22]
+        Cidr:
+          value: "0.0.0.0/0"
+    actions:
+      - type: notify
+        subject: "Security group allows SSH from the Internet"
+        violation_desc: "Port 22 is reachable from 0.0.0.0/0."
+        action_desc: "Restrict the source to a bastion, VPN range, or use SSM Session Manager."
+
+  # ── Security groups open to the world on RDP (CIS 5.3) ──
+  - name: sg-open-rdp
+    resource: security-group
+    description: "Security groups allowing RDP (3389) from 0.0.0.0/0"
+    filters:
+      - type: ingress
+        Ports: [3389]
+        Cidr:
+          value: "0.0.0.0/0"
+    actions:
+      - type: notify
+        subject: "Security group allows RDP from the Internet"
+        violation_desc: "Port 3389 is reachable from 0.0.0.0/0."
+        action_desc: "Restrict the source range or use a bastion host."
+
+  # ── Unencrypted EBS volumes (CIS 2.2.1) ──
+  - name: ebs-unencrypted
+    resource: ebs
+    description: "EBS volumes without encryption at rest"
+    filters:
+      - Encrypted: false
+    actions:
+      - type: notify
+        subject: "Unencrypted EBS volume"
+        violation_desc: "Volume is not encrypted at rest."
+        action_desc: "Snapshot, copy with encryption enabled, and swap the volume."
+
+  # ── Unencrypted RDS instances (CIS 2.3.1) ──
+  - name: rds-unencrypted
+    resource: rds
+    description: "RDS instances without storage encryption"
+    filters:
+      - StorageEncrypted: false
+    actions:
+      - type: notify
+        subject: "Unencrypted RDS instance"
+        violation_desc: "Database storage is not encrypted at rest."
+        action_desc: "Create an encrypted snapshot copy and restore from it."
+
+  # ── Publicly accessible RDS instances ──
+  - name: rds-publicly-accessible
+    resource: rds
+    description: "RDS instances reachable from the Internet"
+    filters:
+      - PubliclyAccessible: true
+    actions:
+      - type: notify
+        subject: "Publicly accessible RDS instance"
+        violation_desc: "The database endpoint resolves to a public IP."
+        action_desc: "Disable public accessibility and route access through the VPC."
+
+  # ── IAM access keys older than 90 days (CIS 1.4) ──
+  - name: iam-stale-access-keys
+    resource: iam-user
+    description: "IAM users with active access keys older than 90 days"
+    filters:
+      - type: credential
+        key: access_keys.active
+        value: true
+      - type: credential
+        key: access_keys.last_rotated
+        value: 90
+        op: greater-than
+        value_type: age
+    actions:
+      - type: notify
+        subject: "Stale IAM access key"
+        violation_desc: "An active access key has not been rotated in over 90 days."
+        action_desc: "Rotate the key and update the consuming application."
+
+  # ── IAM users without MFA (CIS 1.10) ──
+  - name: iam-user-no-mfa
+    resource: iam-user
+    description: "IAM users with console access but no MFA device"
+    filters:
+      - type: credential
+        key: password_enabled
+        value: true
+      - type: credential
+        key: mfa_active
+        value: false
+    actions:
+      - type: notify
+        subject: "IAM user without MFA"
+        violation_desc: "Console login is enabled without a second factor."
+        action_desc: "Enforce MFA enrollment or disable the console password."
+
+  # ── S3 buckets without default encryption (CIS 2.1.1) ──
+  - name: s3-no-default-encryption
+    resource: s3
+    description: "S3 buckets without default server-side encryption"
+    filters:
+      - type: bucket-encryption
+        state: false
+    actions:
+      - type: notify
+        subject: "S3 bucket without default encryption"
+        violation_desc: "Objects written without an encryption header are stored unencrypted."
+        action_desc: "Enable default SSE-S3 or SSE-KMS encryption on the bucket."

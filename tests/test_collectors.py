@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import patch
 
 import boto3
 import pytest
 from moto import mock_aws
 
-from cloudmapper.collectors.aws import AsyncAWSCollector
-from cloudmapper.schema.models import AssetType, CloudProvider
+from cloudg.collectors.aws import AsyncAWSCollector
+from cloudg.schema.models import AssetType, CloudProvider
 
 
 @pytest.fixture
@@ -38,7 +37,7 @@ class TestSchemaModels:
     """Test Pydantic v2 schema models."""
 
     def test_cloud_asset_creation(self):
-        from cloudmapper.schema.models import CloudAsset
+        from cloudg.schema.models import CloudAsset
 
         asset = CloudAsset(
             name="test-instance",
@@ -53,7 +52,7 @@ class TestSchemaModels:
         assert asset.id  # Should have auto-generated UUID
 
     def test_cloud_asset_display_id_with_arn(self):
-        from cloudmapper.schema.models import CloudAsset
+        from cloudg.schema.models import CloudAsset
 
         asset = CloudAsset(
             arn="arn:aws:ec2:us-east-1:123456:instance/i-123",
@@ -64,7 +63,7 @@ class TestSchemaModels:
         assert asset.display_id == "arn:aws:ec2:us-east-1:123456:instance/i-123"
 
     def test_cloud_asset_display_id_without_arn(self):
-        from cloudmapper.schema.models import CloudAsset
+        from cloudg.schema.models import CloudAsset
 
         asset = CloudAsset(
             name="test",
@@ -74,7 +73,7 @@ class TestSchemaModels:
         assert asset.display_id == asset.id
 
     def test_finding_risk_score(self):
-        from cloudmapper.schema.models import Finding, Severity
+        from cloudg.schema.models import Finding, Severity
 
         finding = Finding(
             resource_id="test",
@@ -86,7 +85,7 @@ class TestSchemaModels:
         assert finding.risk_score == 9.5
 
     def test_finding_risk_score_with_cvss(self):
-        from cloudmapper.schema.models import Finding, Severity
+        from cloudg.schema.models import Finding, Severity
 
         finding = Finding(
             resource_id="test",
@@ -100,7 +99,7 @@ class TestSchemaModels:
         assert finding.risk_score == 8.2
 
     def test_scan_result_summary(self):
-        from cloudmapper.schema.models import Finding, ScanResult, Severity
+        from cloudg.schema.models import Finding, ScanResult, Severity
 
         result = ScanResult(
             findings=[
@@ -115,7 +114,7 @@ class TestSchemaModels:
         assert summary["severity_breakdown"]["HIGH"] == 1
 
     def test_network_edge_creation(self):
-        from cloudmapper.schema.models import EdgeType, NetworkEdge
+        from cloudg.schema.models import EdgeType, NetworkEdge
 
         edge = NetworkEdge(
             source_id="0.0.0.0/0",
@@ -183,7 +182,7 @@ class TestAsyncAWSCollector:
     def _setup_s3(self, session):
         """Create mock S3 bucket."""
         s3 = session.client("s3", region_name="us-east-1")
-        s3.create_bucket(Bucket="test-bucket-cloudmapper")
+        s3.create_bucket(Bucket="test-bucket-cloudg")
 
     def _setup_iam(self, session):
         """Create mock IAM user."""
@@ -222,7 +221,7 @@ class TestAsyncAWSCollector:
         )
         assets = asyncio.run(collector._collect_s3())
         assert len(assets) >= 1
-        bucket = next(a for a in assets if a.name == "test-bucket-cloudmapper")
+        bucket = next(a for a in assets if a.name == "test-bucket-cloudg")
         assert bucket.asset_type == AssetType.S3_BUCKET
 
     def test_collect_vpcs(self, boto3_session):
@@ -296,7 +295,7 @@ class TestAsyncAWSCollector:
         collector = AsyncAWSCollector(
             session=boto3_session, region="us-east-1", account_id="123456789012"
         )
-        assets = asyncio.run(collector.collect())
+        asyncio.run(collector.collect())
         edges = asyncio.run(collector.collect_edges())
 
         # Should have at least SG edges

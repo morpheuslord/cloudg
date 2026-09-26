@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────
+# ISO/IEC 27001:2022 — Annex A Control Mappings
+# Source: ISO/IEC 27001:2022 Annex A control names (control titles are
+# publicly listed; the full standard text is published by ISO)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: ISO-27001
+version: "2022"
+source: "ISO/IEC 27001:2022 Annex A"
+
+controls:
+  - id: "ISO-A.5.15"
+    title: "Access control"
+    patterns:
+      - "access.*control"
+      - "authorization"
+      - "iam.*polic"
+    severity: HIGH
+
+  - id: "ISO-A.5.17"
+    title: "Authentication information"
+    patterns:
+      - "password.*policy"
+      - "credential.*rotat"
+      - "access.*key.*rotat"
+    severity: MEDIUM
+
+  - id: "ISO-A.5.18"
+    title: "Access rights"
+    patterns:
+      - "least.*privilege"
+      - "overly.*permissive"
+      - "wildcard"
+      - "unused.*account"
+    severity: HIGH
+
+  - id: "ISO-A.8.5"
+    title: "Secure authentication"
+    patterns:
+      - "mfa"
+      - "multi.factor"
+    severity: HIGH
+
+  - id: "ISO-A.8.8"
+    title: "Management of technical vulnerabilities"
+    patterns:
+      - "vulnerability"
+      - "cve"
+      - "patch"
+    severity: HIGH
+
+  - id: "ISO-A.8.15"
+    title: "Logging"
+    patterns:
+      - "logging"
+      - "audit.*log"
+      - "cloudtrail"
+      - "flow.*log"
+    severity: MEDIUM
+
+  - id: "ISO-A.8.16"
+    title: "Monitoring activities"
+    patterns:
+      - "monitor"
+      - "alarm"
+      - "detect"
+    severity: MEDIUM
+
+  - id: "ISO-A.8.20"
+    title: "Networks security"
+    patterns:
+      - "security.*group"
+      - "firewall"
+      - "network.*acl"
+      - "internet.*exposed"
+    severity: HIGH
+
+  - id: "ISO-A.8.24"
+    title: "Use of cryptography"
+    patterns:
+      - "encrypt"
+      - "tls"
+      - "kms"
+      - "unencrypted"
+    severity: HIGH
