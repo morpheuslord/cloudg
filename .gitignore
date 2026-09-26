@@ -30,8 +30,12 @@ htmlcov/
 .tox/
 .nox/
 
-# ── Poetry ──
+# ── Package managers ──
 poetry.lock
+uv.lock
+
+# ── Claude workspace (never push) ──
+.claude/
 
 # ── OS ──
 .DS_Store
@@ -62,4 +66,4 @@ config.yaml
 *.ttl
 *.jsonld
 *.nt
-rag_chunks/
+rag_chunks/.ruff_cache/

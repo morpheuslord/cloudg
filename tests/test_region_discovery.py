@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from cloudmapper.region_discovery import (
+from cloudg.region_discovery import (
     AWS_REGIONS_FALLBACK,
     AZURE_LOCATIONS_FALLBACK,
     GCP_REGIONS_FALLBACK,
@@ -18,7 +17,7 @@ from cloudmapper.region_discovery import (
 
 def _run(coro):
     """Run async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── Sentinel Tests ──

@@ -1,0 +1,93 @@
+# ─────────────────────────────────────────────────────────────────
+# SOC 2 — Trust Services Criteria (2017, revised 2022) Mappings
+# Source: AICPA Trust Services Criteria (Common Criteria series)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: SOC2
+version: "2017 (2022 revision)"
+source: "AICPA Trust Services Criteria"
+
+controls:
+  - id: "SOC2-CC6.1"
+    title: "Logical access security software, infrastructure, and architectures are implemented"
+    patterns:
+      - "access.*control"
+      - "authorization"
+      - "iam.*polic"
+      - "least.*privilege"
+    severity: HIGH
+
+  - id: "SOC2-CC6.2"
+    title: "New internal and external users are registered and authorized before access is granted"
+    patterns:
+      - "unused.*account"
+      - "stale.*user"
+      - "account.*manage"
+    severity: MEDIUM
+
+  - id: "SOC2-CC6.3"
+    title: "Access to data and software is removed or modified when no longer required"
+    patterns:
+      - "access.*key.*rotat"
+      - "credential.*rotat"
+      - "inactive.*credential"
+    severity: MEDIUM
+
+  - id: "SOC2-CC6.6"
+    title: "Logical access security measures protect against threats from outside system boundaries"
+    patterns:
+      - "internet.*exposed"
+      - "publicly.*accessible"
+      - "0\\.0\\.0\\.0"
+      - "firewall"
+      - "security.*group"
+    severity: CRITICAL
+
+  - id: "SOC2-CC6.7"
+    title: "Transmission, movement, and removal of information is restricted and protected"
+    patterns:
+      - "encrypt"
+      - "tls"
+      - "ssl"
+      - "https"
+    severity: HIGH
+
+  - id: "SOC2-CC6.8"
+    title: "Controls prevent or detect the introduction of unauthorized or malicious software"
+    patterns:
+      - "vulnerability"
+      - "cve"
+      - "malware"
+      - "patch"
+    severity: HIGH
+
+  - id: "SOC2-CC7.1"
+    title: "Vulnerabilities are identified and monitored through detection and monitoring procedures"
+    patterns:
+      - "scan"
+      - "detect"
+      - "guardduty"
+      - "security.*hub"
+    severity: MEDIUM
+
+  - id: "SOC2-CC7.2"
+    title: "System components are monitored for anomalies indicative of malicious acts or errors"
+    patterns:
+      - "monitor"
+      - "logging"
+      - "audit"
+      - "alarm"
+      - "cloudtrail"
+    severity: MEDIUM
+
+  - id: "SOC2-A1.2"
+    title: "Environmental protections, backup, and recovery infrastructure are maintained"
+    patterns:
+      - "backup"
+      - "snapshot"
+      - "multi.?az"
+      - "replication"
+    severity: MEDIUM

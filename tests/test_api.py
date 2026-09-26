@@ -1,19 +1,16 @@
-"""Tests for the CloudMapper programmatic API."""
+"""Tests for the CloudG programmatic API."""
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
-from cloudmapper.api import (
+from cloudg.api import (
     AnalysisResult,
-    CloudMapperEngine,
+    CloudGEngine,
     CollectionResult,
     PipelineResult,
 )
-from cloudmapper.config import CloudMapperConfig
+from cloudg.config import CloudGConfig
 
 
 # ── Result Dataclass Tests ──
@@ -70,16 +67,16 @@ class TestAnalysisResult:
 # ── Engine Tests ──
 
 
-class TestCloudMapperEngine:
+class TestCloudGEngine:
     def test_engine_instantiation(self):
         """Engine should be instantiable with a config."""
-        config = CloudMapperConfig()
-        engine = CloudMapperEngine(config)
+        config = CloudGConfig()
+        engine = CloudGEngine(config)
         assert engine.config is config
 
     def test_engine_default_hooks_are_none(self):
-        config = CloudMapperConfig()
-        engine = CloudMapperEngine(config)
+        config = CloudGConfig()
+        engine = CloudGEngine(config)
         assert engine.on_collection_complete is None
         assert engine.on_scan_complete is None
         assert engine.on_finding is None
@@ -89,8 +86,8 @@ class TestCloudMapperEngine:
 
     def test_engine_hooks_settable(self):
         """Event hooks should be assignable."""
-        config = CloudMapperConfig()
-        engine = CloudMapperEngine(config)
+        config = CloudGConfig()
+        engine = CloudGEngine(config)
 
         called = {"phase": None}
 
@@ -103,8 +100,8 @@ class TestCloudMapperEngine:
 
     def test_engine_error_hook(self):
         """Error hook should capture exceptions."""
-        config = CloudMapperConfig()
-        engine = CloudMapperEngine(config)
+        config = CloudGConfig()
+        engine = CloudGEngine(config)
 
         errors = []
 
@@ -118,8 +115,8 @@ class TestCloudMapperEngine:
 
     def test_multi_provider_config(self):
         """Engine with multi-provider config should preserve providers."""
-        config = CloudMapperConfig(providers=["aws", "azure", "gcp"])
-        engine = CloudMapperEngine(config)
+        config = CloudGConfig(providers=["aws", "azure", "gcp"])
+        engine = CloudGEngine(config)
         assert engine.config.providers == ["aws", "azure", "gcp"]
 
 
@@ -129,25 +126,25 @@ class TestCloudMapperEngine:
 class TestConfigBackwardCompat:
     def test_single_provider_string(self):
         """Old-style 'provider: azure' should auto-migrate to providers list."""
-        config = CloudMapperConfig(provider="azure")
+        config = CloudGConfig(provider="azure")
         assert config.providers == ["azure"]
 
     def test_providers_list_takes_precedence(self):
         """If providers list is explicitly set, it should be used."""
-        config = CloudMapperConfig(providers=["aws", "gcp"])
+        config = CloudGConfig(providers=["aws", "gcp"])
         assert config.providers == ["aws", "gcp"]
 
     def test_default_is_aws(self):
         """Default provider should be aws."""
-        config = CloudMapperConfig()
+        config = CloudGConfig()
         assert config.providers == ["aws"]
 
     def test_all_regions_azure(self):
         """Azure config should default to ALL regions."""
-        config = CloudMapperConfig()
+        config = CloudGConfig()
         assert config.azure.regions == ["ALL"]
 
     def test_all_regions_gcp(self):
         """GCP config should default to ALL regions."""
-        config = CloudMapperConfig()
+        config = CloudGConfig()
         assert config.gcp.regions == ["ALL"]
