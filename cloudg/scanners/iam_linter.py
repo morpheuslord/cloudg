@@ -26,19 +26,17 @@ class IAMLinter:
         """Check which IAM analysis tools are available."""
         try:
             import parliament  # noqa: F401
+
             self._parliament_available = True
         except ImportError:
-            logger.warning(
-                "parliament not installed. Install with: pip install parliament"
-            )
+            logger.warning("parliament not installed. Install with: pip install parliament")
 
         try:
             import policy_sentry  # noqa: F401
+
             self._policy_sentry_available = True
         except ImportError:
-            logger.debug(
-                "policy-sentry not installed. Install with: pip install policy-sentry"
-            )
+            logger.debug("policy-sentry not installed. Install with: pip install policy-sentry")
 
     def analyze_policies(self, assets: list[CloudAsset]) -> list[Finding]:
         """Analyse all IAM policy assets.
@@ -52,12 +50,13 @@ class IAMLinter:
         findings: list[Finding] = []
 
         iam_assets = [
-            a for a in assets
-            if a.asset_type in (AssetType.IAM_POLICY, AssetType.IAM_ROLE)
+            a for a in assets if a.asset_type in (AssetType.IAM_POLICY, AssetType.IAM_ROLE)
         ]
 
         for asset in iam_assets:
-            policy_doc = asset.metadata.get("assume_role_policy") or asset.metadata.get("policy_document")
+            policy_doc = asset.metadata.get("assume_role_policy") or asset.metadata.get(
+                "policy_document"
+            )
             if not policy_doc:
                 continue
 
@@ -77,9 +76,7 @@ class IAMLinter:
         logger.info("IAM linter produced %d findings", len(findings))
         return findings
 
-    def _lint_with_parliament(
-        self, policy_str: str, asset: CloudAsset
-    ) -> list[Finding]:
+    def _lint_with_parliament(self, policy_str: str, asset: CloudAsset) -> list[Finding]:
         """Run Parliament linter on a policy document."""
         findings: list[Finding] = []
 
@@ -96,7 +93,7 @@ class IAMLinter:
                         resource_arn=asset.arn,
                         severity=severity,
                         title=f"[Parliament] IAM policy issue: {finding.issue}",
-                        description=finding.detail if hasattr(finding, 'detail') else str(finding),
+                        description=finding.detail if hasattr(finding, "detail") else str(finding),
                         evidence=f"Policy: {asset.name}, Issue: {finding.issue}",
                         remediation=(
                             "Review and fix the IAM policy. Follow least-privilege "
@@ -111,9 +108,7 @@ class IAMLinter:
 
         return findings
 
-    def _check_wildcards(
-        self, policy_str: str, asset: CloudAsset
-    ) -> list[Finding]:
+    def _check_wildcards(self, policy_str: str, asset: CloudAsset) -> list[Finding]:
         """Check for wildcard permissions (Action: * or Resource: *)."""
         findings: list[Finding] = []
 
@@ -164,7 +159,8 @@ class IAMLinter:
                 sensitive_prefixes = ("iam:", "sts:", "kms:", "s3:", "ec2:", "lambda:")
                 has_sensitive = any(
                     any(a.startswith(p) for p in sensitive_prefixes)
-                    for a in actions if isinstance(a, str) and a != "*"
+                    for a in actions
+                    if isinstance(a, str) and a != "*"
                 )
 
                 if has_sensitive or "*" in actions:

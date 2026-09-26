@@ -25,49 +25,73 @@ from cloudg.schema.models import (
 
 # ── Helpers ──
 
+
 def _make_assets() -> list[CloudAsset]:
     return [
         CloudAsset(
-            id="vpc-1", name="prod-vpc",
-            asset_type=AssetType.VPC, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="vpc-1",
+            name="prod-vpc",
+            asset_type=AssetType.VPC,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             metadata={"vpc_id": "vpc-1", "cidr_block": "10.0.0.0/16"},
             tags={"Name": "prod-vpc", "owner": "platform-team", "costcenter": "engineering"},
         ),
         CloudAsset(
-            id="subnet-1", name="prod-subnet",
-            asset_type=AssetType.SUBNET, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="subnet-1",
+            name="prod-subnet",
+            asset_type=AssetType.SUBNET,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             metadata={"vpc_id": "vpc-1", "subnet_id": "subnet-1", "cidr_block": "10.0.1.0/24"},
         ),
         CloudAsset(
-            id="ec2-1", name="web-server",
-            asset_type=AssetType.EC2, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
-            metadata={"vpc_id": "vpc-1", "subnet_id": "subnet-1",
-                       "security_groups": ["sg-1"], "instance_type": "t3.medium"},
+            id="ec2-1",
+            name="web-server",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
+            metadata={
+                "vpc_id": "vpc-1",
+                "subnet_id": "subnet-1",
+                "security_groups": ["sg-1"],
+                "instance_type": "t3.medium",
+            },
         ),
         CloudAsset(
-            id="rds-1", name="prod-db",
-            asset_type=AssetType.RDS_INSTANCE, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="rds-1",
+            name="prod-db",
+            asset_type=AssetType.RDS_INSTANCE,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             metadata={"storage_encrypted": True, "kms_key_id": "kms-1"},
         ),
         CloudAsset(
-            id="sg-1", name="web-sg",
-            asset_type=AssetType.SECURITY_GROUP, provider=CloudProvider.AWS,
+            id="sg-1",
+            name="web-sg",
+            asset_type=AssetType.SECURITY_GROUP,
+            provider=CloudProvider.AWS,
             region="us-east-1",
             metadata={"group_id": "sg-1", "vpc_id": "vpc-1"},
         ),
         CloudAsset(
-            id="role-1", name="app-role",
-            asset_type=AssetType.IAM_ROLE, provider=CloudProvider.AWS,
-            region="global", account_id="123456789012",
+            id="role-1",
+            name="app-role",
+            asset_type=AssetType.IAM_ROLE,
+            provider=CloudProvider.AWS,
+            region="global",
+            account_id="123456789012",
             metadata={"assume_role_policy": {"Version": "2012-10-17", "Statement": []}},
         ),
         CloudAsset(
-            id="kms-1", name="prod-key",
-            asset_type=AssetType.KMS_KEY, provider=CloudProvider.AWS,
+            id="kms-1",
+            name="prod-key",
+            asset_type=AssetType.KMS_KEY,
+            provider=CloudProvider.AWS,
             region="us-east-1",
             metadata={"rotation_enabled": True, "key_usage": "ENCRYPT_DECRYPT"},
         ),
@@ -77,25 +101,35 @@ def _make_assets() -> list[CloudAsset]:
 def _make_edges() -> list[NetworkEdge]:
     return [
         NetworkEdge(
-            source_id="vpc-1", target_id="subnet-1",
+            source_id="vpc-1",
+            target_id="subnet-1",
             edge_type=EdgeType.CONTAINS,
         ),
         NetworkEdge(
-            source_id="0.0.0.0/0", target_id="ec2-1",
+            source_id="0.0.0.0/0",
+            target_id="ec2-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            cidr="0.0.0.0/0", ports=[443], protocol="TCP",
+            cidr="0.0.0.0/0",
+            ports=[443],
+            protocol="TCP",
             direction="ingress",
         ),
         NetworkEdge(
-            source_id="ec2-1", target_id="rds-1",
+            source_id="ec2-1",
+            target_id="rds-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            ports=[3306], protocol="TCP", cidr="10.0.0.0/8",
+            ports=[3306],
+            protocol="TCP",
+            cidr="10.0.0.0/8",
             direction="ingress",
         ),
         NetworkEdge(
-            source_id="ec2-1", target_id="0.0.0.0/0",
+            source_id="ec2-1",
+            target_id="0.0.0.0/0",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            port_range="0-65535", protocol="ALL", cidr="0.0.0.0/0",
+            port_range="0-65535",
+            protocol="ALL",
+            cidr="0.0.0.0/0",
             direction="egress",
         ),
     ]
@@ -168,9 +202,12 @@ class TestRelationInference:
     def test_internet_sg_rule_infers_internet_reachable(self):
         """SG rule with 0.0.0.0/0 should infer INTERNET_REACHABLE."""
         edge = NetworkEdge(
-            source_id="0.0.0.0/0", target_id="ec2-1",
+            source_id="0.0.0.0/0",
+            target_id="ec2-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            cidr="0.0.0.0/0", ports=[443], protocol="TCP",
+            cidr="0.0.0.0/0",
+            ports=[443],
+            protocol="TCP",
             direction="ingress",
         )
         rels = infer_relations(edge, {})
@@ -182,9 +219,12 @@ class TestRelationInference:
     def test_ssh_port_infers_only_ssh(self):
         """SG rule with port 22 should infer ONLY_SSH."""
         edge = NetworkEdge(
-            source_id="10.0.0.0/8", target_id="ec2-1",
+            source_id="10.0.0.0/8",
+            target_id="ec2-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            cidr="10.0.0.0/8", ports=[22], protocol="TCP",
+            cidr="10.0.0.0/8",
+            ports=[22],
+            protocol="TCP",
             direction="ingress",
         )
         rels = infer_relations(edge, {})
@@ -196,7 +236,8 @@ class TestRelationInference:
         """CONTAINS edge between VPC and Subnet should infer VPC_CONTAINS_SUBNET."""
         assets_by_id = {a.id: a for a in _make_assets()}
         edge = NetworkEdge(
-            source_id="vpc-1", target_id="subnet-1",
+            source_id="vpc-1",
+            target_id="subnet-1",
             edge_type=EdgeType.CONTAINS,
         )
         rels = infer_relations(edge, assets_by_id)
@@ -206,9 +247,12 @@ class TestRelationInference:
     def test_all_traffic_inferred(self):
         """Wide port range with ALL protocol should infer ALL_TRAFFIC."""
         edge = NetworkEdge(
-            source_id="ec2-1", target_id="0.0.0.0/0",
+            source_id="ec2-1",
+            target_id="0.0.0.0/0",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            port_range="0-65535", protocol="ALL", cidr="0.0.0.0/0",
+            port_range="0-65535",
+            protocol="ALL",
+            cidr="0.0.0.0/0",
             direction="egress",
         )
         rels = infer_relations(edge, {})
@@ -219,7 +263,8 @@ class TestRelationInference:
     def test_lb_target_infers_load_balanced(self):
         """LOAD_BALANCER_TARGET edge should infer LB_TARGETS_INSTANCE."""
         edge = NetworkEdge(
-            source_id="lb-1", target_id="ec2-1",
+            source_id="lb-1",
+            target_id="ec2-1",
             edge_type=EdgeType.LOAD_BALANCER_TARGET,
         )
         rels = infer_relations(edge, {})
@@ -230,7 +275,8 @@ class TestRelationInference:
     def test_peering_edge(self):
         """PEERING edge should infer VPC_PEERED."""
         edge = NetworkEdge(
-            source_id="vpc-1", target_id="vpc-2",
+            source_id="vpc-1",
+            target_id="vpc-2",
             edge_type=EdgeType.PEERING,
         )
         rels = infer_relations(edge, {})
@@ -320,6 +366,7 @@ class TestCloudOntology:
         onto = CloudOntology()
         onto.build(_make_assets(), _make_edges())
         import json
+
         jsonld = onto.to_jsonld()
         parsed = json.loads(jsonld)
         assert isinstance(parsed, (dict, list))

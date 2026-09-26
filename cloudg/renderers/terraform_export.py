@@ -79,13 +79,33 @@ _TF_RESOURCE_MAP: dict[AssetType, str] = {
 
 # Read-only / computed fields to strip from Terraform output
 _COMPUTED_FIELDS = {
-    "arn", "id", "state", "status", "create_date", "creation_date",
-    "public_ip", "private_ip", "dns_name", "domain_name",
-    "last_modified", "last_accessed", "last_rotated",
-    "running_tasks", "active_services", "item_count", "size_bytes",
-    "acl_grants", "public_access_block", "key_state", "origin",
-    "image_id", "password_last_used", "user_id", "role_id",
-    "web_acl_id", "capacity_providers",
+    "arn",
+    "id",
+    "state",
+    "status",
+    "create_date",
+    "creation_date",
+    "public_ip",
+    "private_ip",
+    "dns_name",
+    "domain_name",
+    "last_modified",
+    "last_accessed",
+    "last_rotated",
+    "running_tasks",
+    "active_services",
+    "item_count",
+    "size_bytes",
+    "acl_grants",
+    "public_access_block",
+    "key_state",
+    "origin",
+    "image_id",
+    "password_last_used",
+    "user_id",
+    "role_id",
+    "web_acl_id",
+    "capacity_providers",
 }
 
 
@@ -175,13 +195,15 @@ def _transform_security_group(asset: CloudAsset) -> dict[str, Any]:
     for rule in m.get("ingress_rules", []):
         for ip_range in rule.get("IpRanges", []):
             proto = rule.get("IpProtocol", "-1")
-            ingress_rules.append({
-                "from_port": rule.get("FromPort", 0),
-                "to_port": rule.get("ToPort", 0),
-                "protocol": "all" if proto == "-1" else proto,
-                "cidr_blocks": [ip_range.get("CidrIp", "")],
-                "description": ip_range.get("Description", ""),
-            })
+            ingress_rules.append(
+                {
+                    "from_port": rule.get("FromPort", 0),
+                    "to_port": rule.get("ToPort", 0),
+                    "protocol": "all" if proto == "-1" else proto,
+                    "cidr_blocks": [ip_range.get("CidrIp", "")],
+                    "description": ip_range.get("Description", ""),
+                }
+            )
     if ingress_rules:
         attrs["ingress"] = ingress_rules
 
@@ -190,13 +212,15 @@ def _transform_security_group(asset: CloudAsset) -> dict[str, Any]:
     for rule in m.get("egress_rules", []):
         for ip_range in rule.get("IpRanges", []):
             proto = rule.get("IpProtocol", "-1")
-            egress_rules.append({
-                "from_port": rule.get("FromPort", 0),
-                "to_port": rule.get("ToPort", 0),
-                "protocol": "all" if proto == "-1" else proto,
-                "cidr_blocks": [ip_range.get("CidrIp", "")],
-                "description": ip_range.get("Description", ""),
-            })
+            egress_rules.append(
+                {
+                    "from_port": rule.get("FromPort", 0),
+                    "to_port": rule.get("ToPort", 0),
+                    "protocol": "all" if proto == "-1" else proto,
+                    "cidr_blocks": [ip_range.get("CidrIp", "")],
+                    "description": ip_range.get("Description", ""),
+                }
+            )
     if egress_rules:
         attrs["egress"] = egress_rules
 
@@ -416,7 +440,8 @@ class TerraformExporter:
 
         logger.info(
             "Terraform export complete: %d resources → %s",
-            len(assets), self._output_dir,
+            len(assets),
+            self._output_dir,
         )
         return paths
 
@@ -504,7 +529,9 @@ class TerraformExporter:
                 }
 
         if CloudProvider.GCP in providers:
-            gcp_projects = {a.account_id for a in assets if a.provider == CloudProvider.GCP and a.account_id}
+            gcp_projects = {
+                a.account_id for a in assets if a.provider == CloudProvider.GCP and a.account_id
+            }
             variables["gcp_project_id"] = {
                 "description": "GCP project ID",
                 "type": "string",
@@ -517,7 +544,9 @@ class TerraformExporter:
             }
 
         if CloudProvider.AZURE in providers:
-            azure_subs = {a.account_id for a in assets if a.provider == CloudProvider.AZURE and a.account_id}
+            azure_subs = {
+                a.account_id for a in assets if a.provider == CloudProvider.AZURE and a.account_id
+            }
             variables["azure_subscription_id"] = {
                 "description": "Azure subscription ID",
                 "type": "string",

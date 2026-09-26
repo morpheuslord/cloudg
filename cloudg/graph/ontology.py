@@ -138,51 +138,81 @@ class RelationType(str, Enum):
 _RELATION_GROUPS: dict[RelationType, RelationGroup] = {}
 _GROUP_RANGES = {
     RelationGroup.NETWORK: [
-        RelationType.INGRESS_ALLOWED, RelationType.INGRESS_DENIED,
-        RelationType.EGRESS_ALLOWED, RelationType.EGRESS_DENIED,
-        RelationType.ONLY_HTTP, RelationType.ONLY_HTTPS,
-        RelationType.ONLY_SSH, RelationType.ONLY_RDP,
-        RelationType.ALL_TRAFFIC, RelationType.PORT_RESTRICTED,
-        RelationType.CIDR_RESTRICTED, RelationType.INTERNET_REACHABLE,
-        RelationType.VPC_PEERED, RelationType.TRANSIT_ROUTED,
-        RelationType.NAT_TRANSLATED, RelationType.DNS_RESOLVED,
+        RelationType.INGRESS_ALLOWED,
+        RelationType.INGRESS_DENIED,
+        RelationType.EGRESS_ALLOWED,
+        RelationType.EGRESS_DENIED,
+        RelationType.ONLY_HTTP,
+        RelationType.ONLY_HTTPS,
+        RelationType.ONLY_SSH,
+        RelationType.ONLY_RDP,
+        RelationType.ALL_TRAFFIC,
+        RelationType.PORT_RESTRICTED,
+        RelationType.CIDR_RESTRICTED,
+        RelationType.INTERNET_REACHABLE,
+        RelationType.VPC_PEERED,
+        RelationType.TRANSIT_ROUTED,
+        RelationType.NAT_TRANSLATED,
+        RelationType.DNS_RESOLVED,
     ],
     RelationGroup.CONTAINMENT: [
-        RelationType.VPC_CONTAINS_SUBNET, RelationType.SUBNET_CONTAINS_INSTANCE,
-        RelationType.REGION_CONTAINS_VPC, RelationType.ACCOUNT_CONTAINS_REGION,
-        RelationType.ORG_CONTAINS_ACCOUNT, RelationType.CLUSTER_CONTAINS_SERVICE,
+        RelationType.VPC_CONTAINS_SUBNET,
+        RelationType.SUBNET_CONTAINS_INSTANCE,
+        RelationType.REGION_CONTAINS_VPC,
+        RelationType.ACCOUNT_CONTAINS_REGION,
+        RelationType.ORG_CONTAINS_ACCOUNT,
+        RelationType.CLUSTER_CONTAINS_SERVICE,
         RelationType.LB_TARGETS_INSTANCE,
     ],
     RelationGroup.IAM: [
-        RelationType.ROLE_ASSUMES_ROLE, RelationType.USER_HAS_POLICY,
-        RelationType.ROLE_HAS_POLICY, RelationType.GROUP_HAS_POLICY,
-        RelationType.POLICY_ALLOWS_ACTION, RelationType.POLICY_DENIES_ACTION,
-        RelationType.CROSS_ACCOUNT_TRUST, RelationType.SERVICE_LINKED_ROLE,
-        RelationType.PERMISSION_BOUNDARY_LIMITS, RelationType.SCP_RESTRICTS,
+        RelationType.ROLE_ASSUMES_ROLE,
+        RelationType.USER_HAS_POLICY,
+        RelationType.ROLE_HAS_POLICY,
+        RelationType.GROUP_HAS_POLICY,
+        RelationType.POLICY_ALLOWS_ACTION,
+        RelationType.POLICY_DENIES_ACTION,
+        RelationType.CROSS_ACCOUNT_TRUST,
+        RelationType.SERVICE_LINKED_ROLE,
+        RelationType.PERMISSION_BOUNDARY_LIMITS,
+        RelationType.SCP_RESTRICTS,
     ],
     RelationGroup.DATA_FLOW: [
-        RelationType.READS_FROM, RelationType.WRITES_TO,
-        RelationType.ENCRYPTS_WITH, RelationType.DECRYPTS_WITH,
-        RelationType.LOGS_TO, RelationType.STREAMS_TO,
-        RelationType.REPLICATES_TO, RelationType.BACKUP_TO,
+        RelationType.READS_FROM,
+        RelationType.WRITES_TO,
+        RelationType.ENCRYPTS_WITH,
+        RelationType.DECRYPTS_WITH,
+        RelationType.LOGS_TO,
+        RelationType.STREAMS_TO,
+        RelationType.REPLICATES_TO,
+        RelationType.BACKUP_TO,
         RelationType.CACHE_FOR,
     ],
     RelationGroup.SECURITY: [
-        RelationType.PROTECTED_BY_SG, RelationType.PROTECTED_BY_NACL,
-        RelationType.PROTECTED_BY_WAF, RelationType.ENCRYPTED_BY_KMS,
-        RelationType.ROTATES_SECRET, RelationType.CERTIFICATE_SECURES,
-        RelationType.FINDING_AFFECTS, RelationType.VULNERABILITY_EXPLOITS,
+        RelationType.PROTECTED_BY_SG,
+        RelationType.PROTECTED_BY_NACL,
+        RelationType.PROTECTED_BY_WAF,
+        RelationType.ENCRYPTED_BY_KMS,
+        RelationType.ROTATES_SECRET,
+        RelationType.CERTIFICATE_SECURES,
+        RelationType.FINDING_AFFECTS,
+        RelationType.VULNERABILITY_EXPLOITS,
         RelationType.COMPLIANCE_GOVERNS,
     ],
     RelationGroup.COMPUTE: [
-        RelationType.RUNS_ON, RelationType.TRIGGERED_BY,
-        RelationType.INVOKES, RelationType.SCALES_WITH,
-        RelationType.LOAD_BALANCED_BY, RelationType.SCHEDULED_BY,
-        RelationType.DEPENDS_ON, RelationType.SERVES_TRAFFIC_TO,
+        RelationType.RUNS_ON,
+        RelationType.TRIGGERED_BY,
+        RelationType.INVOKES,
+        RelationType.SCALES_WITH,
+        RelationType.LOAD_BALANCED_BY,
+        RelationType.SCHEDULED_BY,
+        RelationType.DEPENDS_ON,
+        RelationType.SERVES_TRAFFIC_TO,
     ],
     RelationGroup.GOVERNANCE: [
-        RelationType.TAGGED_WITH, RelationType.COST_ALLOCATED_TO,
-        RelationType.OWNED_BY, RelationType.MONITORED_BY,
+        RelationType.TAGGED_WITH,
+        RelationType.COST_ALLOCATED_TO,
+        RelationType.OWNED_BY,
+        RelationType.MONITORED_BY,
     ],
 }
 for _group, _types in _GROUP_RANGES.items():
@@ -301,10 +331,15 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
                 port_rel = _PORT_RELATIONS.get(p)
                 if port_rel and port_rel not in relations:
                     relations.append(port_rel)
-            if not any(r in relations for r in [
-                RelationType.ONLY_HTTP, RelationType.ONLY_HTTPS,
-                RelationType.ONLY_SSH, RelationType.ONLY_RDP,
-            ]):
+            if not any(
+                r in relations
+                for r in [
+                    RelationType.ONLY_HTTP,
+                    RelationType.ONLY_HTTPS,
+                    RelationType.ONLY_SSH,
+                    RelationType.ONLY_RDP,
+                ]
+            ):
                 relations.append(RelationType.PORT_RESTRICTED)
         elif protocol == "ALL" or (edge.port_range and edge.port_range == "0-65535"):
             relations.append(RelationType.ALL_TRAFFIC)
@@ -317,12 +352,19 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
         src = assets_by_id.get(edge.source_id)
         tgt = assets_by_id.get(edge.target_id)
         if src and tgt:
-            if src.asset_type in (AssetType.VPC, AssetType.VNET) and tgt.asset_type == AssetType.SUBNET:
+            if (
+                src.asset_type in (AssetType.VPC, AssetType.VNET)
+                and tgt.asset_type == AssetType.SUBNET
+            ):
                 relations.append(RelationType.VPC_CONTAINS_SUBNET)
             elif src.asset_type == AssetType.SUBNET:
                 relations.append(RelationType.SUBNET_CONTAINS_INSTANCE)
-            elif src.asset_type in (AssetType.ECS_CLUSTER, AssetType.EKS_CLUSTER,
-                                     AssetType.AKS_CLUSTER, AssetType.GKE_CLUSTER):
+            elif src.asset_type in (
+                AssetType.ECS_CLUSTER,
+                AssetType.EKS_CLUSTER,
+                AssetType.AKS_CLUSTER,
+                AssetType.GKE_CLUSTER,
+            ):
                 relations.append(RelationType.CLUSTER_CONTAINS_SERVICE)
             else:
                 relations.append(RelationType.VPC_CONTAINS_SUBNET)  # generic containment
@@ -377,7 +419,9 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
     return relations
 
 
-def infer_asset_relations(asset: CloudAsset, all_assets: list[CloudAsset]) -> list[tuple[RelationType, str]]:
+def infer_asset_relations(
+    asset: CloudAsset, all_assets: list[CloudAsset]
+) -> list[tuple[RelationType, str]]:
     """Infer additional semantic relations from asset metadata alone.
 
     Returns list of (RelationType, target_asset_id) tuples.
@@ -399,7 +443,10 @@ def infer_asset_relations(asset: CloudAsset, all_assets: list[CloudAsset]) -> li
     vpc_id = asset.metadata.get("vpc_id")
     if vpc_id and asset.asset_type != AssetType.VPC:
         for other in all_assets:
-            if other.asset_type in (AssetType.VPC, AssetType.VNET) and other.metadata.get("vpc_id") == vpc_id:
+            if (
+                other.asset_type in (AssetType.VPC, AssetType.VNET)
+                and other.metadata.get("vpc_id") == vpc_id
+            ):
                 if asset.asset_type == AssetType.SUBNET:
                     relations.append((RelationType.VPC_CONTAINS_SUBNET, other.id))
                 else:
@@ -470,18 +517,44 @@ class CloudOntology:
 
         # Top-level classes
         for cls_name in [
-            "CloudResource", "ComputeInstance", "ServerlessFunction",
-            "ContainerCluster", "ManagedAppService", "VirtualNetwork",
-            "Subnet", "SecurityGroup", "NetworkACL", "RouteTable",
-            "InternetGateway", "NATGateway", "LoadBalancer",
-            "CDNDistribution", "TransitGateway", "PeeringConnection",
-            "ElasticIP", "ObjectStorage", "BlockStorage",
-            "RelationalDatabase", "NoSQLDatabase",
-            "IAMUser", "IAMRole", "IAMPolicy", "IAMGroup",
-            "ServicePrincipal", "EncryptionKey", "Secret",
-            "Certificate", "KeyVault", "AuditLog", "FlowLog",
-            "SecurityFinding", "ComplianceControl",
-            "Region", "Account", "Organization", "TagValue",
+            "CloudResource",
+            "ComputeInstance",
+            "ServerlessFunction",
+            "ContainerCluster",
+            "ManagedAppService",
+            "VirtualNetwork",
+            "Subnet",
+            "SecurityGroup",
+            "NetworkACL",
+            "RouteTable",
+            "InternetGateway",
+            "NATGateway",
+            "LoadBalancer",
+            "CDNDistribution",
+            "TransitGateway",
+            "PeeringConnection",
+            "ElasticIP",
+            "ObjectStorage",
+            "BlockStorage",
+            "RelationalDatabase",
+            "NoSQLDatabase",
+            "IAMUser",
+            "IAMRole",
+            "IAMPolicy",
+            "IAMGroup",
+            "ServicePrincipal",
+            "EncryptionKey",
+            "Secret",
+            "Certificate",
+            "KeyVault",
+            "AuditLog",
+            "FlowLog",
+            "SecurityFinding",
+            "ComplianceControl",
+            "Region",
+            "Account",
+            "Organization",
+            "TagValue",
         ]:
             cls_uri = CM[cls_name]
             g.add((cls_uri, RDF.type, OWL.Class))
@@ -522,9 +595,17 @@ class CloudOntology:
 
         # Data properties
         for dp_name in [
-            "hasARN", "hasName", "hasRegion", "hasProvider",
-            "hasAccountId", "hasCIDR", "hasPort", "hasProtocol",
-            "hasSeverity", "hasRiskScore", "isInternetExposed",
+            "hasARN",
+            "hasName",
+            "hasRegion",
+            "hasProvider",
+            "hasAccountId",
+            "hasCIDR",
+            "hasPort",
+            "hasProtocol",
+            "hasSeverity",
+            "hasRiskScore",
+            "isInternetExposed",
         ]:
             dp_uri = CMP[dp_name]
             g.add((dp_uri, RDF.type, OWL.DatatypeProperty))
@@ -566,7 +647,11 @@ class CloudOntology:
         for asset in assets:
             for rel_type, target_id in infer_asset_relations(asset, assets):
                 src_uri = CMR[asset.id]
-                tgt_uri = CMR[target_id] if not target_id.startswith("tag:") else CMR[target_id.replace(":", "_")]
+                tgt_uri = (
+                    CMR[target_id]
+                    if not target_id.startswith("tag:")
+                    else CMR[target_id.replace(":", "_")]
+                )
                 self._graph.add((src_uri, CMP[rel_type.value], tgt_uri))
 
         # Add findings
@@ -586,7 +671,13 @@ class CloudOntology:
         self._graph.add((uri, CMP["hasName"], Literal(asset.name)))
         self._graph.add((uri, CMP["hasProvider"], Literal(asset.provider.value)))
         self._graph.add((uri, CMP["hasRegion"], Literal(asset.region)))
-        self._graph.add((uri, CMP["isInternetExposed"], Literal(asset.is_internet_exposed, datatype=XSD.boolean)))
+        self._graph.add(
+            (
+                uri,
+                CMP["isInternetExposed"],
+                Literal(asset.is_internet_exposed, datatype=XSD.boolean),
+            )
+        )
 
         if asset.arn:
             self._graph.add((uri, CMP["hasARN"], Literal(asset.arn)))

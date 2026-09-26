@@ -61,7 +61,11 @@ class PluginRegistry:
         # Discover collectors
         try:
             eps = entry_points()
-            collector_eps = eps.select(group=COLLECTOR_GROUP) if hasattr(eps, "select") else eps.get(COLLECTOR_GROUP, [])
+            collector_eps = (
+                eps.select(group=COLLECTOR_GROUP)
+                if hasattr(eps, "select")
+                else eps.get(COLLECTOR_GROUP, [])
+            )
             for ep in collector_eps:
                 try:
                     self._collectors[ep.name] = ep.load()
@@ -74,7 +78,11 @@ class PluginRegistry:
         # Discover scanners
         try:
             eps = entry_points()
-            scanner_eps = eps.select(group=SCANNER_GROUP) if hasattr(eps, "select") else eps.get(SCANNER_GROUP, [])
+            scanner_eps = (
+                eps.select(group=SCANNER_GROUP)
+                if hasattr(eps, "select")
+                else eps.get(SCANNER_GROUP, [])
+            )
             for ep in scanner_eps:
                 try:
                     self._scanners[ep.name] = ep.load()
@@ -109,14 +117,18 @@ class PluginRegistry:
         """Get a collector class by name."""
         self._discover()
         if name not in self._collectors:
-            raise KeyError(f"No collector registered for '{name}'. Available: {list(self._collectors.keys())}")
+            raise KeyError(
+                f"No collector registered for '{name}'. Available: {list(self._collectors.keys())}"
+            )
         return self._collectors[name]
 
     def get_scanner(self, name: str) -> Type[Any]:
         """Get a scanner class by name."""
         self._discover()
         if name not in self._scanners:
-            raise KeyError(f"No scanner registered for '{name}'. Available: {list(self._scanners.keys())}")
+            raise KeyError(
+                f"No scanner registered for '{name}'. Available: {list(self._scanners.keys())}"
+            )
         return self._scanners[name]
 
     def list_collectors(self) -> list[str]:

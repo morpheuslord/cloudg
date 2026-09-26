@@ -21,77 +21,131 @@ from cloudg.schema.models import (
 
 # ── Helpers ──
 
+
 def _make_assets() -> list[CloudAsset]:
     return [
         CloudAsset(
-            id="vpc-1", name="prod-vpc",
-            asset_type=AssetType.VPC, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="vpc-1",
+            name="prod-vpc",
+            asset_type=AssetType.VPC,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             arn="arn:aws:ec2:us-east-1:123456789012:vpc/vpc-1",
             metadata={"vpc_id": "vpc-1", "cidr_block": "10.0.0.0/16"},
             tags={"Name": "prod-vpc", "Environment": "production"},
         ),
         CloudAsset(
-            id="subnet-1", name="prod-subnet",
-            asset_type=AssetType.SUBNET, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="subnet-1",
+            name="prod-subnet",
+            asset_type=AssetType.SUBNET,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             arn="arn:aws:ec2:us-east-1:123456789012:subnet/subnet-1",
-            metadata={"vpc_id": "vpc-1", "subnet_id": "subnet-1",
-                       "cidr_block": "10.0.1.0/24", "availability_zone": "us-east-1a",
-                       "map_public_ip": False},
+            metadata={
+                "vpc_id": "vpc-1",
+                "subnet_id": "subnet-1",
+                "cidr_block": "10.0.1.0/24",
+                "availability_zone": "us-east-1a",
+                "map_public_ip": False,
+            },
         ),
         CloudAsset(
-            id="ec2-1", name="web-server-01",
-            asset_type=AssetType.EC2, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="ec2-1",
+            name="web-server-01",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             arn="arn:aws:ec2:us-east-1:123456789012:instance/i-1234567890",
-            metadata={"instance_type": "t3.medium", "image_id": "ami-12345",
-                       "subnet_id": "subnet-1", "security_groups": ["sg-1"]},
+            metadata={
+                "instance_type": "t3.medium",
+                "image_id": "ami-12345",
+                "subnet_id": "subnet-1",
+                "security_groups": ["sg-1"],
+            },
             tags={"Name": "web-server-01"},
         ),
         CloudAsset(
-            id="sg-1", name="web-sg",
-            asset_type=AssetType.SECURITY_GROUP, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="sg-1",
+            name="web-sg",
+            asset_type=AssetType.SECURITY_GROUP,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             arn="arn:aws:ec2:us-east-1:123456789012:security-group/sg-1",
             metadata={
-                "group_id": "sg-1", "vpc_id": "vpc-1",
+                "group_id": "sg-1",
+                "vpc_id": "vpc-1",
                 "description": "Web security group",
                 "ingress_rules": [
-                    {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
-                     "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
-                    {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80,
-                     "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 443,
+                        "ToPort": 443,
+                        "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 80,
+                        "ToPort": 80,
+                        "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                    },
                 ],
                 "egress_rules": [
-                    {"IpProtocol": "-1", "FromPort": 0, "ToPort": 0,
-                     "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
+                    {
+                        "IpProtocol": "-1",
+                        "FromPort": 0,
+                        "ToPort": 0,
+                        "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                    },
                 ],
             },
         ),
         CloudAsset(
-            id="rds-1", name="prod-db",
-            asset_type=AssetType.RDS_INSTANCE, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="123456789012",
+            id="rds-1",
+            name="prod-db",
+            asset_type=AssetType.RDS_INSTANCE,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="123456789012",
             arn="arn:aws:rds:us-east-1:123456789012:db/prod-db",
-            metadata={"engine": "postgres", "engine_version": "15.4",
-                       "instance_class": "db.r6g.large", "storage_encrypted": True,
-                       "multi_az": True, "publicly_accessible": False},
+            metadata={
+                "engine": "postgres",
+                "engine_version": "15.4",
+                "instance_class": "db.r6g.large",
+                "storage_encrypted": True,
+                "multi_az": True,
+                "publicly_accessible": False,
+            },
         ),
         CloudAsset(
-            id="role-1", name="app-role",
-            asset_type=AssetType.IAM_ROLE, provider=CloudProvider.AWS,
-            region="global", account_id="123456789012",
+            id="role-1",
+            name="app-role",
+            asset_type=AssetType.IAM_ROLE,
+            provider=CloudProvider.AWS,
+            region="global",
+            account_id="123456789012",
             arn="arn:aws:iam::123456789012:role/app-role",
-            metadata={"assume_role_policy": {
-                "Version": "2012-10-17",
-                "Statement": [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"},
-                               "Action": "sts:AssumeRole"}],
-            }},
+            metadata={
+                "assume_role_policy": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ec2.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            },
         ),
         CloudAsset(
-            id="s3-1", name="my-data-bucket",
-            asset_type=AssetType.S3_BUCKET, provider=CloudProvider.AWS,
+            id="s3-1",
+            name="my-data-bucket",
+            asset_type=AssetType.S3_BUCKET,
+            provider=CloudProvider.AWS,
             region="global",
             arn="arn:aws:s3:::my-data-bucket",
             tags={"Environment": "production"},
@@ -102,7 +156,8 @@ def _make_assets() -> list[CloudAsset]:
 def _make_edges() -> list[NetworkEdge]:
     return [
         NetworkEdge(
-            source_id="vpc-1", target_id="subnet-1",
+            source_id="vpc-1",
+            target_id="subnet-1",
             edge_type=EdgeType.CONTAINS,
         ),
     ]
@@ -137,10 +192,15 @@ class TestResourceMapping:
     def test_aws_mappings_exist(self):
         """All main AWS asset types should have Terraform mappings."""
         aws_types = [
-            AssetType.EC2, AssetType.VPC, AssetType.SUBNET,
-            AssetType.SECURITY_GROUP, AssetType.S3_BUCKET,
-            AssetType.RDS_INSTANCE, AssetType.LAMBDA_FUNCTION,
-            AssetType.LOAD_BALANCER, AssetType.IAM_ROLE,
+            AssetType.EC2,
+            AssetType.VPC,
+            AssetType.SUBNET,
+            AssetType.SECURITY_GROUP,
+            AssetType.S3_BUCKET,
+            AssetType.RDS_INSTANCE,
+            AssetType.LAMBDA_FUNCTION,
+            AssetType.LOAD_BALANCER,
+            AssetType.IAM_ROLE,
         ]
         for at in aws_types:
             assert at in _TF_RESOURCE_MAP, f"{at.value} missing from TF map"
@@ -280,6 +340,7 @@ class TestTerraformExporter:
         exporter = TerraformExporter(output_dir=tmp_path)
         paths = exporter.export(_make_assets(), _make_edges())
         import os
+
         assert os.access(paths["import_commands"], os.X_OK)
 
     def test_s3_bucket_resource(self, tmp_path):

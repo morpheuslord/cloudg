@@ -101,7 +101,9 @@ class GCPCollector(BaseCollector):
                             "state": resource.state.name if resource.state else None,
                             "parent_asset_type": resource.parent_asset_type,
                             "parent_full_resource_name": resource.parent_full_resource_name,
-                            "network_tags": list(resource.network_tags) if resource.network_tags else [],
+                            "network_tags": list(resource.network_tags)
+                            if resource.network_tags
+                            else [],
                         },
                         raw_data={
                             "name": resource.name,

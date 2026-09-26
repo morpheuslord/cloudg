@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 # Template directory candidates — the packaged directory ships in the
 # wheel, the rest keep old checkouts and Docker layouts working
 _TEMPLATE_DIR_CANDIDATES = [
-    Path(__file__).parent.parent / "templates",          # packaged: cloudg/templates
-    Path(__file__).parent.parent.parent / "templates",   # legacy repo-root layout
-    Path("/app/templates"),                              # legacy Docker runtime
-    Path("./templates"),                                 # CWD fallback
+    Path(__file__).parent.parent / "templates",  # packaged: cloudg/templates
+    Path(__file__).parent.parent.parent / "templates",  # legacy repo-root layout
+    Path("/app/templates"),  # legacy Docker runtime
+    Path("./templates"),  # CWD fallback
 ]
 
 
@@ -102,7 +102,13 @@ class HTMLReportGenerator:
     ) -> dict[str, Any]:
         """Prepare data for template rendering."""
         # Severity breakdown
-        severity_counts: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+        severity_counts: dict[str, int] = {
+            "CRITICAL": 0,
+            "HIGH": 0,
+            "MEDIUM": 0,
+            "LOW": 0,
+            "INFO": 0,
+        }
         for finding in scan_result.findings:
             severity_counts[finding.severity.value] = (
                 severity_counts.get(finding.severity.value, 0) + 1
@@ -118,9 +124,7 @@ class HTMLReportGenerator:
         # Source tool breakdown
         source_tools: dict[str, int] = {}
         for finding in scan_result.findings:
-            source_tools[finding.source_tool] = (
-                source_tools.get(finding.source_tool, 0) + 1
-            )
+            source_tools[finding.source_tool] = source_tools.get(finding.source_tool, 0) + 1
 
         # Compliance framework summary
         compliance_summary: dict[str, dict[str, int]] = {}
@@ -137,7 +141,14 @@ class HTMLReportGenerator:
         for finding in scan_result.findings:
             rid = finding.resource_id or finding.resource_arn or ""
             if rid not in findings_per_resource:
-                findings_per_resource[rid] = {"total": 0, "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+                findings_per_resource[rid] = {
+                    "total": 0,
+                    "CRITICAL": 0,
+                    "HIGH": 0,
+                    "MEDIUM": 0,
+                    "LOW": 0,
+                    "INFO": 0,
+                }
             findings_per_resource[rid]["total"] += 1
             findings_per_resource[rid][finding.severity.value] += 1
 
@@ -202,7 +213,9 @@ class HTMLReportGenerator:
                 "type": asset.asset_type.value,
                 "arn": asset.arn or "",
                 "internet_exposed": asset.is_internet_exposed,
-                "findings": findings_per_resource.get(asset.id, findings_per_resource.get(asset.arn or "", {})),
+                "findings": findings_per_resource.get(
+                    asset.id, findings_per_resource.get(asset.arn or "", {})
+                ),
             }
             region = asset.region or "global"
             vpc_id = asset.metadata.get("vpc_id", "")
@@ -232,13 +245,19 @@ class HTMLReportGenerator:
                 for subnet_name, resources in sorted(subnets.items()):
                     if subnet_name == "_vpc_meta":
                         continue
-                    subnet_node: dict[str, Any] = {"name": subnet_name, "type": "subnet", "children": resources}
+                    subnet_node: dict[str, Any] = {
+                        "name": subnet_name,
+                        "type": "subnet",
+                        "children": resources,
+                    }
                     vpc_node["children"].append(subnet_node)
                 region_node["children"].append(vpc_node)
             tree["children"].append(region_node)
 
         if ungrouped:
-            tree["children"].append({"name": "Global / Ungrouped", "type": "global", "children": ungrouped})
+            tree["children"].append(
+                {"name": "Global / Ungrouped", "type": "global", "children": ungrouped}
+            )
 
         return tree
 
@@ -272,56 +291,65 @@ class HTMLReportGenerator:
                 continue
 
             # Finding node
-            nodes.append({
-                "id": finding_id,
-                "name": (finding.title or "")[:60],
-                "type": "SECURITY_FINDING",
-                "severity": finding.severity.value,
-                "source_tool": finding.source_tool,
-                "risk_score": finding.risk_score,
-                "is_external": False,
-                "is_internet_exposed": False,
-                "region": "",
-                "arn": "",
-            })
+            nodes.append(
+                {
+                    "id": finding_id,
+                    "name": (finding.title or "")[:60],
+                    "type": "SECURITY_FINDING",
+                    "severity": finding.severity.value,
+                    "source_tool": finding.source_tool,
+                    "risk_score": finding.risk_score,
+                    "is_external": False,
+                    "is_internet_exposed": False,
+                    "region": "",
+                    "arn": "",
+                }
+            )
             existing_ids.add(finding_id)
 
             # FINDING_AFFECTS edge → resource
-            target_id = arn_to_node_id.get(finding.resource_arn or "") or \
-                        arn_to_node_id.get(finding.resource_id or "")
+            target_id = arn_to_node_id.get(finding.resource_arn or "") or arn_to_node_id.get(
+                finding.resource_id or ""
+            )
             if target_id:
-                links.append({
-                    "source": finding_id,
-                    "target": target_id,
-                    "relation": "FINDING_AFFECTS",
-                    "severity": finding.severity.value,
-                })
+                links.append(
+                    {
+                        "source": finding_id,
+                        "target": target_id,
+                        "relation": "FINDING_AFFECTS",
+                        "severity": finding.severity.value,
+                    }
+                )
 
             # Compliance framework nodes + COMPLIANCE_GOVERNS edges
-            for fw in (finding.compliance_frameworks or []):
+            for fw in finding.compliance_frameworks or []:
                 fw_id = f"compliance_{fw}"
                 if fw_id not in fw_nodes_added:
-                    nodes.append({
-                        "id": fw_id,
-                        "name": fw,
-                        "type": "COMPLIANCE_FRAMEWORK",
-                        "severity": "",
-                        "source_tool": "",
-                        "risk_score": 0,
-                        "is_external": False,
-                        "is_internet_exposed": False,
-                        "region": "",
-                        "arn": "",
-                    })
+                    nodes.append(
+                        {
+                            "id": fw_id,
+                            "name": fw,
+                            "type": "COMPLIANCE_FRAMEWORK",
+                            "severity": "",
+                            "source_tool": "",
+                            "risk_score": 0,
+                            "is_external": False,
+                            "is_internet_exposed": False,
+                            "region": "",
+                            "arn": "",
+                        }
+                    )
                     fw_nodes_added.add(fw_id)
                     existing_ids.add(fw_id)
 
                 # COMPLIANCE_GOVERNS → finding
-                links.append({
-                    "source": fw_id,
-                    "target": finding_id,
-                    "relation": "COMPLIANCE_GOVERNS",
-                })
+                links.append(
+                    {
+                        "source": fw_id,
+                        "target": finding_id,
+                        "relation": "COMPLIANCE_GOVERNS",
+                    }
+                )
 
         return {"nodes": nodes, "links": links}
 
@@ -340,10 +368,10 @@ class HTMLReportGenerator:
             findings_rows += f"""
                 <tr>
                     <td style="{sev_class}">{sev}</td>
-                    <td>{f.get('title', '')}</td>
-                    <td><code>{f.get('resource_arn', f.get('resource_id', ''))}</code></td>
-                    <td>{f.get('source_tool', '')}</td>
-                    <td>{f.get('remediation', '')[:100]}</td>
+                    <td>{f.get("title", "")}</td>
+                    <td><code>{f.get("resource_arn", f.get("resource_id", ""))}</code></td>
+                    <td>{f.get("source_tool", "")}</td>
+                    <td>{f.get("remediation", "")[:100]}</td>
                 </tr>"""
 
         return f"""<!DOCTYPE html>
@@ -382,14 +410,14 @@ class HTMLReportGenerator:
 <body>
 <div class="container">
     <h1>☁️ CloudG Security Report</h1>
-    <p class="subtitle">Scan ID: {data['scan_id']} | Provider: {data['provider']} | Account: {data['account_id']}</p>
+    <p class="subtitle">Scan ID: {data["scan_id"]} | Provider: {data["provider"]} | Account: {data["account_id"]}</p>
 
     <div class="cards">
-        <div class="card"><h3>Total Assets</h3><div class="value">{data['total_assets']}</div></div>
-        <div class="card"><h3>Total Findings</h3><div class="value">{data['total_findings']}</div></div>
-        <div class="card critical"><h3>Critical</h3><div class="value">{data['severity_counts'].get('CRITICAL', 0)}</div></div>
-        <div class="card high"><h3>High</h3><div class="value">{data['severity_counts'].get('HIGH', 0)}</div></div>
-        <div class="card medium"><h3>Medium</h3><div class="value">{data['severity_counts'].get('MEDIUM', 0)}</div></div>
+        <div class="card"><h3>Total Assets</h3><div class="value">{data["total_assets"]}</div></div>
+        <div class="card"><h3>Total Findings</h3><div class="value">{data["total_findings"]}</div></div>
+        <div class="card critical"><h3>Critical</h3><div class="value">{data["severity_counts"].get("CRITICAL", 0)}</div></div>
+        <div class="card high"><h3>High</h3><div class="value">{data["severity_counts"].get("HIGH", 0)}</div></div>
+        <div class="card medium"><h3>Medium</h3><div class="value">{data["severity_counts"].get("MEDIUM", 0)}</div></div>
     </div>
 
     <h2>Security Findings</h2>

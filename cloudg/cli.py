@@ -34,17 +34,13 @@ _BANNER = r"""
 def print_banner() -> None:
     """Print the cloudg ASCII banner."""
     console.print(f"[bold cyan]{_BANNER}[/]", highlight=False)
-    console.print(
-        "  [dim]cloud graphing — map, graph and audit AWS / Azure / GCP[/]\n"
-    )
+    console.print("  [dim]cloud graphing — map, graph and audit AWS / Azure / GCP[/]\n")
 
 
 def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
     """Configure structured logging with Rich + optional file output."""
     level = logging.DEBUG if verbose else logging.INFO
-    handlers: list[logging.Handler] = [
-        RichHandler(rich_tracebacks=True, console=console)
-    ]
+    handlers: list[logging.Handler] = [RichHandler(rich_tracebacks=True, console=console)]
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(
@@ -78,7 +74,8 @@ def cli(verbose: bool, config_path: str | None, log_file: str | None) -> None:
 
 @cli.command()
 @click.option(
-    "-p", "--provider",
+    "-p",
+    "--provider",
     type=click.Choice(["aws", "azure", "gcp"], case_sensitive=False),
     required=True,
     help="Cloud provider to collect from",
@@ -88,7 +85,8 @@ def cli(verbose: bool, config_path: str | None, log_file: str | None) -> None:
 @click.option("--subscription-id", default=None, help="Azure subscription ID")
 @click.option("--project-id", default=None, help="GCP project ID")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="./reports",
     help="Output directory",
 )
@@ -129,9 +127,7 @@ def collect(
             from cloudg.collectors.gcp import GCPCollector
 
             creds = resolver.resolve_gcp(project_id=project_id)
-            collector = GCPCollector(
-                project_id=creds.project_id, credentials=creds.credentials
-            )
+            collector = GCPCollector(project_id=creds.project_id, credentials=creds.credentials)
         else:
             raise click.BadParameter(f"Unknown provider: {provider}")
 
@@ -173,7 +169,8 @@ def collect(
 @click.option("--iac-dir", default=None, help="IaC directory for Checkov (defaults to '.')")
 @click.option("--images", default=None, help="Comma-separated container images for Trivy")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="./reports",
     help="Output directory",
 )
@@ -207,30 +204,39 @@ def scan(
 
     def _run_prowler() -> list[Any]:
         from cloudg.scanners.prowler import ProwlerScanner
+
         console.print("  → Running Prowler...")
-        s = ProwlerScanner(provider=provider, profile=profile, output_dir=str(output_dir / "prowler"))
+        s = ProwlerScanner(
+            provider=provider, profile=profile, output_dir=str(output_dir / "prowler")
+        )
         return s.run()
 
     def _run_scoutsuite() -> list[Any]:
         from cloudg.scanners.scoutsuite import ScoutSuiteScanner
+
         console.print("  → Running ScoutSuite...")
-        s = ScoutSuiteScanner(provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite"))
+        s = ScoutSuiteScanner(
+            provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite")
+        )
         return s.run()
 
     def _run_checkov() -> list[Any]:
         from cloudg.scanners.checkov import CheckovScanner
+
         console.print(f"  → Running Checkov (target: {resolved_iac_dir})...")
         s = CheckovScanner(target_dir=resolved_iac_dir)
         return s.run()
 
     def _run_trivy() -> list[Any]:
         from cloudg.scanners.trivy import TrivyScanner
+
         console.print(f"  → Running Trivy ({len(resolved_images)} images)...")
         s = TrivyScanner()
         return s.scan_images(resolved_images)
 
     def _run_trivy_fs() -> list[Any]:
         from cloudg.scanners.trivy import TrivyScanner
+
         console.print(f"  → Running Trivy filesystem scan (target: {resolved_iac_dir})...")
         s = TrivyScanner()
         return s.scan_filesystem([resolved_iac_dir])
@@ -251,7 +257,9 @@ def scan(
             if resolved_images:
                 future_to_name[executor.submit(_run_trivy)] = "Trivy"
             else:
-                console.print("  [yellow]⊘ Trivy: no images specified, falling back to filesystem scan[/yellow]")
+                console.print(
+                    "  [yellow]⊘ Trivy: no images specified, falling back to filesystem scan[/yellow]"
+                )
                 future_to_name[executor.submit(_run_trivy_fs)] = "Trivy (filesystem)"
 
         for future in concurrent.futures.as_completed(future_to_name):
@@ -283,13 +291,15 @@ def scan(
 
 @cli.command()
 @click.option(
-    "-i", "--input",
+    "-i",
+    "--input",
     "input_file",
     required=True,
     help="Path to findings.json from a previous run",
 )
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="./reports",
     help="Output directory",
 )
@@ -353,7 +363,8 @@ def report(input_file: str, output: str, fmt: str) -> None:
 
 @cli.command()
 @click.option(
-    "-p", "--provider",
+    "-p",
+    "--provider",
     type=click.Choice(["aws", "azure", "gcp", "all"], case_sensitive=False),
     multiple=True,
     required=True,
@@ -363,24 +374,56 @@ def report(input_file: str, output: str, fmt: str) -> None:
 @click.option("--aws-key", default=None, help="AWS access key ID (direct credential)")
 @click.option("--aws-secret", default=None, help="AWS secret access key (direct credential)")
 @click.option("--aws-session-token", default=None, help="AWS session token (temporary credentials)")
-@click.option("--aws-role-arn", default=None, help="Role ARN to assume via STS (or OIDC target with --aws-web-identity-token-file)")
-@click.option("--aws-external-id", default=None, help="ExternalId for AssumeRole (third-party auditor pattern)")
-@click.option("--aws-web-identity-token-file", default=None, help="OIDC token file for AssumeRoleWithWebIdentity (GitHub Actions, EKS)")
+@click.option(
+    "--aws-role-arn",
+    default=None,
+    help="Role ARN to assume via STS (or OIDC target with --aws-web-identity-token-file)",
+)
+@click.option(
+    "--aws-external-id",
+    default=None,
+    help="ExternalId for AssumeRole (third-party auditor pattern)",
+)
+@click.option(
+    "--aws-web-identity-token-file",
+    default=None,
+    help="OIDC token file for AssumeRoleWithWebIdentity (GitHub Actions, EKS)",
+)
 @click.option("--region", default=None, help="AWS region (ignored if --regions is set)")
 @click.option("--subscription-id", default=None, help="Azure subscription ID")
-@click.option("--azure-tenant-id", default=None, help="Azure AD tenant ID (service principal / workload identity)")
-@click.option("--azure-client-id", default=None, help="Azure service principal or workload identity client ID")
+@click.option(
+    "--azure-tenant-id",
+    default=None,
+    help="Azure AD tenant ID (service principal / workload identity)",
+)
+@click.option(
+    "--azure-client-id", default=None, help="Azure service principal or workload identity client ID"
+)
 @click.option("--azure-client-secret", default=None, help="Azure service principal client secret")
 @click.option("--azure-cert-path", default=None, help="Azure service principal certificate path")
-@click.option("--azure-federated-token-file", default=None, help="Federated OIDC token file (Azure workload identity)")
-@click.option("--azure-managed-identity", is_flag=True, default=False, help="Authenticate with the host's Azure managed identity")
+@click.option(
+    "--azure-federated-token-file",
+    default=None,
+    help="Federated OIDC token file (Azure workload identity)",
+)
+@click.option(
+    "--azure-managed-identity",
+    is_flag=True,
+    default=False,
+    help="Authenticate with the host's Azure managed identity",
+)
 @click.option("--project-id", default=None, help="GCP project ID")
-@click.option("--gcp-credentials-file", default=None, help="GCP service account key JSON or workload identity federation config")
+@click.option(
+    "--gcp-credentials-file",
+    default=None,
+    help="GCP service account key JSON or workload identity federation config",
+)
 @click.option("--gcp-impersonate-sa", default=None, help="GCP service account email to impersonate")
 @click.option("--iac-dir", default=None, help="IaC directory for Checkov")
 @click.option("--images", default=None, help="Container images for Trivy (comma-separated)")
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     default="./reports",
     help="Output directory",
 )
@@ -391,7 +434,9 @@ def report(input_file: str, output: str, fmt: str) -> None:
 )
 @click.option("--ontology/--no-ontology", default=True, help="Build semantic ontology graph")
 @click.option("--rag-export/--no-rag-export", default=True, help="Generate RAG-ready chunks")
-@click.option("--terraform/--no-terraform", default=False, help="Generate Terraform .tf.json recreation files")
+@click.option(
+    "--terraform/--no-terraform", default=False, help="Generate Terraform .tf.json recreation files"
+)
 @click.option(
     "--regions",
     "scan_regions",
@@ -548,7 +593,7 @@ def run(
     try:
         assets, edges, coverage_records = asyncio.run(multi_collector.collect_all())
         console.print(f"  [green]✓ {len(assets)} assets, {len(edges)} edges[/]")
-        if hasattr(multi_collector, '_resolved_regions'):
+        if hasattr(multi_collector, "_resolved_regions"):
             for prov, regs in multi_collector._resolved_regions.items():
                 console.print(f"    {prov}: {len(regs)} regions")
     except Exception as exc:
@@ -574,7 +619,9 @@ def run(
 
     analyzer = ReachabilityAnalyzer(graph)
     reachability_findings = analyzer.generate_findings()
-    console.print(f"  [green]✓ Graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges[/]")
+    console.print(
+        f"  [green]✓ Graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges[/]"
+    )
     console.print(f"  [green]✓ Reachability findings: {len(reachability_findings)}[/]")
 
     # Attack paths
@@ -594,7 +641,9 @@ def run(
 
             rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
             rag_paths = rag.export_all(
-                assets, edges, graph,
+                assets,
+                edges,
+                graph,
                 findings=reachability_findings,
                 output_dir=output_dir,
             )
@@ -612,8 +661,10 @@ def run(
             tf_dir = cfg.terraform.output_dir or str(output_dir / "terraform")
             tf_exporter = TerraformExporter(output_dir=tf_dir)
             preview = tf_exporter.preview(assets)
-            console.print(f"  [dim]Preview: {preview['total_mapped']} resources mappable, "
-                          f"{preview['total_unmapped']} unmapped[/]")
+            console.print(
+                f"  [dim]Preview: {preview['total_mapped']} resources mappable, "
+                f"{preview['total_unmapped']} unmapped[/]"
+            )
 
             tf_paths = tf_exporter.export(assets, edges)
             console.print(f"  [green]✓ Provider: {tf_paths['provider']}[/]")
@@ -631,6 +682,7 @@ def run(
 
     def run_prowler(prov: str) -> list[Any]:
         from cloudg.scanners.prowler import ProwlerScanner
+
         console.print(f"  → [cyan]Prowler ({prov})[/cyan] started...")
         prowler_region = cfg.aws.regions[0] if cfg.aws.regions else None
         s = ProwlerScanner(
@@ -648,6 +700,7 @@ def run(
 
     def run_scoutsuite(prov: str) -> list[Any]:
         from cloudg.scanners.scoutsuite import ScoutSuiteScanner
+
         console.print(f"  → [cyan]ScoutSuite ({prov})[/cyan] started...")
         s = ScoutSuiteScanner(
             provider=prov,
@@ -661,9 +714,12 @@ def run(
 
     def run_checkov(target_dir: str) -> list[Any]:
         from cloudg.scanners.checkov import CheckovScanner
+
         frameworks = cfg.scanners.checkov_frameworks or []
         fw_label = ", ".join(frameworks) if frameworks else "auto-detect"
-        console.print(f"  → [cyan]Checkov[/cyan] started (target: {target_dir}, frameworks: {fw_label})...")
+        console.print(
+            f"  → [cyan]Checkov[/cyan] started (target: {target_dir}, frameworks: {fw_label})..."
+        )
         s = CheckovScanner(
             target_dir=target_dir,
             frameworks=frameworks if frameworks else None,
@@ -675,6 +731,7 @@ def run(
 
     def run_trivy(image_list: list[str]) -> list[Any]:
         from cloudg.scanners.trivy import TrivyScanner
+
         console.print(f"  → [cyan]Trivy[/cyan] started ({len(image_list)} images)...")
         s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
         findings = s.scan_images(image_list)
@@ -683,7 +740,10 @@ def run(
 
     def run_trivy_fs(target_dirs: list[str]) -> list[Any]:
         from cloudg.scanners.trivy import TrivyScanner
-        console.print(f"  → [cyan]Trivy (filesystem)[/cyan] started ({len(target_dirs)} directories)...")
+
+        console.print(
+            f"  → [cyan]Trivy (filesystem)[/cyan] started ({len(target_dirs)} directories)..."
+        )
         s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
         findings = s.scan_filesystem(target_dirs)
         console.print(f"  [green]✓ Trivy (filesystem):[/green] {len(findings)} findings")
@@ -714,7 +774,9 @@ def run(
         if "scoutsuite" in scanner_list:
             for prov in cfg.providers:
                 if prov in ("aws", "azure", "gcp"):
-                    future_to_scanner[executor.submit(run_scoutsuite, prov)] = f"ScoutSuite ({prov})"
+                    future_to_scanner[executor.submit(run_scoutsuite, prov)] = (
+                        f"ScoutSuite ({prov})"
+                    )
         else:
             console.print("  [dim]⊘ ScoutSuite: not enabled[/dim]")
 
@@ -730,8 +792,12 @@ def run(
             if resolved_images:
                 future_to_scanner[executor.submit(run_trivy, resolved_images)] = "Trivy (images)"
             else:
-                console.print("  [yellow]⊘ Trivy: no images configured, falling back to filesystem scan[/yellow]")
-                future_to_scanner[executor.submit(run_trivy_fs, resolved_iac_dirs)] = "Trivy (filesystem)"
+                console.print(
+                    "  [yellow]⊘ Trivy: no images configured, falling back to filesystem scan[/yellow]"
+                )
+                future_to_scanner[executor.submit(run_trivy_fs, resolved_iac_dirs)] = (
+                    "Trivy (filesystem)"
+                )
         else:
             console.print("  [dim]⊘ Trivy: not enabled[/dim]")
 
@@ -748,13 +814,17 @@ def run(
                 else:
                     scanner_findings.extend(findings)
             except concurrent.futures.TimeoutError:
-                console.print(f"  [red]✗ {scanner_name} timed out after {cfg.scanners.timeout_seconds}s[/red]")
+                console.print(
+                    f"  [red]✗ {scanner_name} timed out after {cfg.scanners.timeout_seconds}s[/red]"
+                )
             except Exception as exc:
                 console.print(f"  [red]✗ {scanner_name} failed:[/red] {exc}")
 
     # Combine all findings for downstream phases
     all_security_findings = scanner_findings + iam_findings + reachability_findings
-    console.print(f"\n  [bold green]✓ Phase 3 complete:[/bold green] {len(all_security_findings)} total findings")
+    console.print(
+        f"\n  [bold green]✓ Phase 3 complete:[/bold green] {len(all_security_findings)} total findings"
+    )
 
     # Phase 3b: Semantic Ontology (runs AFTER scanners so findings are included)
     if ontology and cfg.ontology.enabled:
@@ -765,9 +835,13 @@ def run(
             cloud_ontology = CloudOntology()
             cloud_ontology.build(assets, edges, findings=all_security_findings)
             stats = cloud_ontology.stats()
-            console.print(f"  [green]✓ Ontology: {stats['total_triples']} triples, "
-                          f"{stats['classes_used']} classes, {stats['individuals']} individuals[/]")
-            console.print(f"  [green]✓ Security findings in ontology: {len(all_security_findings)}[/]")
+            console.print(
+                f"  [green]✓ Ontology: {stats['total_triples']} triples, "
+                f"{stats['classes_used']} classes, {stats['individuals']} individuals[/]"
+            )
+            console.print(
+                f"  [green]✓ Security findings in ontology: {len(all_security_findings)}[/]"
+            )
 
             for fmt in cfg.ontology.export_formats:
                 ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
@@ -776,7 +850,7 @@ def run(
                 console.print(f"  [green]✓ Ontology ({fmt}): {onto_path}[/]")
 
             # Group summary
-            for group, count in stats['relation_group_counts'].items():
+            for group, count in stats["relation_group_counts"].items():
                 console.print(f"    {group}: {count} relations")
         except Exception as exc:
             console.print(f"  [red]✗ Ontology build failed: {exc}[/]")
@@ -785,9 +859,12 @@ def run(
     if rag_export and cfg.rag.enabled:
         try:
             from cloudg.graph.rag_export import RAGExporter
+
             rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
             rag_paths = rag.export_all(
-                assets, edges, graph,
+                assets,
+                edges,
+                graph,
                 findings=all_security_findings,
                 output_dir=output_dir,
             )

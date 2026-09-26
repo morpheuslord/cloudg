@@ -327,7 +327,11 @@ class CloudGEngine:
         def _run_checkov(target_dir: str) -> list[Finding]:
             from cloudg.scanners.checkov import CheckovScanner
 
-            fw = self.config.scanners.checkov_frameworks[0] if self.config.scanners.checkov_frameworks else None
+            fw = (
+                self.config.scanners.checkov_frameworks[0]
+                if self.config.scanners.checkov_frameworks
+                else None
+            )
             scanner = CheckovScanner(
                 target_dir=target_dir,
                 framework=fw,
@@ -378,7 +382,9 @@ class CloudGEngine:
                     scanner_findings.extend(findings)
                     logger.info("[%s] %d findings", name, len(findings))
                 except concurrent.futures.TimeoutError:
-                    logger.error("[%s] timed out after %ds", name, self.config.scanners.timeout_seconds)
+                    logger.error(
+                        "[%s] timed out after %ds", name, self.config.scanners.timeout_seconds
+                    )
                     self._emit_error(name, TimeoutError(f"{name} timed out"))
                 except Exception as exc:
                     logger.error("[%s] failed: %s", name, exc)
@@ -528,9 +534,7 @@ class CloudGEngine:
         findings = await self.scan(collection.assets, collection.edges, output_dir=out)
 
         # Phase 3: Analyse
-        analysis = await self.analyze(
-            collection.assets, collection.edges, findings, output_dir=out
-        )
+        analysis = await self.analyze(collection.assets, collection.edges, findings, output_dir=out)
 
         # Phase 4: Normalise
         self._emit_phase_start("normalisation")
@@ -541,7 +545,9 @@ class CloudGEngine:
 
             normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
             scan_result = normaliser.normalise(
-                analysis.reachability_findings, findings, [],
+                analysis.reachability_findings,
+                findings,
+                [],
                 assets=collection.assets,
             )
             scan_result.edges = collection.edges

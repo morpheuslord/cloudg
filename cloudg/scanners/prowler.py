@@ -88,8 +88,10 @@ class ProwlerScanner:
         cmd = [
             "prowler",
             self._provider,
-            "-M", "json-asff",
-            "-o", self._output_dir,
+            "-M",
+            "json-asff",
+            "-o",
+            self._output_dir,
         ]
 
         if self._profile and self._provider == "aws":
@@ -133,7 +135,9 @@ class ProwlerScanner:
                         check_count += 1
                         if check_count % 25 == 0:
                             elapsed = int(time.time() - start_time)
-                            logger.info("[Prowler] %d checks completed (%ds elapsed)", check_count, elapsed)
+                            logger.info(
+                                "[Prowler] %d checks completed (%ds elapsed)", check_count, elapsed
+                            )
                     elif "Executing" in stripped or "Service" in stripped:
                         logger.info("[Prowler] %s", stripped[:120])
 
@@ -223,11 +227,7 @@ class ProwlerScanner:
                 title=asff.get("Title", "Unknown Prowler Finding"),
                 description=asff.get("Description", ""),
                 evidence=json.dumps(asff.get("ProductFields", {}), default=str)[:1000],
-                remediation=(
-                    asff.get("Remediation", {})
-                    .get("Recommendation", {})
-                    .get("Text", "")
-                ),
+                remediation=(asff.get("Remediation", {}).get("Recommendation", {}).get("Text", "")),
                 source_tool="prowler",
                 source_finding_id=asff.get("Id", ""),
                 compliance_frameworks=list(set(compliance)),

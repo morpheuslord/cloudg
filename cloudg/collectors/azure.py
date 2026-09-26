@@ -106,9 +106,7 @@ class AzureCollector(BaseCollector):
                         tags=tags,
                         metadata={
                             "address_space": (
-                                vnet.address_space.address_prefixes
-                                if vnet.address_space
-                                else []
+                                vnet.address_space.address_prefixes if vnet.address_space else []
                             ),
                             "provisioning_state": vnet.provisioning_state,
                         },
@@ -129,7 +127,9 @@ class AzureCollector(BaseCollector):
                             metadata={
                                 "address_prefix": subnet.address_prefix,
                                 "vnet_id": vnet.id,
-                                "nsg_id": subnet.network_security_group.id if subnet.network_security_group else None,
+                                "nsg_id": subnet.network_security_group.id
+                                if subnet.network_security_group
+                                else None,
                             },
                             raw_data={"id": subnet.id, "name": subnet.name},
                         )
@@ -233,20 +233,14 @@ class AzureCollector(BaseCollector):
             from azure.mgmt.sql import SqlManagementClient
             from azure.mgmt.resource import ResourceManagementClient
 
-            resource_client = ResourceManagementClient(
-                self._credential, self._subscription_id
-            )
+            resource_client = ResourceManagementClient(self._credential, self._subscription_id)
             sql_client = SqlManagementClient(self._credential, self._subscription_id)
 
             # List resource groups first, then servers in each
             for rg in resource_client.resource_groups.list():
                 try:
-                    for server in sql_client.servers.list_by_resource_group(
-                        rg.name
-                    ):
-                        for db in sql_client.databases.list_by_server(
-                            rg.name, server.name
-                        ):
+                    for server in sql_client.servers.list_by_resource_group(rg.name):
+                        for db in sql_client.databases.list_by_server(rg.name, server.name):
                             assets.append(
                                 CloudAsset(
                                     arn=db.id,
@@ -290,9 +284,7 @@ class AzureCollector(BaseCollector):
                         provider=CloudProvider.AZURE,
                         region=vault.location if hasattr(vault, "location") else "unknown",
                         account_id=self._subscription_id,
-                        metadata={
-                            "vault_uri": getattr(vault, "properties", {})
-                        },
+                        metadata={"vault_uri": getattr(vault, "properties", {})},
                         raw_data={"id": vault.id, "name": vault.name},
                     )
                 )
@@ -354,9 +346,7 @@ class AzureCollector(BaseCollector):
                     )
 
         # Containment edges: VNet contains Subnet
-        vnet_assets = {
-            a.arn: a.id for a in assets if a.asset_type == AssetType.VNET
-        }
+        vnet_assets = {a.arn: a.id for a in assets if a.asset_type == AssetType.VNET}
         for asset in assets:
             vnet_id = asset.metadata.get("vnet_id")
             if vnet_id and vnet_id in vnet_assets:

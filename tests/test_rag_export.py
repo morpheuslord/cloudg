@@ -20,29 +20,41 @@ from cloudg.schema.models import (
 
 # ── Helpers ──
 
+
 def _make_assets() -> list[CloudAsset]:
     return [
         CloudAsset(
-            id="vpc-1", name="prod-vpc",
-            asset_type=AssetType.VPC, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="111",
+            id="vpc-1",
+            name="prod-vpc",
+            asset_type=AssetType.VPC,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="111",
             metadata={"vpc_id": "vpc-1", "cidr_block": "10.0.0.0/16"},
         ),
         CloudAsset(
-            id="ec2-1", name="web-server",
-            asset_type=AssetType.EC2, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="111",
+            id="ec2-1",
+            name="web-server",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="111",
             is_internet_exposed=True,
             metadata={"vpc_id": "vpc-1", "instance_type": "t3.medium"},
         ),
         CloudAsset(
-            id="rds-1", name="prod-db",
-            asset_type=AssetType.RDS_INSTANCE, provider=CloudProvider.AWS,
-            region="us-east-1", account_id="111",
+            id="rds-1",
+            name="prod-db",
+            asset_type=AssetType.RDS_INSTANCE,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+            account_id="111",
         ),
         CloudAsset(
-            id="sg-1", name="web-sg",
-            asset_type=AssetType.SECURITY_GROUP, provider=CloudProvider.AWS,
+            id="sg-1",
+            name="web-sg",
+            asset_type=AssetType.SECURITY_GROUP,
+            provider=CloudProvider.AWS,
             region="us-east-1",
         ),
     ]
@@ -51,18 +63,24 @@ def _make_assets() -> list[CloudAsset]:
 def _make_edges() -> list[NetworkEdge]:
     return [
         NetworkEdge(
-            source_id="vpc-1", target_id="ec2-1",
+            source_id="vpc-1",
+            target_id="ec2-1",
             edge_type=EdgeType.CONTAINS,
         ),
         NetworkEdge(
-            source_id="0.0.0.0/0", target_id="ec2-1",
+            source_id="0.0.0.0/0",
+            target_id="ec2-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            cidr="0.0.0.0/0", ports=[443], protocol="TCP",
+            cidr="0.0.0.0/0",
+            ports=[443],
+            protocol="TCP",
         ),
         NetworkEdge(
-            source_id="ec2-1", target_id="rds-1",
+            source_id="ec2-1",
+            target_id="rds-1",
             edge_type=EdgeType.SECURITY_GROUP_RULE,
-            ports=[3306], protocol="TCP",
+            ports=[3306],
+            protocol="TCP",
         ),
     ]
 
@@ -83,6 +101,7 @@ def _make_findings() -> list[Finding]:
 def _build_graph() -> nx.DiGraph:
     """Build a test NetworkX graph matching our assets/edges."""
     from cloudg.graph.builder import GraphBuilder
+
     builder = GraphBuilder()
     return builder.build(_make_assets(), _make_edges())
 
@@ -227,7 +246,10 @@ class TestExportAll:
         exporter = RAGExporter()
         graph = _build_graph()
         paths = exporter.export_all(
-            _make_assets(), _make_edges(), graph, _make_findings(),
+            _make_assets(),
+            _make_edges(),
+            graph,
+            _make_findings(),
             output_dir=tmp_path,
         )
         assert paths["chunks"].exists()
@@ -238,7 +260,10 @@ class TestExportAll:
         exporter = RAGExporter()
         graph = _build_graph()
         paths = exporter.export_all(
-            _make_assets(), _make_edges(), graph, _make_findings(),
+            _make_assets(),
+            _make_edges(),
+            graph,
+            _make_findings(),
             output_dir=tmp_path,
         )
         with open(paths["chunks"]) as f:
@@ -253,7 +278,10 @@ class TestExportAll:
         exporter = RAGExporter()
         graph = _build_graph()
         paths = exporter.export_all(
-            _make_assets(), _make_edges(), graph, _make_findings(),
+            _make_assets(),
+            _make_edges(),
+            graph,
+            _make_findings(),
             output_dir=tmp_path,
         )
         with open(paths["index"]) as f:

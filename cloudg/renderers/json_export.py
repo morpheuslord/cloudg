@@ -51,17 +51,10 @@ class JSONExporter:
             },
             "summary": scan_result.summary,
             "assets": [
-                asset.model_dump(exclude={"raw_data"}, mode="json")
-                for asset in scan_result.assets
+                asset.model_dump(exclude={"raw_data"}, mode="json") for asset in scan_result.assets
             ],
-            "findings": [
-                finding.model_dump(mode="json")
-                for finding in scan_result.findings
-            ],
-            "compliance": [
-                result.model_dump(mode="json")
-                for result in scan_result.compliance
-            ],
+            "findings": [finding.model_dump(mode="json") for finding in scan_result.findings],
+            "compliance": [result.model_dump(mode="json") for result in scan_result.compliance],
             "graph": graph_json or {"nodes": [], "links": []},
         }
 

@@ -39,7 +39,9 @@ class MultiAccountCollector:
         self._region_discovery = RegionDiscovery()
         self._resolved_regions: dict[str, list[str]] = {}
 
-    async def collect_all(self) -> tuple[list[CloudAsset], list[NetworkEdge], list[CollectionCoverage]]:
+    async def collect_all(
+        self,
+    ) -> tuple[list[CloudAsset], list[NetworkEdge], list[CollectionCoverage]]:
         """Collect assets and edges from ALL configured providers simultaneously.
 
         Returns:
@@ -86,7 +88,10 @@ class MultiAccountCollector:
 
         logger.info(
             "Multi-provider collection complete: %d assets, %d edges across %d coverage records (%s)",
-            len(all_assets), len(all_edges), len(self._coverage), ", ".join(task_labels),
+            len(all_assets),
+            len(all_edges),
+            len(self._coverage),
+            ", ".join(task_labels),
         )
         return all_assets, all_edges, self._coverage
 
@@ -131,9 +136,7 @@ class MultiAccountCollector:
 
         Role assumption is only used when role_name is set AND account_id is specified.
         """
-        coverage = CollectionCoverage(
-            provider="aws", region=region, account_id=account_id
-        )
+        coverage = CollectionCoverage(provider="aws", region=region, account_id=account_id)
         self._coverage.append(coverage)
 
         async with self._semaphore:
@@ -159,9 +162,7 @@ class MultiAccountCollector:
 
                 from cloudg.collectors.aws import AsyncAWSCollector
 
-                collector = AsyncAWSCollector(
-                    session=session, region=region, account_id=account_id
-                )
+                collector = AsyncAWSCollector(session=session, region=region, account_id=account_id)
 
                 start = time.time()
                 assets = await collector.collect()
@@ -169,8 +170,10 @@ class MultiAccountCollector:
                 duration_ms = int((time.time() - start) * 1000)
 
                 coverage.record(
-                    "aws_full", ServiceStatus.SUCCESS,
-                    asset_count=len(assets), duration_ms=duration_ms,
+                    "aws_full",
+                    ServiceStatus.SUCCESS,
+                    asset_count=len(assets),
+                    duration_ms=duration_ms,
                 )
                 return assets, edges
 
@@ -196,13 +199,16 @@ class MultiAccountCollector:
             first_sub = sub_ids[0] if sub_ids[0] else None
             try:
                 from cloudg.credentials import build_azure_credential
+
                 cred = build_azure_credential(self._config.azure)
             except ImportError:
                 cred = None
             azure_regions = await self._region_discovery.discover_azure(cred, first_sub)
-        
+
         self._resolved_regions["azure"] = azure_regions
-        logger.info("Azure: scanning %d subscriptions (locations auto-handled by SDK)", len(sub_ids))
+        logger.info(
+            "Azure: scanning %d subscriptions (locations auto-handled by SDK)", len(sub_ids)
+        )
 
         # Azure SDKs already return resources across all locations within a subscription.
         # We pass the resolved regions as metadata but don't iterate per-region for Azure
@@ -214,9 +220,7 @@ class MultiAccountCollector:
         self, subscription_id: str | None
     ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
         """Collect from a single Azure subscription."""
-        coverage = CollectionCoverage(
-            provider="azure", account_id=subscription_id
-        )
+        coverage = CollectionCoverage(provider="azure", account_id=subscription_id)
         self._coverage.append(coverage)
 
         async with self._semaphore:
@@ -229,6 +233,7 @@ class MultiAccountCollector:
                 credential = build_azure_credential(self._config.azure)
                 if not subscription_id:
                     from azure.mgmt.resource import SubscriptionClient
+
                     sub_client = SubscriptionClient(credential)
                     sub = next(sub_client.subscriptions.list(), None)
                     subscription_id = sub.subscription_id if sub else ""
@@ -241,8 +246,10 @@ class MultiAccountCollector:
                 duration_ms = int((time.time() - start) * 1000)
 
                 coverage.record(
-                    "azure_full", ServiceStatus.SUCCESS,
-                    asset_count=len(assets), duration_ms=duration_ms,
+                    "azure_full",
+                    ServiceStatus.SUCCESS,
+                    asset_count=len(assets),
+                    duration_ms=duration_ms,
                 )
                 return assets, edges
 
@@ -267,6 +274,7 @@ class MultiAccountCollector:
             logger.info("GCP: discovering all regions...")
             try:
                 from cloudg.credentials import build_gcp_credentials
+
                 creds, default_project = build_gcp_credentials(self._config.gcp)
                 pid = project_ids[0] or default_project
             except Exception:
@@ -274,7 +282,9 @@ class MultiAccountCollector:
             gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
 
         self._resolved_regions["gcp"] = gcp_regions
-        logger.info("GCP: scanning %d projects (Cloud Asset Inventory scans all regions)", len(project_ids))
+        logger.info(
+            "GCP: scanning %d projects (Cloud Asset Inventory scans all regions)", len(project_ids)
+        )
 
         # GCP Cloud Asset Inventory API returns resources across ALL regions for a project.
         # No per-region iteration needed — the API is project-scoped.
@@ -285,9 +295,7 @@ class MultiAccountCollector:
         self, project_id: str | None
     ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
         """Collect from a single GCP project."""
-        coverage = CollectionCoverage(
-            provider="gcp", account_id=project_id
-        )
+        coverage = CollectionCoverage(provider="gcp", account_id=project_id)
         self._coverage.append(coverage)
 
         async with self._semaphore:
@@ -308,8 +316,10 @@ class MultiAccountCollector:
                 duration_ms = int((time.time() - start) * 1000)
 
                 coverage.record(
-                    "gcp_full", ServiceStatus.SUCCESS,
-                    asset_count=len(assets), duration_ms=duration_ms,
+                    "gcp_full",
+                    ServiceStatus.SUCCESS,
+                    asset_count=len(assets),
+                    duration_ms=duration_ms,
                 )
                 return assets, edges
 

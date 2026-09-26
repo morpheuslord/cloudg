@@ -49,15 +49,15 @@ class TrivyScanner:
         """
         if not self.is_available():
             logger.warning(
-                "Trivy is not installed. Install from: https://trivy.dev/. "
-                "Skipping Trivy scan."
+                "Trivy is not installed. Install from: https://trivy.dev/. Skipping Trivy scan."
             )
             return []
 
         cmd = [
             "trivy",
             "image",
-            "--format", "json",
+            "--format",
+            "json",
             "--quiet",
             *self._extra_args,
             image,
@@ -120,9 +120,11 @@ class TrivyScanner:
             cmd = [
                 "trivy",
                 "fs",
-                "--format", "json",
+                "--format",
+                "json",
                 "--quiet",
-                "--scanners", "vuln,misconfig,secret",
+                "--scanners",
+                "vuln,misconfig,secret",
                 *self._extra_args,
                 directory,
             ]
@@ -216,7 +218,9 @@ class TrivyScanner:
                 title=f"[Trivy/IaC] {misconfig_id}: {title}",
                 description=description,
                 evidence=f"Directory: {directory}, Target: {target}",
-                remediation=resolution if resolution else primary_url or f"See Trivy check {misconfig_id}",
+                remediation=resolution
+                if resolution
+                else primary_url or f"See Trivy check {misconfig_id}",
                 source_tool="trivy",
                 source_finding_id=misconfig_id,
                 compliance_frameworks=["CIS"],
@@ -290,7 +294,9 @@ class TrivyScanner:
             if fixed_version:
                 remediation = f"Update {pkg_name} from {installed_version} to {fixed_version}"
             else:
-                remediation = f"No fix available for {cve_id} in {pkg_name}. Consider alternative packages."
+                remediation = (
+                    f"No fix available for {cve_id} in {pkg_name}. Consider alternative packages."
+                )
 
             return Finding(
                 resource_id=image,

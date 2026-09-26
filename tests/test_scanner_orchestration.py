@@ -23,9 +23,7 @@ class TestScannerConfigWiring:
     def test_custom_scanners_enabled(self):
         """Custom scanner list should be respected."""
         cfg = CloudGConfig(
-            scanners=ScannerConfig(
-                enabled=["prowler", "scoutsuite", "checkov", "trivy", "iam"]
-            )
+            scanners=ScannerConfig(enabled=["prowler", "scoutsuite", "checkov", "trivy", "iam"])
         )
         assert len(cfg.scanners.enabled) == 5
         assert "scoutsuite" in cfg.scanners.enabled
@@ -38,9 +36,7 @@ class TestScannerConfigWiring:
 
     def test_iac_directories_custom(self):
         """Custom iac_directories should be preserved."""
-        cfg = CloudGConfig(
-            scanners=ScannerConfig(iac_directories=["./infra", "./modules"])
-        )
+        cfg = CloudGConfig(scanners=ScannerConfig(iac_directories=["./infra", "./modules"]))
         assert cfg.scanners.iac_directories == ["./infra", "./modules"]
 
     def test_trivy_images_default_empty(self):
@@ -50,9 +46,7 @@ class TestScannerConfigWiring:
 
     def test_trivy_images_custom(self):
         """Custom trivy_images should be preserved."""
-        cfg = CloudGConfig(
-            scanners=ScannerConfig(trivy_images=["nginx:latest", "app:v2"])
-        )
+        cfg = CloudGConfig(scanners=ScannerConfig(trivy_images=["nginx:latest", "app:v2"]))
         assert cfg.scanners.trivy_images == ["nginx:latest", "app:v2"]
 
     def test_extra_args_fields_exist(self):
@@ -171,6 +165,7 @@ class TestScannerAvailability:
     @patch("shutil.which", return_value=None)
     def test_prowler_not_available(self, mock_which):
         from cloudg.scanners.prowler import ProwlerScanner
+
         assert not ProwlerScanner.is_available()
         findings = ProwlerScanner().run()
         assert findings == []
@@ -178,11 +173,13 @@ class TestScannerAvailability:
     @patch("shutil.which", return_value="/usr/bin/prowler")
     def test_prowler_available(self, mock_which):
         from cloudg.scanners.prowler import ProwlerScanner
+
         assert ProwlerScanner.is_available()
 
     @patch("shutil.which", return_value=None)
     def test_checkov_not_available(self, mock_which):
         from cloudg.scanners.checkov import CheckovScanner
+
         assert not CheckovScanner.is_available()
         findings = CheckovScanner(target_dir=".").run()
         assert findings == []
@@ -190,6 +187,7 @@ class TestScannerAvailability:
     @patch("shutil.which", return_value=None)
     def test_scoutsuite_not_available(self, mock_which):
         from cloudg.scanners.scoutsuite import ScoutSuiteScanner
+
         assert not ScoutSuiteScanner.is_available()
         findings = ScoutSuiteScanner().run()
         assert findings == []
@@ -197,6 +195,7 @@ class TestScannerAvailability:
     @patch("shutil.which", return_value=None)
     def test_trivy_not_available(self, mock_which):
         from cloudg.scanners.trivy import TrivyScanner
+
         assert not TrivyScanner.is_available()
         findings = TrivyScanner().scan_image("test:latest")
         assert findings == []

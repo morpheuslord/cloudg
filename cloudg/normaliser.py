@@ -219,9 +219,7 @@ class FindingsNormaliser:
                     Severity.LOW: 3,
                     Severity.INFO: 4,
                 }
-                if severity_rank.get(finding.severity, 5) < severity_rank.get(
-                    existing.severity, 5
-                ):
+                if severity_rank.get(finding.severity, 5) < severity_rank.get(existing.severity, 5):
                     # Merge source info and compliance frameworks
                     merged_tool = f"{existing.source_tool}, {finding.source_tool}"
                     merged_frameworks = list(

@@ -60,8 +60,10 @@ class CheckovScanner:
 
         cmd = [
             "checkov",
-            "-d", self._target_dir,
-            "--output", "json",
+            "-d",
+            self._target_dir,
+            "--output",
+            "json",
             "--quiet",
         ]
 

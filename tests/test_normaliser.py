@@ -136,40 +136,54 @@ class TestGraphBuilder:
     def _make_assets(self) -> list[CloudAsset]:
         return [
             CloudAsset(
-                id="vpc-1", name="test-vpc",
-                asset_type=AssetType.VPC, provider=CloudProvider.AWS,
+                id="vpc-1",
+                name="test-vpc",
+                asset_type=AssetType.VPC,
+                provider=CloudProvider.AWS,
             ),
             CloudAsset(
-                id="subnet-1", name="test-subnet",
-                asset_type=AssetType.SUBNET, provider=CloudProvider.AWS,
+                id="subnet-1",
+                name="test-subnet",
+                asset_type=AssetType.SUBNET,
+                provider=CloudProvider.AWS,
                 metadata={"vpc_id": "vpc-1"},
             ),
             CloudAsset(
-                id="ec2-1", name="test-instance",
-                asset_type=AssetType.EC2, provider=CloudProvider.AWS,
+                id="ec2-1",
+                name="test-instance",
+                asset_type=AssetType.EC2,
+                provider=CloudProvider.AWS,
                 metadata={"vpc_id": "vpc-1"},
             ),
             CloudAsset(
-                id="rds-1", name="test-db",
-                asset_type=AssetType.RDS_INSTANCE, provider=CloudProvider.AWS,
+                id="rds-1",
+                name="test-db",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
             ),
         ]
 
     def _make_edges(self) -> list[NetworkEdge]:
         return [
             NetworkEdge(
-                source_id="vpc-1", target_id="subnet-1",
+                source_id="vpc-1",
+                target_id="subnet-1",
                 edge_type=EdgeType.CONTAINS,
             ),
             NetworkEdge(
-                source_id="0.0.0.0/0", target_id="ec2-1",
+                source_id="0.0.0.0/0",
+                target_id="ec2-1",
                 edge_type=EdgeType.SECURITY_GROUP_RULE,
-                cidr="0.0.0.0/0", ports=[22], protocol="TCP",
+                cidr="0.0.0.0/0",
+                ports=[22],
+                protocol="TCP",
             ),
             NetworkEdge(
-                source_id="ec2-1", target_id="rds-1",
+                source_id="ec2-1",
+                target_id="rds-1",
                 edge_type=EdgeType.SECURITY_GROUP_RULE,
-                ports=[3306], protocol="TCP",
+                ports=[3306],
+                protocol="TCP",
             ),
         ]
 
@@ -225,30 +239,40 @@ class TestReachabilityAnalyzer:
         builder = GraphBuilder()
         assets = [
             CloudAsset(
-                id="ec2-1", name="web-server",
-                asset_type=AssetType.EC2, provider=CloudProvider.AWS,
+                id="ec2-1",
+                name="web-server",
+                asset_type=AssetType.EC2,
+                provider=CloudProvider.AWS,
             ),
             CloudAsset(
-                id="rds-1", name="database",
-                asset_type=AssetType.RDS_INSTANCE, provider=CloudProvider.AWS,
+                id="rds-1",
+                name="database",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
             ),
             CloudAsset(
-                id="lb-1", name="load-balancer",
-                asset_type=AssetType.LOAD_BALANCER, provider=CloudProvider.AWS,
+                id="lb-1",
+                name="load-balancer",
+                asset_type=AssetType.LOAD_BALANCER,
+                provider=CloudProvider.AWS,
             ),
         ]
         edges = [
             NetworkEdge(
-                source_id="0.0.0.0/0", target_id="lb-1",
+                source_id="0.0.0.0/0",
+                target_id="lb-1",
                 edge_type=EdgeType.SECURITY_GROUP_RULE,
-                cidr="0.0.0.0/0", ports=[443],
+                cidr="0.0.0.0/0",
+                ports=[443],
             ),
             NetworkEdge(
-                source_id="lb-1", target_id="ec2-1",
+                source_id="lb-1",
+                target_id="ec2-1",
                 edge_type=EdgeType.LOAD_BALANCER_TARGET,
             ),
             NetworkEdge(
-                source_id="ec2-1", target_id="rds-1",
+                source_id="ec2-1",
+                target_id="rds-1",
                 edge_type=EdgeType.SECURITY_GROUP_RULE,
                 ports=[3306],
             ),
@@ -291,8 +315,10 @@ class TestReachabilityAnalyzer:
         builder = GraphBuilder()
         assets = [
             CloudAsset(
-                id="ec2-isolated", name="isolated",
-                asset_type=AssetType.EC2, provider=CloudProvider.AWS,
+                id="ec2-isolated",
+                name="isolated",
+                asset_type=AssetType.EC2,
+                provider=CloudProvider.AWS,
             ),
         ]
         builder.build(assets, [])

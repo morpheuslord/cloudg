@@ -177,13 +177,15 @@ class RAGExporter:
                         evidence_parts.append(edge.protocol)
                     if edge.cidr:
                         evidence_parts.append(f"cidr {edge.cidr}")
-                    chunk_relations.append({
-                        "predicate": rel.value,
-                        "direction": "outgoing",
-                        "object": tgt_label,
-                        "object_id": edge.target_id,
-                        "evidence": ", ".join(evidence_parts) if evidence_parts else "",
-                    })
+                    chunk_relations.append(
+                        {
+                            "predicate": rel.value,
+                            "direction": "outgoing",
+                            "object": tgt_label,
+                            "object_id": edge.target_id,
+                            "evidence": ", ".join(evidence_parts) if evidence_parts else "",
+                        }
+                    )
                     relation_types_set.add(rel.value)
 
             # Incoming edges
@@ -192,13 +194,15 @@ class RAGExporter:
                 src_name = assets_by_id.get(edge.source_id, None)
                 src_label = src_name.name if src_name else edge.source_id
                 for rel in inferred:
-                    chunk_relations.append({
-                        "predicate": rel.value,
-                        "direction": "incoming",
-                        "object": src_label,
-                        "object_id": edge.source_id,
-                        "evidence": "",
-                    })
+                    chunk_relations.append(
+                        {
+                            "predicate": rel.value,
+                            "direction": "incoming",
+                            "object": src_label,
+                            "object_id": edge.source_id,
+                            "evidence": "",
+                        }
+                    )
                     relation_types_set.add(rel.value)
 
             # Add relations to content
@@ -214,8 +218,16 @@ class RAGExporter:
             compliance_frameworks: set[str] = set()
             if resource_findings:
                 content_lines.append(f"\nFindings ({len(resource_findings)}):")
-                severity_order = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3, Severity.INFO: 4}
-                sorted_findings = sorted(resource_findings, key=lambda f: severity_order.get(f.severity, 5))
+                severity_order = {
+                    Severity.CRITICAL: 0,
+                    Severity.HIGH: 1,
+                    Severity.MEDIUM: 2,
+                    Severity.LOW: 3,
+                    Severity.INFO: 4,
+                }
+                sorted_findings = sorted(
+                    resource_findings, key=lambda f: severity_order.get(f.severity, 5)
+                )
                 severity_max = sorted_findings[0].severity.value if sorted_findings else "NONE"
                 for f in sorted_findings[:10]:
                     content_lines.append(f"  [{f.severity.value}] {f.title}")
@@ -238,13 +250,15 @@ class RAGExporter:
                 "arn": asset.arn or "",
             }
 
-            chunks.append(RAGChunk(
-                chunk_id=f"entity::{asset.id}",
-                chunk_type="entity",
-                content=content,
-                metadata=metadata,
-                relations=chunk_relations,
-            ))
+            chunks.append(
+                RAGChunk(
+                    chunk_id=f"entity::{asset.id}",
+                    chunk_type="entity",
+                    content=content,
+                    metadata=metadata,
+                    relations=chunk_relations,
+                )
+            )
 
         logger.info("Generated %d entity chunks", len(chunks))
         return chunks
@@ -304,7 +318,9 @@ class RAGExporter:
 
                 for f in findings_by_resource.get(node_id, []):
                     total_findings += 1
-                    if severity_order.get(f.severity.value, 5) < severity_order.get(max_severity, 5):
+                    if severity_order.get(f.severity.value, 5) < severity_order.get(
+                        max_severity, 5
+                    ):
                         max_severity = f.severity.value
                     frameworks.update(f.compliance_frameworks)
 
@@ -319,7 +335,9 @@ class RAGExporter:
                     external_edges += 1
 
             content_lines.append(f"\nAsset types: {dict(type_counts)}")
-            content_lines.append(f"Internal edges: {internal_edges}, External edges: {external_edges}")
+            content_lines.append(
+                f"Internal edges: {internal_edges}, External edges: {external_edges}"
+            )
             if exposed_count:
                 content_lines.append(f"⚠ {exposed_count} internet-exposed resources")
             if total_findings:
@@ -340,12 +358,14 @@ class RAGExporter:
                 "risk_score": round(risk_score, 1),
             }
 
-            chunks.append(RAGChunk(
-                chunk_id=f"community::{comm_id}",
-                chunk_type="community",
-                content="\n".join(content_lines),
-                metadata=metadata,
-            ))
+            chunks.append(
+                RAGChunk(
+                    chunk_id=f"community::{comm_id}",
+                    chunk_type="community",
+                    content="\n".join(content_lines),
+                    metadata=metadata,
+                )
+            )
 
         logger.info("Generated %d community chunks", len(chunks))
         return chunks
@@ -372,16 +392,18 @@ class RAGExporter:
 
             for rel in inferred:
                 group = get_relation_group(rel)
-                group_triples[group].append({
-                    "subject": src_label,
-                    "subject_id": edge.source_id,
-                    "predicate": rel.value,
-                    "object": tgt_label,
-                    "object_id": edge.target_id,
-                    "port_range": edge.port_range or "",
-                    "protocol": edge.protocol or "",
-                    "cidr": edge.cidr or "",
-                })
+                group_triples[group].append(
+                    {
+                        "subject": src_label,
+                        "subject_id": edge.source_id,
+                        "predicate": rel.value,
+                        "object": tgt_label,
+                        "object_id": edge.target_id,
+                        "port_range": edge.port_range or "",
+                        "protocol": edge.protocol or "",
+                        "cidr": edge.cidr or "",
+                    }
+                )
 
         chunks: list[RAGChunk] = []
 
@@ -407,7 +429,9 @@ class RAGExporter:
                 if t["port_range"] or t["protocol"] or t["cidr"]:
                     parts = [p for p in [t["port_range"], t["protocol"], t["cidr"]] if p]
                     evidence = f" [{', '.join(parts)}]"
-                content_lines.append(f"  {t['subject']} → {t['predicate']} → {t['object']}{evidence}")
+                content_lines.append(
+                    f"  {t['subject']} → {t['predicate']} → {t['object']}{evidence}"
+                )
 
             if len(triples) > 50:
                 content_lines.append(f"  ... and {len(triples) - 50} more")
@@ -420,17 +444,22 @@ class RAGExporter:
                 "unique_objects": len({t["object_id"] for t in triples}),
             }
 
-            chunks.append(RAGChunk(
-                chunk_id=f"relation_group::{group.value}",
-                chunk_type="relation_group",
-                content="\n".join(content_lines),
-                metadata=metadata,
-                relations=[{
-                    "predicate": t["predicate"],
-                    "object": t["object"],
-                    "evidence": f"{t['port_range']} {t['protocol']} {t['cidr']}".strip(),
-                } for t in triples[:50]],
-            ))
+            chunks.append(
+                RAGChunk(
+                    chunk_id=f"relation_group::{group.value}",
+                    chunk_type="relation_group",
+                    content="\n".join(content_lines),
+                    metadata=metadata,
+                    relations=[
+                        {
+                            "predicate": t["predicate"],
+                            "object": t["object"],
+                            "evidence": f"{t['port_range']} {t['protocol']} {t['cidr']}".strip(),
+                        }
+                        for t in triples[:50]
+                    ],
+                )
+            )
 
         logger.info("Generated %d relation-group chunks", len(chunks))
         return chunks
@@ -491,8 +520,11 @@ class RAGExporter:
 
         logger.info(
             "RAG export complete: %d chunks (%d entity, %d community, %d relation) -> %s",
-            len(all_chunks), len(entity_chunks), len(community_chunks),
-            len(relation_chunks), out,
+            len(all_chunks),
+            len(entity_chunks),
+            len(community_chunks),
+            len(relation_chunks),
+            out,
         )
 
         return {

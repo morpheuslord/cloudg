@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 # Enums
 # ---------------------------------------------------------------------------
 
+
 class Severity(str, Enum):
     """Finding severity levels."""
 
@@ -131,6 +132,7 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 # ---------------------------------------------------------------------------
 # Core Models
 # ---------------------------------------------------------------------------
+
 
 class CloudAsset(BaseModel):
     """Normalised cloud resource representation."""

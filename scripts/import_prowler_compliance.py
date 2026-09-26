@@ -128,7 +128,9 @@ def main() -> int:
         fw, n_controls, n_links = convert(src, args.out)
         total_controls += n_controls
         total_links += n_links
-        print(f"{fw}: {n_controls} controls, {n_links} check links -> {args.out / (stem + '.yaml')}")
+        print(
+            f"{fw}: {n_controls} controls, {n_links} check links -> {args.out / (stem + '.yaml')}"
+        )
 
     print(f"\nTotal: {total_controls} controls, {total_links} check links")
     return 0

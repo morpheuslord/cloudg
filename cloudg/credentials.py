@@ -132,9 +132,7 @@ def build_aws_session(
                 WebIdentityToken=token,
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}"
-            ) from exc
+            raise RuntimeError(f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}") from exc
         creds = resp["Credentials"]
         session = boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
@@ -202,15 +200,12 @@ def build_azure_credential(cfg: Any) -> Any:
         from azure import identity
     except ImportError as exc:
         raise ImportError(
-            "azure-identity is required for Azure. "
-            "Install with: pip install cloudg[azure]"
+            "azure-identity is required for Azure. Install with: pip install cloudg[azure]"
         ) from exc
 
     tenant_id = getattr(cfg, "tenant_id", None) or os.environ.get("AZURE_TENANT_ID")
     client_id = getattr(cfg, "client_id", None) or os.environ.get("AZURE_CLIENT_ID")
-    client_secret = getattr(cfg, "client_secret", None) or os.environ.get(
-        "AZURE_CLIENT_SECRET"
-    )
+    client_secret = getattr(cfg, "client_secret", None) or os.environ.get("AZURE_CLIENT_SECRET")
     certificate_path = getattr(cfg, "certificate_path", None)
     federated_token_file = getattr(cfg, "federated_token_file", None) or os.environ.get(
         "AZURE_FEDERATED_TOKEN_FILE"
@@ -407,9 +402,7 @@ class CredentialResolver:
         else:
             from types import SimpleNamespace
 
-            credential = build_azure_credential(
-                SimpleNamespace(tenant_id=tenant_id)
-            )
+            credential = build_azure_credential(SimpleNamespace(tenant_id=tenant_id))
         logger.info("Azure credentials resolved for subscription %s", subscription_id)
 
         return AzureCredentials(
@@ -450,8 +443,7 @@ class CredentialResolver:
 
         if not project_id:
             raise ValueError(
-                "GCP project ID is required. "
-                "Set GOOGLE_CLOUD_PROJECT env var or pass project_id."
+                "GCP project ID is required. Set GOOGLE_CLOUD_PROJECT env var or pass project_id."
             )
 
         logger.info("GCP credentials resolved for project %s", project_id)

@@ -17,6 +17,7 @@ from cloudg.schema.models import AssetType, CloudProvider
 def aws_credentials():
     """Mock AWS credentials for moto."""
     import os
+
     os.environ["AWS_ACCESS_KEY_ID"] = "testing"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
     os.environ["AWS_SECURITY_TOKEN"] = "testing"
@@ -103,9 +104,27 @@ class TestSchemaModels:
 
         result = ScanResult(
             findings=[
-                Finding(resource_id="r1", severity=Severity.CRITICAL, title="A", description="", source_tool="t"),
-                Finding(resource_id="r2", severity=Severity.HIGH, title="B", description="", source_tool="t"),
-                Finding(resource_id="r3", severity=Severity.CRITICAL, title="C", description="", source_tool="t"),
+                Finding(
+                    resource_id="r1",
+                    severity=Severity.CRITICAL,
+                    title="A",
+                    description="",
+                    source_tool="t",
+                ),
+                Finding(
+                    resource_id="r2",
+                    severity=Severity.HIGH,
+                    title="B",
+                    description="",
+                    source_tool="t",
+                ),
+                Finding(
+                    resource_id="r3",
+                    severity=Severity.CRITICAL,
+                    title="C",
+                    description="",
+                    source_tool="t",
+                ),
             ]
         )
         summary = result.summary
@@ -156,12 +175,14 @@ class TestAsyncAWSCollector:
         sg_id = sg["GroupId"]
         ec2.authorize_security_group_ingress(
             GroupId=sg_id,
-            IpPermissions=[{
-                "IpProtocol": "tcp",
-                "FromPort": 22,
-                "ToPort": 22,
-                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-            }],
+            IpPermissions=[
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": 22,
+                    "ToPort": 22,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            ],
         )
 
         # Create instance
@@ -172,10 +193,12 @@ class TestAsyncAWSCollector:
             MaxCount=1,
             SubnetId=subnet_id,
             SecurityGroupIds=[sg_id],
-            TagSpecifications=[{
-                "ResourceType": "instance",
-                "Tags": [{"Key": "Name", "Value": "test-instance"}],
-            }],
+            TagSpecifications=[
+                {
+                    "ResourceType": "instance",
+                    "Tags": [{"Key": "Name", "Value": "test-instance"}],
+                }
+            ],
         )
         return vpc_id, subnet_id, sg_id
 
@@ -190,14 +213,18 @@ class TestAsyncAWSCollector:
         iam.create_user(UserName="test-user")
         iam.create_role(
             RoleName="test-role",
-            AssumeRolePolicyDocument=json.dumps({
-                "Version": "2012-10-17",
-                "Statement": [{
-                    "Effect": "Allow",
-                    "Principal": {"Service": "ec2.amazonaws.com"},
-                    "Action": "sts:AssumeRole",
-                }],
-            }),
+            AssumeRolePolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ec2.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            ),
         )
 
     def test_collect_ec2_instances(self, boto3_session):

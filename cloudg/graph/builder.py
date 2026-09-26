@@ -150,7 +150,8 @@ class GraphBuilder:
         # Patch numpy 2.0 compatibility (np.float_ removed)
         try:
             import numpy as np
-            if not hasattr(np, 'float_'):
+
+            if not hasattr(np, "float_"):
                 np.float_ = np.float64  # type: ignore[attr-defined]
         except ImportError:
             pass
@@ -192,9 +193,7 @@ class GraphBuilder:
     # Attack path analysis
     # ------------------------------------------------------------------
 
-    def find_attack_paths(
-        self, source: str, target: str, max_depth: int = 10
-    ) -> list[list[str]]:
+    def find_attack_paths(self, source: str, target: str, max_depth: int = 10) -> list[list[str]]:
         """Find all simple paths between source and target nodes.
 
         Args:
@@ -209,9 +208,7 @@ class GraphBuilder:
             return []
 
         try:
-            paths = list(
-                nx.all_simple_paths(self._graph, source, target, cutoff=max_depth)
-            )
+            paths = list(nx.all_simple_paths(self._graph, source, target, cutoff=max_depth))
             logger.info("Found %d attack paths from %s to %s", len(paths), source, target)
             return paths
         except nx.NetworkXError as exc:
@@ -226,9 +223,7 @@ class GraphBuilder:
         """
         # Find IAM trust edges
         iam_edges = [
-            (u, v)
-            for u, v, d in self._graph.edges(data=True)
-            if d.get("edge_type") == "IAM_TRUST"
+            (u, v) for u, v, d in self._graph.edges(data=True) if d.get("edge_type") == "IAM_TRUST"
         ]
 
         if not iam_edges:

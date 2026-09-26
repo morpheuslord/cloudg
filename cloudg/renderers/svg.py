@@ -73,13 +73,25 @@ _ASSET_TYPE_COLOURS: dict[AssetType, str] = {
 }
 
 # Asset types that go into the VPC hierarchy
-_NETWORK_TYPES = {AssetType.VPC, AssetType.VNET, AssetType.SUBNET, AssetType.EC2,
-                  AssetType.VIRTUAL_MACHINE, AssetType.RDS_INSTANCE, AssetType.AURORA_CLUSTER,
-                  AssetType.LAMBDA_FUNCTION}
+_NETWORK_TYPES = {
+    AssetType.VPC,
+    AssetType.VNET,
+    AssetType.SUBNET,
+    AssetType.EC2,
+    AssetType.VIRTUAL_MACHINE,
+    AssetType.RDS_INSTANCE,
+    AssetType.AURORA_CLUSTER,
+    AssetType.LAMBDA_FUNCTION,
+}
 
 # Asset types that appear in the sidebar (non-network)
-_SIDEBAR_TYPES = {AssetType.IAM_USER, AssetType.IAM_ROLE, AssetType.IAM_POLICY,
-                  AssetType.SECURITY_GROUP, AssetType.NSG}
+_SIDEBAR_TYPES = {
+    AssetType.IAM_USER,
+    AssetType.IAM_ROLE,
+    AssetType.IAM_POLICY,
+    AssetType.SECURITY_GROUP,
+    AssetType.NSG,
+}
 
 
 class SVGRenderer:
@@ -184,9 +196,7 @@ class SVGRenderer:
     # Hierarchy building
     # ------------------------------------------------------------------
 
-    def _build_hierarchy(
-        self, assets: list[CloudAsset]
-    ) -> dict[str, Any]:
+    def _build_hierarchy(self, assets: list[CloudAsset]) -> dict[str, Any]:
         """Build VPC → Subnet → Resource hierarchy from asset metadata."""
         vpcs: dict[str, dict[str, Any]] = {}
         # Index VPCs
@@ -205,9 +215,13 @@ class SVGRenderer:
 
         # Index resources into subnets
         for a in assets:
-            if a.asset_type in (AssetType.EC2, AssetType.VIRTUAL_MACHINE,
-                                AssetType.RDS_INSTANCE, AssetType.AURORA_CLUSTER,
-                                AssetType.LAMBDA_FUNCTION):
+            if a.asset_type in (
+                AssetType.EC2,
+                AssetType.VIRTUAL_MACHINE,
+                AssetType.RDS_INSTANCE,
+                AssetType.AURORA_CLUSTER,
+                AssetType.LAMBDA_FUNCTION,
+            ):
                 subnet_id = a.metadata.get("subnet_id", "")
                 vpc_id = a.metadata.get("vpc_id", "")
                 placed = False
@@ -303,13 +317,18 @@ class SVGRenderer:
                     sx = vpc_x + vpc_pad
                     sy = max_subnet_bottom + 10
 
-                subnet_containers.append({
-                    "type": "subnet",
-                    "name": subnet_asset.name,
-                    "cidr": subnet_asset.metadata.get("cidr_block", ""),
-                    "is_public": subnet_asset.metadata.get("map_public_ip", False),
-                    "x": sx, "y": sy, "w": sbox_w, "h": sbox_h,
-                })
+                subnet_containers.append(
+                    {
+                        "type": "subnet",
+                        "name": subnet_asset.name,
+                        "cidr": subnet_asset.metadata.get("cidr_block", ""),
+                        "is_public": subnet_asset.metadata.get("map_public_ip", False),
+                        "x": sx,
+                        "y": sy,
+                        "w": sbox_w,
+                        "h": sbox_h,
+                    }
+                )
 
                 # Position the subnet asset label (center of box header)
                 positions[subnet_asset.id] = (sx + sbox_w / 2, sy + header_h / 2)
@@ -337,12 +356,17 @@ class SVGRenderer:
             vpc_w = max(main_w - 2 * margin, 400)
             vpc_h = max(max_subnet_bottom - vpc_y + vpc_pad, 100)
 
-            containers.append({
-                "type": "vpc",
-                "name": vpc_asset.name,
-                "cidr": vpc_asset.metadata.get("cidr_block", ""),
-                "x": vpc_x, "y": vpc_y, "w": vpc_w, "h": vpc_h,
-            })
+            containers.append(
+                {
+                    "type": "vpc",
+                    "name": vpc_asset.name,
+                    "cidr": vpc_asset.metadata.get("cidr_block", ""),
+                    "x": vpc_x,
+                    "y": vpc_y,
+                    "w": vpc_w,
+                    "h": vpc_h,
+                }
+            )
             containers.extend(subnet_containers)
 
             positions[vpc_asset.id] = (vpc_x + vpc_w / 2, vpc_y + header_h / 2)
@@ -369,13 +393,17 @@ class SVGRenderer:
                 continue
 
             # Group header
-            containers.append({
-                "type": "sidebar_group",
-                "name": f"{group_label} ({len(group_assets)})",
-                "x": sidebar_x, "y": sy,
-                "w": sidebar_w, "h": 18,
-                "colour": colour,
-            })
+            containers.append(
+                {
+                    "type": "sidebar_group",
+                    "name": f"{group_label} ({len(group_assets)})",
+                    "x": sidebar_x,
+                    "y": sy,
+                    "w": sidebar_w,
+                    "h": 18,
+                    "colour": colour,
+                }
+            )
             sy += 22
 
             # Place assets in the sidebar
@@ -394,13 +422,17 @@ class SVGRenderer:
         for type_key, remaining in sidebar_assets.items():
             if not remaining:
                 continue
-            containers.append({
-                "type": "sidebar_group",
-                "name": f"{type_key} ({len(remaining)})",
-                "x": sidebar_x, "y": sy,
-                "w": sidebar_w, "h": 18,
-                "colour": _COLOURS["other"],
-            })
+            containers.append(
+                {
+                    "type": "sidebar_group",
+                    "name": f"{type_key} ({len(remaining)})",
+                    "x": sidebar_x,
+                    "y": sy,
+                    "w": sidebar_w,
+                    "h": 18,
+                    "colour": _COLOURS["other"],
+                }
+            )
             sy += 22
             cols = max(1, min(3, int(sidebar_w / node_spacing)))
             for ai, a in enumerate(remaining):
@@ -418,61 +450,90 @@ class SVGRenderer:
     # Drawing helpers
     # ------------------------------------------------------------------
 
-    def _draw_container(
-        self, dwg: Drawing, group: Any, container: dict[str, Any]
-    ) -> None:
+    def _draw_container(self, dwg: Drawing, group: Any, container: dict[str, Any]) -> None:
         """Draw a VPC or Subnet container rectangle."""
         ctype = container["type"]
         x, y, w, h = container["x"], container["y"], container["w"], container["h"]
 
         if ctype == "vpc":
-            group.add(dwg.rect(
-                insert=(x, y), size=(w, h),
-                fill=_COLOURS["vpc_bg"], stroke=_COLOURS["vpc_border"],
-                stroke_width=2, rx=8, ry=8, opacity=0.85,
-                stroke_dasharray="8,4",
-            ))
+            group.add(
+                dwg.rect(
+                    insert=(x, y),
+                    size=(w, h),
+                    fill=_COLOURS["vpc_bg"],
+                    stroke=_COLOURS["vpc_border"],
+                    stroke_width=2,
+                    rx=8,
+                    ry=8,
+                    opacity=0.85,
+                    stroke_dasharray="8,4",
+                )
+            )
             label = f"VPC: {container['name']}"
             if container.get("cidr"):
                 label += f"  ({container['cidr']})"
-            group.add(dwg.text(
-                label, insert=(x + 10, y + 16),
-                font_size="13px", font_weight="bold",
-                font_family="Inter, Arial, sans-serif",
-                fill=_COLOURS["vpc_border"],
-            ))
+            group.add(
+                dwg.text(
+                    label,
+                    insert=(x + 10, y + 16),
+                    font_size="13px",
+                    font_weight="bold",
+                    font_family="Inter, Arial, sans-serif",
+                    fill=_COLOURS["vpc_border"],
+                )
+            )
 
         elif ctype == "subnet":
-            group.add(dwg.rect(
-                insert=(x, y), size=(w, h),
-                fill=_COLOURS["subnet_bg"], stroke=_COLOURS["subnet_border"],
-                stroke_width=1.5, rx=6, ry=6, opacity=0.7,
-            ))
+            group.add(
+                dwg.rect(
+                    insert=(x, y),
+                    size=(w, h),
+                    fill=_COLOURS["subnet_bg"],
+                    stroke=_COLOURS["subnet_border"],
+                    stroke_width=1.5,
+                    rx=6,
+                    ry=6,
+                    opacity=0.7,
+                )
+            )
             label = container["name"]
             if container.get("cidr"):
                 label += f"  ({container['cidr']})"
             if container.get("is_public"):
                 label += "  🌐"
-            group.add(dwg.text(
-                label, insert=(x + 8, y + 14),
-                font_size="10px", font_weight="600",
-                font_family="Inter, Arial, sans-serif",
-                fill=_COLOURS["subnet_border"],
-            ))
+            group.add(
+                dwg.text(
+                    label,
+                    insert=(x + 8, y + 14),
+                    font_size="10px",
+                    font_weight="600",
+                    font_family="Inter, Arial, sans-serif",
+                    fill=_COLOURS["subnet_border"],
+                )
+            )
 
         elif ctype == "sidebar_group":
             colour = container.get("colour", _COLOURS["other"])
-            group.add(dwg.text(
-                container["name"], insert=(x, y + 13),
-                font_size="11px", font_weight="bold",
-                font_family="Inter, Arial, sans-serif",
-                fill=colour,
-            ))
+            group.add(
+                dwg.text(
+                    container["name"],
+                    insert=(x, y + 13),
+                    font_size="11px",
+                    font_weight="bold",
+                    font_family="Inter, Arial, sans-serif",
+                    fill=colour,
+                )
+            )
             # Underline
-            group.add(dwg.line(
-                start=(x, y + 16), end=(x + container["w"], y + 16),
-                stroke=colour, stroke_width=0.5, opacity=0.4,
-            ))
+            group.add(
+                dwg.line(
+                    start=(x, y + 16),
+                    end=(x + container["w"], y + 16),
+                    stroke=colour,
+                    stroke_width=0.5,
+                    opacity=0.4,
+                )
+            )
 
     def _draw_node(
         self,
@@ -492,25 +553,41 @@ class SVGRenderer:
 
         node_g = dwg.g(class_="node")
 
-        node_g.add(dwg.circle(
-            center=(x, y), r=r,
-            fill=colour, stroke=border, stroke_width=border_w, opacity=0.9,
-        ))
+        node_g.add(
+            dwg.circle(
+                center=(x, y),
+                r=r,
+                fill=colour,
+                stroke=border,
+                stroke_width=border_w,
+                opacity=0.9,
+            )
+        )
 
         # Label — truncate long names
         label = asset.name[:18] + "…" if len(asset.name) > 18 else asset.name
-        node_g.add(dwg.text(
-            label, insert=(x, y + r + 13),
-            text_anchor="middle", font_size="9px",
-            font_family="Inter, Arial, sans-serif", fill="#333333",
-        ))
+        node_g.add(
+            dwg.text(
+                label,
+                insert=(x, y + r + 13),
+                text_anchor="middle",
+                font_size="9px",
+                font_family="Inter, Arial, sans-serif",
+                fill="#333333",
+            )
+        )
 
         # Type badge
-        node_g.add(dwg.text(
-            asset.asset_type.value, insert=(x, y + r + 23),
-            text_anchor="middle", font_size="7px",
-            font_family="Inter, Arial, sans-serif", fill="#888888",
-        ))
+        node_g.add(
+            dwg.text(
+                asset.asset_type.value,
+                insert=(x, y + r + 23),
+                text_anchor="middle",
+                font_size="7px",
+                font_family="Inter, Arial, sans-serif",
+                fill="#888888",
+            )
+        )
 
         # Severity badge
         resource_findings = findings_map.get(asset.id, [])
@@ -522,16 +599,25 @@ class SVGRenderer:
             badge_colour = _SEVERITY_BADGE_COLOURS.get(
                 Severity(max_sev.get("severity", "INFO")), "#95A5A6"
             )
-            node_g.add(dwg.circle(
-                center=(x + r - 2, y - r + 2), r=7,
-                fill=badge_colour, stroke="white", stroke_width=1.5,
-            ))
-            node_g.add(dwg.text(
-                str(len(resource_findings)),
-                insert=(x + r - 2, y - r + 5),
-                text_anchor="middle", font_size="7px",
-                font_weight="bold", fill="white",
-            ))
+            node_g.add(
+                dwg.circle(
+                    center=(x + r - 2, y - r + 2),
+                    r=7,
+                    fill=badge_colour,
+                    stroke="white",
+                    stroke_width=1.5,
+                )
+            )
+            node_g.add(
+                dwg.text(
+                    str(len(resource_findings)),
+                    insert=(x + r - 2, y - r + 5),
+                    text_anchor="middle",
+                    font_size="7px",
+                    font_weight="bold",
+                    fill="white",
+                )
+            )
 
         group.add(node_g)
 
@@ -545,16 +631,27 @@ class SVGRenderer:
         x_start = 20
         y_start = height - 180
 
-        legend_g.add(dwg.rect(
-            insert=(x_start - 10, y_start - 20),
-            size=(220, 170), fill="white", stroke="#DDDDDD",
-            rx=5, ry=5, opacity=0.95,
-        ))
-        legend_g.add(dwg.text(
-            "Legend", insert=(x_start, y_start),
-            font_size="12px", font_weight="bold",
-            font_family="Inter, Arial, sans-serif", fill="#333333",
-        ))
+        legend_g.add(
+            dwg.rect(
+                insert=(x_start - 10, y_start - 20),
+                size=(220, 170),
+                fill="white",
+                stroke="#DDDDDD",
+                rx=5,
+                ry=5,
+                opacity=0.95,
+            )
+        )
+        legend_g.add(
+            dwg.text(
+                "Legend",
+                insert=(x_start, y_start),
+                font_size="12px",
+                font_weight="bold",
+                font_family="Inter, Arial, sans-serif",
+                fill="#333333",
+            )
+        )
 
         items = [
             ("EC2/VM", _COLOURS["ec2"]),
@@ -571,10 +668,15 @@ class SVGRenderer:
         for i, (label, colour) in enumerate(items):
             y = y_start + 18 + i * 15
             legend_g.add(dwg.circle(center=(x_start + 6, y - 3), r=5, fill=colour))
-            legend_g.add(dwg.text(
-                label, insert=(x_start + 18, y),
-                font_size="10px", font_family="Inter, Arial, sans-serif", fill="#333333",
-            ))
+            legend_g.add(
+                dwg.text(
+                    label,
+                    insert=(x_start + 18, y),
+                    font_size="10px",
+                    font_family="Inter, Arial, sans-serif",
+                    fill="#333333",
+                )
+            )
 
         dwg.add(legend_g)
 
