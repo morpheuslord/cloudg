@@ -38,8 +38,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/morpheuslord/cloudmapper"
-Repository = "https://github.com/morpheuslord/cloudmapper"
+Homepage = "https://github.com/morpheuslord/cloudg"
+Repository = "https://github.com/morpheuslord/cloudg"
 
 [project.optional-dependencies]
 aws = [
