@@ -51,7 +51,7 @@ jobs:
 # One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
 #   Project name:  cloudg
 #   Owner:         morpheuslord
-#   Repository:    cloudmapper
+#   Repository:    cloudg
 #   Workflow:      publish.yml
 #   Environment:   pypi
 # Also create the "pypi" environment under the repo's Settings -> Environments.
