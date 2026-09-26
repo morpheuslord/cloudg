@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────────
+# Cloud Custodian — Azure Security & Governance Policies
+# ─────────────────────────────────────────────────────────────────
+# Detection-only policies for common Azure misconfigurations. Aligned
+# with CIS Microsoft Azure Foundations Benchmark v2.0 where noted.
+#
+# Usage:
+#   uv pip install c7n c7n-azure
+#   custodian run --output-dir ./custodian-output cloudg/policies/custodian-azure.yml
+
+policies:
+
+  # ── Storage accounts allowing plain HTTP (CIS Azure 3.1) ──
+  - name: azure-storage-http-allowed
+    resource: azure.storage
+    description: "Storage accounts that do not require secure transfer"
+    filters:
+      - type: value
+        key: properties.supportsHttpsTrafficOnly
+        value: false
+    actions:
+      - type: notify
+        subject: "Storage account allows HTTP"
+        violation_desc: "Secure transfer (HTTPS-only) is disabled."
+        action_desc: "Enable 'Secure transfer required' on the storage account."
+
+  # ── NSGs allowing SSH from anywhere (CIS Azure 6.2) ──
+  - name: azure-nsg-open-ssh
+    resource: azure.networksecuritygroup
+    description: "Network security groups allowing SSH (22) from any source"
+    filters:
+      - type: ingress
+        ports: "22"
+        access: Allow
+        source: "*"
+    actions:
+      - type: notify
+        subject: "NSG allows SSH from the Internet"
+        violation_desc: "Port 22 is open to any source address."
+        action_desc: "Restrict the source or use Azure Bastion."
+
+  # ── NSGs allowing RDP from anywhere (CIS Azure 6.1) ──
+  - name: azure-nsg-open-rdp
+    resource: azure.networksecuritygroup
+    description: "Network security groups allowing RDP (3389) from any source"
+    filters:
+      - type: ingress
+        ports: "3389"
+        access: Allow
+        source: "*"
+    actions:
+      - type: notify
+        subject: "NSG allows RDP from the Internet"
+        violation_desc: "Port 3389 is open to any source address."
+        action_desc: "Restrict the source or use Azure Bastion."
+
+  # ── VMs without managed disks ──
+  - name: azure-vm-unmanaged-disks
+    resource: azure.vm
+    description: "VMs still using unmanaged (storage account) disks"
+    filters:
+      - type: value
+        key: properties.storageProfile.osDisk.managedDisk
+        value: null
+    actions:
+      - type: notify
+        subject: "VM uses unmanaged disks"
+        violation_desc: "Unmanaged disks miss per-disk encryption and RBAC controls."
+        action_desc: "Migrate the VM to managed disks."
+
+  # ── SQL servers without auditing (CIS Azure 4.1.1) ──
+  - name: azure-sqlserver-no-auditing
+    resource: azure.sqlserver
+    description: "SQL servers without blob auditing enabled"
+    filters:
+      - type: value
+        key: properties.state
+        value: Ready
+    actions:
+      - type: notify
+        subject: "Review SQL server auditing"
+        violation_desc: "Verify that auditing is enabled for this SQL server."
+        action_desc: "Enable auditing to a storage account or Log Analytics workspace."
+
+  # ── Untagged resource groups ──
+  - name: azure-untagged-resource-groups
+    resource: azure.resourcegroup
+    description: "Resource groups missing an Owner tag"
+    filters:
+      - "tag:Owner": absent
+    actions:
+      - type: notify
+        subject: "Untagged resource group"
+        violation_desc: "Resource group has no Owner tag for cost and ownership tracking."
+        action_desc: "Add an Owner tag."

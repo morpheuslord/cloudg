@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
-# CloudMapper Auto-Install Script (Linux / macOS)
+# CloudG Auto-Install Script (Linux / macOS)
 # Installs ALL Python deps, system packages, and security scanner tools.
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -17,7 +17,7 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $1"; }
 
-echo -e "${BOLD}☁️  CloudMapper Full Auto-Installer${NC}"
+echo -e "${BOLD}☁️  CloudG Full Auto-Installer${NC}"
 echo "─────────────────────────────────────────────────"
 
 # ── Detect OS & package manager ──
@@ -195,12 +195,20 @@ else
     command -v node &> /dev/null && ok "Node.js $(node --version) installed" || warn "Node.js installation failed"
 fi
 
-# ── 5. Create virtual environment ──
+# ── 5. uv (package manager) ──
 echo ""
+if ! command -v uv &> /dev/null; then
+    info "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+command -v uv &> /dev/null && ok "uv $(uv --version | cut -d' ' -f2) found" || { fail "uv installation failed"; exit 1; }
+
+# ── 6. Create virtual environment ──
 VENV_DIR=".venv"
 if [ ! -d "$VENV_DIR" ]; then
     info "Creating virtual environment..."
-    "$PYTHON_CMD" -m venv "$VENV_DIR"
+    uv venv "$VENV_DIR" --python "$PYTHON_CMD"
     ok "Virtual environment created at $VENV_DIR"
 else
     ok "Virtual environment already exists"
@@ -211,23 +219,18 @@ fi
 source "$VENV_DIR/bin/activate"
 ok "Virtual environment activated"
 
-# ── 6. Upgrade pip & build tools ──
-info "Upgrading pip, setuptools, wheel..."
-pip install --upgrade pip setuptools wheel --quiet
-ok "Build tools upgraded"
-
-# ── 7. Install CloudMapper + all deps ──
+# ── 7. Install CloudG + all deps ──
 echo ""
-info "Installing CloudMapper with full dependencies..."
-pip install -e ".[dev]" --quiet && ok "CloudMapper core + dev installed" || {
+info "Installing CloudG with full dependencies..."
+uv pip install -e ".[all,dev]" --quiet && ok "CloudG core + dev installed" || {
     warn "editable install failed, installing deps directly..."
-    pip install pydantic click rich aioboto3 boto3 networkx jinja2 svgwrite aiofiles parliament \
+    uv pip install pydantic click rich aioboto3 boto3 networkx jinja2 svgwrite aiofiles parliament \
         pytest pytest-asyncio moto --quiet
     ok "Core dependencies installed"
 }
 
 # Attempt full extras (may have optional heavy deps)
-pip install -e ".[full]" --quiet 2>/dev/null && ok "Full extras installed" || warn "Some optional extras not available"
+uv pip install -e ".[full]" --quiet 2>/dev/null && ok "Full extras installed" || warn "Some optional extras not available"
 
 # ── 8. Install Security Scanner Tools ──
 echo ""
@@ -239,7 +242,7 @@ info "Installing Prowler..."
 if command -v prowler &> /dev/null; then
     ok "Prowler already installed: $(prowler --version 2>/dev/null || echo 'version unknown')"
 else
-    pip install prowler --quiet 2>/dev/null && ok "Prowler installed via pip" || warn "Prowler install failed (try: pip install prowler)"
+    uv pip install prowler --quiet 2>/dev/null && ok "Prowler installed via pip" || warn "Prowler install failed (try: uv pip install prowler)"
 fi
 
 # Checkov
@@ -247,7 +250,7 @@ info "Installing Checkov..."
 if command -v checkov &> /dev/null; then
     ok "Checkov already installed"
 else
-    pip install checkov --quiet 2>/dev/null && ok "Checkov installed via pip" || warn "Checkov install failed (try: pip install checkov)"
+    uv pip install checkov --quiet 2>/dev/null && ok "Checkov installed via pip" || warn "Checkov install failed (try: uv pip install checkov)"
 fi
 
 # ScoutSuite
@@ -255,16 +258,16 @@ info "Installing ScoutSuite..."
 if command -v scout &> /dev/null; then
     ok "ScoutSuite already installed"
 else
-    pip install scoutsuite --quiet 2>/dev/null && ok "ScoutSuite installed via pip" || warn "ScoutSuite install failed (try: pip install scoutsuite)"
+    uv pip install scoutsuite --quiet 2>/dev/null && ok "ScoutSuite installed via pip" || warn "ScoutSuite install failed (try: uv pip install scoutsuite)"
 fi
 
 # Parliament (IAM linter)
 info "Installing Parliament..."
-pip install parliament --quiet 2>/dev/null && ok "Parliament installed" || warn "Parliament install failed"
+uv pip install parliament --quiet 2>/dev/null && ok "Parliament installed" || warn "Parliament install failed"
 
 # Policy Sentry
 info "Installing Policy Sentry..."
-pip install policy-sentry --quiet 2>/dev/null && ok "Policy Sentry installed" || warn "Policy Sentry install failed"
+uv pip install policy-sentry --quiet 2>/dev/null && ok "Policy Sentry installed" || warn "Policy Sentry install failed"
 
 # Trivy (binary — not a pip package)
 echo ""
@@ -332,7 +335,7 @@ fi
 
 # Cloud Custodian (pip)
 info "Installing Cloud Custodian..."
-pip install c7n --quiet 2>/dev/null && ok "Cloud Custodian (c7n) installed" || warn "Cloud Custodian install failed (optional)"
+uv pip install c7n --quiet 2>/dev/null && ok "Cloud Custodian (c7n) installed" || warn "Cloud Custodian install failed (optional)"
 
 # ── 9. Install cloud CLIs (if missing) ──
 echo ""
@@ -375,11 +378,11 @@ else
         fedora|rhel)
             sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true
             sudo "$PKG_MGR" install -y azure-cli 2>/dev/null && ok "Azure CLI installed" || {
-                pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
+                uv pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
             }
             ;;
         *)
-            pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
+            uv pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
             ;;
     esac
 fi
@@ -405,17 +408,17 @@ else
     esac
 fi
 
-# ── 10. Verify CloudMapper Installation ──
+# ── 10. Verify CloudG Installation ──
 echo ""
 echo -e "${BOLD}Verifying Installation${NC}"
 echo "─────────────────────────────────────────────────"
 
-if cloudmapper --version &> /dev/null; then
-    VERSION=$(cloudmapper --version 2>/dev/null)
-    ok "cloudmapper $VERSION"
+if cloudg --version &> /dev/null; then
+    VERSION=$(cloudg --version 2>/dev/null)
+    ok "cloudg $VERSION"
 else
-    warn "CloudMapper CLI not on PATH — trying direct invocation"
-    "$PYTHON_CMD" -m cloudmapper.cli --version 2>/dev/null && ok "CloudMapper accessible via python -m" || warn "CloudMapper CLI not yet functional"
+    warn "CloudG CLI not on PATH — trying direct invocation"
+    "$PYTHON_CMD" -m cloudg.cli --version 2>/dev/null && ok "CloudG accessible via python -m" || warn "CloudG CLI not yet functional"
 fi
 
 # ── 11. Summary ──
@@ -423,7 +426,7 @@ echo ""
 echo -e "${BOLD}────────── Installation Summary ──────────${NC}"
 
 declare -A TOOLS=(
-    ["CloudMapper"]="cloudmapper"
+    ["CloudG"]="cloudg"
     ["Prowler"]="prowler"
     ["Checkov"]="checkov"
     ["ScoutSuite"]="scout"
@@ -449,9 +452,9 @@ echo -e "${GREEN}${BOLD}✓ Installation complete!${NC}"
 echo ""
 echo "Usage:"
 echo "  source $VENV_DIR/bin/activate"
-echo "  cloudmapper --help"
-echo "  cloudmapper collect --provider aws --region us-east-1"
-echo "  cloudmapper run --provider aws -o ./reports"
+echo "  cloudg --help"
+echo "  cloudg collect --provider aws --region us-east-1"
+echo "  cloudg run --provider aws -o ./reports"
 echo ""
 echo "To run Cloud Custodian policies:"
-echo "  custodian run --output-dir ./custodian-output policies/custodian.yml"
+echo "  custodian run --output-dir ./custodian-output cloudg/policies/custodian.yml"

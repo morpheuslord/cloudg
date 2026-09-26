@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────
+# GDPR — Article Mappings for Infrastructure Findings
+# Source: Regulation (EU) 2016/679 (public, EUR-Lex)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs. Only the articles with a direct technical
+# infrastructure reading are mapped.
+# ─────────────────────────────────────────────────────────────────
+
+framework: GDPR
+version: "2016/679"
+source: "Regulation (EU) 2016/679"
+
+controls:
+  - id: "GDPR-25"
+    title: "Data protection by design and by default"
+    patterns:
+      - "public.*access"
+      - "default.*config"
+      - "publicly.*accessible"
+      - "access.*control"
+    severity: HIGH
+
+  - id: "GDPR-30"
+    title: "Records of processing activities"
+    patterns:
+      - "audit"
+      - "logging"
+      - "cloudtrail"
+    severity: MEDIUM
+
+  - id: "GDPR-32"
+    title: "Security of processing (encryption, confidentiality, resilience)"
+    patterns:
+      - "encrypt"
+      - "tls"
+      - "unencrypted"
+      - "vulnerability"
+    severity: HIGH
+
+  - id: "GDPR-33"
+    title: "Notification of a personal data breach (detection capability)"
+    patterns:
+      - "monitor"
+      - "detect"
+      - "alarm"
+      - "guardduty"
+    severity: MEDIUM
+
+  - id: "GDPR-44"
+    title: "General principle for transfers (data residency and replication)"
+    patterns:
+      - "cross.*region.*replicat"
+      - "data.*residenc"
+      - "replicates_to"
+    severity: LOW

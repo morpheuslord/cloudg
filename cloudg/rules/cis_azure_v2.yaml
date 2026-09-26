@@ -1,0 +1,142 @@
+# ─────────────────────────────────────────────────────────────────
+# CIS Microsoft Azure Foundations Benchmark v2.0 — Control ID Mappings
+# Source: CIS Microsoft Azure Foundations Benchmark v2.0.0 (public)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs. Prowler and Checkov emit these natively.
+# ─────────────────────────────────────────────────────────────────
+
+framework: CIS-AZURE
+version: "2.0"
+source: "CIS Microsoft Azure Foundations Benchmark v2.0.0"
+
+controls:
+  # 1. Identity and Access Management
+  - id: "CIS-Azure-1.5"
+    title: "Ensure that MFA is enabled for all privileged users"
+    patterns:
+      - "azure.*mfa"
+      - "privileged.*mfa"
+      - "mfa.*admin"
+    severity: CRITICAL
+
+  - id: "CIS-Azure-1.23"
+    title: "Ensure that no custom subscription owner roles are created"
+    patterns:
+      - "custom.*owner.*role"
+      - "subscription.*owner"
+    severity: HIGH
+
+  # 3. Storage Accounts
+  - id: "CIS-Azure-3.1"
+    title: "Ensure that Secure transfer required is enabled for storage accounts"
+    patterns:
+      - "storage.*https"
+      - "secure.*transfer"
+      - "supportsHttpsTrafficOnly"
+    severity: HIGH
+
+  - id: "CIS-Azure-3.7"
+    title: "Ensure that public access level is disabled for storage accounts with blob containers"
+    patterns:
+      - "blob.*public"
+      - "storage.*public.*access"
+      - "container.*public"
+    severity: CRITICAL
+
+  - id: "CIS-Azure-3.9"
+    title: "Ensure storage account access is restricted to trusted networks"
+    patterns:
+      - "storage.*network.*rule"
+      - "storage.*default.*allow"
+    severity: MEDIUM
+
+  # 4. Database Services
+  - id: "CIS-Azure-4.1.1"
+    title: "Ensure that auditing is enabled on SQL servers"
+    patterns:
+      - "sql.*audit"
+      - "server.*auditing"
+    severity: MEDIUM
+
+  - id: "CIS-Azure-4.1.2"
+    title: "Ensure no SQL server firewall rule allows ingress from 0.0.0.0"
+    patterns:
+      - "sql.*firewall.*0\\.0\\.0\\.0"
+      - "sql.*allow.*azure.*services"
+      - "sql.*public.*access"
+    severity: CRITICAL
+
+  - id: "CIS-Azure-4.1.3"
+    title: "Ensure SQL server Transparent Data Encryption is enabled"
+    patterns:
+      - "transparent.*data.*encrypt"
+      - "sql.*tde"
+      - "sql.*encrypt"
+    severity: HIGH
+
+  # 5. Logging and Monitoring
+  - id: "CIS-Azure-5.1.1"
+    title: "Ensure that a diagnostic setting exists for subscription activity logs"
+    patterns:
+      - "diagnostic.*setting"
+      - "activity.*log"
+    severity: MEDIUM
+
+  - id: "CIS-Azure-5.1.3"
+    title: "Ensure the storage container storing activity logs is not publicly accessible"
+    patterns:
+      - "log.*container.*public"
+      - "insights.*public"
+    severity: HIGH
+
+  # 6. Networking
+  - id: "CIS-Azure-6.1"
+    title: "Ensure that RDP access from the Internet is restricted"
+    patterns:
+      - "nsg.*rdp"
+      - "rdp.*internet"
+      - "3389.*internet"
+      - "nsg.*3389"
+    severity: CRITICAL
+
+  - id: "CIS-Azure-6.2"
+    title: "Ensure that SSH access from the Internet is restricted"
+    patterns:
+      - "nsg.*ssh"
+      - "ssh.*internet"
+      - "nsg.*22"
+    severity: CRITICAL
+
+  - id: "CIS-Azure-6.5"
+    title: "Ensure that Network Security Group flow logs are enabled"
+    patterns:
+      - "nsg.*flow.*log"
+      - "network.*watcher"
+    severity: MEDIUM
+
+  # 7. Virtual Machines
+  - id: "CIS-Azure-7.2"
+    title: "Ensure that OS and data disks are encrypted with CMK"
+    patterns:
+      - "disk.*encrypt"
+      - "vm.*encrypt"
+      - "managed.*disk.*cmk"
+    severity: HIGH
+
+  # 8. Key Vault
+  - id: "CIS-Azure-8.4"
+    title: "Ensure the Key Vault is recoverable (soft delete and purge protection)"
+    patterns:
+      - "key.*vault.*soft.*delete"
+      - "purge.*protection"
+      - "vault.*recover"
+    severity: MEDIUM
+
+  - id: "CIS-Azure-8.5"
+    title: "Ensure that Key Vault allows only Azure services and trusted networks"
+    patterns:
+      - "key.*vault.*network"
+      - "key.*vault.*public"
+      - "vault.*firewall"
+    severity: HIGH

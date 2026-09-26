@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-import pytest
 
-from cloudmapper.renderers.terraform_export import (
+from cloudg.renderers.terraform_export import (
     TerraformExporter,
     _sanitise_tf_name,
     _TF_RESOURCE_MAP,
 )
-from cloudmapper.schema.models import (
+from cloudg.schema.models import (
     AssetType,
     CloudAsset,
     CloudProvider,

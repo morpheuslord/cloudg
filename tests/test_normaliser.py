@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 
-from cloudmapper.normaliser import FindingsNormaliser
-from cloudmapper.schema.models import (
+from cloudg.normaliser import FindingsNormaliser
+from cloudg.schema.models import (
     AssetType,
     CloudAsset,
     CloudProvider,
@@ -14,8 +13,8 @@ from cloudmapper.schema.models import (
     NetworkEdge,
     Severity,
 )
-from cloudmapper.graph.builder import GraphBuilder
-from cloudmapper.graph.reachability import ReachabilityAnalyzer
+from cloudg.graph.builder import GraphBuilder
+from cloudg.graph.reachability import ReachabilityAnalyzer
 
 
 # ── Normaliser Tests ──

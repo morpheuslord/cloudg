@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────
+# HIPAA Security Rule — Technical Safeguards Mappings
+# Source: 45 CFR Part 164, Subpart C (U.S. federal regulation,
+# public domain)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: HIPAA
+version: "45 CFR 164 Subpart C"
+source: "HIPAA Security Rule, 45 CFR 164.308-164.312"
+
+controls:
+  - id: "HIPAA-164.308(a)(1)"
+    title: "Security management process — risk analysis and management"
+    patterns:
+      - "vulnerability"
+      - "cve"
+      - "misconfigur"
+    severity: HIGH
+
+  - id: "HIPAA-164.308(a)(4)"
+    title: "Information access management"
+    patterns:
+      - "least.*privilege"
+      - "overly.*permissive"
+      - "wildcard"
+    severity: HIGH
+
+  - id: "HIPAA-164.312(a)(1)"
+    title: "Access control — unique user identification and authorization"
+    patterns:
+      - "access.*control"
+      - "iam.*polic"
+      - "authorization"
+      - "shared.*account"
+    severity: HIGH
+
+  - id: "HIPAA-164.312(a)(2)(iv)"
+    title: "Encryption and decryption of electronic protected health information"
+    patterns:
+      - "encrypt.*rest"
+      - "storage.*encrypt"
+      - "unencrypted"
+      - "kms"
+    severity: HIGH
+
+  - id: "HIPAA-164.312(b)"
+    title: "Audit controls — record and examine system activity"
+    patterns:
+      - "audit"
+      - "logging"
+      - "cloudtrail"
+      - "flow.*log"
+    severity: MEDIUM
+
+  - id: "HIPAA-164.312(c)(1)"
+    title: "Integrity — protect ePHI from improper alteration or destruction"
+    patterns:
+      - "versioning"
+      - "log.*file.*valid"
+      - "integrit"
+      - "mfa.*delete"
+    severity: MEDIUM
+
+  - id: "HIPAA-164.312(d)"
+    title: "Person or entity authentication"
+    patterns:
+      - "mfa"
+      - "multi.factor"
+      - "password.*policy"
+      - "authentication"
+    severity: HIGH
+
+  - id: "HIPAA-164.312(e)(1)"
+    title: "Transmission security — guard against unauthorized access in transit"
+    patterns:
+      - "tls"
+      - "ssl"
+      - "https"
+      - "transit.*encrypt"
+    severity: HIGH
