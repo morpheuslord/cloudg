@@ -1,16 +1,26 @@
 <p align="center">
-  <img src="assets/logo.svg" width="400" alt="cloudg logo">
+  <img src="https://raw.githubusercontent.com/morpheuslord/cloudg/main/assets/cloudg_animated_logo.gif" width="600" alt="cloudg animated logo">
 </p>
 
-# cloudg
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/version-0.3.0-4c1.svg" alt="Version 0.3.0">
+  <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
+</p>
 
-cloudg (short for cloud graphing) maps cloud infrastructure across AWS, Azure and GCP, builds a graph of what it finds, runs security scanners over the same inventory, and writes everything out as reports you can actually use: an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
+<p align="center">
+  <b>cloudg</b> (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph,<br>
+  runs security scanners over the same inventory, and turns the results into reports you can actually use.
+</p>
 
-It started as a single-account AWS mapper and grew into a pipeline. One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks.
+---
 
-## Install
+One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks. Out the other end come an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
-With uv, which is what I use for development:
+---
+
+## Quick start
 
 ```bash
 git clone https://github.com/morpheuslord/cloudg.git
@@ -19,17 +29,6 @@ cd cloudg
 uv venv && source .venv/bin/activate
 uv pip install -e ".[all,dev]"
 ```
-
-Plain pip works too: `pip install -e ".[all]"`. The cloud SDKs are extras, so `pip install cloudg[aws]` pulls only boto3/aioboto3, `[azure]` and `[gcp]` do the same for their SDKs, and `[all]` installs the lot. The core package with no extras still gives you the graph engine, the ontology, the normaliser and the report renderers.
-
-The external scanners (Prowler, Checkov, Trivy, ScoutSuite) are separate executables, not Python dependencies. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up everything including the scanners and the cloud CLIs. Docker is the lazy path, since the image bundles all four scanners:
-
-```bash
-docker build -t cloudg:latest .
-docker compose run --rm cloudg run -p aws --regions us-east-1
-```
-
-## Quick start
 
 ```bash
 # one provider, one region
@@ -44,11 +43,34 @@ cloudg run -p aws --regions us-east-1 --terraform
 
 Reports land in `./reports`. Open `report.html` first.
 
+<details>
+<summary><b>Other install options (pip, Docker, installer scripts)</b></summary>
+
+<br>
+
+Plain pip works too: `pip install -e ".[all]"`. The cloud SDKs are extras, so `pip install cloudg[aws]` pulls only boto3/aioboto3, `[azure]` and `[gcp]` do the same for their SDKs, and `[all]` installs the lot. The core package with no extras still gives you the graph engine, the ontology, the normaliser and the report renderers.
+
+The external scanners (Prowler, Checkov, Trivy, ScoutSuite) are separate executables, not Python dependencies. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up everything including the scanners and the cloud CLIs.
+
+Docker is the lazy path, since the image bundles all four scanners:
+
+```bash
+docker build -t cloudg:latest .
+docker compose run --rm cloudg run -p aws --regions us-east-1
+```
+
+</details>
+
+---
+
 ## Authentication
 
-Every provider supports several auth methods, resolved in a fixed priority order. The same config works on a laptop, in CI, and on cloud compute.
+Every provider supports several auth methods, resolved in a fixed priority order. The same config works on a laptop, in CI, and on cloud compute. The full set of fields lives in `config.yaml` with comments for each method.
 
-### AWS
+<details>
+<summary><b>AWS</b></summary>
+
+<br>
 
 1. Direct keys: `--aws-key` / `--aws-secret` (plus `--aws-session-token` for temporary credentials), or the standard env vars.
 2. OIDC web identity federation: `--aws-role-arn` together with `--aws-web-identity-token-file`. This is the GitHub Actions / GitLab CI / EKS service account pattern, no long-lived keys anywhere.
@@ -57,7 +79,12 @@ Every provider supports several auth methods, resolved in a fixed priority order
 
 On top of any of these you can layer STS role assumption with `--aws-role-arn` and, for the third-party auditor pattern, `--aws-external-id`. Multi-account fan-out uses `accounts` plus `role_name` in the config file, and cloudg assumes that role in each account before collecting.
 
-### Azure
+</details>
+
+<details>
+<summary><b>Azure</b></summary>
+
+<br>
 
 1. Workload identity federation: `--azure-tenant-id`, `--azure-client-id` and `--azure-federated-token-file` (AKS workload identity, GitHub OIDC).
 2. Service principal with a client secret: `--azure-client-secret`.
@@ -65,14 +92,21 @@ On top of any of these you can layer STS role assumption with `--aws-role-arn` a
 4. Managed identity: `--azure-managed-identity`, with `managed_identity_client_id` in the config for user-assigned identities.
 5. The DefaultAzureCredential chain, which also covers `az login` sessions.
 
-### GCP
+</details>
+
+<details>
+<summary><b>GCP</b></summary>
+
+<br>
 
 1. A credentials file via `--gcp-credentials-file`: either a service account key JSON or a workload identity federation (`external_account`) config.
 2. Application default credentials: `GOOGLE_APPLICATION_CREDENTIALS`, gcloud user credentials, or the GCE/GKE metadata server.
 
 `--gcp-impersonate-sa` layers service account impersonation on top of either, which is handy when your user account may impersonate a read-only scanner service account.
 
-The full set of fields lives in `config.yaml` with comments for each method.
+</details>
+
+---
 
 ## What the pipeline does
 
@@ -92,6 +126,8 @@ The same inventory feeds three other exports. The ontology module infers about 6
 
 Scanner findings are deduplicated by resource and title, rescored against CVSS, and mapped to compliance controls.
 
+---
+
 ## Compliance rules
 
 Findings are tagged with framework controls in four tiers, most precise first:
@@ -100,6 +136,11 @@ Findings are tagged with framework controls in four tiers, most precise first:
 2. Exact check-ID lookup against the shipped rulesets. These are generated from Prowler's public compliance data (Apache-2.0) and cover 28 frameworks with 4,166 controls and 10,236 check mappings across AWS, Azure and GCP: CIS 5.0 for each cloud, NIST 800-53 rev 5, NIST CSF 2.0, PCI DSS 4.0, SOC 2, HIPAA, GDPR, ISO 27001:2022, MITRE ATT&CK, and the AWS Foundational Security Best Practices.
 3. Regex pattern rules for scanners that emit no compliance metadata.
 4. A small built-in fallback table.
+
+<details>
+<summary><b>Refreshing and extending the rulesets</b></summary>
+
+<br>
 
 The rulesets ship inside the package (`cloudg/rules/`). To refresh them against a newer Prowler release:
 
@@ -121,7 +162,16 @@ controls:
 
 `cloudg/policies/` additionally holds Cloud Custodian policy packs (AWS governance, AWS security, Azure, GCP) you can run with `custodian run` independently of cloudg.
 
-## CLI reference
+</details>
+
+---
+
+## Reference
+
+<details>
+<summary><b>CLI flags</b></summary>
+
+<br>
 
 | Flag | Meaning |
 |---|---|
@@ -145,7 +195,12 @@ controls:
 
 `cloudg collect` and `cloudg scan` run the individual phases; `cloudg report -i findings.json` re-renders reports from a previous run.
 
-## Output files
+</details>
+
+<details>
+<summary><b>Output files</b></summary>
+
+<br>
 
 | File | What it is |
 |---|---|
@@ -155,6 +210,10 @@ controls:
 | `ontology.ttl`, `ontology.jsonld` | the RDF ontology |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks |
 | `terraform/*.tf.json`, `terraform/import.sh` | recreation files |
+
+</details>
+
+---
 
 ## Using it as a library
 
@@ -181,6 +240,8 @@ Custom collectors and scanners register through entry points, no core changes ne
 mycloud = "my_package.collector:MyCollector"
 ```
 
+---
+
 ## Development
 
 ```bash
@@ -191,6 +252,8 @@ uv build           # wheel + sdist for PyPI
 ```
 
 Python 3.11 or newer. The moto/aiobotocore incompatibility around async response bodies is handled in `tests/conftest.py`, so the suite runs against current versions of both.
+
+---
 
 ## License
 
