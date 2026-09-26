@@ -14,7 +14,8 @@ With uv, which is what I use for development:
 
 ```bash
 git clone https://github.com/morpheuslord/cloudg.git
-cd cloudmapper
+cd cloudg
+
 uv venv && source .venv/bin/activate
 uv pip install -e ".[all,dev]"
 ```
