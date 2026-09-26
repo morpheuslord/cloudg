@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────
+# Cloud Custodian — GCP Security & Governance Policies
+# ─────────────────────────────────────────────────────────────────
+# Detection-only policies for common GCP misconfigurations. Aligned
+# with CIS GCP Foundation Benchmark v3.0 where noted.
+#
+# Usage:
+#   uv pip install c7n c7n-gcp
+#   custodian run --output-dir ./custodian-output cloudg/policies/custodian-gcp.yml
+
+policies:
+
+  # ── Firewall rules open to the world on SSH (CIS GCP 3.6) ──
+  - name: gcp-firewall-open-ssh
+    resource: gcp.firewall
+    description: "Firewall rules allowing 0.0.0.0/0 ingress (review SSH/RDP exposure)"
+    filters:
+      - type: value
+        key: sourceRanges[]
+        op: contains
+        value: "0.0.0.0/0"
+      - type: value
+        key: direction
+        value: INGRESS
+    actions:
+      - type: notify
+        subject: "Firewall rule open to the Internet"
+        violation_desc: "Ingress rule accepts traffic from 0.0.0.0/0."
+        action_desc: "Restrict source ranges or use IAP TCP forwarding."
+
+  # ── Buckets with public IAM bindings (CIS GCP 5.1) ──
+  - name: gcp-bucket-public
+    resource: gcp.bucket
+    description: "Cloud Storage buckets granting access to allUsers or allAuthenticatedUsers"
+    filters:
+      - type: iam-policy
+        key: "bindings[*].members[]"
+        op: intersect
+        value: ["allUsers", "allAuthenticatedUsers"]
+    actions:
+      - type: notify
+        subject: "Public Cloud Storage bucket"
+        violation_desc: "Bucket IAM policy grants access to everyone."
+        action_desc: "Remove the public binding and enable public access prevention."
+
+  # ── Default network still present (CIS GCP 3.1) ──
+  - name: gcp-default-network
+    resource: gcp.vpc
+    description: "Projects still containing the default network"
+    filters:
+      - type: value
+        key: name
+        value: default
+    actions:
+      - type: notify
+        subject: "Default network present"
+        violation_desc: "The auto-created default network has permissive firewall rules."
+        action_desc: "Create a custom VPC and delete the default network."
+
+  # ── Instances with public IPs (CIS GCP 4.9) ──
+  - name: gcp-instance-public-ip
+    resource: gcp.instance
+    description: "Compute instances with external IP addresses"
+    filters:
+      - type: value
+        key: networkInterfaces[0].accessConfigs
+        value: present
+    actions:
+      - type: notify
+        subject: "Instance with public IP"
+        violation_desc: "Instance is directly reachable from the Internet."
+        action_desc: "Remove the external IP and use Cloud NAT or IAP instead."
+
+  # ── Cloud SQL instances open to the world (CIS GCP 6.5) ──
+  - name: gcp-cloudsql-open
+    resource: gcp.sql-instance
+    description: "Cloud SQL instances with 0.0.0.0/0 in authorized networks"
+    filters:
+      - type: value
+        key: "settings.ipConfiguration.authorizedNetworks[].value"
+        op: contains
+        value: "0.0.0.0/0"
+    actions:
+      - type: notify
+        subject: "Cloud SQL instance open to the Internet"
+        violation_desc: "Authorized networks include 0.0.0.0/0."
+        action_desc: "Remove the open range and use private IP or the Cloud SQL Auth Proxy."

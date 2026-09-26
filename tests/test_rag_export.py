@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import networkx as nx
-import pytest
 
-from cloudmapper.graph.rag_export import RAGChunk, RAGExporter
-from cloudmapper.schema.models import (
+from cloudg.graph.rag_export import RAGChunk, RAGExporter
+from cloudg.schema.models import (
     AssetType,
     CloudAsset,
     CloudProvider,
@@ -84,7 +82,7 @@ def _make_findings() -> list[Finding]:
 
 def _build_graph() -> nx.DiGraph:
     """Build a test NetworkX graph matching our assets/edges."""
-    from cloudmapper.graph.builder import GraphBuilder
+    from cloudg.graph.builder import GraphBuilder
     builder = GraphBuilder()
     return builder.build(_make_assets(), _make_edges())
 

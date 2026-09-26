@@ -1,0 +1,133 @@
+# ─────────────────────────────────────────────────────────────────
+# CIS Google Cloud Platform Foundation Benchmark v3.0 — Control ID Mappings
+# Source: CIS Google Cloud Platform Foundation Benchmark v3.0.0 (public)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: CIS-GCP
+version: "3.0"
+source: "CIS Google Cloud Platform Foundation Benchmark v3.0.0"
+
+controls:
+  # 1. Identity and Access Management
+  - id: "CIS-GCP-1.4"
+    title: "Ensure that there are only GCP-managed service account keys for each service account"
+    patterns:
+      - "service.*account.*key"
+      - "user.*managed.*key"
+    severity: HIGH
+
+  - id: "CIS-GCP-1.5"
+    title: "Ensure that service accounts have no admin privileges"
+    patterns:
+      - "service.*account.*admin"
+      - "service.*account.*editor"
+      - "service.*account.*owner"
+    severity: HIGH
+
+  - id: "CIS-GCP-1.7"
+    title: "Ensure user-managed service account keys are rotated every 90 days"
+    patterns:
+      - "service.*account.*key.*rotat"
+      - "key.*90.*day"
+    severity: MEDIUM
+
+  # 2. Logging and Monitoring
+  - id: "CIS-GCP-2.1"
+    title: "Ensure that Cloud Audit Logging is configured across all services"
+    patterns:
+      - "audit.*log.*config"
+      - "cloud.*audit"
+    severity: MEDIUM
+
+  - id: "CIS-GCP-2.2"
+    title: "Ensure that sinks are configured for all log entries"
+    patterns:
+      - "log.*sink"
+      - "log.*export"
+    severity: MEDIUM
+
+  # 3. Networking
+  - id: "CIS-GCP-3.1"
+    title: "Ensure that the default network does not exist in a project"
+    patterns:
+      - "default.*network"
+      - "default.*vpc"
+    severity: MEDIUM
+
+  - id: "CIS-GCP-3.6"
+    title: "Ensure that SSH access is restricted from the Internet"
+    patterns:
+      - "firewall.*ssh"
+      - "firewall.*22"
+      - "gcp.*ssh.*0\\.0\\.0\\.0"
+    severity: CRITICAL
+
+  - id: "CIS-GCP-3.7"
+    title: "Ensure that RDP access is restricted from the Internet"
+    patterns:
+      - "firewall.*rdp"
+      - "firewall.*3389"
+    severity: CRITICAL
+
+  - id: "CIS-GCP-3.8"
+    title: "Ensure that VPC Flow Logs are enabled for every subnet"
+    patterns:
+      - "subnet.*flow.*log"
+      - "vpc.*flow"
+    severity: MEDIUM
+
+  # 4. Virtual Machines
+  - id: "CIS-GCP-4.2"
+    title: "Ensure that instances are not configured to use the default service account with full API access"
+    patterns:
+      - "default.*service.*account"
+      - "cloud-platform.*scope"
+    severity: HIGH
+
+  - id: "CIS-GCP-4.9"
+    title: "Ensure that compute instances do not have public IP addresses"
+    patterns:
+      - "instance.*public.*ip"
+      - "compute.*external.*ip"
+    severity: MEDIUM
+
+  - id: "CIS-GCP-4.7"
+    title: "Ensure VM disks for critical VMs are encrypted with CSEK"
+    patterns:
+      - "disk.*csek"
+      - "compute.*disk.*encrypt"
+    severity: MEDIUM
+
+  # 5. Storage
+  - id: "CIS-GCP-5.1"
+    title: "Ensure that Cloud Storage buckets are not anonymously or publicly accessible"
+    patterns:
+      - "bucket.*allUsers"
+      - "bucket.*public"
+      - "storage.*anonymous"
+    severity: CRITICAL
+
+  - id: "CIS-GCP-5.2"
+    title: "Ensure that Cloud Storage buckets have uniform bucket-level access enabled"
+    patterns:
+      - "uniform.*bucket"
+      - "bucket.*level.*access"
+    severity: MEDIUM
+
+  # 6. Cloud SQL
+  - id: "CIS-GCP-6.2.1"
+    title: "Ensure that Cloud SQL database instances require SSL for all incoming connections"
+    patterns:
+      - "cloud.*sql.*ssl"
+      - "sql.*require.*ssl"
+    severity: HIGH
+
+  - id: "CIS-GCP-6.5"
+    title: "Ensure that Cloud SQL database instances are not open to the world"
+    patterns:
+      - "sql.*authorized.*network"
+      - "sql.*0\\.0\\.0\\.0"
+    severity: CRITICAL

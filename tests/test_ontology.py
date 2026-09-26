@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 
-from cloudmapper.graph.ontology import (
+from cloudg.graph.ontology import (
     CloudOntology,
     RelationGroup,
     RelationType,
@@ -13,7 +12,7 @@ from cloudmapper.graph.ontology import (
     infer_relations,
     infer_asset_relations,
 )
-from cloudmapper.schema.models import (
+from cloudg.schema.models import (
     AssetType,
     CloudAsset,
     CloudProvider,
@@ -110,7 +109,7 @@ def _make_findings() -> list[Finding]:
             severity=Severity.HIGH,
             title="Internet-exposed web server",
             description="EC2 instance is reachable from 0.0.0.0/0 on port 443",
-            source_tool="cloudmapper-reachability",
+            source_tool="cloudg-reachability",
             compliance_frameworks=["CIS", "NIST-800-53"],
         ),
         Finding(
@@ -118,7 +117,7 @@ def _make_findings() -> list[Finding]:
             severity=Severity.CRITICAL,
             title="Database reachable from internet path",
             description="RDS instance reachable via web-server",
-            source_tool="cloudmapper-reachability",
+            source_tool="cloudg-reachability",
             compliance_frameworks=["CIS"],
         ),
     ]
@@ -273,7 +272,7 @@ class TestCloudOntology:
         # Check that ec2-1 exists as ComputeInstance
         sparql = """
         SELECT ?type WHERE {
-            <https://cloudmapper.io/resource/ec2-1> a ?type .
+            <https://cloudg.io/resource/ec2-1> a ?type .
         }
         """
         results = onto.query(sparql)
@@ -302,7 +301,7 @@ class TestCloudOntology:
         onto.build(_make_assets(), _make_edges(), _make_findings())
         sparql = """
         SELECT ?finding WHERE {
-            ?finding a <https://cloudmapper.io/ontology#SecurityFinding> .
+            ?finding a <https://cloudg.io/ontology#SecurityFinding> .
         }
         """
         results = onto.query(sparql)

@@ -1,8 +1,8 @@
 services:
-  cloudmapper:
+  cloudg:
     build: .
-    image: cloudmapper:latest
-    container_name: cloudmapper
+    image: cloudg:latest
+    container_name: cloudg
     volumes:
       # Mount reports directory so output persists on host
       - ./reports:/app/reports
@@ -10,7 +10,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       # Pass AWS credentials via environment variables
-      # Set these when running: docker compose run cloudmapper ...
+      # Set these when running: docker compose run cloudg ...
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
@@ -22,5 +22,5 @@ services:
       - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
       # GCP (optional — mount service account JSON)
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
-    entrypoint: ["cloudmapper"]
+    entrypoint: ["cloudg"]
     command: ["--help"]

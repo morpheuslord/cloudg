@@ -1,0 +1,108 @@
+# ─────────────────────────────────────────────────────────────────
+# PCI DSS v4.0 — Requirement Mappings
+# Source: PCI Security Standards Council, PCI DSS v4.0 (public summary
+# of requirements; the full standard is published by the PCI SSC)
+#
+# Fallback mappings for findings that arrive without scanner-native
+# compliance control IDs.
+# ─────────────────────────────────────────────────────────────────
+
+framework: PCI-DSS
+version: "4.0"
+source: "PCI DSS v4.0"
+
+controls:
+  - id: "PCI-1.2"
+    title: "Network security controls (NSCs) are configured and maintained"
+    patterns:
+      - "security.*group"
+      - "firewall"
+      - "network.*acl"
+      - "nsg"
+    severity: HIGH
+
+  - id: "PCI-1.3"
+    title: "Network access to and from the cardholder data environment is restricted"
+    patterns:
+      - "0\\.0\\.0\\.0"
+      - "internet.*exposed"
+      - "publicly.*accessible"
+      - "open.*to.*the.*world"
+    severity: CRITICAL
+
+  - id: "PCI-2.2"
+    title: "System components are configured and managed securely"
+    patterns:
+      - "default.*config"
+      - "default.*password"
+      - "hardening"
+      - "misconfigur"
+    severity: MEDIUM
+
+  - id: "PCI-3.5"
+    title: "Primary account number (PAN) is secured wherever it is stored"
+    patterns:
+      - "encrypt.*rest"
+      - "storage.*encrypt"
+      - "unencrypted"
+    severity: HIGH
+
+  - id: "PCI-4.2"
+    title: "PAN is protected with strong cryptography during transmission"
+    patterns:
+      - "tls"
+      - "ssl"
+      - "https"
+      - "transit.*encrypt"
+      - "secure.*transfer"
+    severity: HIGH
+
+  - id: "PCI-7.2"
+    title: "Access to system components and data is appropriately defined and assigned"
+    patterns:
+      - "least.*privilege"
+      - "overly.*permissive"
+      - "wildcard"
+      - "admin.*access"
+    severity: HIGH
+
+  - id: "PCI-8.3"
+    title: "Strong authentication for users and administrators is established and managed"
+    patterns:
+      - "mfa"
+      - "multi.factor"
+      - "password.*policy"
+    severity: HIGH
+
+  - id: "PCI-8.6"
+    title: "Use of application and system accounts and associated authentication factors is strictly managed"
+    patterns:
+      - "access.*key.*rotat"
+      - "credential.*rotat"
+      - "stale.*credential"
+    severity: MEDIUM
+
+  - id: "PCI-10.2"
+    title: "Audit logs are implemented to support the detection of anomalies"
+    patterns:
+      - "logging"
+      - "cloudtrail"
+      - "audit.*log"
+      - "flow.*log"
+    severity: MEDIUM
+
+  - id: "PCI-10.4"
+    title: "Audit logs are reviewed to identify anomalies or suspicious activity"
+    patterns:
+      - "monitor"
+      - "alarm"
+      - "alert"
+    severity: MEDIUM
+
+  - id: "PCI-11.3"
+    title: "External and internal vulnerabilities are regularly identified and addressed"
+    patterns:
+      - "vulnerability"
+      - "cve"
+      - "patch"
+    severity: HIGH

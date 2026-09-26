@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════
-# CloudMapper — Multi-stage Dockerfile optimized for rapid prototyping
+# CloudG — Multi-stage Dockerfile optimized for rapid prototyping
 # ═══════════════════════════════════════════════════════════════════
 # Layer strategy (fastest → slowest to change):
 #   1. scanners  — Prowler, Checkov, Trivy (rarely changes, cached)
@@ -41,18 +41,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir poetry
+# uv — fast dependency resolution and installs
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy ONLY dependency files — this layer is cached until deps change
-COPY pyproject.toml poetry.lock* ./
-RUN poetry config virtualenvs.create false && \
-    poetry install --no-interaction --no-ansi --no-root --only main 2>/dev/null || true
+# Copy ONLY the dependency file — this layer is cached until deps change
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache -r pyproject.toml \
+    --extra aws --extra azure --extra gcp
 
 
 # ── Stage 3: Application (changes every code edit — instant rebuild) ──
 FROM python:3.12-slim
 
-LABEL maintainer="CloudMapper Team"
+LABEL maintainer="CloudG Team"
 LABEL description="Cloud Infrastructure Mapping & Security Intelligence Agent"
 
 WORKDIR /app
@@ -88,19 +89,17 @@ RUN pip install --no-cache-dir parliament
 
 # ── Everything below here rebuilds on every code change (fast) ──
 
-# Copy static assets
-COPY templates/ ./templates/
-COPY rules/ ./rules/
-
 # Copy source code last — only this layer busts cache on code edits
-COPY cloudmapper/ ./cloudmapper/
+# (templates, rules and policies ship inside the cloudg package)
+COPY --from=deps /usr/local/bin/uv /usr/local/bin/uv
+COPY cloudg/ ./cloudg/
 COPY pyproject.toml README.md ./
 
-# Install cloudmapper package (no-deps since deps are already installed from stage 2)
-RUN pip install --no-deps .
+# Install cloudg package (no-deps since deps are already installed from stage 2)
+RUN uv pip install --system --no-cache --no-deps .
 
 # Reports output directory
 RUN mkdir -p /app/reports
 
-ENTRYPOINT ["cloudmapper"]
+ENTRYPOINT ["cloudg"]
 CMD ["--help"]
