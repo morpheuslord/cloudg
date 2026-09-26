@@ -13,7 +13,7 @@ It started as a single-account AWS mapper and grew into a pipeline. One command 
 With uv, which is what I use for development:
 
 ```bash
-git clone https://github.com/morpheuslord/cloudmapper.git
+git clone https://github.com/morpheuslord/cloudg.git
 cd cloudmapper
 uv venv && source .venv/bin/activate
 uv pip install -e ".[all,dev]"
