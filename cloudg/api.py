@@ -43,6 +43,34 @@ from cloudg.schema.models import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_iac_dirs(
+    iac_dir: str | None,
+    config_dirs: list[str] | None,
+    terraform_dir: str | Path | None = None,
+) -> tuple[list[str], str | None]:
+    """Resolve which directories the IaC scanners (Checkov, Trivy fs) target.
+
+    Priority: explicit dir -> configured dirs -> the generated Terraform
+    recreation of the live infrastructure. There is deliberately no fallback
+    to "." any more: scanning whatever directory cloudg happens to run from
+    is not a scan of the cloud, and its zero findings read like a clean bill
+    of health.
+
+    Returns:
+        (dirs, source) where source is "cli", "config", "terraform", or
+        None when there is nothing for the IaC scanners to target.
+    """
+    if iac_dir:
+        return [iac_dir], "cli"
+    if config_dirs:
+        return list(config_dirs), "config"
+    if terraform_dir:
+        tf_path = Path(terraform_dir)
+        if tf_path.is_dir() and any(tf_path.glob("*.tf.json")):
+            return [str(tf_path)], "terraform"
+    return [], None
+
+
 # ---------------------------------------------------------------------------
 # Result dataclasses
 # ---------------------------------------------------------------------------
@@ -285,14 +313,37 @@ class CloudGEngine:
             logger.error("Graph analysis failed: %s", exc)
             self._emit_error("graph_analysis", exc)
 
-        # Resolve IaC directories
-        resolved_iac_dirs: list[str] = []
-        if iac_dir:
-            resolved_iac_dirs = [iac_dir]
-        elif self.config.scanners.iac_directories:
-            resolved_iac_dirs = list(self.config.scanners.iac_directories)
-        else:
-            resolved_iac_dirs = ["."]
+        # Resolve IaC directories. When nothing is configured but Terraform
+        # recreation is enabled, generate it now and scan that: the IaC
+        # scanners then audit the live infrastructure via its Terraform
+        # representation instead of an unrelated local directory.
+        tf_dir: str | None = None
+        if (
+            not iac_dir
+            and not self.config.scanners.iac_directories
+            and self.config.terraform.enabled
+        ):
+            tf_dir = self.config.terraform.output_dir or str(out / "terraform")
+            try:
+                from cloudg.renderers.terraform_export import TerraformExporter
+
+                TerraformExporter(output_dir=tf_dir).export(assets, edges)
+            except Exception as exc:
+                logger.error("Terraform export for IaC scanning failed: %s", exc)
+                self._emit_error("terraform", exc)
+                tf_dir = None
+
+        resolved_iac_dirs, iac_source = resolve_iac_dirs(
+            iac_dir, self.config.scanners.iac_directories, tf_dir
+        )
+        if iac_source == "terraform":
+            logger.info("IaC scanners target the Terraform recreation at %s", resolved_iac_dirs[0])
+        elif not resolved_iac_dirs and "checkov" in scanner_list:
+            logger.warning(
+                "Skipping Checkov: no IaC directory configured. "
+                "Pass iac_dir, set scanners.iac_directories, or enable terraform "
+                "so the recreated infrastructure can be scanned."
+            )
 
         # Resolve images
         resolved_images: list[str] = images or list(self.config.scanners.trivy_images)

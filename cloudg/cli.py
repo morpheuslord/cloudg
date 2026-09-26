@@ -567,15 +567,6 @@ def run(
     if "gcp" in cfg.providers:
         console.print(f"[bold]GCP regions:[/] {cfg.gcp.regions}")
 
-    # ── Resolve IaC directories: CLI flag → config → default "." ──
-    resolved_iac_dirs: list[str] = []
-    if iac_dir:
-        resolved_iac_dirs = [iac_dir]
-    elif cfg.scanners.iac_directories:
-        resolved_iac_dirs = list(cfg.scanners.iac_directories)
-    else:
-        resolved_iac_dirs = ["."]
-
     # ── Resolve container images: CLI flag → config ──
     resolved_images: list[str] = []
     if images:
@@ -653,6 +644,7 @@ def run(
             console.print(f"  [red]✗ RAG export failed: {exc}[/]")
 
     # Phase 2d: Terraform Recreation
+    tf_dir: str | None = None
     if terraform or cfg.terraform.enabled:
         console.print("\n[bold]Phase 2d: Terraform Recreation[/]")
         try:
@@ -673,12 +665,25 @@ def run(
             console.print(f"  [green]✓ Import: {tf_paths['import_commands']}[/]")
         except Exception as exc:
             console.print(f"  [red]✗ Terraform export failed: {exc}[/]")
+            tf_dir = None
 
     import concurrent.futures
 
     # Phase 3: Security Scanning (all scanners in parallel)
     console.print("\n[bold]Phase 3: Security Scanning[/bold] (Running in parallel)")
     scanner_findings: list[Any] = []
+
+    # ── Resolve IaC scan targets: CLI flag → config → Terraform recreation ──
+    # No fallback to "." — scanning the directory cloudg runs from is not a
+    # scan of the cloud, and its zero findings look like a clean result.
+    from cloudg.api import resolve_iac_dirs
+
+    resolved_iac_dirs, iac_source = resolve_iac_dirs(iac_dir, cfg.scanners.iac_directories, tf_dir)
+    if iac_source == "terraform":
+        console.print(
+            "  [dim]IaC scanners target the Terraform recreation of the live "
+            f"infrastructure ({resolved_iac_dirs[0]})[/dim]"
+        )
 
     def run_prowler(prov: str) -> list[Any]:
         from cloudg.scanners.prowler import ProwlerScanner
@@ -780,23 +785,35 @@ def run(
         else:
             console.print("  [dim]⊘ ScoutSuite: not enabled[/dim]")
 
-        # Checkov — always runs against resolved IaC directories
+        # Checkov — runs against resolved IaC directories
         if "checkov" in scanner_list:
-            for d in resolved_iac_dirs:
-                future_to_scanner[executor.submit(run_checkov, d)] = f"Checkov ({d})"
+            if resolved_iac_dirs:
+                for d in resolved_iac_dirs:
+                    future_to_scanner[executor.submit(run_checkov, d)] = f"Checkov ({d})"
+            else:
+                console.print(
+                    "  [yellow]⊘ Checkov: nothing to scan — pass --iac-dir, set "
+                    "scanners.iac_directories, or enable --terraform to scan the "
+                    "recreated infrastructure[/yellow]"
+                )
         else:
             console.print("  [dim]⊘ Checkov: not enabled[/dim]")
 
-        # Trivy — runs against container images if available, otherwise falls back to filesystem scan
+        # Trivy — scans container images if configured, else the IaC targets
         if "trivy" in scanner_list:
             if resolved_images:
                 future_to_scanner[executor.submit(run_trivy, resolved_images)] = "Trivy (images)"
-            else:
+            elif resolved_iac_dirs:
                 console.print(
                     "  [yellow]⊘ Trivy: no images configured, falling back to filesystem scan[/yellow]"
                 )
                 future_to_scanner[executor.submit(run_trivy_fs, resolved_iac_dirs)] = (
                     "Trivy (filesystem)"
+                )
+            else:
+                console.print(
+                    "  [yellow]⊘ Trivy: nothing to scan — configure --images, "
+                    "--iac-dir, or enable --terraform[/yellow]"
                 )
         else:
             console.print("  [dim]⊘ Trivy: not enabled[/dim]")

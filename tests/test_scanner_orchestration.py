@@ -252,3 +252,43 @@ class TestIaCDirResolution:
             resolved = ["."]
 
         assert resolved == ["."]
+
+
+class TestResolveIacDirs:
+    """IaC target resolution: CLI dir -> config dirs -> terraform recreation, never '.'."""
+
+    def test_cli_dir_wins(self, tmp_path):
+        from cloudg.api import resolve_iac_dirs
+
+        dirs, source = resolve_iac_dirs("./infra", ["./other"], str(tmp_path))
+        assert dirs == ["./infra"]
+        assert source == "cli"
+
+    def test_config_dirs_used_when_no_cli_dir(self):
+        from cloudg.api import resolve_iac_dirs
+
+        dirs, source = resolve_iac_dirs(None, ["./a", "./b"], None)
+        assert dirs == ["./a", "./b"]
+        assert source == "config"
+
+    def test_terraform_recreation_used_as_fallback(self, tmp_path):
+        from cloudg.api import resolve_iac_dirs
+
+        (tmp_path / "main.tf.json").write_text("{}")
+        dirs, source = resolve_iac_dirs(None, [], tmp_path)
+        assert dirs == [str(tmp_path)]
+        assert source == "terraform"
+
+    def test_terraform_dir_without_tf_json_is_ignored(self, tmp_path):
+        from cloudg.api import resolve_iac_dirs
+
+        dirs, source = resolve_iac_dirs(None, [], tmp_path)
+        assert dirs == []
+        assert source is None
+
+    def test_no_targets_means_skip_not_cwd(self):
+        from cloudg.api import resolve_iac_dirs
+
+        dirs, source = resolve_iac_dirs(None, [], None)
+        assert dirs == []
+        assert source is None
