@@ -30,6 +30,7 @@ class TestFindingsNormaliser:
         severity: Severity = Severity.HIGH,
         source_tool: str = "prowler",
         cvss: float | None = None,
+        source_finding_id: str | None = None,
     ) -> Finding:
         return Finding(
             resource_id="r1",
@@ -39,6 +40,7 @@ class TestFindingsNormaliser:
             description="Test description",
             source_tool=source_tool,
             cvss_score=cvss,
+            source_finding_id=source_finding_id,
         )
 
     def test_normalise_empty(self):
@@ -73,6 +75,110 @@ class TestFindingsNormaliser:
         f2 = self._make_finding(title="Finding B")
 
         result = normaliser.normalise([f1, f2])
+        assert len(result.findings) == 2
+
+    def test_same_scanner_same_title_different_checks_not_merged(self):
+        """Two different checks sharing a generic title on one resource stay separate."""
+        normaliser = FindingsNormaliser()
+        bucket = "arn:aws:s3:::my-bucket"
+        f1 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="checkov",
+            source_finding_id="CKV_AWS_19",
+        )
+        f2 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="checkov",
+            source_finding_id="CKV_AWS_145",
+        )
+
+        result = normaliser.normalise([f1, f2])
+        assert len(result.findings) == 2
+
+    def test_same_scanner_same_check_merged_despite_title_variation(self):
+        """The same check re-reported by one scanner is a true duplicate."""
+        normaliser = FindingsNormaliser()
+        bucket = "arn:aws:s3:::my-bucket"
+        f1 = self._make_finding(
+            resource_arn=bucket,
+            title="S3 bucket default encryption",
+            source_tool="prowler",
+            source_finding_id="prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-aaa",
+        )
+        f2 = self._make_finding(
+            resource_arn=bucket,
+            title="S3 bucket default encryption enabled",
+            severity=Severity.MEDIUM,
+            source_tool="prowler",
+            source_finding_id="prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-bbb",
+        )
+
+        result = normaliser.normalise([f1], [f2])
+        assert len(result.findings) == 1
+        # Highest severity survives
+        assert result.findings[0].severity == Severity.HIGH
+
+    def test_cross_scanner_equivalent_checks_merged(self):
+        """Equivalent checks with matching normalised titles merge across scanners."""
+        normaliser = FindingsNormaliser()
+        bucket = "arn:aws:s3:::my-bucket"
+        f1 = self._make_finding(
+            resource_arn=bucket,
+            title="S3 bucket default encryption enabled",
+            source_tool="prowler",
+            source_finding_id="prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-aaa",
+        )
+        f2 = self._make_finding(
+            resource_arn=bucket,
+            title="[Checkov/terraform] S3 Bucket Default Encryption Enabled",
+            source_tool="checkov",
+            source_finding_id="CKV_AWS_19",
+        )
+
+        result = normaliser.normalise([f1], [f2])
+        assert len(result.findings) == 1
+        assert "prowler" in result.findings[0].source_tool
+        assert "checkov" in result.findings[0].source_tool
+
+    def test_cross_scanner_non_equivalent_checks_not_merged(self):
+        """Same-worded but semantically different checks stay separate."""
+        normaliser = FindingsNormaliser()
+        bucket = "arn:aws:s3:::my-bucket"
+        f1 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="prowler",
+            source_finding_id="prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-aaa",
+        )
+        f2 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="checkov",
+            source_finding_id="CKV_AWS_145",
+        )
+
+        result = normaliser.normalise([f1], [f2])
+        assert len(result.findings) == 2
+
+    def test_known_check_never_merges_with_unknown(self):
+        """A finding with a check ID never merges with a title-only finding."""
+        normaliser = FindingsNormaliser()
+        bucket = "arn:aws:s3:::my-bucket"
+        f1 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="checkov",
+            source_finding_id="CKV_AWS_19",
+        )
+        f2 = self._make_finding(
+            resource_arn=bucket,
+            title="Encryption at rest enabled",
+            source_tool="parliament",
+        )
+
+        result = normaliser.normalise([f1], [f2])
         assert len(result.findings) == 2
 
     def test_severity_ordering(self):

@@ -1,0 +1,67 @@
+# Cross-scanner check equivalence map.
+#
+# Two findings from *different* scanners are only merged into one when:
+#   1. their normalised titles match, AND
+#   2. both check IDs resolve to the same canonical `id` below.
+#
+# Checks not listed here are never merged across scanners — the safe
+# failure mode is visible duplication, not silently dropping a scanner's
+# coverage. Extend this file as new equivalences are confirmed.
+#
+# Format:
+#   equivalences:
+#     - id: <canonical-semantic-id>
+#       title: <human-readable description>
+#       checks:
+#         <scanner>: [<check-id>, ...]
+#
+# Scanner names match Finding.source_tool (lowercase). Prowler uses its
+# check name (extracted from the ASFF Id); Checkov its CKV_* ID; Trivy
+# its AVD-* ID.
+
+equivalences:
+  - id: aws-s3-default-encryption
+    title: S3 bucket default encryption at rest
+    checks:
+      prowler: [s3_bucket_default_encryption]
+      checkov: [CKV_AWS_19]
+      trivy: [AVD-AWS-0088]
+
+  - id: aws-s3-public-access-block
+    title: S3 bucket-level public access block
+    checks:
+      prowler: [s3_bucket_level_public_access_block]
+      checkov: [CKV_AWS_56]
+      trivy: [AVD-AWS-0094]
+
+  - id: aws-ebs-volume-encryption
+    title: EBS volume encryption at rest
+    checks:
+      prowler: [ec2_ebs_volume_encryption]
+      checkov: [CKV_AWS_3]
+      trivy: [AVD-AWS-0026]
+
+  - id: aws-rds-storage-encryption
+    title: RDS instance storage encryption at rest
+    checks:
+      prowler: [rds_instance_storage_encrypted]
+      checkov: [CKV_AWS_16]
+      trivy: [AVD-AWS-0080]
+
+  - id: aws-cloudtrail-log-file-validation
+    title: CloudTrail log file validation enabled
+    checks:
+      prowler: [cloudtrail_log_file_validation_enabled]
+      checkov: [CKV_AWS_35]
+
+  - id: aws-sg-ingress-ssh-open
+    title: Security group open to the internet on SSH (22)
+    checks:
+      prowler: [ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22]
+      checkov: [CKV_AWS_24]
+
+  - id: aws-sg-ingress-rdp-open
+    title: Security group open to the internet on RDP (3389)
+    checks:
+      prowler: [ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_3389]
+      checkov: [CKV_AWS_25]

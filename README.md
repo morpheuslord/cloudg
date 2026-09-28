@@ -124,7 +124,7 @@ Collection runs all providers concurrently with asyncio, iterating accounts and 
 
 The same inventory feeds three other exports. The ontology module infers about 62 typed relations (`exposed_to_internet`, `assumes_role`, `encrypted_by`, `hosted_in_vpc` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
 
-Scanner findings are deduplicated by resource and title, rescored against CVSS, and mapped to compliance controls.
+Scanner findings are deduplicated in two passes — within a scanner by (scanner, check ID, resource), and across scanners only when both the normalised title and the underlying check semantics (`rules/check_equivalence.yaml`) match — then rescored against CVSS and mapped to compliance controls.
 
 ---
 

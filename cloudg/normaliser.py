@@ -69,6 +69,66 @@ _FALLBACK_RULES: dict[str, list[dict[str, str]]] = {
 }
 
 
+# Strips leading scanner tags such as "[Checkov/terraform]" or "[Trivy]"
+# so titles from different scanners can be compared.
+_TITLE_TAG_RE = re.compile(r"^\s*(\[[^\]]+\]\s*)+")
+_TITLE_JUNK_RE = re.compile(r"[^a-z0-9]+")
+
+# Prowler ASFF Ids look like
+# "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-eu-west-1-..."
+# — the check name is the third dash-separated token (check names use
+# underscores, never dashes).
+_PROWLER_ASFF_ID_RE = re.compile(r"^prowler-[a-z0-9]+-([a-z0-9_]+)-")
+
+
+def _normalise_title(title: str) -> str:
+    """Normalise a finding title for cross-scanner comparison.
+
+    Lowercases, drops leading scanner tags, and collapses punctuation and
+    whitespace, so "[Checkov/terraform] Encryption at rest enabled." and
+    "Encryption At Rest Enabled" compare equal.
+    """
+    text = _TITLE_TAG_RE.sub("", title).lower()
+    return _TITLE_JUNK_RE.sub(" ", text).strip()
+
+
+def _load_check_equivalence(rules_dir: str | Path) -> dict[tuple[str, str], str]:
+    """Load the cross-scanner check-equivalence map from check_equivalence.yaml.
+
+    Returns a mapping of (scanner, check_id) -> canonical semantic ID.
+    Two findings from different scanners may only be merged when both of
+    their checks resolve to the same canonical ID.
+    """
+    path = Path(rules_dir) / "check_equivalence.yaml"
+    if not path.exists():
+        return {}
+
+    try:
+        import yaml
+    except ImportError:
+        logger.debug("PyYAML not installed, skipping check equivalence map")
+        return {}
+
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception as exc:
+        logger.warning("Failed to load check equivalence map %s: %s", path, exc)
+        return {}
+
+    index: dict[tuple[str, str], str] = {}
+    for entry in data.get("equivalences", []) or []:
+        canonical = str(entry.get("id", "")).strip()
+        if not canonical:
+            continue
+        for scanner, check_ids in (entry.get("checks") or {}).items():
+            for check_id in check_ids or []:
+                index[(str(scanner).lower(), str(check_id))] = canonical
+    if index:
+        logger.debug("Loaded %d check equivalences from %s", len(index), path.name)
+    return index
+
+
 def _load_external_rulesets(rules_dir: str | Path) -> dict[str, list[dict[str, Any]]]:
     """Load YAML rulesets from the rules directory.
 
@@ -120,7 +180,14 @@ class FindingsNormaliser:
     3. External YAML ruleset regex patterns from the rules/ directory
     4. Fallback regex patterns for untagged findings
 
-    Deduplication key: (resource_arn, title)
+    Deduplication (two passes):
+    1. Within a scanner: keyed on (scanner, check_id, resource), so two
+       different checks that share a generic title on the same resource
+       never collapse into one finding.
+    2. Across scanners: collapsed only when the normalised titles match
+       AND the checks resolve to the same canonical semantic ID in
+       rules/check_equivalence.yaml. Findings with no check ID at all
+       (title-only tools) merge on exact normalised title.
     Scoring: composite of severity + CVSS
     """
 
@@ -132,6 +199,7 @@ class FindingsNormaliser:
         self._findings: list[Finding] = []
         self._compliance: list[ComplianceResult] = []
         self._external_rules = _load_external_rulesets(rules_dir)
+        self._check_equivalence = _load_check_equivalence(rules_dir)
         # Exact-match index: scanner check ID -> [(framework, control_id, title)]
         self._check_index: dict[str, list[tuple[str, str, str]]] = {}
         for framework, controls in self._external_rules.items():
@@ -199,44 +267,136 @@ class FindingsNormaliser:
         )
 
     def _deduplicate(self, findings: list[Finding]) -> list[Finding]:
-        """Deduplicate findings by (resource_arn, title) key.
+        """Deduplicate findings in two passes.
 
-        When duplicates are found, keep the highest-severity one and
-        merge source tools.
+        Pass 1 — within a scanner, keyed on (scanner, check_id, resource):
+        the same check re-reported for the same resource (e.g. via two
+        report formats, or once per compliance framework) is a true
+        duplicate. Findings without a check ID fall back to their
+        normalised title as the discriminator, so two *different* checks
+        that happen to share a generic title ("encryption at rest
+        enabled") on the same bucket are never collapsed.
+
+        Pass 2 — across scanners: merge only when the normalised titles
+        match AND both checks resolve to the same canonical semantic ID
+        in the equivalence map. Findings that carry no check ID at all
+        merge with each other on exact normalised title (the only signal
+        those tools provide). A known check is never merged with an
+        unknown or non-equivalent one — visible duplication is preferred
+        over silently dropping a scanner's coverage.
+
+        Merging keeps the highest severity and unions source tools and
+        compliance frameworks.
         """
-        seen: dict[tuple[str, str], Finding] = {}
-
+        # ── Pass 1: within-scanner ──
+        by_scanner_check: dict[tuple[str, str, str], Finding] = {}
         for finding in findings:
-            key = (finding.resource_arn or finding.resource_id, finding.title)
+            resource = finding.resource_arn or finding.resource_id
+            check_id = self._dedupe_check_id(finding)
+            discriminator = check_id if check_id else f"title:{_normalise_title(finding.title)}"
+            key = (finding.source_tool, discriminator, resource)
 
-            if key in seen:
-                existing = seen[key]
-                # Keep higher severity
-                severity_rank = {
-                    Severity.CRITICAL: 0,
-                    Severity.HIGH: 1,
-                    Severity.MEDIUM: 2,
-                    Severity.LOW: 3,
-                    Severity.INFO: 4,
-                }
-                if severity_rank.get(finding.severity, 5) < severity_rank.get(existing.severity, 5):
-                    # Merge source info and compliance frameworks
-                    merged_tool = f"{existing.source_tool}, {finding.source_tool}"
-                    merged_frameworks = list(
-                        set(existing.compliance_frameworks + finding.compliance_frameworks)
-                    )
-                    finding.source_tool = merged_tool
-                    finding.compliance_frameworks = merged_frameworks
-                    seen[key] = finding
-                else:
-                    existing.source_tool = f"{existing.source_tool}, {finding.source_tool}"
-                    existing.compliance_frameworks = list(
-                        set(existing.compliance_frameworks + finding.compliance_frameworks)
-                    )
+            if key in by_scanner_check:
+                by_scanner_check[key] = self._merge_pair(by_scanner_check[key], finding)
             else:
-                seen[key] = finding
+                by_scanner_check[key] = finding
 
-        return list(seen.values())
+        # ── Pass 2: across scanners, grouped by (resource, normalised title) ──
+        groups: dict[tuple[str, str], list[Finding]] = defaultdict(list)
+        for finding in by_scanner_check.values():
+            resource = finding.resource_arn or finding.resource_id
+            groups[(resource, _normalise_title(finding.title))].append(finding)
+
+        result: list[Finding] = []
+        for group in groups.values():
+            # Each entry: (finding, canonical semantic ID or None, has_check_id)
+            merged: list[tuple[Finding, str | None, bool]] = []
+            for finding in group:
+                check_id = self._dedupe_check_id(finding)
+                canonical = self._canonical_check(finding, check_id)
+                target = None
+                for idx, (other, other_canonical, other_has_check) in enumerate(merged):
+                    if bool(check_id) != other_has_check:
+                        continue  # never merge a known check with an unknown one
+                    if check_id:
+                        # Both known: require matching semantics
+                        if canonical is None or canonical != other_canonical:
+                            continue
+                    # Both unknown: exact normalised title (the group key) suffices
+                    target = idx
+                    break
+
+                if target is None:
+                    merged.append((finding, canonical, bool(check_id)))
+                else:
+                    other, other_canonical, other_has_check = merged[target]
+                    merged[target] = (
+                        self._merge_pair(other, finding),
+                        other_canonical,
+                        other_has_check,
+                    )
+
+            result.extend(entry[0] for entry in merged)
+
+        return result
+
+    @staticmethod
+    def _dedupe_check_id(finding: Finding) -> str:
+        """Extract the scanner's own check ID for dedupe keying.
+
+        Prowler embeds the check name in its ASFF Id; Checkov, Trivy and
+        ScoutSuite already report a bare check/rule ID. Returns "" when
+        the finding carries no usable check ID.
+        """
+        src = (finding.source_finding_id or "").strip()
+        if not src:
+            return ""
+
+        match = _PROWLER_ASFF_ID_RE.match(src)
+        if match:
+            return match.group(1)
+
+        return src
+
+    def _canonical_check(self, finding: Finding, check_id: str) -> str | None:
+        """Resolve (scanner, check_id) to a canonical semantic ID, or None."""
+        if not check_id:
+            return None
+        # source_tool may already be a merged list ("prowler, scoutsuite");
+        # the check ID always comes from the first (primary) tool.
+        scanner = finding.source_tool.split(",")[0].strip().lower()
+        return self._check_equivalence.get((scanner, check_id))
+
+    @staticmethod
+    def _merge_pair(existing: Finding, incoming: Finding) -> Finding:
+        """Merge two duplicate findings, keeping the highest severity.
+
+        Returns the surviving finding with source tools and compliance
+        frameworks unioned.
+        """
+        severity_rank = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 1,
+            Severity.MEDIUM: 2,
+            Severity.LOW: 3,
+            Severity.INFO: 4,
+        }
+        if severity_rank.get(incoming.severity, 5) < severity_rank.get(existing.severity, 5):
+            keep, other = incoming, existing
+        else:
+            keep, other = existing, incoming
+
+        merged_tools = [t.strip() for t in keep.source_tool.split(",")]
+        for tool in (t.strip() for t in other.source_tool.split(",")):
+            if tool not in merged_tools:
+                merged_tools.append(tool)
+        keep.source_tool = ", ".join(merged_tools)
+
+        for fw in other.compliance_frameworks:
+            if fw not in keep.compliance_frameworks:
+                keep.compliance_frameworks.append(fw)
+
+        return keep
 
     def _score_findings(self, findings: list[Finding]) -> list[Finding]:
         """Apply composite scoring to findings."""
