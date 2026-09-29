@@ -94,6 +94,8 @@ RUN pip install --no-cache-dir parliament
 COPY --from=deps /usr/local/bin/uv /usr/local/bin/uv
 COPY cloudg/ ./cloudg/
 COPY pyproject.toml README.md ./
+# The package readme rendered on PyPI; hatchling refuses to build without it
+COPY docs/DOCUMENTATION.md ./docs/DOCUMENTATION.md
 
 # Install cloudg package (no-deps since deps are already installed from stage 2)
 RUN uv pip install --system --no-cache --no-deps .
