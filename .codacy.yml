@@ -1,0 +1,19 @@
+---
+# Codacy configuration.
+#
+# tests/ are excluded from analysis: pytest asserts (Bandit B101) and
+# moto's documented fake credentials (B105 "testing") are correct usage
+# there, and they accounted for ~290 false positives. Shipped code under
+# cloudg/ stays fully analysed.
+exclude_paths:
+  - "tests/**"
+  - "docs/**"
+  - "assets/**"
+
+engines:
+  # dodgy pattern-matches the word "secret" in any assignment, which the
+  # asset taxonomy (AssetType.SECRET) and ontology relation names trip by
+  # necessity in a cloud-security tool. Real secret detection is covered
+  # by GitHub secret scanning and the Trivy secret scanner.
+  dodgy:
+    enabled: false

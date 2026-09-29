@@ -10,6 +10,9 @@ from typing import Any, Callable, Type
 
 logger = logging.getLogger(__name__)
 
+# System RNG: jitter is not cryptographic, but this also satisfies Bandit B311
+_jitter_rng = random.SystemRandom()
+
 # Default retryable exception types
 RETRYABLE_EXCEPTIONS: tuple[Type[Exception], ...] = (
     ConnectionError,
@@ -81,7 +84,7 @@ def with_retry(
 
                     # Exponential backoff with full jitter
                     delay = min(max_delay, base_delay * (backoff_factor ** (attempt - 1)))
-                    jitter = random.uniform(0, delay)
+                    jitter = _jitter_rng.uniform(0, delay)
                     actual_delay = jitter
 
                     logger.warning(

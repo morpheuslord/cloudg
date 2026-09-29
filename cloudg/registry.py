@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import logging
 from importlib.metadata import entry_points
 from typing import Any, Type
@@ -29,10 +30,23 @@ _BUILTIN_SCANNERS: dict[str, str] = {
 }
 
 
+# Shape of a valid "module.path:ClassName" plugin path
+_DOTTED_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _load_class(dotted_path: str) -> Type[Any]:
-    """Import a class from a 'module.path:ClassName' string."""
+    """Import a class from a 'module.path:ClassName' string.
+
+    Paths come from the built-in mapping above or from installed
+    entry points, never from remote input; the shape check rejects
+    anything that is not a plain dotted module path.
+    """
+    if not _DOTTED_PATH_RE.match(dotted_path):
+        raise ValueError(f"Invalid plugin path: {dotted_path!r}")
     module_path, class_name = dotted_path.rsplit(":", 1)
-    module = importlib.import_module(module_path)
+    module = importlib.import_module(  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+        module_path
+    )
     return getattr(module, class_name)
 
 
@@ -73,7 +87,7 @@ class PluginRegistry:
                 except Exception as exc:
                     logger.warning("Failed to load collector plugin %s: %s", ep.name, exc)
         except Exception:
-            pass
+            logger.debug("Collector entry point discovery failed", exc_info=True)
 
         # Discover scanners
         try:
@@ -90,7 +104,7 @@ class PluginRegistry:
                 except Exception as exc:
                     logger.warning("Failed to load scanner plugin %s: %s", ep.name, exc)
         except Exception:
-            pass
+            logger.debug("Scanner entry point discovery failed", exc_info=True)
 
         # Fill in built-in defaults for any not discovered
         for name, path in _BUILTIN_COLLECTORS.items():

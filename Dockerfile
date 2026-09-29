@@ -103,5 +103,14 @@ RUN uv pip install --system --no-cache --no-deps .
 # Reports output directory
 RUN mkdir -p /app/reports
 
+# Run as a non-root user (CKV_DOCKER_3); scanners keep their caches in HOME
+RUN useradd --create-home --shell /usr/sbin/nologin cloudg && \
+    chown -R cloudg:cloudg /app
+USER cloudg
+ENV HOME=/home/cloudg
+
+# The CLI is the only surface, so a version probe is the health signal (CKV_DOCKER_2)
+HEALTHCHECK --interval=5m --timeout=30s CMD ["cloudg", "--version"]
+
 ENTRYPOINT ["cloudg"]
 CMD ["--help"]

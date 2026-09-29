@@ -6,7 +6,7 @@ import glob
 import json
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 import tempfile
 from typing import Any
 
@@ -114,7 +114,9 @@ class ProwlerScanner:
 
         try:
             # Use Popen for live streaming instead of blocking subprocess.run
-            proc = subprocess.Popen(
+            # The argv list starts with the prowler binary and shell=False;
+            # user-controlled parts are arguments, not code.
+            proc = subprocess.Popen(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit # nosec B603
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

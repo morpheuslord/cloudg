@@ -15,7 +15,8 @@ privately:
 
 * GitHub: use "Report a vulnerability" under the Security tab of this
   repository (private vulnerability reporting), or
-* Email: chiranjeevi.naidu@proton.me
+* Email: the address listed for the maintainer on
+  [PyPI](https://pypi.org/project/cloudg/)
 
 Please include a description, steps to reproduce, and the version or commit
 you tested. You can expect an acknowledgement within a few days. Please give

@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -67,7 +67,9 @@ class ScoutSuiteScanner:
         logger.info("Running ScoutSuite: %s", " ".join(cmd))
 
         try:
-            result = subprocess.run(
+            # The argv list starts with the scanner binary name and shell=False;
+            # user-controlled parts are arguments, not code.
+            result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit # nosec B603
                 cmd,
                 capture_output=True,
                 text=True,

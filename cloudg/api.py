@@ -212,14 +212,14 @@ class CloudGEngine:
             try:
                 self.on_phase_start(phase)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
 
     def _emit_error(self, phase: str, exc: Exception) -> None:
         if self.on_error:
             try:
                 self.on_error(phase, exc)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
 
     # ------------------------------------------------------------------
     # Phase 1: Collection
@@ -258,7 +258,7 @@ class CloudGEngine:
             try:
                 self.on_collection_complete(result)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
 
         return result
 
@@ -449,13 +449,13 @@ class CloudGEngine:
                 try:
                     self.on_finding(f)
                 except Exception:
-                    pass
+                    logger.debug("Event hook raised; ignoring", exc_info=True)
 
         if self.on_scan_complete:
             try:
                 self.on_scan_complete(all_findings)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
 
         return all_findings
 
@@ -488,12 +488,12 @@ class CloudGEngine:
                 try:
                     self.on_finding(f)
                 except Exception:
-                    pass
+                    logger.debug("Event hook raised; ignoring", exc_info=True)
         if self.on_scan_complete:
             try:
                 self.on_scan_complete(findings)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
         return findings
 
     def normalise_findings(
@@ -620,7 +620,7 @@ class CloudGEngine:
             try:
                 result.attack_paths = builder.find_lateral_movement_paths()
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
         except Exception as exc:
             logger.error("Graph build failed: %s", exc)
             self._emit_error("graph_build", exc)
@@ -673,7 +673,7 @@ class CloudGEngine:
             try:
                 self.on_analysis_complete(result)
             except Exception:
-                pass
+                logger.debug("Event hook raised; ignoring", exc_info=True)
 
         return result
 
