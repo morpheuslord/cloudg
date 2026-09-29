@@ -18,6 +18,8 @@ from rich.logging import RichHandler
 from cloudg import __version__, ui
 from cloudg.ui import console
 
+logger = logging.getLogger(__name__)
+
 # Global config reference (set by CLI group)
 _config = None
 
@@ -1054,7 +1056,8 @@ def run(
                 output_dir=output_dir,
             )
         except Exception:
-            pass  # RAG already ran in Phase 2c, this is an update pass
+            # RAG already ran in Phase 2c, this is an update pass
+            logger.debug("RAG update pass failed; keeping Phase 2c export", exc_info=True)
 
     # Phase 4: Normalise (with external rulesets)
     ui.phase("Phase 4 · Normalisation")

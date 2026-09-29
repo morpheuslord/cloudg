@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 from typing import Any
 
 from cloudg.schema.models import Finding, Severity
@@ -76,7 +76,9 @@ class CheckovScanner:
         logger.info("Running Checkov: %s", " ".join(cmd))
 
         try:
-            result = subprocess.run(
+            # The argv list starts with the scanner binary name and shell=False;
+            # user-controlled parts are arguments, not code.
+            result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit # nosec B603
                 cmd,
                 capture_output=True,
                 text=True,

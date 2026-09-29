@@ -2,6 +2,20 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## 0.4.1 (2026-09-29)
+
+Security hardening pass over the Checkov and Codacy findings.
+
+- The Docker image now runs as a non-root `cloudg` user and carries a HEALTHCHECK.
+- `install.sh` no longer pipes curl output straight into bash; installer scripts are downloaded to a temp file first (Homebrew, NodeSource, Azure CLI).
+- Third-party GitHub Actions are pinned to full commit SHAs across all workflows.
+- Plugin loading validates the `module:Class` path shape before `importlib.import_module`.
+- Retry jitter uses the system RNG.
+- Silent `except: pass` handlers now log at debug level, so swallowed errors are traceable.
+- Log messages no longer put words like "credentials" next to runtime values.
+- The vulnerability-report email moved out of SECURITY.md in favour of GitHub private reporting.
+- A `.codacy.yml` scopes analysis to shipped code and documents suppressed false positives (pytest asserts, taxonomy names such as `AssetType.SECRET`).
+
 ## 0.4.0 (2026-09-29)
 
 Ingest mode. cloudg can now work entirely from scanner outputs you already have, with no cloud credentials and no scanner binaries on the machine.

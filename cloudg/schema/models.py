@@ -87,7 +87,7 @@ class AssetType(str, Enum):
 
     # Secrets / Keys
     KMS_KEY = "KMS_KEY"
-    SECRET = "SECRET"
+    SECRET = "SECRET"  # nosec B105 - asset type name, not a credential
     CERTIFICATE = "CERTIFICATE"
     KEY_VAULT = "KEY_VAULT"
 
@@ -116,7 +116,7 @@ class EdgeType(str, Enum):
 class ComplianceStatus(str, Enum):
     """Compliance check status."""
 
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - compliance status label, not a credential
     FAIL = "FAIL"
     NOT_APPLICABLE = "NOT_APPLICABLE"
     MANUAL = "MANUAL"

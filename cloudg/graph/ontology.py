@@ -111,7 +111,7 @@ class RelationType(str, Enum):
     PROTECTED_BY_NACL = "PROTECTED_BY_NACL"
     PROTECTED_BY_WAF = "PROTECTED_BY_WAF"
     ENCRYPTED_BY_KMS = "ENCRYPTED_BY_KMS"
-    ROTATES_SECRET = "ROTATES_SECRET"
+    ROTATES_SECRET = "ROTATES_SECRET"  # nosec B105 - ontology relation name, not a credential
     CERTIFICATE_SECURES = "CERTIFICATE_SECURES"
     FINDING_AFFECTS = "FINDING_AFFECTS"
     VULNERABILITY_EXPLOITS = "VULNERABILITY_EXPLOITS"
@@ -580,7 +580,7 @@ class CloudOntology:
             "IAMRole": "CloudResource",
             "IAMPolicy": "CloudResource",
             "EncryptionKey": "CloudResource",
-            "Secret": "CloudResource",
+            "Secret": "CloudResource",  # nosec B105 - class hierarchy label, not a credential
         }
         for child, parent in hierarchy.items():
             g.add((CM[child], RDFS.subClassOf, CM[parent]))

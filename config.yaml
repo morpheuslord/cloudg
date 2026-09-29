@@ -60,7 +60,7 @@ azure:
   client_id: null
   client_secret: null
   certificate_path: null
-  federated_token_file: null
+  federated_token_file: null # nosemgrep: codacy.yaml.security.hard-coded-tokens -- config key for a file path, no token value
   use_managed_identity: false
   managed_identity_client_id: null   # For user-assigned managed identities
 
@@ -129,7 +129,7 @@ ontology:
 rag:
   enabled: true
   chunk_strategy: hybrid   # entity | community | relation_group | hybrid
-  max_chunk_tokens: 2000
+  max_chunk_tokens: 2000 # nosemgrep: codacy.yaml.security.hard-coded-tokens -- LLM chunk size, not a token value
 
 # ── Terraform Recreation ──
 terraform:

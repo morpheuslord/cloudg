@@ -130,7 +130,7 @@ class HTMLReportGenerator:
         compliance_summary: dict[str, dict[str, int]] = {}
         for result in scan_result.compliance:
             if result.framework not in compliance_summary:
-                compliance_summary[result.framework] = {"pass": 0, "fail": 0}
+                compliance_summary[result.framework] = {"pass": 0, "fail": 0}  # nosec B105 - status counters
             if result.status.value == "PASS":
                 compliance_summary[result.framework]["pass"] += 1
             else:

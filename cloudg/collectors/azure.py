@@ -259,6 +259,7 @@ class AzureCollector(BaseCollector):
                                 )
                             )
                 except Exception:
+                    logger.debug("Skipping SQL server in %s", rg.name, exc_info=True)
                     continue
         except ImportError:
             logger.warning("azure-mgmt-sql not installed, skipping SQL collection")

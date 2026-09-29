@@ -28,7 +28,10 @@ detect_os() {
             PKG_MGR="brew"
         else
             info "Installing Homebrew..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            brew_installer=$(mktemp)
+            curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$brew_installer"
+            /bin/bash "$brew_installer"
+            rm -f "$brew_installer"
             PKG_MGR="brew"
         fi
     elif command -v apt-get &> /dev/null; then
@@ -175,14 +178,20 @@ else
     info "Installing Node.js 20 LTS..."
     case "$PKG_MGR" in
         apt)
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null
+            node_setup=$(mktemp)
+            curl -fsSL https://deb.nodesource.com/setup_20.x -o "$node_setup" 2>/dev/null
+            sudo -E bash "$node_setup" 2>/dev/null
+            rm -f "$node_setup"
             sudo apt-get install -y nodejs
             ;;
         brew)
             brew install node@20
             ;;
         dnf|yum)
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null
+            node_setup=$(mktemp)
+            curl -fsSL https://rpm.nodesource.com/setup_20.x -o "$node_setup" 2>/dev/null
+            sudo bash "$node_setup" 2>/dev/null
+            rm -f "$node_setup"
             sudo "$PKG_MGR" install -y nodejs
             ;;
         pacman)
@@ -373,7 +382,13 @@ else
             brew install azure-cli 2>/dev/null && ok "Azure CLI installed" || warn "Azure CLI install failed"
             ;;
         debian)
-            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash 2>/dev/null && ok "Azure CLI installed" || warn "Azure CLI install failed"
+            az_setup=$(mktemp)
+            if curl -fsSL https://aka.ms/InstallAzureCLIDeb -o "$az_setup" 2>/dev/null && sudo bash "$az_setup" 2>/dev/null; then
+                ok "Azure CLI installed"
+            else
+                warn "Azure CLI install failed"
+            fi
+            rm -f "$az_setup"
             ;;
         fedora|rhel)
             sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true

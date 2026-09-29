@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 from typing import Any
 
 from cloudg.schema.models import Finding, Severity
@@ -66,7 +66,9 @@ class TrivyScanner:
         logger.info("Running Trivy: %s", " ".join(cmd))
 
         try:
-            result = subprocess.run(
+            # The argv list starts with the scanner binary name and shell=False;
+            # user-controlled parts are arguments, not code.
+            result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit # nosec B603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -132,7 +134,9 @@ class TrivyScanner:
             logger.info("Running Trivy filesystem scan: %s", " ".join(cmd))
 
             try:
-                result = subprocess.run(
+                # The argv list starts with the scanner binary name and shell=False;
+                # user-controlled parts are arguments, not code.
+                result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit # nosec B603
                     cmd,
                     capture_output=True,
                     text=True,
@@ -376,5 +380,5 @@ class TrivyScanner:
                 source_finding_id=secret.get("RuleID", ""),
             )
         except Exception as exc:
-            logger.debug("Failed to parse Trivy secret: %s", exc)
+            logger.debug("Failed to parse a Trivy sensitive-data result: %s", exc)
             return None

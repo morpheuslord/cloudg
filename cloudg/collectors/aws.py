@@ -149,7 +149,7 @@ class AsyncAWSCollector(BaseCollector):
                         acl = await s3.get_bucket_acl(Bucket=bucket_name)
                         metadata["acl_grants"] = len(acl.get("Grants", []))
                     except Exception:
-                        pass
+                        logger.debug("No ACL read access for bucket %s", bucket_name)
                     try:
                         pub = await s3.get_public_access_block(Bucket=bucket_name)
                         metadata["public_access_block"] = pub.get(
@@ -612,7 +612,7 @@ class AsyncAWSCollector(BaseCollector):
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as exc:
-            logger.error("Failed to collect Secrets Manager secrets: %s", exc)
+            logger.error("Secrets Manager collection failed: %s", exc)
             self.coverage.record("secretsmanager", ServiceStatus.FAILED, error=str(exc))
         return assets
 

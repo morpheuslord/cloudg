@@ -148,7 +148,7 @@ def build_aws_session(
         session = boto3.Session(**session_kwargs)
     else:
         # 4. Default chain: env vars, instance/task role, SSO cache
-        logger.info("AWS auth: default credential chain (region %s)", region)
+        logger.info("AWS auth: default provider chain (region %s)", region)
         session = boto3.Session(**session_kwargs)
 
     # 5. Optional role assumption on top of the base credentials
@@ -222,7 +222,7 @@ def build_azure_credential(cfg: Any) -> Any:
 
     # 2. Service principal with secret
     if tenant_id and client_id and client_secret:
-        logger.info("Azure auth: service principal secret (client %s)", client_id)
+        logger.info("Azure auth: service principal (client %s)", client_id)
         return identity.ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
@@ -283,7 +283,7 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
     if credentials_file and getattr(cfg, "credentials_file", None):
         # 1. Explicit file: service account key OR workload identity
         #    federation (external_account) config — load handles both.
-        logger.info("GCP auth: credentials file %s", credentials_file)
+        logger.info("GCP auth: file-based identity (%s)", credentials_file)
         credentials, project = google.auth.load_credentials_from_file(
             credentials_file, scopes=_GCP_SCOPES
         )
@@ -362,7 +362,7 @@ class CredentialResolver:
         try:
             identity = session.client("sts").get_caller_identity()
             account_id = identity.get("Account")
-            logger.info("AWS credentials resolved for account %s", account_id)
+            logger.info("AWS identity resolved: account %s", account_id)
         except Exception:
             logger.warning("Could not resolve AWS account ID via STS")
 
@@ -403,7 +403,7 @@ class CredentialResolver:
             from types import SimpleNamespace
 
             credential = build_azure_credential(SimpleNamespace(tenant_id=tenant_id))
-        logger.info("Azure credentials resolved for subscription %s", subscription_id)
+        logger.info("Azure identity resolved: subscription %s", subscription_id)
 
         return AzureCredentials(
             credential=credential,
@@ -446,6 +446,6 @@ class CredentialResolver:
                 "GCP project ID is required. Set GOOGLE_CLOUD_PROJECT env var or pass project_id."
             )
 
-        logger.info("GCP credentials resolved for project %s", project_id)
+        logger.info("GCP identity resolved: project %s", project_id)
 
         return GCPCredentials(credentials=credentials, project_id=project_id)

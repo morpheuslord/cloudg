@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pages: write
-      id-token: write
+      id-token: write # nosemgrep: codacy.yaml.security.hard-coded-tokens -- OIDC permission scope, not a token value
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
