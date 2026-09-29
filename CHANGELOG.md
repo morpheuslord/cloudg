@@ -2,7 +2,7 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
-## Unreleased (0.4.0)
+## 0.4.0 (2026-09-29)
 
 Ingest mode. cloudg can now work entirely from scanner outputs you already have, with no cloud credentials and no scanner binaries on the machine.
 
