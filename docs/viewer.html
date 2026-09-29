@@ -433,7 +433,7 @@ function renderTable() {
     tr.className = "frow";
     const res = resOf(f);
     tr.innerHTML =
-      `<td><span class="sev ${sevOf(f)}"><i></i>${sevOf(f)}</span></td>` +
+      `<td><span class="sev ${esc(sevOf(f))}"><i></i>${esc(sevOf(f))}</span></td>` +
       `<td>${esc(f.title || "")}</td>` +
       `<td class="tools-cell">${esc(res.length > 42 ? "…" + res.slice(-41) : res)}</td>` +
       `<td class="tools-cell">${esc(f.source_tool || "")}</td>` +
