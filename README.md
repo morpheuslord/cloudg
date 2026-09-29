@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/version-0.3.1-4c1.svg" alt="Version 0.3.1">
+  <img src="https://img.shields.io/badge/version-0.3.1-4c1.svg" alt="Version 0.4.0">
   <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
 </p>
 
