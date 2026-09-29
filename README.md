@@ -18,6 +18,8 @@
 
 One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks. Out the other end come an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
+**Full documentation:** every command, flag, output and API surface is covered in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md).
+
 ---
 
 ## Quick start
@@ -42,6 +44,14 @@ cloudg run -p aws --regions us-east-1 --terraform
 ```
 
 Reports land in `./reports`. Open `report.html` first.
+
+Already ran the scanners yourself? Feed cloudg their native output files instead — no cloud credentials, no scanner binaries:
+
+```bash
+cloudg ingest --prowler ./prowler-output/ --checkov ./results_json.json --trivy ./trivy.json
+```
+
+Any combination of Prowler, ScoutSuite, Checkov and Trivy outputs works; cloudg normalises, deduplicates across scanners via the check-equivalence rulesets, maps compliance frameworks, and renders the reports.
 
 <details>
 <summary><b>Other install options (pip, Docker, installer scripts)</b></summary>
@@ -193,7 +203,7 @@ controls:
 | `--terraform/--no-terraform` | Terraform recreation (off by default) |
 | `-o, --output` | output directory, `./reports` by default |
 
-`cloudg collect` and `cloudg scan` run the individual phases; `cloudg report -i findings.json` re-renders reports from a previous run.
+`cloudg collect` and `cloudg scan` run the individual phases; `cloudg ingest` aggregates scanner outputs you already have (`--prowler`, `--scoutsuite`, `--checkov`, `--trivy`, each taking a file or directory and repeatable); `cloudg report -i findings.json` re-renders reports from a previous run.
 
 </details>
 
@@ -231,7 +241,7 @@ result = engine.run_pipeline_sync()
 print(result.to_summary())
 ```
 
-The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
+The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, `ingest_reports()` / `run_from_reports()` for working from existing scanner output files, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
 
 Custom collectors and scanners register through entry points, no core changes needed:
 
