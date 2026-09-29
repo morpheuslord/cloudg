@@ -44,7 +44,9 @@ def _load_class(dotted_path: str) -> Type[Any]:
     if not _DOTTED_PATH_RE.match(dotted_path):
         raise ValueError(f"Invalid plugin path: {dotted_path!r}")
     module_path, class_name = dotted_path.rsplit(":", 1)
-    module = importlib.import_module(module_path)  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+    module = importlib.import_module(  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+        module_path
+    )
     return getattr(module, class_name)
 
 
