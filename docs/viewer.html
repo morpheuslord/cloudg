@@ -327,7 +327,7 @@ const SAMPLE = {
 };
 
 let report = null;       // normalised {findings, assets, compliance, graph}
-let state = { q: "", sevs: new Set(SEV_ORDER), tool: "", sortK: "risk_score", sortDir: -1, open: new Set() };
+let state = { q: "", sevs: new Set(SEV_ORDER), tool: "", sortK: "risk_score", sortDir: -1 };
 
 // ── Normalise either file shape into one structure ──
 function normalise(raw) {
