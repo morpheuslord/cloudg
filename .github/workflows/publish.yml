@@ -23,6 +23,17 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      - name: Set version from release tag
+        # The release tag is the source of truth: v0.4.0 builds 0.4.0
+        # no matter what pyproject.toml says, so a stale version can
+        # never collide with a file already on PyPI.
+        if: github.ref_type == 'tag'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          sed -i "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" cloudg/__init__.py
+          echo "Building version $VERSION from tag $GITHUB_REF_NAME"
+
       - name: Build wheel and sdist
         run: uv build
 
@@ -53,6 +64,10 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run of an already-published release stays green instead
+          # of failing on the duplicate file.
+          skip-existing: true
 
   docker:
     runs-on: ubuntu-latest
