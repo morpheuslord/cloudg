@@ -1,0 +1,587 @@
+<title>cloudg Report Viewer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f5f8fc;
+    --ink: #14263e;
+    --muted: #55677f;
+    --accent: #1a56c5;
+    --accent-ink: #164a9e;
+    --line: #dbe4f0;
+    --chip-bg: #e9f0fa;
+    /* viz tokens (validated reference palette) */
+    --viz-surface: #fcfcfb;
+    --viz-ink: #0b0b0b;
+    --viz-ink-2: #52514e;
+    --viz-muted: #898781;
+    --viz-grid: #e1e0d9;
+    --sev-critical: #d03b3b;
+    --sev-high: #ec835a;
+    --sev-medium: #fab219;
+    --sev-low: #2a78d6;
+    --sev-info: #898781;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --seq: #2a78d6;
+    --display: "Archivo", "Segoe UI", sans-serif;
+    --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a1425;
+      --surface: #101f37;
+      --ink: #dfe8f5;
+      --muted: #8fa3bd;
+      --accent: #619cff;
+      --accent-ink: #7fb0ff;
+      --line: #22344f;
+      --chip-bg: #16283f;
+      --viz-surface: #1a1a19;
+      --viz-ink: #ffffff;
+      --viz-ink-2: #c3c2b7;
+      --viz-muted: #898781;
+      --viz-grid: #2c2c2a;
+      --sev-low: #3987e5;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --seq: #3987e5;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a1425;
+    --surface: #101f37;
+    --ink: #dfe8f5;
+    --muted: #8fa3bd;
+    --accent: #619cff;
+    --accent-ink: #7fb0ff;
+    --line: #22344f;
+    --chip-bg: #16283f;
+    --viz-surface: #1a1a19;
+    --viz-ink: #ffffff;
+    --viz-ink-2: #c3c2b7;
+    --viz-muted: #898781;
+    --viz-grid: #2c2c2a;
+    --sev-low: #3987e5;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --seq: #3987e5;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 15.5px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+
+  header.top { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; margin-bottom: 22px; }
+  .brand { font-family: var(--display); font-weight: 700; font-size: 20px; }
+  .brand .g { color: var(--accent-ink); }
+  .brand .sub { font-weight: 600; color: var(--muted); }
+  .spacer { flex: 1; }
+  .loadbox {
+    display: flex; align-items: center; gap: 10px;
+    border: 1.5px dashed var(--line); border-radius: 8px;
+    padding: 7px 14px; font-size: 14px; color: var(--muted);
+  }
+  .loadbox.drag { border-color: var(--accent); color: var(--accent-ink); }
+  .loadbox button {
+    font-family: var(--body); font-size: 14px; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer;
+  }
+  .loadbox button:hover { background: var(--accent-ink); }
+  .loadbox button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  #srcname { font-family: var(--mono); font-size: 12.5px; }
+  .badge-sample {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+    color: var(--accent-ink); background: var(--chip-bg);
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px;
+  }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  .tile .v { font-family: var(--display); font-size: 27px; font-weight: 700; line-height: 1.15; }
+  .tile .l { font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+  .tile.crit .v { color: var(--sev-critical); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--viz-surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .card h2 {
+    font-family: var(--display); font-size: 15px; font-weight: 600;
+    color: var(--ink); margin: 0 0 12px;
+  }
+  .card h2 .n { color: var(--muted); font-weight: 600; }
+
+  /* horizontal bar rows */
+  .brow { display: grid; grid-template-columns: 92px 1fr 46px; align-items: center; gap: 10px; margin: 7px 0; }
+  #reschart .brow, #compchart .brow { grid-template-columns: minmax(120px, 220px) 1fr 46px; }
+  #reschart .brow .bl { direction: rtl; text-align: left; }
+  .brow .bl { font-size: 13px; color: var(--viz-ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brow .bt { position: relative; height: 14px; }
+  .brow .bar {
+    position: absolute; inset: 0 auto 0 0; border-radius: 0 4px 4px 0;
+    min-width: 2px; transition: width .25s;
+  }
+  .brow .bv { font-family: var(--mono); font-size: 12.5px; color: var(--viz-ink); font-variant-numeric: tabular-nums; }
+  .brow:hover .bar { filter: brightness(1.08); }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+  /* severity chip (icon + label, never color alone) */
+  .sev {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+    letter-spacing: .04em;
+  }
+  .sev i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .sev.CRITICAL i { background: var(--sev-critical); }
+  .sev.HIGH i { background: var(--sev-high); }
+  .sev.MEDIUM i { background: var(--sev-medium); }
+  .sev.LOW i { background: var(--sev-low); }
+  .sev.INFO i { background: var(--sev-info); }
+
+  /* filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .filters input[type="search"], .filters select {
+    font-family: var(--body); font-size: 14px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .filters input[type="search"] { min-width: 200px; flex: 1; }
+  .fchip {
+    font-family: var(--mono); font-size: 12px; cursor: pointer; user-select: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+    background: var(--bg); color: var(--muted);
+  }
+  .fchip[aria-pressed="true"] { background: var(--chip-bg); color: var(--accent-ink); border-color: var(--accent); }
+  .fchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* findings table */
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); text-align: left; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  th, td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  tr.frow { cursor: pointer; }
+  tr.frow:hover td { background: var(--surface); }
+  tr.detail td {
+    background: var(--surface); font-size: 13.5px; color: var(--muted);
+    padding: 12px 16px;
+  }
+  tr.detail b { color: var(--ink); font-weight: 600; }
+  .tools-cell { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .count-note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+  /* topology */
+  #topo { width: 100%; height: 460px; display: block; background: var(--viz-surface); border-radius: 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 13px; color: var(--viz-ink-2); }
+  .legend .sev i { border-radius: 50%; }
+
+  footer { margin-top: 28px; color: var(--muted); font-size: 13.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+  a { color: var(--accent-ink); }
+
+  @media (prefers-reduced-motion: reduce) { .brow .bar { transition: none; } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="brand">cloud<span class="g">g</span> <span class="sub">report viewer</span></div>
+  <span id="samplebadge" class="badge-sample">sample data</span>
+  <div class="spacer"></div>
+  <div class="loadbox" id="dropzone">
+    <span>Drop <code>findings.json</code> or <code>raw-findings.json</code> here, or</span>
+    <button id="pickbtn" type="button">Open a report</button>
+    <input id="filein" type="file" accept=".json,application/json" hidden>
+    <span id="srcname"></span>
+  </div>
+</header>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Findings by severity</h2>
+    <div id="sevchart"></div>
+  </div>
+  <div class="card">
+    <h2>Findings by tool</h2>
+    <div id="toolchart"></div>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Failed compliance controls <span class="n" id="compn"></span></h2>
+    <div id="compchart"></div>
+  </div>
+  <div class="card">
+    <h2>Most affected resources</h2>
+    <div id="reschart"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px">
+  <h2>Findings <span class="n" id="findn"></span></h2>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Search title, resource, check ID…" aria-label="Search findings">
+    <span id="sevfilters"></span>
+    <select id="toolsel" aria-label="Filter by tool"><option value="">All tools</option></select>
+  </div>
+  <div class="tablewrap">
+    <table aria-label="Findings">
+      <thead><tr>
+        <th data-k="severity">Severity</th>
+        <th data-k="title">Title</th>
+        <th data-k="resource">Resource</th>
+        <th data-k="source_tool">Tool</th>
+        <th data-k="risk_score">Risk</th>
+      </tr></thead>
+      <tbody id="fbody"></tbody>
+    </table>
+  </div>
+  <p class="count-note" id="shown"></p>
+</div>
+
+<div class="card" id="topocard">
+  <h2>Topology <span class="n" id="topon"></span></h2>
+  <svg id="topo" role="img" aria-label="Infrastructure topology graph"></svg>
+  <div class="legend" id="topolegend"></div>
+</div>
+
+<footer>
+  Reads the <code>findings.json</code> written by <code>cloudg run</code>, <code>cloudg ingest</code> or <code>cloudg report</code>,
+  and the <code>raw-findings.json</code> from <code>cloudg scan</code>. Everything stays in your browser; nothing is uploaded.
+  Part of <a href="https://github.com/morpheuslord/cloudg">cloudg</a>.
+</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+"use strict";
+
+const SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
+const SEV_COLORS = {
+  CRITICAL: "var(--sev-critical)", HIGH: "var(--sev-high)", MEDIUM: "var(--sev-medium)",
+  LOW: "var(--sev-low)", INFO: "var(--sev-info)",
+};
+
+// ── Sample report (clearly labelled; replaced by the first file loaded) ──
+const SAMPLE = {
+  metadata: { scan_id: "sample", provider: "AWS" },
+  assets: [
+    { id: "a1", arn: "arn:aws:s3:::demo-data-bucket", name: "demo-data-bucket", asset_type: "S3_BUCKET", provider: "AWS" },
+    { id: "a2", arn: "arn:aws:ec2:us-east-1:111:instance/i-0abc", name: "web-1", asset_type: "EC2", provider: "AWS" },
+    { id: "a3", arn: "arn:aws:ec2:us-east-1:111:security-group/sg-01", name: "web-sg", asset_type: "SECURITY_GROUP", provider: "AWS" },
+    { id: "a4", arn: "arn:aws:iam::111:role/demo-admin", name: "demo-admin", asset_type: "IAM_ROLE", provider: "AWS" },
+    { id: "a5", arn: "arn:aws:rds:us-east-1:111:db:appdb", name: "appdb", asset_type: "RDS_INSTANCE", provider: "AWS" },
+  ],
+  findings: [
+    { severity: "CRITICAL", title: "Security group open to the internet on SSH (22)", resource_arn: "arn:aws:ec2:us-east-1:111:security-group/sg-01", source_tool: "prowler, checkov", source_finding_id: "ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22", risk_score: 9.5, description: "Port 22 is reachable from 0.0.0.0/0.", remediation: "Restrict the ingress rule to trusted CIDRs.", compliance_frameworks: ["CIS", "NIST-800-53"] },
+    { severity: "CRITICAL", title: "CVE-2024-0001: openssl (alpine)", resource_arn: "myrepo/app:latest", source_tool: "trivy", source_finding_id: "CVE-2024-0001", cvss_score: 9.8, risk_score: 9.7, description: "Remote code execution in openssl 3.1.0.", remediation: "Update openssl from 3.1.0 to 3.1.1", compliance_frameworks: ["CVE"] },
+    { severity: "HIGH", title: "S3 bucket default encryption", resource_arn: "arn:aws:s3:::demo-data-bucket", source_tool: "prowler, checkov", source_finding_id: "s3_bucket_default_encryption", risk_score: 7.5, description: "Bucket has no default encryption at rest.", remediation: "Enable SSE-S3 or SSE-KMS default encryption.", compliance_frameworks: ["CIS", "PCI-DSS", "HIPAA"] },
+    { severity: "HIGH", title: "RDS instance storage encryption at rest", resource_arn: "arn:aws:rds:us-east-1:111:db:appdb", source_tool: "prowler", source_finding_id: "rds_instance_storage_encrypted", risk_score: 7.5, description: "Storage encryption is disabled.", remediation: "Recreate the instance with encryption enabled.", compliance_frameworks: ["CIS", "GDPR"] },
+    { severity: "HIGH", title: "IAM role allows full administrative access", resource_arn: "arn:aws:iam::111:role/demo-admin", source_tool: "iam", source_finding_id: "iam_admin_policy", risk_score: 7.5, description: "Policy grants *:* on all resources.", remediation: "Scope the policy to required actions.", compliance_frameworks: ["CIS", "SOC2"] },
+    { severity: "MEDIUM", title: "S3 bucket-level public access block", resource_arn: "arn:aws:s3:::demo-data-bucket", source_tool: "checkov", source_finding_id: "CKV_AWS_56", risk_score: 5.0, description: "Public access block is not fully enabled.", remediation: "Enable all four public access block settings.", compliance_frameworks: ["CIS"] },
+    { severity: "MEDIUM", title: "EC2 instance without detailed monitoring", resource_arn: "arn:aws:ec2:us-east-1:111:instance/i-0abc", source_tool: "scoutsuite", source_finding_id: "ec2-monitoring-disabled", risk_score: 5.0, description: "Detailed monitoring is off.", remediation: "Enable detailed monitoring.", compliance_frameworks: ["NIST-800-53"] },
+    { severity: "LOW", title: "Internet-reachable path to web-1", resource_arn: "arn:aws:ec2:us-east-1:111:instance/i-0abc", source_tool: "cloudg-graph", source_finding_id: "reachability", risk_score: 2.5, description: "BFS from the internet node reaches this instance via web-sg.", remediation: "Review whether public exposure is intended.", compliance_frameworks: [] },
+    { severity: "INFO", title: "Secret found in container image: aws-key", resource_arn: "myrepo/app:latest", source_tool: "trivy", source_finding_id: "aws-access-key-id", risk_score: 0.5, description: "A key-shaped string was matched in a layer.", remediation: "Rotate and remove; use a secret manager.", compliance_frameworks: [] },
+  ],
+  compliance: [
+    { framework: "CIS", control_id: "CIS/2.1.1", status: "FAIL", finding_ids: ["1", "2"] },
+    { framework: "CIS", control_id: "CIS/5.2", status: "FAIL", finding_ids: ["3"] },
+    { framework: "NIST-800-53", control_id: "SC-7", status: "FAIL", finding_ids: ["4"] },
+    { framework: "PCI-DSS", control_id: "PCI-3.4", status: "FAIL", finding_ids: ["5"] },
+    { framework: "HIPAA", control_id: "164.312", status: "FAIL", finding_ids: ["6"] },
+    { framework: "GDPR", control_id: "GDPR-32", status: "FAIL", finding_ids: ["7"] },
+  ],
+  graph: {
+    nodes: [
+      { id: "internet", name: "internet", group: "internet" },
+      { id: "a3", name: "web-sg", group: "AWS" },
+      { id: "a2", name: "web-1", group: "AWS" },
+      { id: "a1", name: "demo-data-bucket", group: "AWS" },
+      { id: "a5", name: "appdb", group: "AWS" },
+      { id: "a4", name: "demo-admin", group: "AWS" },
+    ],
+    links: [
+      { source: "internet", target: "a3" }, { source: "a3", target: "a2" },
+      { source: "a2", target: "a1" }, { source: "a2", target: "a5" },
+      { source: "a4", target: "a2" },
+    ],
+  },
+};
+
+let report = null;       // normalised {findings, assets, compliance, graph}
+let state = { q: "", sevs: new Set(SEV_ORDER), tool: "", sortK: "risk_score", sortDir: -1 };
+
+// ── Normalise either file shape into one structure ──
+function normalise(raw) {
+  if (Array.isArray(raw)) return { findings: raw, assets: [], compliance: [], graph: null };
+  return {
+    findings: raw.findings || [],
+    assets: raw.assets || [],
+    compliance: raw.compliance || [],
+    graph: raw.graph && (raw.graph.nodes || []).length ? raw.graph : null,
+  };
+}
+const sevOf = (f) => (f.severity || "INFO").toUpperCase();
+const resOf = (f) => f.resource_arn || f.resource_id || "";
+const toolsOf = (f) => (Array.isArray(f.source_tool) ? f.source_tool : (f.source_tool || "unknown").split(",")).map((t) => String(t).trim()).filter(Boolean);
+const riskOf = (f) => (typeof f.risk_score === "number" ? f.risk_score : (f.cvss_score ?? 0));
+
+function counterBy(items, keyFn) {
+  const m = new Map();
+  for (const it of items) for (const k of [].concat(keyFn(it))) m.set(k, (m.get(k) || 0) + 1);
+  return m;
+}
+
+// ── Bar chart rows (plain HTML, thin marks, value labels) ──
+function bars(el, entries, colorFn, emptyMsg) {
+  el.innerHTML = "";
+  if (!entries.length) { el.innerHTML = `<div class="empty">${emptyMsg}</div>`; return; }
+  const max = Math.max(...entries.map((e) => e[1]));
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  for (const [label, n] of entries) {
+    const row = document.createElement("div");
+    row.className = "brow";
+    const pct = total ? Math.round((n / total) * 100) : 0;
+    row.title = `${label}: ${n} (${pct}%)`;
+    row.innerHTML =
+      `<span class="bl">${esc(label)}</span>` +
+      `<span class="bt"><span class="bar" style="width:${max ? (n / max) * 100 : 0}%;background:${colorFn(label)}"></span></span>` +
+      `<span class="bv">${n}</span>`;
+    el.appendChild(row);
+  }
+}
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ── Renderers ──
+function renderTiles() {
+  const f = report.findings;
+  const critHigh = f.filter((x) => ["CRITICAL", "HIGH"].includes(sevOf(x))).length;
+  const tools = new Set(f.flatMap(toolsOf));
+  const frameworks = new Set(f.flatMap((x) => x.compliance_frameworks || []));
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><div class="v">${f.length}</div><div class="l">findings</div></div>
+    <div class="tile crit"><div class="v">${critHigh}</div><div class="l">critical + high</div></div>
+    <div class="tile"><div class="v">${report.assets.length || "—"}</div><div class="l">assets</div></div>
+    <div class="tile"><div class="v">${tools.size}</div><div class="l">tools</div></div>
+    <div class="tile"><div class="v">${frameworks.size}</div><div class="l">frameworks</div></div>`;
+}
+
+function renderCharts() {
+  const bySev = counterBy(report.findings, sevOf);
+  bars(
+    document.getElementById("sevchart"),
+    SEV_ORDER.filter((s) => bySev.has(s)).map((s) => [s, bySev.get(s)]),
+    (s) => SEV_COLORS[s], "No findings."
+  );
+
+  const byTool = [...counterBy(report.findings, toolsOf)].sort((a, b) => b[1] - a[1]);
+  bars(document.getElementById("toolchart"), byTool, () => "var(--seq)", "No findings.");
+
+  const failed = report.compliance.filter((c) => (c.status || "").toUpperCase() === "FAIL");
+  const byFw = [...counterBy(failed, (c) => c.framework || "unknown")].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  document.getElementById("compn").textContent = failed.length ? `· ${failed.length} failed` : "";
+  bars(document.getElementById("compchart"), byFw, () => "var(--sev-high)",
+    "No compliance data in this file (raw-findings.json has none; run the normaliser for it).");
+
+  const byRes = [...counterBy(report.findings, (f) => resOf(f) || "(no resource)")]
+    .sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([r, n]) => [r.length > 46 ? "…" + r.slice(-45) : r, n]);
+  bars(document.getElementById("reschart"), byRes, () => "var(--seq)", "No findings.");
+}
+
+function visibleFindings() {
+  const q = state.q.toLowerCase();
+  return report.findings
+    .filter((f) => state.sevs.has(sevOf(f)))
+    .filter((f) => !state.tool || toolsOf(f).includes(state.tool))
+    .filter((f) => !q || `${f.title} ${resOf(f)} ${f.source_finding_id || ""}`.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const k = state.sortK;
+      let av, bv;
+      if (k === "risk_score") { av = riskOf(a); bv = riskOf(b); }
+      else if (k === "severity") { av = SEV_ORDER.indexOf(sevOf(a)); bv = SEV_ORDER.indexOf(sevOf(b)); return (av - bv) * -state.sortDir; }
+      else if (k === "resource") { av = resOf(a); bv = resOf(b); }
+      else { av = a[k] || ""; bv = b[k] || ""; }
+      return (av < bv ? -1 : av > bv ? 1 : 0) * state.sortDir;
+    });
+}
+
+function renderTable() {
+  const rows = visibleFindings();
+  const body = document.getElementById("fbody");
+  body.innerHTML = "";
+  rows.slice(0, 400).forEach((f, i) => {
+    const tr = document.createElement("tr");
+    tr.className = "frow";
+    const res = resOf(f);
+    tr.innerHTML =
+      `<td><span class="sev ${esc(sevOf(f))}"><i></i>${esc(sevOf(f))}</span></td>` +
+      `<td>${esc(f.title || "")}</td>` +
+      `<td class="tools-cell">${esc(res.length > 42 ? "…" + res.slice(-41) : res)}</td>` +
+      `<td class="tools-cell">${esc(f.source_tool || "")}</td>` +
+      `<td class="num">${riskOf(f).toFixed(1)}</td>`;
+    tr.addEventListener("click", () => {
+      const open = tr.nextElementSibling && tr.nextElementSibling.classList.contains("detail");
+      document.querySelectorAll("tr.detail").forEach((d) => d.remove());
+      if (open) return;
+      const d = document.createElement("tr");
+      d.className = "detail";
+      const fw = (f.compliance_frameworks || []).join(", ");
+      d.innerHTML = `<td colspan="5">
+        ${f.description ? `<b>Description</b> — ${esc(f.description)}<br>` : ""}
+        ${f.evidence ? `<b>Evidence</b> — ${esc(f.evidence)}<br>` : ""}
+        ${f.remediation ? `<b>Remediation</b> — ${esc(f.remediation)}<br>` : ""}
+        ${f.source_finding_id ? `<b>Check</b> — <code>${esc(f.source_finding_id)}</code>` : ""}
+        ${fw ? ` &nbsp; <b>Frameworks</b> — ${esc(fw)}` : ""}
+        ${res ? `<br><b>Resource</b> — <code>${esc(res)}</code>` : ""}</td>`;
+      tr.after(d);
+    });
+    body.appendChild(tr);
+  });
+  document.getElementById("findn").textContent = `· ${report.findings.length}`;
+  document.getElementById("shown").textContent =
+    rows.length > 400 ? `Showing 400 of ${rows.length} matching findings; refine the filters for the rest.`
+      : `${rows.length} matching finding${rows.length === 1 ? "" : "s"}. Click a row for details.`;
+}
+
+// ── Topology (d3 force layout) ──
+const GROUP_COLORS = { AWS: "var(--series-1)", AZURE: "var(--series-2)", GCP: "var(--series-3)" };
+function renderTopo() {
+  const card = document.getElementById("topocard");
+  const svg = d3.select("#topo");
+  svg.selectAll("*").remove();
+  const g = report.graph;
+  if (!g) {
+    card.style.display = "";
+    document.getElementById("topon").textContent = "";
+    document.getElementById("topolegend").innerHTML =
+      `<span class="empty">No graph data in this file. The full findings.json from cloudg run or cloudg report carries it; raw scan/ingest output does not.</span>`;
+    return;
+  }
+  const W = svg.node().clientWidth || 900, H = 460;
+  svg.attr("viewBox", `0 0 ${W} ${H}`);
+  const nodes = g.nodes.map((n) => ({ ...n }));
+  const links = (g.links || []).map((l) => ({ ...l }));
+  document.getElementById("topon").textContent = `· ${nodes.length} nodes, ${links.length} edges`;
+
+  const groupOf = (n) => n.id === "internet" || n.name === "internet" ? "internet"
+    : (n.group || n.provider || "AWS").toUpperCase();
+  const color = (n) => groupOf(n) === "internet" ? "var(--viz-ink)" : (GROUP_COLORS[groupOf(n)] || "var(--viz-muted)");
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id((d) => d.id).distance(70))
+    .force("charge", d3.forceManyBody().strength(-220))
+    .force("center", d3.forceCenter(W / 2, H / 2))
+    .force("collide", d3.forceCollide(22));
+
+  const root = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([0.4, 4]).on("zoom", (e) => root.attr("transform", e.transform)));
+
+  const link = root.append("g").selectAll("line").data(links).join("line")
+    .attr("stroke", "var(--viz-grid)").attr("stroke-width", 1.4);
+  const node = root.append("g").selectAll("g").data(nodes).join("g").style("cursor", "grab")
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+  node.append("circle").attr("r", (d) => groupOf(d) === "internet" ? 11 : 8)
+    .attr("fill", color).attr("stroke", "var(--viz-surface)").attr("stroke-width", 2);
+  node.append("title").text((d) => `${d.name || d.id} (${d.asset_type || d.type || groupOf(d)})`);
+  node.append("text").text((d) => d.name || d.id)
+    .attr("dx", 12).attr("dy", 4)
+    .attr("font-family", "var(--mono)").attr("font-size", "11px").attr("fill", "var(--viz-ink-2)");
+
+  sim.on("tick", () => {
+    link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
+      .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
+    node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+  });
+
+  const groups = [...new Set(nodes.map(groupOf))];
+  document.getElementById("topolegend").innerHTML = groups.map((gr) =>
+    `<span class="sev"><i style="background:${gr === "internet" ? "var(--viz-ink)" : (GROUP_COLORS[gr] || "var(--viz-muted)")}"></i>${esc(gr)}</span>`
+  ).join("");
+}
+
+// ── Filters wiring ──
+function renderFilters() {
+  const wrap = document.getElementById("sevfilters");
+  wrap.innerHTML = "";
+  for (const s of SEV_ORDER) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "fchip";
+    b.setAttribute("aria-pressed", state.sevs.has(s));
+    b.innerHTML = `<span class="sev ${s}"><i></i>${s}</span>`;
+    b.addEventListener("click", () => {
+      state.sevs.has(s) ? state.sevs.delete(s) : state.sevs.add(s);
+      b.setAttribute("aria-pressed", state.sevs.has(s));
+      renderTable();
+    });
+    wrap.appendChild(b);
+  }
+  const sel = document.getElementById("toolsel");
+  sel.innerHTML = `<option value="">All tools</option>`;
+  [...new Set(report.findings.flatMap(toolsOf))].sort().forEach((t) => {
+    const o = document.createElement("option"); o.value = t; o.textContent = t; sel.appendChild(o);
+  });
+}
+
+function renderAll() { renderTiles(); renderCharts(); renderFilters(); renderTable(); renderTopo(); }
+
+function loadRaw(raw, name, isSample) {
+  report = normalise(raw);
+  state = { ...state, q: "", tool: "", sevs: new Set(SEV_ORDER) };
+  document.getElementById("q").value = "";
+  document.getElementById("samplebadge").hidden = !isSample;
+  document.getElementById("srcname").textContent = isSample ? "" : name;
+  renderAll();
+}
+
+function loadFile(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    try { loadRaw(JSON.parse(rd.result), file.name, false); }
+    catch { alertBox(`Could not parse ${file.name} as JSON.`); }
+  };
+  rd.readAsText(file);
+}
+function alertBox(msg) {
+  document.getElementById("srcname").textContent = msg;
+}
+
+document.getElementById("pickbtn").addEventListener("click", () => document.getElementById("filein").click());
+document.getElementById("filein").addEventListener("change", (e) => e.target.files[0] && loadFile(e.target.files[0]));
+const dz = document.getElementById("dropzone");
+for (const t of ["dragover", "dragenter"]) window.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("drag"); });
+for (const t of ["dragleave", "drop"]) window.addEventListener(t, (e) => { e.preventDefault(); dz.classList.remove("drag"); });
+window.addEventListener("drop", (e) => e.dataTransfer.files[0] && loadFile(e.dataTransfer.files[0]));
+
+document.getElementById("q").addEventListener("input", (e) => { state.q = e.target.value; renderTable(); });
+document.getElementById("toolsel").addEventListener("change", (e) => { state.tool = e.target.value; renderTable(); });
+document.querySelectorAll("th[data-k]").forEach((th) => th.addEventListener("click", () => {
+  const k = th.dataset.k;
+  state.sortDir = state.sortK === k ? -state.sortDir : -1;
+  state.sortK = k;
+  renderTable();
+}));
+
+loadRaw(SAMPLE, "", true);
+</script>
