@@ -341,7 +341,7 @@ function normalise(raw) {
 }
 const sevOf = (f) => (f.severity || "INFO").toUpperCase();
 const resOf = (f) => f.resource_arn || f.resource_id || "";
-const toolsOf = (f) => (f.source_tool || "unknown").split(",").map((t) => t.trim()).filter(Boolean);
+const toolsOf = (f) => (Array.isArray(f.source_tool) ? f.source_tool : (f.source_tool || "unknown").split(",")).map((t) => String(t).trim()).filter(Boolean);
 const riskOf = (f) => (typeof f.risk_score === "number" ? f.risk_score : (f.cvss_score ?? 0));
 
 function counterBy(items, keyFn) {
