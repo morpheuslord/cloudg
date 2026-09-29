@@ -18,7 +18,7 @@
 
 One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks. Out the other end come an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
-**Full documentation:** every command, flag, output and API surface is covered in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md).
+**Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
 
 ---
 

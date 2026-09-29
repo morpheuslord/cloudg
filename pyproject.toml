@@ -40,6 +40,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/morpheuslord/cloudg"
 Repository = "https://github.com/morpheuslord/cloudg"
+Documentation = "https://morpheuslord.github.io/cloudg/"
+Changelog = "https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 aws = [

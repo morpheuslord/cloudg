@@ -1,56 +1,53 @@
 <title>cloudg Handbook</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
 <style>
   :root {
-    --bg: #f6f8f7;
-    --surface: #ffffff;
-    --ink: #182420;
-    --muted: #5b6a65;
-    --accent: #0e8a7d;
-    --accent-ink: #0b6e64;
-    --line: #d9e2df;
-    --code-bg: #0f1a17;
-    --code-ink: #d6e5e0;
-    --code-accent: #6fd8c9;
-    --warn: #9a6b00;
-    --warn-bg: #fdf6e3;
-    --chip-bg: #e4efec;
-    --display: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+    --bg: #ffffff;
+    --surface: #f5f8fc;
+    --ink: #14263e;
+    --muted: #55677f;
+    --accent: #1a56c5;
+    --accent-ink: #164a9e;
+    --line: #dbe4f0;
+    --code-bg: #0e1e33;
+    --code-ink: #d8e4f4;
+    --code-accent: #7db2ff;
+    --code-comment: #7e93ad;
+    --chip-bg: #e9f0fa;
+    --display: "Archivo", "Segoe UI", "Helvetica Neue", sans-serif;
     --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
-    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #101816;
-      --surface: #16211e;
-      --ink: #e2ece9;
-      --muted: #93a5a0;
-      --accent: #2fc4b2;
-      --accent-ink: #2fc4b2;
-      --line: #26332f;
-      --code-bg: #0b1210;
-      --code-ink: #cfe0db;
-      --code-accent: #63d3c3;
-      --warn: #e3b341;
-      --warn-bg: #241d0d;
-      --chip-bg: #1d2b27;
+      --bg: #0a1425;
+      --surface: #101f37;
+      --ink: #dfe8f5;
+      --muted: #8fa3bd;
+      --accent: #619cff;
+      --accent-ink: #7fb0ff;
+      --line: #22344f;
+      --code-bg: #081020;
+      --code-ink: #cfdef2;
+      --code-accent: #8ab8ff;
+      --code-comment: #6d84a0;
+      --chip-bg: #16283f;
       color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #101816;
-    --surface: #16211e;
-    --ink: #e2ece9;
-    --muted: #93a5a0;
-    --accent: #2fc4b2;
-    --accent-ink: #2fc4b2;
-    --line: #26332f;
-    --code-bg: #0b1210;
-    --code-ink: #cfe0db;
-    --code-accent: #63d3c3;
-    --warn: #e3b341;
-    --warn-bg: #241d0d;
-    --chip-bg: #1d2b27;
+    --bg: #0a1425;
+    --surface: #101f37;
+    --ink: #dfe8f5;
+    --muted: #8fa3bd;
+    --accent: #619cff;
+    --accent-ink: #7fb0ff;
+    --line: #22344f;
+    --code-bg: #081020;
+    --code-ink: #cfdef2;
+    --code-accent: #8ab8ff;
+    --code-comment: #6d84a0;
+    --chip-bg: #16283f;
     color-scheme: dark;
   }
 
@@ -65,18 +62,18 @@
   .shell {
     display: flex;
     gap: 48px;
-    max-width: 1200px;
+    max-width: 1220px;
     margin: 0 auto;
     padding: 0 20px;
   }
   nav.toc {
-    flex: 0 0 220px;
+    flex: 0 0 218px;
     position: sticky;
     top: env(safe-area-inset-top, 0px);
     align-self: flex-start;
     max-height: 100vh;
     overflow-y: auto;
-    padding: 40px 0 40px;
+    padding: 36px 0 40px;
     font-size: 14.5px;
   }
   nav.toc .brand {
@@ -84,22 +81,21 @@
     font-weight: 700;
     font-size: 21px;
     letter-spacing: -0.01em;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
   nav.toc .brand .g { color: var(--accent-ink); }
   nav.toc .ver {
     font-family: var(--mono);
     font-size: 12px;
     color: var(--muted);
-    margin-bottom: 24px;
+    margin-bottom: 22px;
   }
   nav.toc ul { list-style: none; margin: 0; padding: 0; }
-  nav.toc li { margin: 0; }
   nav.toc a {
     display: block;
     color: var(--muted);
     text-decoration: none;
-    padding: 4px 10px;
+    padding: 3px 10px;
     border-left: 2px solid var(--line);
   }
   nav.toc a:hover { color: var(--accent-ink); border-left-color: var(--accent); }
@@ -110,17 +106,25 @@
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: var(--muted);
-    margin: 18px 0 6px;
+    margin: 16px 0 5px;
   }
 
   main {
     flex: 1;
     min-width: 0;
-    max-width: 74ch;
-    padding: 40px 0 96px;
+    max-width: 76ch;
+    padding: 36px 0 96px;
   }
 
-  header.hero { margin-bottom: 48px; }
+  header.hero { margin-bottom: 44px; }
+  .logo-video {
+    width: 100%;
+    max-width: 460px;
+    border-radius: 10px;
+    display: block;
+    margin-bottom: 20px;
+    background: var(--code-bg);
+  }
   .eyebrow {
     font-family: var(--mono);
     font-size: 12.5px;
@@ -131,15 +135,15 @@
   }
   h1 {
     font-family: var(--display);
-    font-size: clamp(30px, 5vw, 42px);
+    font-size: clamp(30px, 5vw, 40px);
     font-weight: 700;
     letter-spacing: -0.02em;
     line-height: 1.12;
     margin: 0 0 14px;
     text-wrap: balance;
   }
-  .lede { font-size: 19px; color: var(--muted); max-width: 60ch; }
-  .hero-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .lede { font-size: 18.5px; color: var(--muted); max-width: 62ch; }
+  .hero-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
   .hero-links a {
     font-family: var(--mono);
     font-size: 13px;
@@ -147,37 +151,36 @@
     text-decoration: none;
     background: var(--chip-bg);
     border: 1px solid var(--line);
-    border-radius: 999px;
+    border-radius: 6px;
     padding: 5px 14px;
   }
   .hero-links a:hover { border-color: var(--accent); }
 
-  section { margin-bottom: 56px; }
+  section { margin-bottom: 52px; }
   h2 {
     font-family: var(--display);
-    font-size: 25px;
+    font-size: 24px;
     font-weight: 700;
     letter-spacing: -0.015em;
-    margin: 0 0 4px;
-    padding-top: 18px;
-    border-top: 1px solid var(--line);
+    margin: 0 0 6px;
+    padding-top: 20px;
+    border-top: 2px solid var(--line);
     text-wrap: balance;
   }
-  h2 .hash { color: var(--accent); }
   h3 {
     font-family: var(--display);
-    font-size: 17.5px;
+    font-size: 17px;
     font-weight: 600;
-    margin: 30px 0 8px;
+    margin: 28px 0 6px;
   }
-  h3 code { font-size: 16px; }
-  p { margin: 12px 0; }
+  h3 code { font-size: 15.5px; background: none; padding: 0; color: var(--accent-ink); }
+  p { margin: 11px 0; }
   a { color: var(--accent-ink); }
   strong { font-weight: 600; }
 
   code {
     font-family: var(--mono);
-    font-size: 0.86em;
+    font-size: 0.85em;
     background: var(--chip-bg);
     border-radius: 4px;
     padding: 1px 5px;
@@ -185,32 +188,28 @@
   pre {
     background: var(--code-bg);
     color: var(--code-ink);
-    border-radius: 10px;
-    padding: 16px 18px;
+    border-radius: 8px;
+    padding: 15px 18px;
     overflow-x: auto;
     line-height: 1.55;
-    margin: 14px 0;
+    margin: 13px 0;
   }
   pre code { background: none; padding: 0; color: inherit; font-size: 13.5px; }
-  pre .c { color: #7c948e; }
+  pre .c { color: var(--code-comment); }
   pre .k { color: var(--code-accent); }
 
-  .tablewrap { overflow-x: auto; margin: 14px 0; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 15px;
-  }
+  .tablewrap { overflow-x: auto; margin: 13px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
   th {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 11.5px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted);
     text-align: left;
     font-weight: 600;
   }
-  th, td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th, td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   td code { white-space: nowrap; }
   td:first-child { white-space: nowrap; }
 
@@ -218,44 +217,38 @@
     background: var(--surface);
     border: 1px solid var(--line);
     border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    padding: 12px 16px;
-    margin: 16px 0;
+    border-radius: 6px;
+    padding: 11px 16px;
+    margin: 15px 0;
   }
-  .note.warn { border-left-color: var(--warn); background: var(--warn-bg); }
   .note p { margin: 4px 0; }
 
-  .pipeline {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
+  ul.plain { padding-left: 22px; margin: 11px 0; }
+  ul.plain li { margin: 5px 0; }
+
+  .release { margin: 22px 0; }
+  .release .tag {
     font-family: var(--mono);
     font-size: 13px;
-    margin: 18px 0;
-  }
-  .pipeline .stage {
-    background: var(--surface);
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--chip-bg);
     border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 12px;
-    line-height: 1.4;
+    border-radius: 6px;
+    padding: 2px 10px;
+    margin-right: 8px;
   }
-  .pipeline .stage b { display: block; color: var(--accent-ink); font-weight: 600; }
-  .pipeline .stage span { color: var(--muted); font-size: 11.5px; }
-  .pipeline .arrow { color: var(--muted); }
-
-  ul.plain { padding-left: 22px; margin: 12px 0; }
-  ul.plain li { margin: 6px 0; }
+  .release .date { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .release h3 { margin: 10px 0 4px; }
 
   footer {
-    border-top: 1px solid var(--line);
+    border-top: 2px solid var(--line);
     padding-top: 20px;
     color: var(--muted);
     font-size: 14px;
   }
 
-  @media (max-width: 860px) {
+  @media (max-width: 880px) {
     .shell { flex-direction: column; gap: 0; }
     nav.toc {
       position: static;
@@ -264,10 +257,10 @@
       padding-bottom: 8px;
       border-bottom: 1px solid var(--line);
     }
-    nav.toc ul { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+    nav.toc ul { display: flex; flex-wrap: wrap; gap: 3px 12px; }
     nav.toc a { border-left: none; padding: 2px 0; }
-    nav.toc .group { width: 100%; margin: 10px 0 2px; }
-    main { padding-top: 28px; }
+    nav.toc .group { width: 100%; margin: 9px 0 2px; }
+    main { padding-top: 26px; }
   }
   @media (prefers-reduced-motion: no-preference) {
     html { scroll-behavior: smooth; }
@@ -277,7 +270,7 @@
 <div class="shell">
 <nav class="toc" aria-label="Contents">
   <div class="brand">cloud<span class="g">g</span></div>
-  <div class="ver">v0.3.2 · handbook</div>
+  <div class="ver">v0.3.2 &middot; handbook</div>
   <ul>
     <li class="group">Start</li>
     <li><a href="#install">Installation</a></li>
@@ -287,262 +280,342 @@
     <li><a href="#collect-scan">collect &amp; scan</a></li>
     <li><a href="#ingest">cloudg ingest</a></li>
     <li><a href="#report">cloudg report</a></li>
-    <li class="group">Concepts</li>
-    <li><a href="#scanners">Scanners</a></li>
-    <li><a href="#dedupe">Dedup &amp; rulesets</a></li>
-    <li><a href="#compliance">Compliance</a></li>
-    <li><a href="#outputs">Outputs</a></li>
+    <li class="group">Contracts</li>
+    <li><a href="#inputs">Input requirements</a></li>
+    <li><a href="#outputs">Output contract</a></li>
+    <li><a href="#models">Data models</a></li>
+    <li><a href="#config">Configuration</a></li>
     <li class="group">Integrate</li>
     <li><a href="#api">Python API</a></li>
+    <li><a href="#recipes">Recipes</a></li>
     <li><a href="#plugins">Plugins</a></li>
     <li><a href="#auth">Authentication</a></li>
     <li><a href="#docker">Docker</a></li>
+    <li class="group">Project</li>
+    <li><a href="#changelog">Changelog</a></li>
   </ul>
 </nav>
 
 <main>
 <header class="hero">
-  <div class="eyebrow">cloud graphing · AWS / Azure / GCP</div>
+  <video class="logo-video" autoplay loop muted playsinline aria-label="cloudg animated logo">
+    <source src="assets/cloudg_animated_logo.mp4" type="video/mp4">
+  </video>
+  <div class="eyebrow">cloud graphing &middot; AWS / Azure / GCP</div>
   <h1>Map the cloud. Scan it. Merge everything.</h1>
-  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks — or skips the scanning entirely and aggregates outputs you already have.</p>
+  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks. It can also skip the scanning entirely and aggregate outputs you already have.</p>
   <div class="hero-links">
     <a href="https://github.com/morpheuslord/cloudg">GitHub</a>
     <a href="https://pypi.org/project/cloudg/">PyPI</a>
-    <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md">Markdown docs</a>
+    <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md">Markdown reference</a>
+    <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">Changelog</a>
   </div>
 </header>
 
 <section id="install">
-  <h2><span class="hash">#</span> Installation</h2>
+  <h2>Installation</h2>
   <pre><code><span class="c"># core: graph engine, normaliser, renderers, ingest</span>
 pip install cloudg
 
-<span class="c"># cloud SDK extras — pick what you collect from</span>
-pip install cloudg[aws]        <span class="c"># boto3 / aioboto3</span>
+<span class="c"># cloud SDK extras, pulled in only for collection</span>
+pip install cloudg[aws]        <span class="c"># boto3, aioboto3</span>
 pip install cloudg[azure]      <span class="c"># Azure management SDKs</span>
-pip install cloudg[gcp]        <span class="c"># google-cloud-asset</span>
+pip install cloudg[gcp]        <span class="c"># google-cloud-asset, google-auth</span>
 pip install cloudg[all]</code></pre>
-  <p>The cloud SDKs are optional extras. The core package alone still gives you the graph engine, ontology, findings normaliser, report renderers and <code>cloudg ingest</code> — enough to aggregate existing scan results on a machine with no cloud credentials at all.</p>
+  <p>The core package alone ships the graph engine, ontology builder, findings normaliser, report renderers and <code>cloudg ingest</code>. That is enough to aggregate existing scan results on a machine with no cloud access at all.</p>
   <div class="note">
-    <p><strong>The scanners are not Python dependencies.</strong> Prowler, ScoutSuite, Checkov and Trivy are separate executables. Install whichever subset you want — cloudg detects what is on <code>PATH</code> and skips the rest with a warning. <code>install.sh</code> / <code>install.bat</code> set up everything; the Docker image bundles all four.</p>
+    <p><strong>The scanners are not Python dependencies.</strong> Prowler, ScoutSuite, Checkov and Trivy are separate executables. Install whichever subset you want; cloudg checks <code>PATH</code> at run time and skips anything missing with a warning. <code>install.sh</code> / <code>install.bat</code> set up all of them, and the Docker image bundles the four binaries.</p>
   </div>
-  <p>Python 3.11 or newer.</p>
+  <p>Requires Python 3.11 or newer.</p>
 </section>
 
 <section id="pipeline">
-  <h2><span class="hash">#</span> The pipeline</h2>
-  <div class="pipeline">
-    <div class="stage"><b>collect</b><span>async, all providers</span></div>
-    <span class="arrow">→</span>
-    <div class="stage"><b>graph</b><span>reachability, attack paths</span></div>
-    <span class="arrow">→</span>
-    <div class="stage"><b>scan</b><span>prowler · scout · checkov · trivy · iam</span></div>
-    <span class="arrow">→</span>
-    <div class="stage"><b>normalise</b><span>dedupe · score · map</span></div>
-    <span class="arrow">→</span>
-    <div class="stage"><b>report</b><span>HTML · JSON · RDF · RAG · TF</span></div>
-  </div>
-  <ul class="plain">
-    <li><strong>Collect</strong> — asyncio collection from every configured provider, account and region in parallel. Regions auto-discover with <code>--regions all</code>.</li>
-    <li><strong>Graph</strong> — assets and network edges become a directed NetworkX graph; BFS from the internet node finds exposed resources, blast-radius scoring estimates what an attacker could reach from each node.</li>
-    <li><strong>Scan</strong> — the enabled scanners run concurrently over the same inventory. Each one is optional.</li>
-    <li><strong>Normalise</strong> — findings are deduplicated within and across scanners, rescored against CVSS, and mapped to compliance controls.</li>
-    <li><strong>Report</strong> — interactive HTML, findings JSON, topology in three formats, RDF ontology, RAG chunks, Terraform recreation.</li>
-  </ul>
-  <p>Every phase degrades gracefully: a missing binary, an unreachable provider or a failed exporter logs a warning and the rest continues.</p>
+  <h2>The pipeline</h2>
+  <pre><code>collect -&gt; graph -&gt; scan -&gt; normalise -&gt; report
+                \-&gt; ontology / RAG / terraform</code></pre>
+  <p>Collection runs all configured providers concurrently with asyncio, iterating accounts and regions per provider. Regions auto-discover with <code>--regions all</code>. Assets and network edges go into a directed NetworkX graph: BFS from the internet node finds exposed resources, and blast-radius scoring estimates what an attacker could reach from each node.</p>
+  <p>The enabled scanners run in parallel over the same inventory, each in its own thread with its own timeout. Their findings, the graph's reachability findings and the built-in IAM linter's results all flow into the normaliser, which deduplicates within and across scanners, rescores against CVSS, and maps everything to compliance controls.</p>
+  <p>Every phase degrades gracefully. A missing binary, an unreachable provider or a failed exporter logs a warning; nothing else stops.</p>
 </section>
 
 <section id="run">
-  <h2><span class="hash">#</span> cloudg run — full pipeline</h2>
+  <h2>cloudg run</h2>
+  <p>The full pipeline: collect, graph, scan, normalise, report.</p>
   <pre><code>cloudg run -p aws --regions us-east-1
-cloudg run -p all --regions all              <span class="c"># everything, everywhere</span>
-cloudg run -p aws --scanners prowler,trivy   <span class="c"># subset of scanners</span>
+cloudg run -p all --regions all
+cloudg run -p aws --scanners prowler,trivy
 cloudg run -p aws --regions us-east-1 --terraform</code></pre>
   <div class="tablewrap"><table>
     <tr><th>Flag</th><th>Meaning</th></tr>
     <tr><td><code>-p, --provider</code></td><td><code>aws</code>, <code>azure</code>, <code>gcp</code> or <code>all</code>; repeatable</td></tr>
     <tr><td><code>--regions</code></td><td><code>all</code> for auto-discovery, or a comma-separated list</td></tr>
-    <tr><td><code>--scanners</code></td><td>subset of <code>prowler,scoutsuite,checkov,trivy,iam</code>; defaults to <code>scanners.enabled</code> in config</td></tr>
+    <tr><td><code>--scanners</code></td><td>subset of <code>prowler,scoutsuite,checkov,trivy,iam</code>; defaults to <code>scanners.enabled</code></td></tr>
     <tr><td><code>--iac-dir</code></td><td>directory for the IaC scanners (Checkov, Trivy fs)</td></tr>
-    <tr><td><code>--images</code></td><td>container images for Trivy</td></tr>
-    <tr><td><code>--ontology / --no-ontology</code></td><td>RDF export (on by default)</td></tr>
-    <tr><td><code>--rag-export / --no-rag-export</code></td><td>RAG chunks (on by default)</td></tr>
-    <tr><td><code>--terraform / --no-terraform</code></td><td>Terraform recreation (off by default)</td></tr>
+    <tr><td><code>--images</code></td><td>comma-separated container images for Trivy</td></tr>
+    <tr><td><code>--ontology / --no-ontology</code></td><td>RDF export, on by default</td></tr>
+    <tr><td><code>--rag-export / --no-rag-export</code></td><td>RAG chunks, on by default</td></tr>
+    <tr><td><code>--terraform / --no-terraform</code></td><td>Terraform recreation, off by default</td></tr>
     <tr><td><code>-o, --output</code></td><td>output directory, <code>./reports</code> by default</td></tr>
   </table></div>
-  <p>When no IaC directory is configured but <code>--terraform</code> is on, the IaC scanners target the generated Terraform recreation of the live infrastructure — Checkov audits your actual cloud, not whatever directory cloudg happens to run from.</p>
+  <p>When no IaC directory is configured but <code>--terraform</code> is on, the IaC scanners target the generated Terraform recreation of the live infrastructure. Checkov then audits your actual cloud, not whatever directory cloudg happens to run from. There is deliberately no fallback to <code>.</code>: a zero-finding scan of an unrelated directory reads like a clean bill of health, and cloudg refuses to produce one.</p>
 </section>
 
 <section id="collect-scan">
-  <h2><span class="hash">#</span> collect &amp; scan — the phases alone</h2>
-  <pre><code><span class="c"># assets + network edges only, no scanners</span>
-cloudg collect -p aws --profile prod --region eu-west-1
-
-<span class="c"># scanners only, no collection</span>
+  <h2>collect &amp; scan</h2>
+  <p>The phases alone. <code>collect</code> writes assets and edges without running a scanner; <code>scan</code> runs the selected scanners concurrently and writes <code>raw-findings.json</code>, no collection.</p>
+  <pre><code>cloudg collect -p aws --profile prod --region eu-west-1
 cloudg scan -p aws --scanners prowler,checkov --iac-dir ./terraform</code></pre>
-  <p><code>collect</code> writes assets and edges for graph building; <code>scan</code> runs the selected scanners concurrently and writes <code>raw-findings.json</code>.</p>
 </section>
 
 <section id="ingest">
-  <h2><span class="hash">#</span> cloudg ingest — bring your own scan results</h2>
-  <p>Already ran the scanners somewhere else — CI, a scheduled job, another machine? Feed cloudg their native output files and it does the aggregation half of the pipeline: normalisation, cross-scanner deduplication via the check-equivalence rulesets, compliance mapping and report generation. <strong>No scanners execute and no cloud credentials are needed.</strong></p>
+  <h2>cloudg ingest</h2>
+  <p>Aggregation without execution. Feed cloudg the native output files of scans that already ran (in CI, on another host, on a schedule) and it runs the normalisation half of the pipeline: cross-scanner dedupe via the check-equivalence rulesets, compliance mapping and report generation. No scanner executes and no cloud credentials are needed.</p>
   <pre><code>cloudg ingest \
   --prowler ./prowler-output/ \
   --scoutsuite ./scoutsuite-report/ \
   --checkov ./results_json.json \
   --trivy ./trivy-image.json --trivy ./trivy-fs.json \
   -o ./reports</code></pre>
-  <div class="tablewrap"><table>
-    <tr><th>Flag</th><th>Accepts</th></tr>
-    <tr><td><code>--prowler</code></td><td>ASFF JSON/JSONL file, or Prowler's <code>-o</code> output directory</td></tr>
-    <tr><td><code>--scoutsuite</code></td><td>the <code>scoutsuite_results_*.js</code> file, or the <code>--report-dir</code> directory</td></tr>
-    <tr><td><code>--checkov</code></td><td>a <code>checkov --output json</code> file, or a directory containing it</td></tr>
-    <tr><td><code>--trivy</code></td><td><code>trivy image|fs --format json</code> file or a directory of them; image vs filesystem is detected from <code>ArtifactType</code></td></tr>
-    <tr><td><code>--format</code></td><td><code>html</code>, <code>json</code> or <code>all</code> (default)</td></tr>
-  </table></div>
-  <p>Every flag is repeatable, and any combination or subset of tools works — one tool alone or all four together. Generate the inputs with:</p>
-  <pre><code>prowler aws -M json-asff -o ./prowler-output
-scout aws --report-dir ./scoutsuite-report --no-browser
-checkov -d ./iac --output json &gt; results_json.json
-trivy image --format json myrepo/app:latest &gt; trivy-image.json
-trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json</code></pre>
-  <div class="note warn">
-    <p>Ingest runs no collection, so outputs that need live assets — topology, ontology, RAG, Terraform — stay empty. When credentials are available, combine both: <code>collect()</code> + <code>ingest_reports()</code> + <code>analyze()</code> through the Python API.</p>
+  <p>Every input flag is repeatable and any combination or subset of tools works: one tool alone, or all four together. The exact formats are pinned down under <a href="#inputs">Input requirements</a>.</p>
+  <div class="note">
+    <p>Ingest runs no collection, so outputs that need live assets (topology, ontology, RAG, Terraform) stay empty. With credentials available, combine both through the API: <code>collect()</code> + <code>ingest_reports()</code> + <code>analyze()</code>.</p>
   </div>
 </section>
 
 <section id="report">
-  <h2><span class="hash">#</span> cloudg report — re-render</h2>
+  <h2>cloudg report</h2>
+  <p>Re-render reports from a previous run's <code>findings.json</code>. No cloud, no scanners. <code>--format</code> takes <code>html</code>, <code>json</code>, <code>svg</code> or <code>all</code>.</p>
   <pre><code>cloudg report -i ./reports/findings.json --format html</code></pre>
-  <p>Re-generates HTML / JSON / SVG reports from a previous run's <code>findings.json</code> without touching the cloud or the scanners.</p>
 </section>
 
-<section id="scanners">
-  <h2><span class="hash">#</span> Scanners</h2>
-  <div class="tablewrap"><table>
-    <tr><th>Scanner</th><th>Covers</th><th>Binary</th><th>Native output cloudg reads</th></tr>
-    <tr><td><strong>Prowler</strong></td><td>CSPM checks, AWS/Azure/GCP</td><td><code>prowler</code></td><td>ASFF JSON / JSONL</td></tr>
-    <tr><td><strong>ScoutSuite</strong></td><td>multi-cloud config audit</td><td><code>scout</code></td><td><code>scoutsuite_results_*.js</code></td></tr>
-    <tr><td><strong>Checkov</strong></td><td>IaC static analysis</td><td><code>checkov</code></td><td>JSON results</td></tr>
-    <tr><td><strong>Trivy</strong></td><td>image CVEs, secrets, IaC misconfig</td><td><code>trivy</code></td><td>JSON (image and fs)</td></tr>
-    <tr><td><strong>IAM linter</strong></td><td>IAM policy analysis</td><td>built in</td><td>—</td></tr>
-  </table></div>
-  <ul class="plain">
-    <li>Selection is explicit: <code>scanners.enabled</code> in config or <code>--scanners</code> on the CLI. Default is all five.</li>
-    <li>A missing binary is skipped with a warning — install any subset you like.</li>
-    <li>All scanners run concurrently, each under <code>scanners.timeout_seconds</code>.</li>
-    <li>The IAM linter needs no external binary and always runs when assets exist.</li>
-  </ul>
-</section>
+<section id="inputs">
+  <h2>Input requirements</h2>
+  <p>What each ingest path expects, and the command that produces it.</p>
 
-<section id="dedupe">
-  <h2><span class="hash">#</span> Deduplication &amp; combination rulesets</h2>
-  <p>Findings merge in two conservative passes:</p>
-  <ul class="plain">
-    <li><strong>Within a scanner</strong> — keyed on <code>(scanner, check&nbsp;ID, resource)</code>: the same check re-reported for the same resource collapses to one finding.</li>
-    <li><strong>Across scanners</strong> — merged only when the normalised titles match <em>and</em> both check IDs resolve to the same canonical semantic ID in <code>rules/check_equivalence.yaml</code>.</li>
-  </ul>
-  <pre><code><span class="k">- id:</span> aws-s3-default-encryption
-  <span class="k">title:</span> S3 bucket default encryption at rest
-  <span class="k">checks:</span>
-    <span class="k">prowler:</span>  [s3_bucket_default_encryption]
-    <span class="k">checkov:</span>  [CKV_AWS_19]
-    <span class="k">trivy:</span>    [AVD-AWS-0088]</code></pre>
-  <p>Checks not in the equivalence map are never merged across scanners: the safe failure mode is visible duplication, not silently dropping a scanner's coverage. A merge keeps the highest severity and unions source tools and frameworks — a merged finding reads <code>source_tool: "prowler, checkov"</code>. This works with whatever subset of tools contributed; fewer tools simply means less to merge.</p>
-</section>
+  <h3>Prowler</h3>
+  <pre><code>prowler aws -M json-asff -o ./prowler-output</code></pre>
+  <p>cloudg accepts the output directory or any single file from it, as a JSON array or JSONL. The fields read from each ASFF finding:</p>
+  <pre><code>{
+  <span class="k">"Id"</span>: "prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-...",
+  <span class="k">"Title"</span>: "S3 bucket default encryption",
+  <span class="k">"Severity"</span>: {"Label": "HIGH"},
+  <span class="k">"Resources"</span>: [{"Id": "arn:aws:s3:::my-bucket"}],
+  <span class="k">"Compliance"</span>: {"Status": "FAILED", "RelatedRequirements": ["CIS 2.1.1"]},
+  <span class="k">"Remediation"</span>: {"Recommendation": {"Text": "..."}}
+}</code></pre>
+  <p>Findings with a <code>PASSED</code> status are skipped. The check name embedded in <code>Id</code> becomes the dedupe key.</p>
 
-<section id="compliance">
-  <h2><span class="hash">#</span> Compliance frameworks</h2>
-  <p>Findings are tagged with framework controls in four tiers, most precise first:</p>
-  <ul class="plain">
-    <li>Whatever the scanner itself reports (Prowler ASFF, Checkov check IDs).</li>
-    <li>Exact check-ID lookup against the shipped rulesets — generated from Prowler's public compliance data: <strong>28 frameworks, 4,166 controls, 10,236 check mappings</strong> across AWS, Azure and GCP. CIS 5.0 per cloud, NIST 800-53 rev 5, NIST CSF 2.0, PCI DSS 4.0, SOC 2, HIPAA, GDPR, ISO 27001:2022, MITRE ATT&amp;CK, AWS FSBP, and more.</li>
-    <li>Regex pattern rules for scanners with no compliance metadata.</li>
-    <li>A small built-in fallback table.</li>
-  </ul>
-  <p>Your own framework is a YAML file in the rules directory:</p>
-  <pre><code><span class="k">framework:</span> MY-FRAMEWORK
-<span class="k">controls:</span>
-  <span class="k">- id:</span> "MF-1.1"
-    <span class="k">title:</span> "Storage is encrypted"
-    <span class="k">patterns:</span> ["encrypt.*rest"]        <span class="c"># regex tier</span>
-    <span class="k">checks:</span> ["s3_default_encryption"]  <span class="c"># exact tier, optional</span></code></pre>
-  <p><code>cloudg/policies/</code> also ships Cloud Custodian policy packs (AWS governance, AWS security, Azure, GCP) runnable with <code>custodian run</code> independently of cloudg.</p>
+  <h3>ScoutSuite</h3>
+  <pre><code>scout aws --report-dir ./scoutsuite-report --no-browser</code></pre>
+  <p>Accepts the report directory (searched recursively for <code>scoutsuite_results*.js</code>) or the file itself. The file is JavaScript, a JSON object assigned to a variable; cloudg strips the assignment and parses the JSON. Each entry under <code>services.&lt;service&gt;.findings</code> with <code>flagged_items &gt; 0</code> yields one finding per flagged item. <code>level</code> maps to severity: <code>danger</code> is CRITICAL, <code>warning</code> HIGH, <code>caution</code> MEDIUM.</p>
+
+  <h3>Checkov</h3>
+  <pre><code>checkov -d ./iac --output json &gt; results_json.json</code></pre>
+  <p>Accepts the JSON file or a directory containing <code>results_json.json</code>. Both output shapes parse: a single <code>{check_type, results}</code> object, or a list of them when several frameworks ran. Findings come from <code>results.failed_checks[]</code>, reading <code>check_id</code>, <code>check_name</code>, <code>severity</code>, <code>resource</code>, <code>file_path</code> and <code>guideline</code>.</p>
+
+  <h3>Trivy</h3>
+  <pre><code>trivy image --format json myrepo/app:latest &gt; trivy-image.json
+trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json</code></pre>
+  <p>Accepts a single JSON file or a directory of them. The top-level <code>ArtifactType</code> decides the parser: <code>container_image</code> goes through the image parser (vulnerabilities and secrets), everything else through the filesystem parser, which also handles misconfigurations. <code>ArtifactName</code> becomes the resource identifier, and the CVSS v3 score is read when present.</p>
 </section>
 
 <section id="outputs">
-  <h2><span class="hash">#</span> Outputs</h2>
+  <h2>Output contract</h2>
   <div class="tablewrap"><table>
-    <tr><th>File</th><th>What it is</th></tr>
-    <tr><td><code>report.html</code></td><td>interactive report — D3 topology, findings table, compliance matrix; works offline</td></tr>
-    <tr><td><code>findings.json</code></td><td>all findings, assets, edges and compliance results</td></tr>
+    <tr><th>File</th><th>Contents</th></tr>
+    <tr><td><code>report.html</code></td><td>interactive report: D3 topology, findings table, compliance matrix; self-contained, works offline</td></tr>
+    <tr><td><code>findings.json</code></td><td>the machine-readable result, structure below; round-trips through <code>cloudg report -i</code></td></tr>
+    <tr><td><code>raw-findings.json</code></td><td>pre-normalisation findings from <code>scan</code> and <code>ingest</code></td></tr>
     <tr><td><code>topology.svg / .graphml / -cytoscape.json</code></td><td>the graph in three formats</td></tr>
-    <tr><td><code>ontology.ttl / .jsonld</code></td><td>RDF ontology — ~62 inferred typed relations, SPARQL-queryable</td></tr>
-    <tr><td><code>rag_chunks.jsonl</code></td><td>the graph chunked per asset, per Louvain community and per relation domain, for LLM retrieval</td></tr>
-    <tr><td><code>terraform/*.tf.json</code></td><td>Terraform recreation of live infrastructure (25+ asset types) with an <code>import.sh</code></td></tr>
+    <tr><td><code>ontology.ttl / .jsonld</code></td><td>RDF ontology, around 62 inferred relation types, SPARQL-queryable</td></tr>
+    <tr><td><code>rag_chunks.jsonl</code></td><td>retrieval-ready chunks, one JSON object per line</td></tr>
+    <tr><td><code>terraform/*.tf.json</code></td><td>Terraform recreation of live infrastructure with an <code>import.sh</code></td></tr>
   </table></div>
+  <pre><code>{
+  <span class="k">"metadata"</span>:   {"scan_id", "provider", "account_id", "region", "started_at", "completed_at"},
+  <span class="k">"summary"</span>:    {"total_assets", "total_findings", "severity_breakdown", "compliance_frameworks"},
+  <span class="k">"assets"</span>:     [CloudAsset, ...],
+  <span class="k">"findings"</span>:   [Finding, ...],
+  <span class="k">"compliance"</span>: [ComplianceResult, ...],
+  <span class="k">"graph"</span>:      {"nodes": [], "links": []}
+}</code></pre>
+</section>
+
+<section id="models">
+  <h2>Data models</h2>
+  <p>Everything flowing through cloudg is a Pydantic v2 model from <code>cloudg.schema.models</code>. All models allow extra fields, so scanner-specific attributes survive serialisation.</p>
+  <h3>Finding</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+    <tr><td><code>resource_id</code>, <code>resource_arn</code></td><td><code>str</code></td><td>internal ID and cloud-native identifier</td></tr>
+    <tr><td><code>severity</code></td><td><code>Severity</code></td><td>CRITICAL, HIGH, MEDIUM, LOW, INFO</td></tr>
+    <tr><td><code>title</code>, <code>description</code></td><td><code>str</code></td><td>scanner tags are stripped for cross-scanner comparison</td></tr>
+    <tr><td><code>evidence</code>, <code>remediation</code></td><td><code>str | None</code></td><td></td></tr>
+    <tr><td><code>source_tool</code></td><td><code>str</code></td><td><code>"prowler"</code>; becomes <code>"prowler, checkov"</code> after a merge</td></tr>
+    <tr><td><code>source_finding_id</code></td><td><code>str | None</code></td><td>the scanner's own check or CVE ID; drives dedupe</td></tr>
+    <tr><td><code>compliance_frameworks</code></td><td><code>list[str]</code></td><td>unioned on merge</td></tr>
+    <tr><td><code>cvss_score</code></td><td><code>float | None</code></td><td>0.0 to 10.0</td></tr>
+    <tr><td><code>risk_score</code></td><td>computed</td><td>severity base averaged with CVSS when present</td></tr>
+  </table></div>
+  <h3>The rest</h3>
+  <p><code>CloudAsset</code> carries <code>arn</code>, <code>name</code>, a 45-value <code>asset_type</code> taxonomy (EC2, S3_BUCKET, IAM_ROLE, VPC, KMS_KEY, ...), <code>provider</code>, <code>region</code>, <code>tags</code>, <code>metadata</code> and <code>is_internet_exposed</code>. <code>NetworkEdge</code> is a directed edge with an <code>edge_type</code> (SECURITY_GROUP_RULE, IAM_TRUST, CONTAINS, INTERNET_EXPOSED, ...), ports, protocol and CIDR. <code>ComplianceResult</code> is one control-level verdict with <code>framework</code>, <code>control_id</code>, <code>status</code> and the <code>finding_ids</code> behind it. <code>ScanResult</code> is the aggregate container the normaliser returns and the renderers consume, with a computed <code>summary</code>.</p>
+</section>
+
+<section id="config">
+  <h2>Configuration</h2>
+  <p><code>config.yaml</code> mirrors every CLI flag and adds persistent settings. Everything is optional. The shipped <a href="https://github.com/morpheuslord/cloudg/blob/main/config.yaml">config.yaml</a> documents each field inline; the structure, with defaults:</p>
+  <pre><code><span class="k">providers:</span> [aws]
+
+<span class="k">aws:</span>
+  <span class="k">regions:</span> [us-east-1]          <span class="c"># or [all]</span>
+  <span class="k">accounts:</span> []                  <span class="c"># multi-account fan-out</span>
+  <span class="k">role_name:</span> null
+  <span class="k">role_arn:</span> null
+  <span class="k">external_id:</span> null
+  <span class="k">web_identity_token_file:</span> null
+
+<span class="k">scanners:</span>
+  <span class="k">enabled:</span> [prowler, scoutsuite, checkov, trivy, iam]
+  <span class="k">timeout_seconds:</span> 3600
+  <span class="k">iac_directories:</span> []
+  <span class="k">trivy_images:</span> []
+  <span class="k">prowler_extra_args:</span> []        <span class="c"># passthrough, per scanner</span>
+
+<span class="k">ontology:</span>  { <span class="k">enabled:</span> true, <span class="k">export_formats:</span> [turtle, json-ld] }
+<span class="k">rag:</span>       { <span class="k">enabled:</span> true, <span class="k">chunk_strategy:</span> hybrid, <span class="k">max_chunk_tokens:</span> 2000 }
+<span class="k">terraform:</span> { <span class="k">enabled:</span> false }
+<span class="k">rulesets:</span>  { <span class="k">rules_dir:</span> null }  <span class="c"># defaults to the packaged cloudg/rules/</span>
+<span class="k">concurrency_limit:</span> 5</code></pre>
+  <p>In code, the same structure is <code>CloudGConfig</code>:</p>
+  <pre><code><span class="k">from</span> cloudg <span class="k">import</span> CloudGConfig, load_config
+
+config = load_config(<span class="c">"config.yaml"</span>)
+config = CloudGConfig(providers=[<span class="c">"aws"</span>])
+config.scanners.enabled = [<span class="c">"prowler"</span>, <span class="c">"iam"</span>]</code></pre>
 </section>
 
 <section id="api">
-  <h2><span class="hash">#</span> Python API</h2>
-  <p><code>CloudGEngine</code> is the integration entry point — async-first with sync wrappers, built for embedding in larger systems (SIEMs, orchestration platforms, command extensions such as <a href="https://github.com/hashgraph-online/hol-guard">hol-guard</a>).</p>
+  <h2>Python API</h2>
+  <p><code>CloudGEngine</code> in <code>cloudg.api</code> is the integration entry point: async-first, sync wrappers included, built for embedding in larger systems (SIEM pipelines, orchestration platforms, command extensions such as <a href="https://github.com/hashgraph-online/hol-guard">hol-guard</a>).</p>
   <pre><code><span class="k">from</span> cloudg <span class="k">import</span> CloudGConfig, CloudGEngine
 
-config = CloudGConfig(providers=[<span class="c">"aws"</span>])
-engine = CloudGEngine(config)
-engine.on_finding = <span class="k">lambda</span> f: forward_to_siem(f)
+engine = CloudGEngine(CloudGConfig(providers=[<span class="c">"aws"</span>]))
+engine.on_finding = <span class="k">lambda</span> f: siem.send(f.model_dump(mode=<span class="c">"json"</span>))
+engine.on_error = <span class="k">lambda</span> phase, exc: alerting.notify(phase, exc)
 
 result = engine.run_pipeline_sync()
 <span class="k">print</span>(result.to_summary())</code></pre>
-  <p>Working from existing scan outputs instead:</p>
-  <pre><code>result = engine.run_from_reports_sync(
-    {<span class="c">"prowler"</span>: [<span class="c">"./prowler-output/"</span>], <span class="c">"trivy"</span>: [<span class="c">"./trivy.json"</span>]},
-    output_dir=<span class="c">"./reports"</span>,
-)</code></pre>
   <div class="tablewrap"><table>
-    <tr><th>Method</th><th>Does</th></tr>
-    <tr><td><code>collect()</code></td><td>multi-provider asset collection → <code>CollectionResult</code></td></tr>
-    <tr><td><code>scan(assets, edges)</code></td><td>run enabled scanners + graph reachability → findings</td></tr>
-    <tr><td><code>ingest_reports(reports)</code></td><td>parse existing scanner outputs → findings, nothing executed</td></tr>
-    <tr><td><code>normalise_findings(findings)</code></td><td>dedupe, merge, score, compliance-map → <code>ScanResult</code></td></tr>
-    <tr><td><code>analyze(assets, edges, findings)</code></td><td>graph, ontology, RAG, Terraform → <code>AnalysisResult</code></td></tr>
-    <tr><td><code>run_pipeline()</code></td><td>everything → <code>PipelineResult</code></td></tr>
-    <tr><td><code>run_from_reports(reports)</code></td><td>ingest → normalise → reports → <code>PipelineResult</code></td></tr>
+    <tr><th>Method</th><th>Returns</th><th>Does</th></tr>
+    <tr><td><code>collect()</code></td><td><code>CollectionResult</code></td><td>multi-provider asset collection: assets, edges, coverage</td></tr>
+    <tr><td><code>scan(assets, edges)</code></td><td><code>list[Finding]</code></td><td>enabled scanners in parallel, plus reachability and IAM linting</td></tr>
+    <tr><td><code>ingest_reports(reports)</code></td><td><code>list[Finding]</code></td><td>parse existing scanner outputs; nothing executes</td></tr>
+    <tr><td><code>normalise_findings(findings)</code></td><td><code>ScanResult</code></td><td>dedupe, cross-scanner merge, CVSS rescoring, compliance mapping</td></tr>
+    <tr><td><code>analyze(assets, edges, findings)</code></td><td><code>AnalysisResult</code></td><td>graph, ontology, RAG chunks, Terraform, attack paths</td></tr>
+    <tr><td><code>run_pipeline()</code></td><td><code>PipelineResult</code></td><td>everything, end to end; <code>run_pipeline_sync()</code> for non-async callers</td></tr>
+    <tr><td><code>run_from_reports(reports)</code></td><td><code>PipelineResult</code></td><td>ingest, normalise, report in one call; sync twin available</td></tr>
   </table></div>
-  <p>Event hooks for streaming integration: <code>on_phase_start</code>, <code>on_collection_complete</code>, <code>on_finding</code>, <code>on_scan_complete</code>, <code>on_analysis_complete</code>, <code>on_error</code>. Exceptions inside a hook are swallowed so they cannot break the pipeline. Each scanner class also exposes its parser directly: <code>ProwlerScanner.parse_report(path)</code> and friends.</p>
+  <p>Event hooks: <code>on_phase_start(phase)</code>, <code>on_collection_complete(result)</code>, <code>on_finding(finding)</code>, <code>on_scan_complete(findings)</code>, <code>on_analysis_complete(result)</code>, <code>on_error(phase, exc)</code>. Exceptions raised inside a hook are swallowed, so a broken callback cannot take the pipeline down. <code>PipelineResult</code> carries the data, report paths, coverage and a <code>to_summary()</code> dict ready to serialise.</p>
+</section>
+
+<section id="recipes">
+  <h2>Integration recipes</h2>
+
+  <h3>Aggregate existing scan results, get reports</h3>
+  <pre><code>engine = CloudGEngine(CloudGConfig())
+result = engine.run_from_reports_sync(
+    {<span class="c">"prowler"</span>: [<span class="c">"./prowler-output/"</span>], <span class="c">"trivy"</span>: [<span class="c">"./trivy-image.json"</span>]},
+    output_dir=<span class="c">"./reports"</span>,
+)
+<span class="k">print</span>(result.total_findings, result.severity_breakdown)
+<span class="k">print</span>(result.report_paths[<span class="c">"html"</span>])</code></pre>
+
+  <h3>Parse first, decide later</h3>
+  <pre><code><span class="k">from</span> cloudg.ingest <span class="k">import</span> ingest_reports
+
+findings = ingest_reports({<span class="c">"prowler"</span>: [<span class="c">"./out/"</span>], <span class="c">"checkov"</span>: [<span class="c">"results_json.json"</span>]})
+scan_result = engine.normalise_findings(findings)
+
+<span class="k">for</span> c <span class="k">in</span> scan_result.compliance:
+    <span class="k">if</span> c.status.value == <span class="c">"FAIL"</span>:
+        <span class="k">print</span>(c.framework, c.control_id, <span class="k">len</span>(c.finding_ids))</code></pre>
+  <p>The per-scanner parsers are also public: <code>TrivyScanner.parse_report("./trivy.json")</code> and friends, one tool with no engine.</p>
+
+  <h3>Combine live collection with ingested reports</h3>
+  <pre><code>collection = <span class="k">await</span> engine.collect()
+ingested = engine.ingest_reports({<span class="c">"prowler"</span>: [<span class="c">"./ci-prowler-output/"</span>]})
+scan_result = engine.normalise_findings(ingested, assets=collection.assets)
+<span class="k">await</span> engine.analyze(collection.assets, collection.edges, scan_result.findings)</code></pre>
+
+  <h3>Gate a CI job on severity</h3>
+  <pre><code>result = CloudGEngine(CloudGConfig()).run_from_reports_sync(
+    {<span class="c">"checkov"</span>: [<span class="c">"results_json.json"</span>]}
+)
+<span class="k">if</span> result.severity_breakdown.get(<span class="c">"CRITICAL"</span>, 0):
+    sys.exit(1)</code></pre>
 </section>
 
 <section id="plugins">
-  <h2><span class="hash">#</span> Plugins</h2>
-  <p>Custom collectors and scanners register through setuptools entry points — no core changes needed:</p>
-  <pre><code><span class="k">[project.entry-points."cloudg.collectors"]</span>
-mycloud = <span class="c">"my_package.collector:MyCollector"</span>
+  <h2>Plugins</h2>
+  <p>Custom collectors and scanners register through setuptools entry points; no core changes needed. <code>PluginRegistry</code> discovers them at startup and falls back to the built-ins for any name not overridden.</p>
+  <pre><code><span class="c"># my_package/scanner.py</span>
+<span class="k">from</span> cloudg.schema.models <span class="k">import</span> Finding, Severity
 
-<span class="k">[project.entry-points."cloudg.scanners"]</span>
-myscanner = <span class="c">"my_package.scanner:MyScanner"</span></code></pre>
-  <p>A scanner plugin needs a <code>run() -&gt; list[Finding]</code> method; collectors follow <code>cloudg/collectors/base.py</code>. <code>PluginRegistry</code> discovers entry points at startup and falls back to the built-ins for anything not overridden.</p>
+<span class="k">class</span> MyScanner:
+    <span class="k">def</span> run(self) -&gt; list[Finding]:
+        <span class="k">return</span> [Finding(
+            resource_id=<span class="c">"arn:aws:s3:::example"</span>,
+            severity=Severity.HIGH,
+            title=<span class="c">"Example finding"</span>,
+            description=<span class="c">"What was found and why it matters"</span>,
+            source_tool=<span class="c">"myscanner"</span>,
+            source_finding_id=<span class="c">"MY_CHECK_001"</span>,
+        )]</code></pre>
+  <pre><code><span class="k">[project.entry-points."cloudg.scanners"]</span>
+myscanner = <span class="c">"my_package.scanner:MyScanner"</span>
+
+<span class="k">[project.entry-points."cloudg.collectors"]</span>
+mycloud = <span class="c">"my_package.collector:MyCollector"</span></code></pre>
+  <p>After <code>pip install</code>, the name works in <code>scanners.enabled</code> and <code>--scanners</code>. If your scanner emits a stable check ID in <code>source_finding_id</code>, add it to <code>rules/check_equivalence.yaml</code> so its findings merge with equivalent checks from other tools.</p>
 </section>
 
 <section id="auth">
-  <h2><span class="hash">#</span> Authentication</h2>
-  <p>Every provider supports several methods, resolved in fixed priority order — the same config works on a laptop, in CI and on cloud compute.</p>
+  <h2>Authentication</h2>
+  <p>Every provider supports several methods, resolved in fixed priority order, so the same config works on a laptop, in CI and on cloud compute.</p>
   <div class="tablewrap"><table>
     <tr><th>Provider</th><th>Methods, most explicit first</th></tr>
-    <tr><td><strong>AWS</strong></td><td>direct keys → OIDC web identity federation (<code>--aws-role-arn</code> + <code>--aws-web-identity-token-file</code>) → named profile incl. SSO → default chain (env, cached SSO, instance role). STS assumption layers on top with <code>--aws-external-id</code> for the third-party-auditor pattern; multi-account fan-out via <code>accounts</code> + <code>role_name</code>.</td></tr>
-    <tr><td><strong>Azure</strong></td><td>workload identity federation → service principal (secret or certificate) → managed identity → <code>DefaultAzureCredential</code> (covers <code>az login</code>).</td></tr>
-    <tr><td><strong>GCP</strong></td><td>credentials file (service-account key or workload identity federation config) → application default credentials. <code>--gcp-impersonate-sa</code> layers impersonation on either.</td></tr>
+    <tr><td><strong>AWS</strong></td><td>direct keys; OIDC web identity federation (<code>--aws-role-arn</code> with <code>--aws-web-identity-token-file</code>, the GitHub Actions and EKS pattern); named profile including SSO; the default chain. STS assumption layers on top with <code>--aws-external-id</code> for the third-party auditor pattern, and multi-account fan-out uses <code>accounts</code> plus <code>role_name</code>.</td></tr>
+    <tr><td><strong>Azure</strong></td><td>workload identity federation; service principal with secret or certificate; managed identity; the <code>DefaultAzureCredential</code> chain, which covers <code>az login</code>.</td></tr>
+    <tr><td><strong>GCP</strong></td><td>credentials file (service account key or workload identity federation config); application default credentials. <code>--gcp-impersonate-sa</code> layers impersonation on either.</td></tr>
   </table></div>
 </section>
 
 <section id="docker">
-  <h2><span class="hash">#</span> Docker</h2>
+  <h2>Docker</h2>
   <pre><code>docker pull ghcr.io/morpheuslord/cloudg:latest
 docker compose run --rm cloudg run -p aws --regions us-east-1</code></pre>
   <p>The image bundles all four scanner binaries, so it is the shortest path to the full pipeline.</p>
 </section>
 
+<section id="changelog">
+  <h2>Changelog</h2>
+  <p>Major releases only. The full log lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+
+  <div class="release">
+    <span class="tag">0.4.0</span> <span class="date">unreleased</span>
+    <h3>Ingest mode</h3>
+    <p>cloudg now works entirely from scanner outputs you already have: the <code>cloudg ingest</code> command, public <code>parse_report()</code> parsers on all four scanner wrappers, and <code>ingest_reports()</code> / <code>normalise_findings()</code> / <code>run_from_reports()</code> on the engine. No cloud credentials, no scanner binaries. Plus this documentation and a least-privilege fix to the publish workflow.</p>
+  </div>
+
+  <div class="release">
+    <span class="tag">0.3.0</span> <span class="date">2026-09-26</span>
+    <h3>The cloudg rebrand</h3>
+    <p>The project, package, CLI, Docker image, installers and CI became cloudg. Multi-cloud authentication (OIDC federation, STS assumption, managed identity, impersonation), compliance rulesets generated from Prowler's public data (28 frameworks, 4,166 controls, 10,236 check mappings), uv packaging, PyPI trusted publishing, GHCR image, MIT license. Patches folded in: 0.3.1 stopped the IaC scanners from silently scanning the working directory; 0.3.2 rekeyed dedupe on scanner check IDs with the cross-scanner equivalence map and moved the CLI to a Rich UI layer.</p>
+  </div>
+</section>
+
 <footer>
-  <p>cloudg is MIT-licensed. Found a gap in these docs? <a href="https://github.com/morpheuslord/cloudg/issues">Open an issue</a>.</p>
+  <p>cloudg is MIT-licensed. Found a gap in this handbook? <a href="https://github.com/morpheuslord/cloudg/issues">Open an issue</a>.</p>
 </footer>
 </main>
 </div>

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="180" viewBox="0 0 460 180" role="img" aria-label="cloudg logo">
+  <defs>
+    <linearGradient id="cg-cloud" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- cloud -->
+  <path d="M118 128
+           a26 26 0 0 1 -2 -52
+           a34 34 0 0 1 64 -12
+           a28 28 0 0 1 38 26
+           a22 22 0 0 1 -4 38
+           z"
+        fill="url(#cg-cloud)"/>
+
+  <!-- graph inside the cloud -->
+  <g stroke="#f8fafc" stroke-width="2.5" opacity="0.95">
+    <line x1="128" y1="106" x2="158" y2="84"/>
+    <line x1="158" y1="84" x2="192" y2="102"/>
+    <line x1="158" y1="84" x2="168" y2="58"/>
+    <line x1="192" y1="102" x2="168" y2="58"/>
+    <line x1="128" y1="106" x2="192" y2="102"/>
+  </g>
+  <g fill="#f8fafc">
+    <circle cx="128" cy="106" r="6"/>
+    <circle cx="158" cy="84" r="6"/>
+    <circle cx="192" cy="102" r="6"/>
+    <circle cx="168" cy="58" r="6"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="228" y="102" font-family="'JetBrains Mono', 'Fira Code', Consolas, monospace"
+        font-size="46" font-weight="700" fill="#0f172a">cloud<tspan fill="#6366f1">g</tspan></text>
+  <text x="230" y="130" font-family="'JetBrains Mono', 'Fira Code', Consolas, monospace"
+        font-size="13" fill="#64748b" letter-spacing="1">cloud graphing</text>
+</svg>
