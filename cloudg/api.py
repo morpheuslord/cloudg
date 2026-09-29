@@ -460,6 +460,127 @@ class CloudGEngine:
         return all_findings
 
     # ------------------------------------------------------------------
+    # Ingest: use existing scanner outputs instead of running scanners
+    # ------------------------------------------------------------------
+
+    def ingest_reports(self, reports: dict[str, list[str | Path]]) -> list[Finding]:
+        """Parse pre-existing scanner reports instead of running scanners.
+
+        For deployments where Prowler/ScoutSuite/Checkov/Trivy already ran
+        elsewhere (CI, another host, a scheduled job): feed their native
+        output files here and get back cloudg findings, ready for
+        `normalise_findings()` / `analyze()`.
+
+        Args:
+            reports: Tool name -> list of report paths (file or directory),
+                e.g. {"prowler": ["./prowler-out/"], "trivy": ["scan.json"]}.
+
+        Returns:
+            Combined list of findings.
+        """
+        self._emit_phase_start("ingest")
+        from cloudg.ingest import ingest_reports as _ingest
+
+        findings = _ingest(reports)
+
+        if self.on_finding:
+            for f in findings:
+                try:
+                    self.on_finding(f)
+                except Exception:
+                    pass
+        if self.on_scan_complete:
+            try:
+                self.on_scan_complete(findings)
+            except Exception:
+                pass
+        return findings
+
+    def normalise_findings(
+        self,
+        findings: list[Finding],
+        assets: list[CloudAsset] | None = None,
+    ) -> ScanResult:
+        """Deduplicate, merge across scanners, score, and map to compliance.
+
+        Applies the same pipeline `run_pipeline()` uses: within-scanner
+        dedupe, cross-scanner merging via rules/check_equivalence.yaml,
+        severity scoring, and compliance-framework mapping.
+        """
+        from cloudg.normaliser import FindingsNormaliser
+
+        normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
+        return normaliser.normalise(findings, assets=assets or [])
+
+    async def run_from_reports(
+        self,
+        reports: dict[str, list[str | Path]],
+        output_dir: str | Path = "./reports",
+    ) -> PipelineResult:
+        """Run the cloudg pipeline on existing scanner outputs — no cloud
+        access and no scanner binaries needed.
+
+        Phases: ingest -> normalise -> reports (JSON + HTML). Collection
+        does not run, so graph/ontology/Terraform outputs that need live
+        assets are empty; combine with `collect()` + `analyze()` when
+        cloud credentials are available.
+
+        Returns:
+            PipelineResult with findings, scan_result, and report paths.
+        """
+        start = time.time()
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        errors: list[str] = []
+
+        findings = self.ingest_reports(reports)
+
+        self._emit_phase_start("normalisation")
+        scan_result = None
+        all_findings = findings
+        try:
+            scan_result = self.normalise_findings(findings)
+            all_findings = scan_result.findings
+        except Exception as exc:
+            logger.error("Normalisation failed: %s", exc)
+            errors.append(f"normalisation: {exc}")
+            self._emit_error("normalisation", exc)
+
+        self._emit_phase_start("reporting")
+        report_paths: dict[str, Path] = {}
+        if scan_result:
+            try:
+                from cloudg.renderers.json_export import JSONExporter
+
+                exporter = JSONExporter(output_dir=str(out))
+                report_paths["json"] = Path(exporter.export(scan_result))
+
+                from cloudg.renderers.html_report import HTMLReportGenerator
+
+                html_gen = HTMLReportGenerator(output_dir=str(out))
+                report_paths["html"] = Path(html_gen.generate(scan_result))
+            except Exception as exc:
+                logger.error("Report generation failed: %s", exc)
+                errors.append(f"reporting: {exc}")
+                self._emit_error("reporting", exc)
+
+        return PipelineResult(
+            findings=all_findings,
+            scan_result=scan_result,
+            report_paths=report_paths,
+            duration_ms=int((time.time() - start) * 1000),
+            errors=errors,
+        )
+
+    def run_from_reports_sync(
+        self,
+        reports: dict[str, list[str | Path]],
+        output_dir: str | Path = "./reports",
+    ) -> PipelineResult:
+        """Synchronous wrapper for `run_from_reports()`."""
+        return asyncio.run(self.run_from_reports(reports, output_dir))
+
+    # ------------------------------------------------------------------
     # Phase 3: Analysis (ontology, RAG, terraform)
     # ------------------------------------------------------------------
 

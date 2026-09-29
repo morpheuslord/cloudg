@@ -367,6 +367,156 @@ def report(input_file: str, output: str, fmt: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# INGEST command (use existing scanner outputs)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option(
+    "--prowler",
+    "prowler_paths",
+    multiple=True,
+    help="Prowler ASFF JSON output (file or output directory). Repeatable.",
+)
+@click.option(
+    "--scoutsuite",
+    "scoutsuite_paths",
+    multiple=True,
+    help="ScoutSuite results (scoutsuite_results_*.js file or report directory). Repeatable.",
+)
+@click.option(
+    "--checkov",
+    "checkov_paths",
+    multiple=True,
+    help="Checkov JSON output (file or directory containing results_json.json). Repeatable.",
+)
+@click.option(
+    "--trivy",
+    "trivy_paths",
+    multiple=True,
+    help="Trivy JSON output from image or fs scans (file or directory). Repeatable.",
+)
+@click.option(
+    "-o",
+    "--output",
+    default="./reports",
+    help="Output directory for reports",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["html", "json", "all"]),
+    default="all",
+    help="Report format",
+)
+def ingest(
+    prowler_paths: tuple[str, ...],
+    scoutsuite_paths: tuple[str, ...],
+    checkov_paths: tuple[str, ...],
+    trivy_paths: tuple[str, ...],
+    output: str,
+    fmt: str,
+) -> None:
+    """Aggregate existing scanner outputs — no scanners are executed.
+
+    Feed cloudg the native output files of scans you already ran
+    (Prowler, ScoutSuite, Checkov, Trivy — any combination) and it
+    normalises, deduplicates across scanners via the check-equivalence
+    rulesets, maps compliance frameworks, and generates reports.
+
+    Example:
+
+        cloudg ingest --prowler ./prowler-out/ --trivy ./trivy.json
+    """
+    ui.section("Ingest Scanner Outputs")
+
+    reports: dict[str, list[str]] = {}
+    if prowler_paths:
+        reports["prowler"] = list(prowler_paths)
+    if scoutsuite_paths:
+        reports["scoutsuite"] = list(scoutsuite_paths)
+    if checkov_paths:
+        reports["checkov"] = list(checkov_paths)
+    if trivy_paths:
+        reports["trivy"] = list(trivy_paths)
+
+    if not reports:
+        ui.error_panel(
+            "No inputs",
+            "Pass at least one report: --prowler, --scoutsuite, --checkov, or --trivy",
+        )
+        sys.exit(1)
+
+    ui.config_panel(
+        "Ingest Configuration",
+        {tool: ", ".join(paths) for tool, paths in reports.items()},
+    )
+
+    from cloudg.ingest import parse_report
+
+    all_findings: list[Any] = []
+    per_tool: dict[str, int] = {}
+    for tool, paths in reports.items():
+        count = 0
+        for path in paths:
+            try:
+                findings = parse_report(tool, path)
+            except (ValueError, FileNotFoundError) as exc:
+                ui.warn(f"{tool}: skipping {path} — {exc}")
+                continue
+            count += len(findings)
+            all_findings.extend(findings)
+        per_tool[tool] = count
+        ui.detail(f"{tool}: {count} findings")
+
+    if not all_findings:
+        ui.warn("No findings parsed from the given reports")
+
+    # Normalise: dedupe within and across scanners, score, map compliance
+    from cloudg.normaliser import FindingsNormaliser
+
+    cfg = _config
+    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir if cfg else None)
+    scan_result = normaliser.normalise(all_findings)
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save raw (pre-normalisation) findings alongside the reports
+    raw_path = output_dir / "raw-findings.json"
+    with open(raw_path, "w") as f:
+        json.dump(
+            [fi.model_dump(mode="json") for fi in all_findings],
+            f,
+            indent=2,
+            default=str,
+        )
+
+    if fmt in ("json", "all"):
+        from cloudg.renderers.json_export import JSONExporter
+
+        exporter = JSONExporter(output_dir=str(output_dir))
+        path = exporter.export(scan_result)
+        ui.artifact("JSON", path)
+
+    if fmt in ("html", "all"):
+        from cloudg.renderers.html_report import HTMLReportGenerator
+
+        generator = HTMLReportGenerator(output_dir=str(output_dir))
+        path = generator.generate(scan_result)
+        ui.artifact("HTML", path)
+
+    ui.artifact("Raw findings", raw_path)
+
+    console.print()
+    ui.success(
+        f"Ingested [metric]{len(all_findings)}[/] findings "
+        f"from {len(per_tool)} tool(s) — "
+        f"[metric]{len(scan_result.findings)}[/] after deduplication"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
 # RUN command (full pipeline)
 # ─────────────────────────────────────────────────────────────────────
 

@@ -163,10 +163,31 @@ class ProwlerScanner:
 
         return self._parse_output()
 
+    @classmethod
+    def parse_report(cls, path: str) -> list[Finding]:
+        """Parse existing Prowler ASFF JSON output without running Prowler.
+
+        Accepts a single ASFF JSON/JSONL file or a directory that is
+        searched recursively for ``*.json`` files (Prowler's ``-o`` output
+        directory works as-is).
+        """
+        import os
+
+        scanner = cls()
+        if os.path.isdir(path):
+            files = glob.glob(f"{path}/**/*.json", recursive=True)
+        else:
+            files = [path]
+        return scanner._parse_files(files)
+
     def _parse_output(self) -> list[Finding]:
         """Parse Prowler ASFF JSON output files."""
-        findings: list[Finding] = []
         output_files = glob.glob(f"{self._output_dir}/**/*.json", recursive=True)
+        return self._parse_files(output_files)
+
+    def _parse_files(self, output_files: list[str]) -> list[Finding]:
+        """Parse a list of Prowler ASFF JSON/JSONL files."""
+        findings: list[Finding] = []
 
         for file_path in output_files:
             try:

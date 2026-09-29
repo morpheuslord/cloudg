@@ -151,6 +151,47 @@ class TrivyScanner:
 
         return all_findings
 
+    @classmethod
+    def parse_report(cls, path: str) -> list[Finding]:
+        """Parse existing Trivy JSON output without running Trivy.
+
+        Accepts a ``trivy image|fs --format json`` report file or a
+        directory of them. Image scans and filesystem/repository scans are
+        told apart by the report's ``ArtifactType`` field.
+        """
+        from pathlib import Path
+
+        p = Path(path)
+        if p.is_dir():
+            candidates = sorted(p.rglob("*.json"))
+            if not candidates:
+                logger.warning("No Trivy JSON results found in %s", path)
+                return []
+        else:
+            candidates = [p]
+
+        scanner = cls()
+        findings: list[Finding] = []
+        for file_path in candidates:
+            try:
+                content = file_path.read_text()
+                data = json.loads(content)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Failed to read Trivy output %s: %s", file_path, exc)
+                continue
+            if not isinstance(data, dict):
+                logger.warning("Unrecognised Trivy output structure in %s", file_path)
+                continue
+
+            artifact = data.get("ArtifactName", str(file_path))
+            if data.get("ArtifactType") == "container_image":
+                findings.extend(scanner._parse_output(content, artifact))
+            else:
+                # filesystem / repository scans: the fs parser also handles
+                # misconfigurations and secrets, so it covers everything else
+                findings.extend(scanner._parse_fs_output(content, artifact))
+        return findings
+
     def _parse_fs_output(self, stdout: str, directory: str) -> list[Finding]:
         """Parse Trivy filesystem scan JSON output."""
         findings: list[Finding] = []

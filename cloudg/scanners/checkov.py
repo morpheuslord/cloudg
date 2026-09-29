@@ -92,6 +92,34 @@ class CheckovScanner:
 
         return self._parse_output(result.stdout)
 
+    @classmethod
+    def parse_report(cls, path: str) -> list[Finding]:
+        """Parse existing Checkov JSON output without running Checkov.
+
+        Accepts the JSON report file (``checkov --output json``, saved to a
+        file, or ``--output-file-path``'s ``results_json.json``) or a
+        directory containing it.
+        """
+        from pathlib import Path
+
+        p = Path(path)
+        if p.is_dir():
+            candidates = list(p.rglob("results_json.json")) or list(p.rglob("*.json"))
+            if not candidates:
+                logger.warning("No Checkov JSON results found in %s", path)
+                return []
+        else:
+            candidates = [p]
+
+        scanner = cls()
+        findings: list[Finding] = []
+        for file_path in candidates:
+            try:
+                findings.extend(scanner._parse_output(file_path.read_text()))
+            except OSError as exc:
+                logger.warning("Failed to read Checkov output %s: %s", file_path, exc)
+        return findings
+
     def _parse_output(self, stdout: str) -> list[Finding]:
         """Parse Checkov JSON output from stdout."""
         findings: list[Finding] = []

@@ -89,10 +89,25 @@ class ScoutSuiteScanner:
 
         return self._parse_output()
 
+    @classmethod
+    def parse_report(cls, path: str) -> list[Finding]:
+        """Parse existing ScoutSuite results without running ScoutSuite.
+
+        Accepts the ``scoutsuite_results_*.js`` file itself or a report
+        directory that is searched recursively for it (ScoutSuite's
+        ``--report-dir`` output directory works as-is).
+        """
+        p = Path(path)
+        if p.is_dir():
+            files = list(p.rglob("scoutsuite_results*.js"))
+            if not files:
+                logger.warning("No ScoutSuite results found in %s", path)
+        else:
+            files = [p]
+        return cls()._parse_files(files)
+
     def _parse_output(self) -> list[Finding]:
         """Parse ScoutSuite results JS file."""
-        findings: list[Finding] = []
-
         report_dir = Path(self._report_dir)
         # ScoutSuite outputs: scoutsuite-results/scoutsuite_results*.js
         results_files = list(report_dir.rglob("scoutsuite_results*.js"))
@@ -100,6 +115,12 @@ class ScoutSuiteScanner:
         if not results_files:
             logger.warning("No ScoutSuite results found in %s", self._report_dir)
             return []
+
+        return self._parse_files(results_files)
+
+    def _parse_files(self, results_files: list[Path]) -> list[Finding]:
+        """Parse a list of ScoutSuite results JS files."""
+        findings: list[Finding] = []
 
         for results_file in results_files:
             try:
