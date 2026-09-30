@@ -54,7 +54,7 @@ The enabled scanners then run in parallel over the same inventory, each in its o
 
 Every phase degrades gracefully. A missing scanner binary, an unreachable provider or a failed exporter logs a warning; nothing else stops.
 
-Alongside the pipeline sits an independent function: [inventory mapping](#cloudg-map) (`cloudg map` / `CloudGEngine.map_inventory()`). It runs no scanners at all — it deep-collects everything deployed or default in the account, including a catch-all sweep of every service, and links it into one interconnected map whose output can later be merged with any scanner findings.
+Alongside the pipeline sits an independent function: [inventory mapping](#cloudg-map) (`cloudg map` / `CloudGEngine.map_inventory()`). It runs no scanners at all. It deep-collects everything deployed or default in the account, sweeps every service for whatever the dedicated collectors miss, and links the lot into one map. Scanner findings can be merged into that map later.
 
 ## CLI reference
 
@@ -105,7 +105,7 @@ cloudg collect -p gcp --project-id <id>
 
 ### cloudg map
 
-Scanner-independent inventory mapping. Deep-collects the complete infrastructure — everything deployed or default — and links it into one interconnected map. No scanner runs and none needs to be installed.
+Scanner-independent inventory mapping: everything deployed or default, linked into one map. No scanner runs and none needs to be installed.
 
 ```bash
 cloudg map -p aws --regions all
@@ -125,11 +125,11 @@ cloudg map -p aws --findings ./reports/raw-findings.json   # merge scanner outpu
 
 Coverage comes in three layers:
 
-1. **Dedicated deep collectors.** Everything the standard collectors know, plus the network fabric: route tables, internet and NAT gateways, network interfaces, EBS volumes/managed disks, Elastic/public IPs, NACLs, VPC peering connections, transit gateways, and customer-managed IAM policies (AWS); NICs, public IPs, disks, load balancers and route tables (Azure).
-2. **Catch-all sweeps.** The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate *every* resource in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). Sweep hits duplicate to dedicated collectors are deduplicated automatically, keeping the richer asset.
-3. **The relationship linker.** A post-collection pass that derives edges purely from asset metadata: instance → security group (`ATTACHED_TO`), subnet ⊃ resource (`CONTAINS`), route table → gateway (`ROUTE`), Lambda → execution role, secret → KMS key, CloudFront → origin (`REFERENCES`), VPC peering (`PEERING`), Azure VM → NIC → NSG/subnet/public IP chains, GCP parent containment and IAM policy bindings — plus a generic pass that resolves any ARN, Azure resource ID or GCP resource name found in one asset's metadata to another collected asset.
+1. Dedicated deep collectors. Everything the standard collectors know, plus the network fabric: route tables, internet and NAT gateways, network interfaces, EBS volumes and managed disks, Elastic and public IPs, NACLs, VPC peering connections, transit gateways, and customer-managed IAM policies (AWS); NICs, public IPs, disks, load balancers and route tables (Azure).
+2. Catch-all sweeps. The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate every resource in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). A sweep hit that duplicates a dedicated collector's asset is dropped; the richer asset wins.
+3. The relationship linker. A post-collection pass that derives edges purely from asset metadata: instance → security group (`ATTACHED_TO`), subnet ⊃ resource (`CONTAINS`), route table → gateway (`ROUTE`), Lambda → execution role, secret → KMS key, CloudFront → origin (`REFERENCES`), VPC peering (`PEERING`), Azure VM → NIC → NSG/subnet/public IP chains, GCP parent containment and IAM policy bindings, and finally a generic pass that resolves any ARN, Azure resource ID or GCP resource name found in one asset's metadata to another collected asset.
 
-Outputs: `inventory-map.json` (assets, edges, summary — services, types, regions, accounts, internet exposure, unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3). With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, sorted riskiest-first) and `compliance-map.json` (framework → findings and affected assets). Inventory and scanners stay decoupled; their outputs merge on demand.
+Outputs: `inventory-map.json` (assets, edges, and a summary covering services, types, regions, accounts, internet exposure and unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3). With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, riskiest first) and `compliance-map.json` (framework → findings and affected assets). The map does not depend on the scanners; findings from any earlier run merge in whenever they exist.
 
 ### cloudg scan
 
@@ -417,7 +417,7 @@ config.aws.regions = ["eu-west-1", "eu-central-1"]
 
 `CloudGEngine` in `cloudg.api` is the integration entry point: async-first, sync wrappers included, built for embedding in larger systems (SIEM pipelines, orchestration platforms, command extensions such as [hol-guard](https://github.com/hashgraph-online/hol-guard)). The package root re-exports the essentials: `CloudGEngine`, `CloudGConfig`, `load_config`, `PipelineResult`, `CollectionResult`, `AnalysisResult`, `InventoryMapper`, `InventoryResult`.
 
-The CLI is a thin layer — nearly everything cloudg does is public, importable API. Beyond the engine itself, the [inventory mapping API](#inventory-mapping-api) and the [deeper toolkit](#the-deeper-toolkit) below are designed to be used directly from code.
+The CLI is a thin layer; nearly everything cloudg does is public, importable API. Beyond the engine itself, the [inventory mapping API](#inventory-mapping-api) and the [deeper toolkit](#the-deeper-toolkit) below are designed to be used directly from code.
 
 ### Construction and hooks
 
@@ -464,7 +464,7 @@ Exceptions raised inside a hook are swallowed, so a broken callback cannot take 
 
 ### Inventory mapping API
 
-`cloudg.inventory` is a standalone package — usable with or without the engine:
+`cloudg.inventory` is a standalone package; the engine is optional:
 
 ```python
 from cloudg import CloudGConfig
@@ -480,7 +480,7 @@ inventory.export("./reports")                # inventory-map.json / .graphml / g
 
 `InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions` and a computed `summary` (totals, per-service/type/region/account breakdowns, edge types, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml` and `inventory-graph.json`.
 
-Merging scanner findings — from `scan()`, `ingest_reports()`, or a saved `raw-findings.json` — happens after the fact, keeping inventory and scanners fully decoupled:
+Merging scanner findings (from `scan()`, `ingest_reports()`, or a saved `raw-findings.json`) happens after the fact, so the mapper never touches the scanners:
 
 ```python
 asset_map = mapper.build_asset_map(inventory, findings)         # asset -> findings/severity
@@ -510,7 +510,7 @@ Modules the pipeline uses internally that are equally useful standalone:
 | `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
 | `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
-| `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone — no engine, no credentials |
+| `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone; no engine, no credentials |
 | `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
 | `cloudg.registry` | `PluginRegistry` | entry-point discovery of collector and scanner plugins |
 
@@ -635,7 +635,7 @@ asyncio.run(main())
 
 ### Map the inventory, overlay findings later
 
-Inventory mapping needs only read credentials — no scanner binaries. Scanners can run elsewhere (CI, a schedule, another host) and merge in whenever their output arrives:
+Inventory mapping needs read credentials and nothing else. Scanners can run elsewhere (CI, a schedule, another host) and merge in whenever their output arrives:
 
 ```python
 from cloudg import CloudGConfig, CloudGEngine
@@ -660,7 +660,7 @@ mapper.export_merged(inventory, findings, "./reports")
 
 ### Link relationships into someone else's inventory
 
-The linker is pure post-processing — feed it assets from any source that produces `CloudAsset` objects (a plugin collector, a CMDB import, a previous run):
+The linker is pure post-processing. Feed it assets from any source that produces `CloudAsset` objects (a plugin collector, a CMDB import, a previous run):
 
 ```python
 from cloudg.inventory import RelationshipLinker

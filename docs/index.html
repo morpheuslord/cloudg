@@ -305,7 +305,7 @@
   </video>
   <div class="eyebrow">cloud graphing &middot; AWS / Azure / GCP</div>
   <h1>Map the cloud. Scan it. Merge everything.</h1>
-  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks. It can also skip the scanning entirely: aggregate outputs you already have, or map the complete inventory — every service, fully interlinked — with no scanner involved.</p>
+  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks. It can also skip the scanning entirely: aggregate outputs you already have, or map the complete inventory, every service interlinked, with no scanner involved.</p>
   <div class="hero-links">
     <a href="https://github.com/morpheuslord/cloudg">GitHub</a>
     <a href="https://pypi.org/project/cloudg/">PyPI</a>
@@ -339,7 +339,7 @@ pip install cloudg[all]</code></pre>
   <p>Collection runs all configured providers concurrently with asyncio, iterating accounts and regions per provider. Regions auto-discover with <code>--regions all</code>. Assets and network edges go into a directed NetworkX graph: BFS from the internet node finds exposed resources, and blast-radius scoring estimates what an attacker could reach from each node.</p>
   <p>The enabled scanners run in parallel over the same inventory, each in its own thread with its own timeout. Their findings, the graph's reachability findings and the built-in IAM linter's results all flow into the normaliser, which deduplicates within and across scanners, rescores against CVSS, and maps everything to compliance controls.</p>
   <p>Every phase degrades gracefully. A missing binary, an unreachable provider or a failed exporter logs a warning; nothing else stops.</p>
-  <p>Alongside the pipeline sits an independent function: <a href="#map">inventory mapping</a>. It runs no scanners at all — it deep-collects everything deployed or default across every service and links it into one interconnected map, which any scanner findings can be merged into later.</p>
+  <p>Alongside the pipeline sits an independent function: <a href="#map">inventory mapping</a>. It runs no scanners at all. It deep-collects everything deployed or default across every service, links it into one map, and lets scanner findings merge into that map later.</p>
 </section>
 
 <section id="run">
@@ -373,7 +373,7 @@ cloudg scan -p aws --scanners prowler,checkov --iac-dir ./terraform</code></pre>
 
 <section id="map">
   <h2>cloudg map</h2>
-  <p>Scanner-independent inventory mapping. Not <em>"what is wrong?"</em> but <em>"what exists, and how is it wired together?"</em>. No scanner runs and none needs to be installed — only read credentials.</p>
+  <p>Scanner-independent inventory mapping: what exists, and how is it wired together. What is wrong stays the scanners' business. No scanner runs and none needs to be installed; read credentials are enough.</p>
   <pre><code>cloudg map -p aws --regions all
 cloudg map -p all --regions all
 cloudg map -p aws --findings ./reports/raw-findings.json   <span class="c"># overlay scanner output</span></code></pre>
@@ -381,12 +381,12 @@ cloudg map -p aws --findings ./reports/raw-findings.json   <span class="c"># ove
   <div class="tablewrap"><table>
     <tr><th>Layer</th><th>What it adds</th></tr>
     <tr><td><strong>Deep collectors</strong></td><td>everything the standard collectors know, plus the network fabric: route tables, internet/NAT gateways, network interfaces, volumes and disks, Elastic and public IPs, NACLs, VPC peering, transit gateways, customer-managed IAM policies</td></tr>
-    <tr><td><strong>Catch-all sweeps</strong></td><td>the AWS Resource Groups Tagging API, Azure Resource Manager's full <code>resources.list()</code>, and GCP Cloud Asset Inventory each enumerate <em>every</em> resource in scope, so services without a dedicated collector still land on the map; duplicates are removed, keeping the richer asset</td></tr>
-    <tr><td><strong>Relationship linker</strong></td><td>derives edges from asset metadata alone: instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG chains, VPC peering, GCP IAM bindings — plus a generic pass resolving any ARN or resource ID one asset holds to another collected asset</td></tr>
+    <tr><td><strong>Catch-all sweeps</strong></td><td>the AWS Resource Groups Tagging API, Azure Resource Manager's full <code>resources.list()</code>, and GCP Cloud Asset Inventory each enumerate every resource in scope, so services without a dedicated collector still land on the map; a duplicate of a dedicated collector's asset is dropped and the richer one wins</td></tr>
+    <tr><td><strong>Relationship linker</strong></td><td>derives edges from asset metadata alone: instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG chains, VPC peering, GCP IAM bindings, and a generic pass resolving any ARN or resource ID one asset holds to another collected asset</td></tr>
   </table></div>
-  <p>Outputs: <code>inventory-map.json</code> (assets, interconnections, summary), <code>inventory-map.graphml</code> and <code>inventory-graph.json</code>. With <code>--findings</code>, additionally <code>asset-map.json</code> (per-asset risk, sorted riskiest-first) and <code>compliance-map.json</code> (framework → affected assets). The inventory and the scanners stay decoupled; their outputs merge on demand.</p>
+  <p>Outputs: <code>inventory-map.json</code> (assets, interconnections, summary), <code>inventory-map.graphml</code> and <code>inventory-graph.json</code>. With <code>--findings</code>, additionally <code>asset-map.json</code> (per-asset risk, riskiest first) and <code>compliance-map.json</code> (framework → affected assets). The map never depends on the scanners; findings merge in whenever they exist.</p>
   <div class="note">
-    <p>The same capability is a first-class library API — <code>engine.map_inventory()</code>, or <code>cloudg.inventory.InventoryMapper</code> and <code>RelationshipLinker</code> standalone. See <a href="#api">Python API</a>.</p>
+    <p>The same capability is library API: <code>engine.map_inventory()</code>, or <code>cloudg.inventory.InventoryMapper</code> and <code>RelationshipLinker</code> standalone. See <a href="#api">Python API</a>.</p>
   </div>
 </section>
 
@@ -557,7 +557,7 @@ compliance = mapper.build_compliance_map(inventory, findings)
 edges = RelationshipLinker(assets).link()               <span class="c"># works on ANY CloudAsset list</span></code></pre>
 
   <h3>The deeper toolkit</h3>
-  <p>The CLI is a thin layer — the modules the pipeline uses internally are public, importable API. The <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#the-deeper-toolkit">markdown reference</a> documents each in full.</p>
+  <p>The CLI is a thin layer; the modules the pipeline uses internally are public, importable API. The <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#the-deeper-toolkit">markdown reference</a> documents each in full.</p>
   <div class="tablewrap"><table>
     <tr><th>Module</th><th>From code</th></tr>
     <tr><td><code>cloudg.inventory</code></td><td><code>InventoryMapper</code>, <code>RelationshipLinker</code>, and the three deep collectors, all standalone</td></tr>
@@ -666,7 +666,7 @@ docker compose run --rm cloudg run -p aws --regions us-east-1</code></pre>
   <div class="release">
     <span class="tag">0.5.0</span> <span class="date">unreleased</span>
     <h3>Inventory mapping</h3>
-    <p>A scanner-independent inventory mapper: <code>cloudg map</code> and <code>CloudGEngine.map_inventory()</code> deep-collect everything deployed or default across AWS, Azure and GCP — network fabric included, with catch-all sweeps so every service appears — and link it into one interconnected map. Scanner findings merge in afterwards as <code>asset-map.json</code> and <code>compliance-map.json</code>. The relationship linker, deep collectors and mapper are all public API.</p>
+    <p>A scanner-independent inventory mapper: <code>cloudg map</code> and <code>CloudGEngine.map_inventory()</code> deep-collect everything deployed or default across AWS, Azure and GCP (network fabric included, with catch-all sweeps so every service appears) and link it into one map. Scanner findings merge in afterwards as <code>asset-map.json</code> and <code>compliance-map.json</code>. The relationship linker, deep collectors and mapper are all public API.</p>
   </div>
 
   <div class="release">

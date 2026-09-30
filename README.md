@@ -18,7 +18,7 @@
 
 One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks. Out the other end come an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
-Need the map without the security tooling? `cloudg map` is a scanner-independent inventory mapper: it deep-collects everything deployed (or default) in an account — down to the network fabric and a catch-all sweep of every service — and links it all into one interconnected asset map you can later overlay with scanner findings. See [Inventory mapping](#inventory-mapping).
+Need the map without the security tooling? `cloudg map` is a scanner-independent inventory mapper: it deep-collects everything deployed (or default) in an account, down to the network fabric, sweeps every service for the rest, and links it all into one asset map you can overlay with scanner findings later. See [Inventory mapping](#inventory-mapping).
 
 **Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
 
@@ -77,11 +77,11 @@ docker compose run --rm cloudg run -p aws --regions us-east-1
 
 ## Inventory mapping
 
-`cloudg map` answers a different question than `cloudg run`: not *"what is wrong?"* but *"what exists, and how is it wired together?"*. It runs **no scanners** — it is an independent function of cloudg — and maps the complete infrastructure:
+`cloudg map` answers a different question than `cloudg run`: what exists, and how is it wired together. Finding out what is wrong stays the scanners' job, and none of them runs here or even needs to be installed. Three things make the map complete:
 
-- **Everything deployed or default.** Beyond the dedicated collectors, each provider gets a catch-all enumeration: the AWS Resource Groups Tagging API, Azure Resource Manager's full subscription listing, and GCP Cloud Asset Inventory. Services without a hand-written collector still land on the map instead of silently missing.
-- **The fabric that interlinks it.** Route tables, internet/NAT gateways, network interfaces, volumes, Elastic/public IPs, NACLs, VPC peering, transit gateways — the pieces that turn a resource list into a topology.
-- **Derived relationships.** A relationship linker walks every asset's metadata and derives attachment, containment, routing and cross-service reference edges (instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG, and a generic pass that resolves any ARN/resource-ID reference between collected assets).
+- Catch-all enumeration per provider. Beyond the dedicated collectors, the AWS Resource Groups Tagging API, Azure Resource Manager's full subscription listing, and GCP Cloud Asset Inventory each list every resource in scope, so a service without a hand-written collector still lands on the map instead of silently missing.
+- The network fabric: route tables, internet and NAT gateways, network interfaces, volumes, Elastic and public IPs, NACLs, VPC peering, transit gateways. These are the pieces that turn a resource list into a topology.
+- A relationship linker that walks every asset's metadata and derives attachment, containment, routing and reference edges: instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG, plus a generic pass that resolves any ARN or resource-ID reference between collected assets.
 
 ```bash
 # map one provider
@@ -94,9 +94,9 @@ cloudg map -p all --regions all
 cloudg map -p aws --regions all --findings ./reports/raw-findings.json
 ```
 
-Outputs: `inventory-map.json` (assets + interconnections + summary), `inventory-map.graphml`, and `inventory-graph.json` for viewers. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets) — the inventory and the scanners stay decoupled, but their outputs merge into one picture.
+Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, and `inventory-graph.json` for viewers. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week.
 
-The same capability is a first-class library API — see [Using it as a library](#using-it-as-a-library):
+All of this is also a library API, see [Using it as a library](#using-it-as-a-library):
 
 ```python
 from cloudg import CloudGConfig, CloudGEngine
@@ -280,7 +280,7 @@ print(result.to_summary())
 
 The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, `map_inventory()` for scanner-independent inventory mapping, `ingest_reports()` / `run_from_reports()` for working from existing scanner output files, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
 
-Inventory mapping composes with the rest — map now, scan whenever, merge later:
+Inventory mapping composes with the rest: map now, scan whenever, merge later.
 
 ```python
 from cloudg import CloudGConfig, CloudGEngine
@@ -300,7 +300,7 @@ compliance = mapper.build_compliance_map(inventory, findings)  # framework -> as
 edges = RelationshipLinker(inventory.assets).link()
 ```
 
-Much more of cloudg is public, importable API than the CLI suggests — the [Python API chapter](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#python-api) documents the full surface, including:
+Much more of cloudg is public, importable API than the CLI suggests. The [Python API chapter](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#python-api) documents the full surface, including:
 
 | API | What it gives you |
 |---|---|
