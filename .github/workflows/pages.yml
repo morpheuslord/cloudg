@@ -36,9 +36,16 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
+      # The artifact name carries the run attempt: on a re-run, the previous
+      # attempt's "github-pages" artifact still exists in the run, and
+      # deploy-pages refuses when it finds two artifacts with the same name
+      # ("Multiple artifacts named github-pages were unexpectedly found").
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/
+          name: github-pages-${{ github.run_attempt }}
 
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}

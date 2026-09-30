@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,12 @@ from cloudg.coverage import CollectionCoverage
 from cloudg.schema.models import CloudAsset, Finding, NetworkEdge
 
 logger = logging.getLogger(__name__)
+
+# GCP identifiers, anchored so ".googleapis.com" cannot match mid-string:
+# full resource name "//compute.googleapis.com/projects/..." and
+# asset type "compute.googleapis.com/Instance"
+_GCP_RESOURCE_NAME_RE = re.compile(r"^//([a-z0-9-]+)\.googleapis\.com/")
+_GCP_ASSET_TYPE_RE = re.compile(r"^([a-z0-9-]+)\.googleapis\.com/")
 
 
 @dataclass
@@ -140,11 +147,12 @@ def _service_of(asset: CloudAsset) -> str:
         if "/providers/" in lowered:
             return lowered.split("/providers/", 1)[1].split("/", 1)[0]
         return "microsoft.resources"
-    if ".googleapis.com/" in arn:
-        return arn.lstrip("/").split(".googleapis.com", 1)[0].split("/")[-1]
-    gcp_type = asset.metadata.get("gcp_asset_type", "")
-    if ".googleapis.com/" in gcp_type:
-        return gcp_type.split(".googleapis.com", 1)[0]
+    gcp_name = _GCP_RESOURCE_NAME_RE.match(arn)
+    if gcp_name:
+        return gcp_name.group(1)
+    gcp_type = _GCP_ASSET_TYPE_RE.match(asset.metadata.get("gcp_asset_type", ""))
+    if gcp_type:
+        return gcp_type.group(1)
     return "unknown"
 
 
