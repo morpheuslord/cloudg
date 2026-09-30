@@ -2,7 +2,7 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-09-30)
 
 Inventory mapping. A dedicated, scanner-independent function that maps everything deployed (or default) in a cloud estate and how it interlinks. It answers what exists and how it is wired together; the scanners keep answering what is wrong.
 
