@@ -190,14 +190,10 @@ class AWSDeepInventoryCollector(AsyncAWSCollector):
                                 "network_interface_id": eni["NetworkInterfaceId"],
                                 "vpc_id": eni.get("VpcId"),
                                 "subnet_id": eni.get("SubnetId"),
-                                "security_groups": [
-                                    g["GroupId"] for g in eni.get("Groups", [])
-                                ],
+                                "security_groups": [g["GroupId"] for g in eni.get("Groups", [])],
                                 "private_ip": eni.get("PrivateIpAddress"),
                                 "public_ip": eni.get("Association", {}).get("PublicIp"),
-                                "attached_instance_id": eni.get("Attachment", {}).get(
-                                    "InstanceId"
-                                ),
+                                "attached_instance_id": eni.get("Attachment", {}).get("InstanceId"),
                                 "interface_type": eni.get("InterfaceType"),
                                 "description": eni.get("Description", ""),
                             },
@@ -386,9 +382,7 @@ class AWSDeepInventoryCollector(AsyncAWSCollector):
         later (dedupe by ARN in :meth:`collect`)."""
         assets: list[CloudAsset] = []
         session = self._get_aio_session()
-        async with session.client(
-            "resourcegroupstaggingapi", region_name=self._region
-        ) as tagging:
+        async with session.client("resourcegroupstaggingapi", region_name=self._region) as tagging:
             paginator = tagging.get_paginator("get_resources")
             async for page in paginator.paginate():
                 for res in page.get("ResourceTagMappingList", []):

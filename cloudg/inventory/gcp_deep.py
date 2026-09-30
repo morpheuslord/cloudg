@@ -69,9 +69,7 @@ class GCPDeepInventoryCollector(GCPCollector):
             request = asset_v1.SearchAllIamPoliciesRequest(scope=scope)
             results = client.search_all_iam_policies(request=request)
 
-            asset_by_name = {
-                a.arn: a.id for a in self._cached_assets if a.arn
-            }
+            asset_by_name = {a.arn: a.id for a in self._cached_assets if a.arn}
             for result in results:
                 resource_name = result.resource
                 target = asset_by_name.get(resource_name, resource_name)

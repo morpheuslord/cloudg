@@ -155,35 +155,10 @@ class SVGRenderer:
         dwg.add(container_group)
 
         # Draw edges (only between real assets)
-        edge_group = dwg.g(id="edges")
-        asset_ids = {a.id for a in assets}
-        for edge in edges:
-            src = positions.get(edge.source_id)
-            tgt = positions.get(edge.target_id)
-            if src and tgt and edge.source_id in asset_ids and edge.target_id in asset_ids:
-                is_internet = edge.cidr in ("0.0.0.0/0", "::/0")
-                colour = _COLOURS["edge_internet"] if is_internet else _COLOURS["edge_normal"]
-                sw = 2 if is_internet else 1
-                dash = "5,3" if edge.edge_type.value == "IAM_TRUST" else None
-                line = dwg.line(start=src, end=tgt, stroke=colour, stroke_width=sw, opacity=0.5)
-                if dash:
-                    line["stroke-dasharray"] = dash
-                edge_group.add(line)
-        dwg.add(edge_group)
+        self._draw_edges(dwg, assets, edges, positions)
 
         # Draw nodes
-        node_group = dwg.g(id="nodes")
-        findings_map = findings_by_resource or {}
-
-        for asset in assets:
-            # Skip VPC and SUBNET — they're drawn as containers
-            if asset.asset_type in (AssetType.VPC, AssetType.VNET, AssetType.SUBNET):
-                continue
-            pos = positions.get(asset.id)
-            if not pos:
-                continue
-            self._draw_node(dwg, node_group, asset, pos, findings_map)
-        dwg.add(node_group)
+        self._draw_nodes(dwg, assets, positions, findings_by_resource or {})
 
         # Legend
         self._draw_legend(dwg, width, height)
@@ -253,32 +228,9 @@ class SVGRenderer:
 
         vpcs = hierarchy["vpcs"]
         margin = 30
-        node_r = 18
-        node_spacing = 55
-        subnet_pad = 20
-        vpc_pad = 25
-        header_h = 22
 
         # Separate assets into network (hierarchy) and sidebar categories
-        sidebar_assets: dict[str, list[CloudAsset]] = {}
-        for a in assets:
-            if a.asset_type in (AssetType.VPC, AssetType.VNET, AssetType.SUBNET):
-                continue
-            # Check if this asset is placed in the hierarchy
-            in_hierarchy = False
-            for vpc_data in vpcs.values():
-                if any(r.id == a.id for r in vpc_data["loose"]):
-                    in_hierarchy = True
-                    break
-                for sdata in vpc_data["subnets"].values():
-                    if any(r.id == a.id for r in sdata["resources"]):
-                        in_hierarchy = True
-                        break
-                if in_hierarchy:
-                    break
-            if not in_hierarchy:
-                key = a.asset_type.value
-                sidebar_assets.setdefault(key, []).append(a)
+        sidebar_assets = self._collect_sidebar_assets(assets, vpcs)
 
         # ── Main area: VPCs ──
         # Leave right sidebar for non-network assets
@@ -288,92 +240,24 @@ class SVGRenderer:
         vpc_y = 70  # Start below title
         vpc_x = margin
 
-        for vpc_id, vpc_data in vpcs.items():
-            vpc_asset = vpc_data["asset"]
-            subnets = vpc_data["subnets"]
-            loose = vpc_data["loose"]
-
-            # Calculate subnet boxes
-            subnet_containers: list[dict[str, Any]] = []
-            sx = vpc_x + vpc_pad
-            sy = vpc_y + vpc_pad + header_h
-
-            max_subnet_bottom = sy
-
-            for subnet_id, sdata in subnets.items():
-                subnet_asset = sdata["asset"]
-                resources = sdata["resources"]
-
-                # Size the subnet box to fit its resources
-                n_res = max(len(resources), 1)
-                cols = min(n_res, 4)
-                rows = math.ceil(n_res / cols) if n_res > 0 else 1
-                sbox_w = cols * node_spacing + 2 * subnet_pad
-                sbox_h = rows * node_spacing + 2 * subnet_pad + header_h
-
-                # Check if it fits horizontally
-                if sx + sbox_w > vpc_x + main_w - vpc_pad - margin:
-                    # Wrap to next row
-                    sx = vpc_x + vpc_pad
-                    sy = max_subnet_bottom + 10
-
-                subnet_containers.append(
-                    {
-                        "type": "subnet",
-                        "name": subnet_asset.name,
-                        "cidr": subnet_asset.metadata.get("cidr_block", ""),
-                        "is_public": subnet_asset.metadata.get("map_public_ip", False),
-                        "x": sx,
-                        "y": sy,
-                        "w": sbox_w,
-                        "h": sbox_h,
-                    }
-                )
-
-                # Position the subnet asset label (center of box header)
-                positions[subnet_asset.id] = (sx + sbox_w / 2, sy + header_h / 2)
-
-                # Place resources inside subnet
-                for ri, res in enumerate(resources):
-                    col = ri % cols
-                    row = ri // cols
-                    rx = sx + subnet_pad + col * node_spacing + node_spacing / 2
-                    ry = sy + header_h + subnet_pad + row * node_spacing + node_spacing / 2
-                    positions[res.id] = (rx, ry)
-
-                max_subnet_bottom = max(max_subnet_bottom, sy + sbox_h)
-                sx += sbox_w + 10
-
-            # Place loose resources (in VPC but not in a subnet)
-            if loose:
-                for li, la in enumerate(loose):
-                    lx = vpc_x + vpc_pad + li * node_spacing + node_spacing / 2
-                    ly = max_subnet_bottom + 15 + node_spacing / 2
-                    positions[la.id] = (lx, ly)
-                max_subnet_bottom += node_spacing + 15
-
-            # VPC container
-            vpc_w = max(main_w - 2 * margin, 400)
-            vpc_h = max(max_subnet_bottom - vpc_y + vpc_pad, 100)
-
-            containers.append(
-                {
-                    "type": "vpc",
-                    "name": vpc_asset.name,
-                    "cidr": vpc_asset.metadata.get("cidr_block", ""),
-                    "x": vpc_x,
-                    "y": vpc_y,
-                    "w": vpc_w,
-                    "h": vpc_h,
-                }
-            )
-            containers.extend(subnet_containers)
-
-            positions[vpc_asset.id] = (vpc_x + vpc_w / 2, vpc_y + header_h / 2)
-            vpc_y += vpc_h + 20
+        for vpc_data in vpcs.values():
+            vpc_y = self._layout_vpc(vpc_data, vpc_x, vpc_y, main_w, margin, positions, containers)
 
         # ── Sidebar: non-network assets ──
         sidebar_w = width - sidebar_x - margin
+        self._layout_sidebar(sidebar_assets, sidebar_x, sidebar_w, positions, containers)
+
+        return positions, containers
+
+    def _layout_sidebar(
+        self,
+        sidebar_assets: dict[str, list[CloudAsset]],
+        sidebar_x: float,
+        sidebar_w: float,
+        positions: dict[str, tuple[float, float]],
+        containers: list[dict[str, Any]],
+    ) -> None:
+        """Lay out sidebar groups of non-network assets top to bottom."""
         sy = 70
         groups_to_show = [
             ("LOAD_BALANCER", "Load Balancers", _COLOURS["load_balancer"]),
@@ -391,149 +275,366 @@ class SVGRenderer:
             group_assets = sidebar_assets.pop(type_key, [])
             if not group_assets:
                 continue
-
-            # Group header
-            containers.append(
-                {
-                    "type": "sidebar_group",
-                    "name": f"{group_label} ({len(group_assets)})",
-                    "x": sidebar_x,
-                    "y": sy,
-                    "w": sidebar_w,
-                    "h": 18,
-                    "colour": colour,
-                }
+            name = f"{group_label} ({len(group_assets)})"
+            sy = self._layout_sidebar_group(
+                name, colour, group_assets, sidebar_x, sidebar_w, sy, positions, containers
             )
-            sy += 22
-
-            # Place assets in the sidebar
-            cols = max(1, min(3, int(sidebar_w / node_spacing)))
-            for ai, a in enumerate(group_assets):
-                col = ai % cols
-                row = ai // cols
-                ax = sidebar_x + 15 + col * node_spacing + node_r
-                ay = sy + row * (node_spacing - 10) + node_r
-                positions[a.id] = (ax, ay)
-
-            rows = math.ceil(len(group_assets) / cols)
-            sy += rows * (node_spacing - 10) + 15
 
         # Any remaining sidebar types
         for type_key, remaining in sidebar_assets.items():
             if not remaining:
                 continue
-            containers.append(
+            name = f"{type_key} ({len(remaining)})"
+            sy = self._layout_sidebar_group(
+                name, _COLOURS["other"], remaining, sidebar_x, sidebar_w, sy, positions, containers
+            )
+
+    def _collect_sidebar_assets(
+        self,
+        assets: list[CloudAsset],
+        vpcs: dict[str, dict[str, Any]],
+    ) -> dict[str, list[CloudAsset]]:
+        """Group assets that are not placed in the VPC hierarchy by asset type."""
+        sidebar_assets: dict[str, list[CloudAsset]] = {}
+        for a in assets:
+            if a.asset_type in (AssetType.VPC, AssetType.VNET, AssetType.SUBNET):
+                continue
+            # Check if this asset is placed in the hierarchy
+            if not self._is_in_hierarchy(a, vpcs):
+                key = a.asset_type.value
+                sidebar_assets.setdefault(key, []).append(a)
+        return sidebar_assets
+
+    def _is_in_hierarchy(self, asset: CloudAsset, vpcs: dict[str, dict[str, Any]]) -> bool:
+        """Return True if the asset sits in a VPC's loose list or a subnet's resources."""
+        for vpc_data in vpcs.values():
+            if any(r.id == asset.id for r in vpc_data["loose"]):
+                return True
+            for sdata in vpc_data["subnets"].values():
+                if any(r.id == asset.id for r in sdata["resources"]):
+                    return True
+        return False
+
+    def _layout_vpc(
+        self,
+        vpc_data: dict[str, Any],
+        vpc_x: float,
+        vpc_y: float,
+        main_w: int,
+        margin: int,
+        positions: dict[str, tuple[float, float]],
+        containers: list[dict[str, Any]],
+    ) -> float:
+        """Lay out one VPC (subnets + loose resources) and return the next vpc_y."""
+        node_spacing = 55
+        vpc_pad = 25
+        header_h = 22
+
+        vpc_asset = vpc_data["asset"]
+        loose = vpc_data["loose"]
+
+        # Calculate subnet boxes
+        subnet_containers, max_subnet_bottom = self._layout_subnets(
+            vpc_data["subnets"], vpc_x, vpc_y, main_w, margin, positions
+        )
+
+        # Place loose resources (in VPC but not in a subnet)
+        if loose:
+            for li, la in enumerate(loose):
+                lx = vpc_x + vpc_pad + li * node_spacing + node_spacing / 2
+                ly = max_subnet_bottom + 15 + node_spacing / 2
+                positions[la.id] = (lx, ly)
+            max_subnet_bottom += node_spacing + 15
+
+        # VPC container
+        vpc_w = max(main_w - 2 * margin, 400)
+        vpc_h = max(max_subnet_bottom - vpc_y + vpc_pad, 100)
+
+        containers.append(
+            {
+                "type": "vpc",
+                "name": vpc_asset.name,
+                "cidr": vpc_asset.metadata.get("cidr_block", ""),
+                "x": vpc_x,
+                "y": vpc_y,
+                "w": vpc_w,
+                "h": vpc_h,
+            }
+        )
+        containers.extend(subnet_containers)
+
+        positions[vpc_asset.id] = (vpc_x + vpc_w / 2, vpc_y + header_h / 2)
+        return vpc_y + vpc_h + 20
+
+    def _layout_subnets(
+        self,
+        subnets: dict[str, dict[str, Any]],
+        vpc_x: float,
+        vpc_y: float,
+        main_w: int,
+        margin: int,
+        positions: dict[str, tuple[float, float]],
+    ) -> tuple[list[dict[str, Any]], float]:
+        """Size subnet boxes, place their resources, and return (containers, bottom y)."""
+        node_spacing = 55
+        subnet_pad = 20
+        vpc_pad = 25
+        header_h = 22
+
+        subnet_containers: list[dict[str, Any]] = []
+        sx = vpc_x + vpc_pad
+        sy = vpc_y + vpc_pad + header_h
+
+        max_subnet_bottom = sy
+
+        for sdata in subnets.values():
+            subnet_asset = sdata["asset"]
+            resources = sdata["resources"]
+
+            # Size the subnet box to fit its resources
+            n_res = max(len(resources), 1)
+            cols = min(n_res, 4)
+            rows = math.ceil(n_res / cols) if n_res > 0 else 1
+            sbox_w = cols * node_spacing + 2 * subnet_pad
+            sbox_h = rows * node_spacing + 2 * subnet_pad + header_h
+
+            # Check if it fits horizontally
+            if sx + sbox_w > vpc_x + main_w - vpc_pad - margin:
+                # Wrap to next row
+                sx = vpc_x + vpc_pad
+                sy = max_subnet_bottom + 10
+
+            subnet_containers.append(
                 {
-                    "type": "sidebar_group",
-                    "name": f"{type_key} ({len(remaining)})",
-                    "x": sidebar_x,
+                    "type": "subnet",
+                    "name": subnet_asset.name,
+                    "cidr": subnet_asset.metadata.get("cidr_block", ""),
+                    "is_public": subnet_asset.metadata.get("map_public_ip", False),
+                    "x": sx,
                     "y": sy,
-                    "w": sidebar_w,
-                    "h": 18,
-                    "colour": _COLOURS["other"],
+                    "w": sbox_w,
+                    "h": sbox_h,
                 }
             )
-            sy += 22
-            cols = max(1, min(3, int(sidebar_w / node_spacing)))
-            for ai, a in enumerate(remaining):
-                col = ai % cols
-                row = ai // cols
-                ax = sidebar_x + 15 + col * node_spacing + node_r
-                ay = sy + row * (node_spacing - 10) + node_r
-                positions[a.id] = (ax, ay)
-            rows = math.ceil(len(remaining) / cols)
-            sy += rows * (node_spacing - 10) + 15
 
-        return positions, containers
+            # Position the subnet asset label (center of box header)
+            positions[subnet_asset.id] = (sx + sbox_w / 2, sy + header_h / 2)
+
+            # Place resources inside subnet
+            self._place_subnet_resources(resources, sx, sy, cols, positions)
+
+            max_subnet_bottom = max(max_subnet_bottom, sy + sbox_h)
+            sx += sbox_w + 10
+
+        return subnet_containers, max_subnet_bottom
+
+    def _place_subnet_resources(
+        self,
+        resources: list[CloudAsset],
+        sx: float,
+        sy: float,
+        cols: int,
+        positions: dict[str, tuple[float, float]],
+    ) -> None:
+        """Place resource nodes in a grid inside a subnet box."""
+        node_spacing = 55
+        subnet_pad = 20
+        header_h = 22
+        for ri, res in enumerate(resources):
+            col = ri % cols
+            row = ri // cols
+            rx = sx + subnet_pad + col * node_spacing + node_spacing / 2
+            ry = sy + header_h + subnet_pad + row * node_spacing + node_spacing / 2
+            positions[res.id] = (rx, ry)
+
+    def _layout_sidebar_group(
+        self,
+        name: str,
+        colour: str,
+        group_assets: list[CloudAsset],
+        sidebar_x: float,
+        sidebar_w: float,
+        sy: float,
+        positions: dict[str, tuple[float, float]],
+        containers: list[dict[str, Any]],
+    ) -> float:
+        """Place one sidebar group header plus its assets and return the next y."""
+        node_r = 18
+        node_spacing = 55
+
+        # Group header
+        containers.append(
+            {
+                "type": "sidebar_group",
+                "name": name,
+                "x": sidebar_x,
+                "y": sy,
+                "w": sidebar_w,
+                "h": 18,
+                "colour": colour,
+            }
+        )
+        sy += 22
+
+        # Place assets in the sidebar
+        cols = max(1, min(3, int(sidebar_w / node_spacing)))
+        for ai, a in enumerate(group_assets):
+            col = ai % cols
+            row = ai // cols
+            ax = sidebar_x + 15 + col * node_spacing + node_r
+            ay = sy + row * (node_spacing - 10) + node_r
+            positions[a.id] = (ax, ay)
+
+        rows = math.ceil(len(group_assets) / cols)
+        return sy + rows * (node_spacing - 10) + 15
 
     # ------------------------------------------------------------------
     # Drawing helpers
     # ------------------------------------------------------------------
 
+    def _draw_edges(
+        self,
+        dwg: Drawing,
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+        positions: dict[str, tuple[float, float]],
+    ) -> None:
+        """Draw network edges between positioned assets."""
+        edge_group = dwg.g(id="edges")
+        asset_ids = {a.id for a in assets}
+        for edge in edges:
+            src = positions.get(edge.source_id)
+            tgt = positions.get(edge.target_id)
+            if src and tgt and edge.source_id in asset_ids and edge.target_id in asset_ids:
+                is_internet = edge.cidr in ("0.0.0.0/0", "::/0")
+                colour = _COLOURS["edge_internet"] if is_internet else _COLOURS["edge_normal"]
+                sw = 2 if is_internet else 1
+                dash = "5,3" if edge.edge_type.value == "IAM_TRUST" else None
+                line = dwg.line(start=src, end=tgt, stroke=colour, stroke_width=sw, opacity=0.5)
+                if dash:
+                    line["stroke-dasharray"] = dash
+                edge_group.add(line)
+        dwg.add(edge_group)
+
+    def _draw_nodes(
+        self,
+        dwg: Drawing,
+        assets: list[CloudAsset],
+        positions: dict[str, tuple[float, float]],
+        findings_map: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Draw all resource nodes at their calculated positions."""
+        node_group = dwg.g(id="nodes")
+        for asset in assets:
+            # Skip VPC and SUBNET — they're drawn as containers
+            if asset.asset_type in (AssetType.VPC, AssetType.VNET, AssetType.SUBNET):
+                continue
+            pos = positions.get(asset.id)
+            if not pos:
+                continue
+            self._draw_node(dwg, node_group, asset, pos, findings_map)
+        dwg.add(node_group)
+
     def _draw_container(self, dwg: Drawing, group: Any, container: dict[str, Any]) -> None:
         """Draw a VPC or Subnet container rectangle."""
         ctype = container["type"]
-        x, y, w, h = container["x"], container["y"], container["w"], container["h"]
+        x, y = container["x"], container["y"]
 
         if ctype == "vpc":
-            group.add(
-                dwg.rect(
-                    insert=(x, y),
-                    size=(w, h),
-                    fill=_COLOURS["vpc_bg"],
-                    stroke=_COLOURS["vpc_border"],
-                    stroke_width=2,
-                    rx=8,
-                    ry=8,
-                    opacity=0.85,
-                    stroke_dasharray="8,4",
-                )
-            )
-            label = f"VPC: {container['name']}"
-            if container.get("cidr"):
-                label += f"  ({container['cidr']})"
-            group.add(
-                dwg.text(
-                    label,
-                    insert=(x + 10, y + 16),
-                    font_size="13px",
-                    font_weight="bold",
-                    font_family="Inter, Arial, sans-serif",
-                    fill=_COLOURS["vpc_border"],
-                )
-            )
-
+            self._draw_vpc_container(dwg, group, container, x, y)
         elif ctype == "subnet":
-            group.add(
-                dwg.rect(
-                    insert=(x, y),
-                    size=(w, h),
-                    fill=_COLOURS["subnet_bg"],
-                    stroke=_COLOURS["subnet_border"],
-                    stroke_width=1.5,
-                    rx=6,
-                    ry=6,
-                    opacity=0.7,
-                )
-            )
-            label = container["name"]
-            if container.get("cidr"):
-                label += f"  ({container['cidr']})"
-            if container.get("is_public"):
-                label += "  🌐"
-            group.add(
-                dwg.text(
-                    label,
-                    insert=(x + 8, y + 14),
-                    font_size="10px",
-                    font_weight="600",
-                    font_family="Inter, Arial, sans-serif",
-                    fill=_COLOURS["subnet_border"],
-                )
-            )
-
+            self._draw_subnet_container(dwg, group, container, x, y)
         elif ctype == "sidebar_group":
-            colour = container.get("colour", _COLOURS["other"])
-            group.add(
-                dwg.text(
-                    container["name"],
-                    insert=(x, y + 13),
-                    font_size="11px",
-                    font_weight="bold",
-                    font_family="Inter, Arial, sans-serif",
-                    fill=colour,
-                )
+            self._draw_sidebar_group_header(dwg, group, container, x, y)
+
+    def _draw_vpc_container(
+        self, dwg: Drawing, group: Any, container: dict[str, Any], x: float, y: float
+    ) -> None:
+        """Draw a VPC container rectangle with its label."""
+        group.add(
+            dwg.rect(
+                insert=(x, y),
+                size=(container["w"], container["h"]),
+                fill=_COLOURS["vpc_bg"],
+                stroke=_COLOURS["vpc_border"],
+                stroke_width=2,
+                rx=8,
+                ry=8,
+                opacity=0.85,
+                stroke_dasharray="8,4",
             )
-            # Underline
-            group.add(
-                dwg.line(
-                    start=(x, y + 16),
-                    end=(x + container["w"], y + 16),
-                    stroke=colour,
-                    stroke_width=0.5,
-                    opacity=0.4,
-                )
+        )
+        label = f"VPC: {container['name']}"
+        if container.get("cidr"):
+            label += f"  ({container['cidr']})"
+        group.add(
+            dwg.text(
+                label,
+                insert=(x + 10, y + 16),
+                font_size="13px",
+                font_weight="bold",
+                font_family="Inter, Arial, sans-serif",
+                fill=_COLOURS["vpc_border"],
             )
+        )
+
+    def _draw_subnet_container(
+        self, dwg: Drawing, group: Any, container: dict[str, Any], x: float, y: float
+    ) -> None:
+        """Draw a Subnet container rectangle with its label."""
+        group.add(
+            dwg.rect(
+                insert=(x, y),
+                size=(container["w"], container["h"]),
+                fill=_COLOURS["subnet_bg"],
+                stroke=_COLOURS["subnet_border"],
+                stroke_width=1.5,
+                rx=6,
+                ry=6,
+                opacity=0.7,
+            )
+        )
+        label = container["name"]
+        if container.get("cidr"):
+            label += f"  ({container['cidr']})"
+        if container.get("is_public"):
+            label += "  🌐"
+        group.add(
+            dwg.text(
+                label,
+                insert=(x + 8, y + 14),
+                font_size="10px",
+                font_weight="600",
+                font_family="Inter, Arial, sans-serif",
+                fill=_COLOURS["subnet_border"],
+            )
+        )
+
+    def _draw_sidebar_group_header(
+        self, dwg: Drawing, group: Any, container: dict[str, Any], x: float, y: float
+    ) -> None:
+        """Draw a sidebar group heading with its underline."""
+        colour = container.get("colour", _COLOURS["other"])
+        group.add(
+            dwg.text(
+                container["name"],
+                insert=(x, y + 13),
+                font_size="11px",
+                font_weight="bold",
+                font_family="Inter, Arial, sans-serif",
+                fill=colour,
+            )
+        )
+        # Underline
+        group.add(
+            dwg.line(
+                start=(x, y + 16),
+                end=(x + container["w"], y + 16),
+                stroke=colour,
+                stroke_width=0.5,
+                opacity=0.4,
+            )
+        )
 
     def _draw_node(
         self,
@@ -564,6 +665,19 @@ class SVGRenderer:
             )
         )
 
+        self._draw_node_labels(dwg, node_g, asset, x, y, r)
+
+        # Severity badge
+        resource_findings = findings_map.get(asset.id, [])
+        if resource_findings:
+            self._draw_severity_badge(dwg, node_g, resource_findings, x, y, r)
+
+        group.add(node_g)
+
+    def _draw_node_labels(
+        self, dwg: Drawing, node_g: Any, asset: CloudAsset, x: float, y: float, r: int
+    ) -> None:
+        """Draw the name label and type badge below a node."""
         # Label — truncate long names
         label = asset.name[:18] + "…" if len(asset.name) > 18 else asset.name
         node_g.add(
@@ -589,37 +703,42 @@ class SVGRenderer:
             )
         )
 
-        # Severity badge
-        resource_findings = findings_map.get(asset.id, [])
-        if resource_findings:
-            max_sev = min(
-                resource_findings,
-                key=lambda f: list(Severity).index(Severity(f.get("severity", "INFO"))),
+    def _draw_severity_badge(
+        self,
+        dwg: Drawing,
+        node_g: Any,
+        resource_findings: list[dict[str, Any]],
+        x: float,
+        y: float,
+        r: int,
+    ) -> None:
+        """Draw a finding-count badge coloured by the worst severity."""
+        max_sev = min(
+            resource_findings,
+            key=lambda f: list(Severity).index(Severity(f.get("severity", "INFO"))),
+        )
+        badge_colour = _SEVERITY_BADGE_COLOURS.get(
+            Severity(max_sev.get("severity", "INFO")), "#95A5A6"
+        )
+        node_g.add(
+            dwg.circle(
+                center=(x + r - 2, y - r + 2),
+                r=7,
+                fill=badge_colour,
+                stroke="white",
+                stroke_width=1.5,
             )
-            badge_colour = _SEVERITY_BADGE_COLOURS.get(
-                Severity(max_sev.get("severity", "INFO")), "#95A5A6"
+        )
+        node_g.add(
+            dwg.text(
+                str(len(resource_findings)),
+                insert=(x + r - 2, y - r + 5),
+                text_anchor="middle",
+                font_size="7px",
+                font_weight="bold",
+                fill="white",
             )
-            node_g.add(
-                dwg.circle(
-                    center=(x + r - 2, y - r + 2),
-                    r=7,
-                    fill=badge_colour,
-                    stroke="white",
-                    stroke_width=1.5,
-                )
-            )
-            node_g.add(
-                dwg.text(
-                    str(len(resource_findings)),
-                    insert=(x + r - 2, y - r + 5),
-                    text_anchor="middle",
-                    font_size="7px",
-                    font_weight="bold",
-                    fill="white",
-                )
-            )
-
-        group.add(node_g)
+        )
 
     # ------------------------------------------------------------------
     # Legend & CSS

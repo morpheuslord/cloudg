@@ -122,69 +122,86 @@ class IAMLinter:
             statements = [statements]
 
         for statement in statements:
-            effect = statement.get("Effect", "")
-            actions = statement.get("Action", [])
-            resources = statement.get("Resource", [])
-
-            if isinstance(actions, str):
-                actions = [actions]
-            if isinstance(resources, str):
-                resources = [resources]
-
-            # Check for wildcard actions
-            if effect == "Allow" and "*" in actions:
-                findings.append(
-                    Finding(
-                        resource_id=asset.id,
-                        resource_arn=asset.arn,
-                        severity=Severity.HIGH,
-                        title=f"Wildcard Action (*) in IAM policy: {asset.name}",
-                        description=(
-                            f"The IAM policy '{asset.name}' grants 'Action: *' "
-                            f"(all actions). This violates least-privilege principles."
-                        ),
-                        evidence=f"Statement: {json.dumps(statement)[:500]}",
-                        remediation=(
-                            "Replace 'Action: *' with specific actions required "
-                            "by the workload. Use AWS Access Advisor to identify "
-                            "unused permissions."
-                        ),
-                        source_tool="cloudg-iam",
-                        compliance_frameworks=["CIS", "NIST-800-53", "SOC2"],
-                    )
-                )
-
-            # Check for wildcard resources with sensitive actions
-            if effect == "Allow" and "*" in resources:
-                sensitive_prefixes = ("iam:", "sts:", "kms:", "s3:", "ec2:", "lambda:")
-                has_sensitive = any(
-                    any(a.startswith(p) for p in sensitive_prefixes)
-                    for a in actions
-                    if isinstance(a, str) and a != "*"
-                )
-
-                if has_sensitive or "*" in actions:
-                    findings.append(
-                        Finding(
-                            resource_id=asset.id,
-                            resource_arn=asset.arn,
-                            severity=Severity.HIGH,
-                            title=f"Wildcard Resource (*) in IAM policy: {asset.name}",
-                            description=(
-                                f"The IAM policy '{asset.name}' grants access to "
-                                f"'Resource: *' (all resources) for sensitive actions."
-                            ),
-                            evidence=f"Statement: {json.dumps(statement)[:500]}",
-                            remediation=(
-                                "Scope 'Resource' to specific ARN patterns. "
-                                "Use conditions to further restrict access."
-                            ),
-                            source_tool="cloudg-iam",
-                            compliance_frameworks=["CIS", "NIST-800-53"],
-                        )
-                    )
+            findings.extend(self._check_statement_wildcards(statement, asset))
 
         return findings
+
+    def _check_statement_wildcards(self, statement: dict, asset: CloudAsset) -> list[Finding]:
+        """Check a single policy statement for wildcard permissions."""
+        findings: list[Finding] = []
+
+        effect = statement.get("Effect", "")
+        actions = statement.get("Action", [])
+        resources = statement.get("Resource", [])
+
+        if isinstance(actions, str):
+            actions = [actions]
+        if isinstance(resources, str):
+            resources = [resources]
+
+        # Check for wildcard actions
+        if effect == "Allow" and "*" in actions:
+            findings.append(self._wildcard_action_finding(statement, asset))
+
+        # Check for wildcard resources with sensitive actions
+        if effect == "Allow" and "*" in resources:
+            if self._has_sensitive_actions(actions) or "*" in actions:
+                findings.append(self._wildcard_resource_finding(statement, asset))
+
+        return findings
+
+    @staticmethod
+    def _has_sensitive_actions(actions: list) -> bool:
+        """Check whether any non-wildcard action targets a sensitive service."""
+        sensitive_prefixes = ("iam:", "sts:", "kms:", "s3:", "ec2:", "lambda:")
+        return any(
+            any(a.startswith(p) for p in sensitive_prefixes)
+            for a in actions
+            if isinstance(a, str) and a != "*"
+        )
+
+    @staticmethod
+    def _wildcard_action_finding(statement: dict, asset: CloudAsset) -> Finding:
+        """Build the finding for an 'Action: *' statement."""
+        return Finding(
+            resource_id=asset.id,
+            resource_arn=asset.arn,
+            severity=Severity.HIGH,
+            title=f"Wildcard Action (*) in IAM policy: {asset.name}",
+            description=(
+                f"The IAM policy '{asset.name}' grants 'Action: *' "
+                f"(all actions). This violates least-privilege principles."
+            ),
+            evidence=f"Statement: {json.dumps(statement)[:500]}",
+            remediation=(
+                "Replace 'Action: *' with specific actions required "
+                "by the workload. Use AWS Access Advisor to identify "
+                "unused permissions."
+            ),
+            source_tool="cloudg-iam",
+            compliance_frameworks=["CIS", "NIST-800-53", "SOC2"],
+        )
+
+    @staticmethod
+    def _wildcard_resource_finding(statement: dict, asset: CloudAsset) -> Finding:
+        """Build the finding for a 'Resource: *' statement with sensitive actions."""
+        return Finding(
+            resource_id=asset.id,
+            resource_arn=asset.arn,
+            severity=Severity.HIGH,
+            title=f"Wildcard Resource (*) in IAM policy: {asset.name}",
+            description=(
+                f"The IAM policy '{asset.name}' grants access to "
+                f"'Resource: *' (all resources) for sensitive actions."
+            ),
+            evidence=f"Statement: {json.dumps(statement)[:500]}",
+            remediation=(
+                "Scope 'Resource' to specific ARN patterns. "
+                "Use conditions to further restrict access."
+            ),
+            source_tool="cloudg-iam",
+            compliance_frameworks=["CIS", "NIST-800-53"],
+        )
 
     @staticmethod
     def _map_parliament_severity(severity: str) -> Severity:

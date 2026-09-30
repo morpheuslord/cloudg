@@ -345,8 +345,6 @@ class CloudGEngine:
         Returns:
             List of all findings.
         """
-        import concurrent.futures
-
         self._emit_phase_start("scanning")
         all_findings: list[Finding] = []
         out = Path(output_dir)
@@ -355,6 +353,28 @@ class CloudGEngine:
         scanner_list = [s.strip().lower() for s in self.config.scanners.enabled]
 
         # Graph-based reachability analysis
+        all_findings.extend(self._run_reachability_analysis(assets, edges))
+
+        resolved_iac_dirs = self._resolve_scan_iac_dirs(iac_dir, scanner_list, assets, edges, out)
+
+        # Resolve images
+        resolved_images: list[str] = images or list(self.config.scanners.trivy_images)
+
+        # Run all scanners concurrently
+        all_findings.extend(
+            self._run_scanners_parallel(
+                scanner_list, assets, resolved_iac_dirs, resolved_images, profile, out
+            )
+        )
+
+        self._emit_scan_results(all_findings)
+
+        return all_findings
+
+    def _run_reachability_analysis(
+        self, assets: list[CloudAsset], edges: list[NetworkEdge]
+    ) -> list[Finding]:
+        """Graph-based reachability analysis for the scanning phase."""
         try:
             from cloudg.graph.builder import GraphBuilder
             from cloudg.graph.reachability import ReachabilityAnalyzer
@@ -362,16 +382,27 @@ class CloudGEngine:
             builder = GraphBuilder()
             graph = builder.build(assets, edges)
             analyzer = ReachabilityAnalyzer(graph)
-            reachability = analyzer.generate_findings()
-            all_findings.extend(reachability)
+            return analyzer.generate_findings()
         except Exception as exc:
             logger.error("Graph analysis failed: %s", exc)
             self._emit_error("graph_analysis", exc)
+            return []
 
-        # Resolve IaC directories. When nothing is configured but Terraform
-        # recreation is enabled, generate it now and scan that: the IaC
-        # scanners then audit the live infrastructure via its Terraform
-        # representation instead of an unrelated local directory.
+    def _resolve_scan_iac_dirs(
+        self,
+        iac_dir: str | None,
+        scanner_list: list[str],
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+        out: Path,
+    ) -> list[str]:
+        """Resolve the IaC directories the scanners should target.
+
+        When nothing is configured but Terraform recreation is enabled,
+        generate it now and scan that: the IaC scanners then audit the live
+        infrastructure via its Terraform representation instead of an
+        unrelated local directory.
+        """
         tf_dir: str | None = None
         if (
             not iac_dir
@@ -399,82 +430,112 @@ class CloudGEngine:
                 "Pass iac_dir, set scanners.iac_directories, or enable terraform "
                 "so the recreated infrastructure can be scanned."
             )
+        return resolved_iac_dirs
 
-        # Resolve images
-        resolved_images: list[str] = images or list(self.config.scanners.trivy_images)
+    def _run_prowler(self, prov: str, profile: str | None, out: Path) -> list[Finding]:
+        from cloudg.scanners.prowler import ProwlerScanner
 
-        # Run all scanners concurrently
-        def _run_prowler(prov: str) -> list[Finding]:
-            from cloudg.scanners.prowler import ProwlerScanner
+        region = self.config.aws.regions[0] if self.config.aws.regions else None
+        scanner = ProwlerScanner(
+            provider=prov,
+            profile=profile,
+            output_dir=str(out / "prowler" / prov),
+            extra_args=self.config.scanners.prowler_extra_args or [],
+            aws_access_key_id=self.config.aws.access_key_id if prov == "aws" else None,
+            aws_secret_access_key=self.config.aws.secret_access_key if prov == "aws" else None,
+            aws_region=region if prov == "aws" else None,
+        )
+        return scanner.run()
 
-            region = self.config.aws.regions[0] if self.config.aws.regions else None
-            scanner = ProwlerScanner(
-                provider=prov,
-                profile=profile,
-                output_dir=str(out / "prowler" / prov),
-                extra_args=self.config.scanners.prowler_extra_args or [],
-                aws_access_key_id=self.config.aws.access_key_id if prov == "aws" else None,
-                aws_secret_access_key=self.config.aws.secret_access_key if prov == "aws" else None,
-                aws_region=region if prov == "aws" else None,
-            )
-            return scanner.run()
+    def _run_scoutsuite(self, prov: str, profile: str | None, out: Path) -> list[Finding]:
+        from cloudg.scanners.scoutsuite import ScoutSuiteScanner
 
-        def _run_scoutsuite(prov: str) -> list[Finding]:
-            from cloudg.scanners.scoutsuite import ScoutSuiteScanner
+        scanner = ScoutSuiteScanner(
+            provider=prov,
+            profile=profile if prov == "aws" else None,
+            report_dir=str(out / "scoutsuite" / prov),
+            extra_args=self.config.scanners.scoutsuite_extra_args or [],
+        )
+        return scanner.run()
 
-            scanner = ScoutSuiteScanner(
-                provider=prov,
-                profile=profile if prov == "aws" else None,
-                report_dir=str(out / "scoutsuite" / prov),
-                extra_args=self.config.scanners.scoutsuite_extra_args or [],
-            )
-            return scanner.run()
+    def _run_checkov(self, target_dir: str) -> list[Finding]:
+        from cloudg.scanners.checkov import CheckovScanner
 
-        def _run_checkov(target_dir: str) -> list[Finding]:
-            from cloudg.scanners.checkov import CheckovScanner
+        scanner = CheckovScanner(
+            target_dir=target_dir,
+            frameworks=self.config.scanners.checkov_frameworks or None,
+            extra_args=self.config.scanners.checkov_extra_args or [],
+        )
+        return scanner.run()
 
-            scanner = CheckovScanner(
-                target_dir=target_dir,
-                frameworks=self.config.scanners.checkov_frameworks or None,
-                extra_args=self.config.scanners.checkov_extra_args or [],
-            )
-            return scanner.run()
+    def _run_trivy(self, image_list: list[str]) -> list[Finding]:
+        from cloudg.scanners.trivy import TrivyScanner
 
-        def _run_trivy(image_list: list[str]) -> list[Finding]:
-            from cloudg.scanners.trivy import TrivyScanner
+        scanner = TrivyScanner(extra_args=self.config.scanners.trivy_extra_args or [])
+        return scanner.scan_images(image_list)
 
-            scanner = TrivyScanner(extra_args=self.config.scanners.trivy_extra_args or [])
-            return scanner.scan_images(image_list)
+    def _run_iam_linter(self, assets: list[CloudAsset]) -> list[Finding]:
+        from cloudg.scanners.iam_linter import IAMLinter
 
-        def _run_iam_linter() -> list[Finding]:
-            from cloudg.scanners.iam_linter import IAMLinter
+        linter = IAMLinter()
+        return linter.analyze_policies(assets)
 
-            linter = IAMLinter()
-            return linter.analyze_policies(assets)
+    def _submit_scanner_jobs(
+        self,
+        executor: Any,
+        scanner_list: list[str],
+        assets: list[CloudAsset],
+        resolved_iac_dirs: list[str],
+        resolved_images: list[str],
+        profile: str | None,
+        out: Path,
+    ) -> dict[Any, str]:
+        """Submit one job per enabled scanner target; returns future -> name."""
+        future_to_name: dict[Any, str] = {}
+
+        if "prowler" in scanner_list:
+            for prov in self.config.providers:
+                future_to_name[executor.submit(self._run_prowler, prov, profile, out)] = (
+                    f"prowler-{prov}"
+                )
+
+        if "scoutsuite" in scanner_list:
+            for prov in self.config.providers:
+                future_to_name[executor.submit(self._run_scoutsuite, prov, profile, out)] = (
+                    f"scoutsuite-{prov}"
+                )
+
+        if "checkov" in scanner_list:
+            for d in resolved_iac_dirs:
+                future_to_name[executor.submit(self._run_checkov, d)] = f"checkov-{d}"
+
+        if "trivy" in scanner_list and resolved_images:
+            future_to_name[executor.submit(self._run_trivy, resolved_images)] = "trivy"
+
+        # IAM linter always runs if assets exist
+        if assets:
+            future_to_name[executor.submit(self._run_iam_linter, assets)] = "iam"
+
+        return future_to_name
+
+    def _run_scanners_parallel(
+        self,
+        scanner_list: list[str],
+        assets: list[CloudAsset],
+        resolved_iac_dirs: list[str],
+        resolved_images: list[str],
+        profile: str | None,
+        out: Path,
+    ) -> list[Finding]:
+        """Run all enabled scanners concurrently and collect their findings."""
+        import concurrent.futures
 
         scanner_findings: list[Finding] = []
         max_workers = len(scanner_list) + len(self.config.providers) + 1
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
-            future_to_name: dict[concurrent.futures.Future, str] = {}
-
-            if "prowler" in scanner_list:
-                for prov in self.config.providers:
-                    future_to_name[executor.submit(_run_prowler, prov)] = f"prowler-{prov}"
-
-            if "scoutsuite" in scanner_list:
-                for prov in self.config.providers:
-                    future_to_name[executor.submit(_run_scoutsuite, prov)] = f"scoutsuite-{prov}"
-
-            if "checkov" in scanner_list:
-                for d in resolved_iac_dirs:
-                    future_to_name[executor.submit(_run_checkov, d)] = f"checkov-{d}"
-
-            if "trivy" in scanner_list and resolved_images:
-                future_to_name[executor.submit(_run_trivy, resolved_images)] = "trivy"
-
-            # IAM linter always runs if assets exist
-            if assets:
-                future_to_name[executor.submit(_run_iam_linter)] = "iam"
+            future_to_name = self._submit_scanner_jobs(
+                executor, scanner_list, assets, resolved_iac_dirs, resolved_images, profile, out
+            )
 
             for future in concurrent.futures.as_completed(future_to_name):
                 name = future_to_name[future]
@@ -491,9 +552,10 @@ class CloudGEngine:
                     logger.error("[%s] failed: %s", name, exc)
                     self._emit_error(name, exc)
 
-        all_findings.extend(scanner_findings)
+        return scanner_findings
 
-        # Emit per-finding callbacks
+    def _emit_scan_results(self, all_findings: list[Finding]) -> None:
+        """Emit per-finding and scan-complete callbacks."""
         if self.on_finding:
             for f in all_findings:
                 try:
@@ -506,8 +568,6 @@ class CloudGEngine:
                 self.on_scan_complete(all_findings)
             except Exception:
                 logger.debug("Event hook raised; ignoring", exc_info=True)
-
-        return all_findings
 
     # ------------------------------------------------------------------
     # Ingest: use existing scanner outputs instead of running scanners
@@ -652,6 +712,38 @@ class CloudGEngine:
         result = AnalysisResult()
 
         # Graph
+        graph = self._analyze_graph(result, assets, edges)
+
+        # Ontology
+        if self.config.ontology.enabled:
+            self._analyze_ontology(result, assets, edges, findings, out)
+
+        # RAG export
+        if self.config.rag.enabled and graph is not None:
+            self._analyze_rag(result, assets, edges, graph, findings, out)
+
+        # Terraform
+        if self.config.terraform.enabled:
+            self._analyze_terraform(result, assets, edges, out)
+
+        if self.on_analysis_complete:
+            try:
+                self.on_analysis_complete(result)
+            except Exception:
+                logger.debug("Event hook raised; ignoring", exc_info=True)
+
+        return result
+
+    def _analyze_graph(
+        self,
+        result: AnalysisResult,
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+    ) -> Any:
+        """Build the asset graph and derive reachability/attack paths.
+
+        Returns the built graph, or None when the build failed.
+        """
         try:
             from cloudg.graph.builder import GraphBuilder
 
@@ -674,58 +766,72 @@ class CloudGEngine:
         except Exception as exc:
             logger.error("Graph build failed: %s", exc)
             self._emit_error("graph_build", exc)
-            graph = None
+            return None
+        return graph
 
-        # Ontology
-        if self.config.ontology.enabled:
-            try:
-                from cloudg.graph.ontology import CloudOntology
+    def _analyze_ontology(
+        self,
+        result: AnalysisResult,
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+        findings: list[Finding],
+        out: Path,
+    ) -> None:
+        """Build the ontology and export it in the configured formats."""
+        try:
+            from cloudg.graph.ontology import CloudOntology
 
-                ontology = CloudOntology()
-                ontology.build(assets, edges, findings)
-                stats = ontology.stats()
-                result.ontology_triples = stats["total_triples"]
+            ontology = CloudOntology()
+            ontology.build(assets, edges, findings)
+            stats = ontology.stats()
+            result.ontology_triples = stats["total_triples"]
 
-                for fmt in self.config.ontology.export_formats:
-                    ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf"}
-                    ext = ext_map.get(fmt, "ttl")
-                    path = ontology.save(out / f"ontology.{ext}", fmt=fmt)
-                    result.ontology_path = path
-            except Exception as exc:
-                logger.error("Ontology build failed: %s", exc)
-                self._emit_error("ontology", exc)
+            for fmt in self.config.ontology.export_formats:
+                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf"}
+                ext = ext_map.get(fmt, "ttl")
+                path = ontology.save(out / f"ontology.{ext}", fmt=fmt)
+                result.ontology_path = path
+        except Exception as exc:
+            logger.error("Ontology build failed: %s", exc)
+            self._emit_error("ontology", exc)
 
-        # RAG export
-        if self.config.rag.enabled and graph is not None:
-            try:
-                from cloudg.graph.rag_export import RAGExporter
+    def _analyze_rag(
+        self,
+        result: AnalysisResult,
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+        graph: Any,
+        findings: list[Finding],
+        out: Path,
+    ) -> None:
+        """Export RAG chunks from the built graph."""
+        try:
+            from cloudg.graph.rag_export import RAGExporter
 
-                rag = RAGExporter(max_chunk_tokens=self.config.rag.max_chunk_tokens)
-                rag_paths = rag.export_all(assets, edges, graph, findings, output_dir=out)
-                result.rag_chunks_path = rag_paths["chunks"]
-            except Exception as exc:
-                logger.error("RAG export failed: %s", exc)
-                self._emit_error("rag_export", exc)
+            rag = RAGExporter(max_chunk_tokens=self.config.rag.max_chunk_tokens)
+            rag_paths = rag.export_all(assets, edges, graph, findings, output_dir=out)
+            result.rag_chunks_path = rag_paths["chunks"]
+        except Exception as exc:
+            logger.error("RAG export failed: %s", exc)
+            self._emit_error("rag_export", exc)
 
-        # Terraform
-        if self.config.terraform.enabled:
-            try:
-                from cloudg.renderers.terraform_export import TerraformExporter
+    def _analyze_terraform(
+        self,
+        result: AnalysisResult,
+        assets: list[CloudAsset],
+        edges: list[NetworkEdge],
+        out: Path,
+    ) -> None:
+        """Export the Terraform recreation of the collected assets."""
+        try:
+            from cloudg.renderers.terraform_export import TerraformExporter
 
-                tf_dir = self.config.terraform.output_dir or str(out / "terraform")
-                tf = TerraformExporter(output_dir=tf_dir)
-                result.terraform_paths = tf.export(assets, edges)
-            except Exception as exc:
-                logger.error("Terraform export failed: %s", exc)
-                self._emit_error("terraform", exc)
-
-        if self.on_analysis_complete:
-            try:
-                self.on_analysis_complete(result)
-            except Exception:
-                logger.debug("Event hook raised; ignoring", exc_info=True)
-
-        return result
+            tf_dir = self.config.terraform.output_dir or str(out / "terraform")
+            tf = TerraformExporter(output_dir=tf_dir)
+            result.terraform_paths = tf.export(assets, edges)
+        except Exception as exc:
+            logger.error("Terraform export failed: %s", exc)
+            self._emit_error("terraform", exc)
 
     # ------------------------------------------------------------------
     # Full pipeline
@@ -759,6 +865,40 @@ class CloudGEngine:
         analysis = await self.analyze(collection.assets, collection.edges, findings, output_dir=out)
 
         # Phase 4: Normalise
+        scan_result, all_findings = self._normalise_pipeline_findings(
+            collection, findings, analysis, errors
+        )
+
+        # Phase 5: Reports
+        report_paths = self._generate_pipeline_reports(scan_result, collection, out, errors)
+
+        return PipelineResult(
+            assets=collection.assets,
+            edges=collection.edges,
+            findings=all_findings,
+            scan_result=scan_result,
+            graph_nodes=analysis.graph_nodes,
+            graph_edges=analysis.graph_edges,
+            ontology_triples=analysis.ontology_triples,
+            rag_chunks_path=analysis.rag_chunks_path,
+            terraform_paths=analysis.terraform_paths,
+            attack_paths=analysis.attack_paths,
+            providers_scanned=collection.providers_scanned,
+            regions_scanned=collection.regions_scanned,
+            coverage=collection.coverage,
+            report_paths=report_paths,
+            duration_ms=int((time.time() - start) * 1000),
+            errors=errors,
+        )
+
+    def _normalise_pipeline_findings(
+        self,
+        collection: CollectionResult,
+        findings: list[Finding],
+        analysis: AnalysisResult,
+        errors: list[str],
+    ) -> tuple[ScanResult | None, list[Finding]]:
+        """Normalise pipeline findings; returns (scan_result, all_findings)."""
         self._emit_phase_start("normalisation")
         scan_result = None
         all_findings = findings + analysis.reachability_findings
@@ -778,8 +918,16 @@ class CloudGEngine:
             logger.error("Normalisation failed: %s", exc)
             errors.append(f"normalisation: {exc}")
             self._emit_error("normalisation", exc)
+        return scan_result, all_findings
 
-        # Phase 5: Reports
+    def _generate_pipeline_reports(
+        self,
+        scan_result: ScanResult | None,
+        collection: CollectionResult,
+        out: Path,
+        errors: list[str],
+    ) -> dict[str, Path]:
+        """Generate JSON and HTML reports (with graph JSON) for the pipeline."""
         self._emit_phase_start("reporting")
         report_paths: dict[str, Path] = {}
         if scan_result:
@@ -803,25 +951,7 @@ class CloudGEngine:
                 logger.error("Report generation failed: %s", exc)
                 errors.append(f"reporting: {exc}")
                 self._emit_error("reporting", exc)
-
-        return PipelineResult(
-            assets=collection.assets,
-            edges=collection.edges,
-            findings=all_findings,
-            scan_result=scan_result,
-            graph_nodes=analysis.graph_nodes,
-            graph_edges=analysis.graph_edges,
-            ontology_triples=analysis.ontology_triples,
-            rag_chunks_path=analysis.rag_chunks_path,
-            terraform_paths=analysis.terraform_paths,
-            attack_paths=analysis.attack_paths,
-            providers_scanned=collection.providers_scanned,
-            regions_scanned=collection.regions_scanned,
-            coverage=collection.coverage,
-            report_paths=report_paths,
-            duration_ms=int((time.time() - start) * 1000),
-            errors=errors,
-        )
+        return report_paths
 
     # ------------------------------------------------------------------
     # Sync wrapper

@@ -57,9 +57,7 @@ def _asset(name, asset_type, arn=None, metadata=None, raw_data=None, provider=Cl
 
 class TestTypeClassification:
     def test_asset_type_from_arn(self):
-        assert (
-            asset_type_from_arn("arn:aws:ec2:us-east-1:1:instance/i-0abc") == AssetType.EC2
-        )
+        assert asset_type_from_arn("arn:aws:ec2:us-east-1:1:instance/i-0abc") == AssetType.EC2
         assert asset_type_from_arn("arn:aws:s3:::my-bucket") == AssetType.S3_BUCKET
         assert (
             asset_type_from_arn("arn:aws:lambda:us-east-1:1:function:fn")
@@ -69,10 +67,7 @@ class TestTypeClassification:
         assert asset_type_from_arn("not-an-arn") == AssetType.OTHER
 
     def test_asset_type_from_arm(self):
-        assert (
-            asset_type_from_arm("Microsoft.Compute/virtualMachines")
-            == AssetType.VIRTUAL_MACHINE
-        )
+        assert asset_type_from_arm("Microsoft.Compute/virtualMachines") == AssetType.VIRTUAL_MACHINE
         assert (
             asset_type_from_arm("Microsoft.Network/networkInterfaces")
             == AssetType.NETWORK_INTERFACE
@@ -117,8 +112,7 @@ class TestRelationshipLinker:
         )
         edges = RelationshipLinker([subnet, rds]).link()
         assert any(
-            e.source_id == subnet.id and e.target_id == rds.id
-            and e.edge_type == EdgeType.CONTAINS
+            e.source_id == subnet.id and e.target_id == rds.id and e.edge_type == EdgeType.CONTAINS
             for e in edges
         )
 
@@ -160,8 +154,7 @@ class TestRelationshipLinker:
         )
         edges = RelationshipLinker([role, fn]).link()
         assert any(
-            e.source_id == fn.id and e.target_id == role.id
-            and e.edge_type == EdgeType.REFERENCES
+            e.source_id == fn.id and e.target_id == role.id and e.edge_type == EdgeType.REFERENCES
             for e in edges
         )
 
@@ -178,9 +171,7 @@ class TestRelationshipLinker:
             metadata={"kms_key_id": "arn:aws:kms:us-east-1:1:key/abcd-1234"},
         )
         edges = RelationshipLinker([key, secret]).link()
-        assert any(
-            e.source_id == secret.id and e.target_id == key.id for e in edges
-        )
+        assert any(e.source_id == secret.id and e.target_id == key.id for e in edges)
 
     def test_vpc_peering(self):
         vpc_a = _asset(
@@ -212,7 +203,9 @@ class TestRelationshipLinker:
     def test_azure_nic_wiring(self):
         sub_id = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/sn"
         nsg_id = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg"
-        nic_id = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic"
+        nic_id = (
+            "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic"
+        )
         vm_id = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
 
         subnet = _asset("sn", AssetType.SUBNET, arn=sub_id, provider=CloudProvider.AZURE)
@@ -258,8 +251,7 @@ class TestRelationshipLinker:
         )
         edges = RelationshipLinker([vpc, subnet]).link()
         assert any(
-            e.source_id == vpc.id and e.target_id == subnet.id
-            and e.edge_type == EdgeType.CONTAINS
+            e.source_id == vpc.id and e.target_id == subnet.id and e.edge_type == EdgeType.CONTAINS
             for e in edges
         )
 
@@ -277,7 +269,8 @@ class TestRelationshipLinker:
         )
         edges = RelationshipLinker([bucket, trail]).link()
         assert any(
-            e.source_id == trail.id and e.target_id == bucket.id
+            e.source_id == trail.id
+            and e.target_id == bucket.id
             and e.edge_type == EdgeType.REFERENCES
             for e in edges
         )
@@ -347,15 +340,11 @@ class TestAWSDeepInventoryCollector:
     def _setup_network(self, session):
         ec2 = session.client("ec2", region_name="us-east-1")
         vpc_id = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        subnet_id = ec2.create_subnet(VpcId=vpc_id, CidrBlock="10.0.1.0/24")["Subnet"][
-            "SubnetId"
-        ]
+        subnet_id = ec2.create_subnet(VpcId=vpc_id, CidrBlock="10.0.1.0/24")["Subnet"]["SubnetId"]
         igw_id = ec2.create_internet_gateway()["InternetGateway"]["InternetGatewayId"]
         ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
         rtb_id = ec2.create_route_table(VpcId=vpc_id)["RouteTable"]["RouteTableId"]
-        ec2.create_route(
-            RouteTableId=rtb_id, DestinationCidrBlock="0.0.0.0/0", GatewayId=igw_id
-        )
+        ec2.create_route(RouteTableId=rtb_id, DestinationCidrBlock="0.0.0.0/0", GatewayId=igw_id)
         ec2.run_instances(
             ImageId="ami-12345678",
             InstanceType="t2.micro",

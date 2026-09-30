@@ -21,6 +21,15 @@ Added:
 - `MultiAccountCollector` accepts per-provider collector class overrides.
 - Documentation: inventory mapping is covered in the README, the handbook (`cloudg map`, the inventory mapping API) and the docs site; a new "deeper toolkit" chapter documents the standalone programmatic APIs (GraphBuilder, CloudOntology, RAGExporter, TerraformExporter, FindingsNormaliser, parsers).
 
+Fixed (pre-release hardening, folded in before publish):
+
+- The engine's Checkov path passed `framework=` to a constructor that takes `frameworks=` (a list) and raised TypeError; it now forwards the configured framework list.
+- The GCP identifier checks in the inventory linker and mapper are anchored regexes, so `.googleapis.com` inside an unrelated ARN no longer classifies an asset as GCP (CodeQL py/incomplete-url-substring-sanitization).
+- The Pages deploy artifact carries the run attempt in its name; re-running the workflow no longer fails on "Multiple artifacts named github-pages".
+- install.sh no longer uses `A && B || C` as if-then-else anywhere; every step is an explicit if/else, with a `pip_tool` helper for the repeated pip installs.
+- Dockerfile pins parliament to 1.6.4.
+- Codacy complexity findings: the long CLI commands (`run`, `scan`, `ingest`), the engine phases (`scan`, `analyze`, `run_pipeline`), the SVG/HTML renderers, the ontology relation inference, the RAG exporters, credentials, registry discovery and the Prowler/IAM-linter scanners were split into focused helpers; behavior is unchanged and the CLI `run` command no longer takes 27 named parameters.
+
 ## 0.4.1 (2026-09-29)
 
 Security hardening pass over the Checkov and Codacy findings.
