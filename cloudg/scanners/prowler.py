@@ -74,9 +74,7 @@ class ProwlerScanner:
         Returns:
             List of Finding objects parsed from Prowler ASFF JSON output.
         """
-        import os
         import time
-        import threading
 
         if not self.is_available():
             logger.warning(
@@ -85,6 +83,19 @@ class ProwlerScanner:
             )
             return []
 
+        cmd = self._build_command()
+        logger.info("[Prowler] Starting: %s", " ".join(cmd))
+
+        env = self._build_env()
+        start_time = time.time()
+
+        if not self._execute(cmd, env, start_time):
+            return []
+
+        return self._parse_output()
+
+    def _build_command(self) -> list[str]:
+        """Build the Prowler CLI argv list."""
         cmd = [
             "prowler",
             self._provider,
@@ -98,10 +109,12 @@ class ProwlerScanner:
             cmd.extend(["-p", self._profile])
 
         cmd.extend(self._extra_args)
+        return cmd
 
-        logger.info("[Prowler] Starting: %s", " ".join(cmd))
+    def _build_env(self) -> dict[str, str]:
+        """Build environment with AWS credentials for the subprocess."""
+        import os
 
-        # Build environment with AWS credentials for the subprocess
         env = os.environ.copy()
         if self._aws_access_key_id:
             env["AWS_ACCESS_KEY_ID"] = self._aws_access_key_id
@@ -109,8 +122,30 @@ class ProwlerScanner:
             env["AWS_SECRET_ACCESS_KEY"] = self._aws_secret_access_key
         if self._aws_region:
             env["AWS_DEFAULT_REGION"] = self._aws_region
+        return env
 
-        start_time = time.time()
+    def _stream_output(self, proc: Any, start_time: float) -> None:
+        """Stream process output, logging progress every 25 checks."""
+        import time
+
+        check_count = 0
+        for line in proc.stdout:
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            # Count checks for progress reporting
+            if "PASS" in stripped or "FAIL" in stripped or "WARNING" in stripped:
+                check_count += 1
+                if check_count % 25 == 0:
+                    elapsed = int(time.time() - start_time)
+                    logger.info("[Prowler] %d checks completed (%ds elapsed)", check_count, elapsed)
+            elif "Executing" in stripped or "Service" in stripped:
+                logger.info("[Prowler] %s", stripped[:120])
+
+    def _execute(self, cmd: list[str], env: dict[str, str], start_time: float) -> bool:
+        """Run the Prowler process; returns False when the run failed outright."""
+        import time
+        import threading
 
         try:
             # Use Popen for live streaming instead of blocking subprocess.run
@@ -126,24 +161,9 @@ class ProwlerScanner:
             )
 
             # Stream output in a reader thread
-            def _stream_output():
-                check_count = 0
-                for line in proc.stdout:
-                    stripped = line.rstrip()
-                    if not stripped:
-                        continue
-                    # Count checks for progress reporting
-                    if "PASS" in stripped or "FAIL" in stripped or "WARNING" in stripped:
-                        check_count += 1
-                        if check_count % 25 == 0:
-                            elapsed = int(time.time() - start_time)
-                            logger.info(
-                                "[Prowler] %d checks completed (%ds elapsed)", check_count, elapsed
-                            )
-                    elif "Executing" in stripped or "Service" in stripped:
-                        logger.info("[Prowler] %s", stripped[:120])
-
-            reader = threading.Thread(target=_stream_output, daemon=True)
+            reader = threading.Thread(
+                target=self._stream_output, args=(proc, start_time), daemon=True
+            )
             reader.start()
 
             proc.wait(timeout=3600)
@@ -158,12 +178,12 @@ class ProwlerScanner:
         except subprocess.TimeoutExpired:
             logger.error("[Prowler] Scan timed out after 3600s — killing process")
             proc.kill()
-            return []
+            return False
         except Exception as exc:
             logger.error("[Prowler] Failed to run: %s", exc)
-            return []
+            return False
 
-        return self._parse_output()
+        return True
 
     @classmethod
     def parse_report(cls, path: str) -> list[Finding]:
