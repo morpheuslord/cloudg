@@ -131,6 +131,19 @@ class ScannerConfig(BaseModel):
     timeout_seconds: int = Field(default=3600, ge=60)
 
 
+class InventoryConfig(BaseModel):
+    """Inventory mapping configuration (scanner-independent asset mapping)."""
+
+    tagging_sweep: bool = Field(
+        default=True,
+        description="AWS: sweep the Resource Groups Tagging API to catch every taggable resource",
+    )
+    link_references: bool = Field(
+        default=True,
+        description="Derive cross-service REFERENCES edges from asset metadata",
+    )
+
+
 class GraphConfig(BaseModel):
     """Graph engine configuration."""
 
@@ -213,6 +226,7 @@ class CloudGConfig(BaseModel):
     azure: AzureConfig = Field(default_factory=AzureConfig)
     gcp: GCPConfig = Field(default_factory=GCPConfig)
     scanners: ScannerConfig = Field(default_factory=ScannerConfig)
+    inventory: InventoryConfig = Field(default_factory=InventoryConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
     ontology: OntologyConfig = Field(default_factory=OntologyConfig)
     rag: RAGConfig = Field(default_factory=RAGConfig)

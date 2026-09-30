@@ -2,6 +2,25 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## 0.5.0 (2026-09-30)
+
+Inventory mapping. A dedicated, scanner-independent function that maps everything deployed (or default) in a cloud estate and how it interlinks. It answers what exists and how it is wired together; the scanners keep answering what is wrong.
+
+Added:
+
+- `cloudg map` CLI command: deep-collects the complete infrastructure across AWS, Azure and GCP without running any scanner, links it into an interconnected map, and writes `inventory-map.json`, `inventory-map.graphml` and `inventory-graph.json`. `--findings` merges previously generated scanner findings into `asset-map.json` (asset → risk) and `compliance-map.json` (framework → affected assets).
+- `cloudg.inventory` package, all public API:
+  - `AWSDeepInventoryCollector` adds route tables, internet/NAT gateways, network interfaces, EBS volumes, Elastic IPs, NACLs, VPC peering, transit gateways and customer-managed IAM policies on top of the standard collector, plus a catch-all sweep of the Resource Groups Tagging API so every taggable resource appears on the map.
+  - `AzureDeepInventoryCollector` adds NICs, public IPs, managed disks, load balancers and route tables, plus a full-subscription ARM `resources.list()` sweep covering every service.
+  - `GCPDeepInventoryCollector` brings a richer Cloud Asset Inventory type taxonomy and IAM policy bindings as attachment edges.
+  - `RelationshipLinker` derives interconnection edges purely from asset metadata (attachment, containment, routing, peering, and a generic cross-service reference pass) and works on any `list[CloudAsset]`.
+  - `InventoryMapper` / `InventoryResult`: orchestration, summaries, exports, and the `build_asset_map()` / `build_compliance_map()` / `export_merged()` merge helpers.
+- `CloudGEngine.map_inventory()` / `map_inventory_sync()` for embedders.
+- `inventory:` config section (`tagging_sweep`, `link_references`).
+- New schema values: `AssetType.NETWORK_INTERFACE`, `EdgeType.ATTACHED_TO`, `EdgeType.REFERENCES`.
+- `MultiAccountCollector` accepts per-provider collector class overrides.
+- Documentation: inventory mapping is covered in the README, the handbook (`cloudg map`, the inventory mapping API) and the docs site; a new "deeper toolkit" chapter documents the standalone programmatic APIs (GraphBuilder, CloudOntology, RAGExporter, TerraformExporter, FindingsNormaliser, parsers).
+
 ## 0.4.1 (2026-09-29)
 
 Security hardening pass over the Checkov and Codacy findings.

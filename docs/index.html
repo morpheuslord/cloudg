@@ -270,7 +270,7 @@
 <div class="shell">
 <nav class="toc" aria-label="Contents">
   <div class="brand">cloud<span class="g">g</span></div>
-  <div class="ver">v0.4.1 &middot; handbook</div>
+  <div class="ver">v0.5.0 &middot; handbook</div>
   <ul>
     <li class="group">Start</li>
     <li><a href="#install">Installation</a></li>
@@ -278,6 +278,7 @@
     <li class="group">CLI</li>
     <li><a href="#run">cloudg run</a></li>
     <li><a href="#collect-scan">collect &amp; scan</a></li>
+    <li><a href="#map">cloudg map</a></li>
     <li><a href="#ingest">cloudg ingest</a></li>
     <li><a href="#report">cloudg report</a></li>
     <li class="group">Contracts</li>
@@ -304,7 +305,7 @@
   </video>
   <div class="eyebrow">cloud graphing &middot; AWS / Azure / GCP</div>
   <h1>Map the cloud. Scan it. Merge everything.</h1>
-  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks. It can also skip the scanning entirely and aggregate outputs you already have.</p>
+  <p class="lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust, and merges every finding against 28 compliance frameworks. It can also skip the scanning entirely: aggregate outputs you already have, or map the complete inventory, every service interlinked, with no scanner involved.</p>
   <div class="hero-links">
     <a href="https://github.com/morpheuslord/cloudg">GitHub</a>
     <a href="https://pypi.org/project/cloudg/">PyPI</a>
@@ -338,6 +339,7 @@ pip install cloudg[all]</code></pre>
   <p>Collection runs all configured providers concurrently with asyncio, iterating accounts and regions per provider. Regions auto-discover with <code>--regions all</code>. Assets and network edges go into a directed NetworkX graph: BFS from the internet node finds exposed resources, and blast-radius scoring estimates what an attacker could reach from each node.</p>
   <p>The enabled scanners run in parallel over the same inventory, each in its own thread with its own timeout. Their findings, the graph's reachability findings and the built-in IAM linter's results all flow into the normaliser, which deduplicates within and across scanners, rescores against CVSS, and maps everything to compliance controls.</p>
   <p>Every phase degrades gracefully. A missing binary, an unreachable provider or a failed exporter logs a warning; nothing else stops.</p>
+  <p>Alongside the pipeline sits an independent function: <a href="#map">inventory mapping</a>. It runs no scanners at all. It deep-collects everything deployed or default across every service, links it into one map, and lets scanner findings merge into that map later.</p>
 </section>
 
 <section id="run">
@@ -367,6 +369,25 @@ cloudg run -p aws --regions us-east-1 --terraform</code></pre>
   <p>The phases alone. <code>collect</code> writes assets and edges without running a scanner; <code>scan</code> runs the selected scanners concurrently and writes <code>raw-findings.json</code>, no collection.</p>
   <pre><code>cloudg collect -p aws --profile prod --region eu-west-1
 cloudg scan -p aws --scanners prowler,checkov --iac-dir ./terraform</code></pre>
+</section>
+
+<section id="map">
+  <h2>cloudg map</h2>
+  <p>Scanner-independent inventory mapping: what exists, and how is it wired together. What is wrong stays the scanners' business. No scanner runs and none needs to be installed; read credentials are enough.</p>
+  <pre><code>cloudg map -p aws --regions all
+cloudg map -p all --regions all
+cloudg map -p aws --findings ./reports/raw-findings.json   <span class="c"># overlay scanner output</span></code></pre>
+  <p>Coverage comes in three layers:</p>
+  <div class="tablewrap"><table>
+    <tr><th>Layer</th><th>What it adds</th></tr>
+    <tr><td><strong>Deep collectors</strong></td><td>everything the standard collectors know, plus the network fabric: route tables, internet/NAT gateways, network interfaces, volumes and disks, Elastic and public IPs, NACLs, VPC peering, transit gateways, customer-managed IAM policies</td></tr>
+    <tr><td><strong>Catch-all sweeps</strong></td><td>the AWS Resource Groups Tagging API, Azure Resource Manager's full <code>resources.list()</code>, and GCP Cloud Asset Inventory each enumerate every resource in scope, so services without a dedicated collector still land on the map; a duplicate of a dedicated collector's asset is dropped and the richer one wins</td></tr>
+    <tr><td><strong>Relationship linker</strong></td><td>derives edges from asset metadata alone: instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG chains, VPC peering, GCP IAM bindings, and a generic pass resolving any ARN or resource ID one asset holds to another collected asset</td></tr>
+  </table></div>
+  <p>Outputs: <code>inventory-map.json</code> (assets, interconnections, summary), <code>inventory-map.graphml</code> and <code>inventory-graph.json</code>. With <code>--findings</code>, additionally <code>asset-map.json</code> (per-asset risk, riskiest first) and <code>compliance-map.json</code> (framework → affected assets). The map never depends on the scanners; findings merge in whenever they exist.</p>
+  <div class="note">
+    <p>The same capability is library API: <code>engine.map_inventory()</code>, or <code>cloudg.inventory.InventoryMapper</code> and <code>RelationshipLinker</code> standalone. See <a href="#api">Python API</a>.</p>
+  </div>
 </section>
 
 <section id="ingest">
@@ -432,6 +453,8 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
     <tr><td><code>ontology.ttl / .jsonld</code></td><td>RDF ontology, around 62 inferred relation types, SPARQL-queryable</td></tr>
     <tr><td><code>rag_chunks.jsonl</code></td><td>retrieval-ready chunks, one JSON object per line</td></tr>
     <tr><td><code>terraform/*.tf.json</code></td><td>Terraform recreation of live infrastructure with an <code>import.sh</code></td></tr>
+    <tr><td><code>inventory-map.json / .graphml</code>, <code>inventory-graph.json</code></td><td>scanner-independent inventory map: assets, interconnections, summary (<code>cloudg map</code>)</td></tr>
+    <tr><td><code>asset-map.json</code>, <code>compliance-map.json</code></td><td>inventory overlaid with scanner findings (<code>cloudg map --findings</code>)</td></tr>
   </table></div>
   <pre><code>{
   <span class="k">"metadata"</span>:   {"scan_id", "provider", "account_id", "region", "started_at", "completed_at"},
@@ -460,7 +483,7 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
     <tr><td><code>risk_score</code></td><td>computed</td><td>severity base averaged with CVSS when present</td></tr>
   </table></div>
   <h3>The rest</h3>
-  <p><code>CloudAsset</code> carries <code>arn</code>, <code>name</code>, a 45-value <code>asset_type</code> taxonomy (EC2, S3_BUCKET, IAM_ROLE, VPC, KMS_KEY, ...), <code>provider</code>, <code>region</code>, <code>tags</code>, <code>metadata</code> and <code>is_internet_exposed</code>. <code>NetworkEdge</code> is a directed edge with an <code>edge_type</code> (SECURITY_GROUP_RULE, IAM_TRUST, CONTAINS, INTERNET_EXPOSED, ...), ports, protocol and CIDR. <code>ComplianceResult</code> is one control-level verdict with <code>framework</code>, <code>control_id</code>, <code>status</code> and the <code>finding_ids</code> behind it. <code>ScanResult</code> is the aggregate container the normaliser returns and the renderers consume, with a computed <code>summary</code>.</p>
+  <p><code>CloudAsset</code> carries <code>arn</code>, <code>name</code>, a 45-value <code>asset_type</code> taxonomy (EC2, S3_BUCKET, IAM_ROLE, VPC, KMS_KEY, ...), <code>provider</code>, <code>region</code>, <code>tags</code>, <code>metadata</code> and <code>is_internet_exposed</code>. <code>NetworkEdge</code> is a directed edge with an <code>edge_type</code> (SECURITY_GROUP_RULE, IAM_TRUST, CONTAINS, INTERNET_EXPOSED, ATTACHED_TO, REFERENCES, ...), ports, protocol and CIDR. <code>ComplianceResult</code> is one control-level verdict with <code>framework</code>, <code>control_id</code>, <code>status</code> and the <code>finding_ids</code> behind it. <code>ScanResult</code> is the aggregate container the normaliser returns and the renderers consume, with a computed <code>summary</code>.</p>
 </section>
 
 <section id="config">
@@ -483,6 +506,7 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
   <span class="k">trivy_images:</span> []
   <span class="k">prowler_extra_args:</span> []        <span class="c"># passthrough, per scanner</span>
 
+<span class="k">inventory:</span> { <span class="k">tagging_sweep:</span> true, <span class="k">link_references:</span> true }  <span class="c"># cloudg map</span>
 <span class="k">ontology:</span>  { <span class="k">enabled:</span> true, <span class="k">export_formats:</span> [turtle, json-ld] }
 <span class="k">rag:</span>       { <span class="k">enabled:</span> true, <span class="k">chunk_strategy:</span> hybrid, <span class="k">max_chunk_tokens:</span> 2000 }
 <span class="k">terraform:</span> { <span class="k">enabled:</span> false }
@@ -516,8 +540,34 @@ result = engine.run_pipeline_sync()
     <tr><td><code>analyze(assets, edges, findings)</code></td><td><code>AnalysisResult</code></td><td>graph, ontology, RAG chunks, Terraform, attack paths</td></tr>
     <tr><td><code>run_pipeline()</code></td><td><code>PipelineResult</code></td><td>everything, end to end; <code>run_pipeline_sync()</code> for non-async callers</td></tr>
     <tr><td><code>run_from_reports(reports)</code></td><td><code>PipelineResult</code></td><td>ingest, normalise, report in one call; sync twin available</td></tr>
+    <tr><td><code>map_inventory()</code></td><td><code>InventoryResult</code></td><td>scanner-independent inventory mapping: deep collection, catch-all sweeps, relationship linking; sync twin available</td></tr>
   </table></div>
   <p>Event hooks: <code>on_phase_start(phase)</code>, <code>on_collection_complete(result)</code>, <code>on_finding(finding)</code>, <code>on_scan_complete(findings)</code>, <code>on_analysis_complete(result)</code>, <code>on_error(phase, exc)</code>. Exceptions raised inside a hook are swallowed, so a broken callback cannot take the pipeline down. <code>PipelineResult</code> carries the data, report paths, coverage and a <code>to_summary()</code> dict ready to serialise.</p>
+
+  <h3>Inventory mapping from code</h3>
+  <pre><code><span class="k">from</span> cloudg.inventory <span class="k">import</span> InventoryMapper, RelationshipLinker
+
+mapper = InventoryMapper(config)
+inventory = mapper.map_inventory_sync()                 <span class="c"># no scanners</span>
+inventory.export(<span class="c">"./reports"</span>)                          <span class="c"># map + graphml + graph json</span>
+
+asset_map = mapper.build_asset_map(inventory, findings) <span class="c"># asset -&gt; risk</span>
+compliance = mapper.build_compliance_map(inventory, findings)
+
+edges = RelationshipLinker(assets).link()               <span class="c"># works on ANY CloudAsset list</span></code></pre>
+
+  <h3>The deeper toolkit</h3>
+  <p>The CLI is a thin layer; the modules the pipeline uses internally are public, importable API. The <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#the-deeper-toolkit">markdown reference</a> documents each in full.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Module</th><th>From code</th></tr>
+    <tr><td><code>cloudg.inventory</code></td><td><code>InventoryMapper</code>, <code>RelationshipLinker</code>, and the three deep collectors, all standalone</td></tr>
+    <tr><td><code>cloudg.graph.builder</code></td><td><code>GraphBuilder</code>: attack paths, lateral movement, centrality / blast-radius metrics, D3 / Cytoscape / GraphML export</td></tr>
+    <tr><td><code>cloudg.graph.ontology</code></td><td><code>CloudOntology</code>: ~62 typed RDF relations, SPARQL-queryable, Turtle / JSON-LD</td></tr>
+    <tr><td><code>cloudg.graph.rag_export</code></td><td><code>RAGExporter</code>: retrieval-ready JSONL chunks of the infrastructure for LLM pipelines</td></tr>
+    <tr><td><code>cloudg.renderers.terraform_export</code></td><td><code>TerraformExporter</code>: <code>.tf.json</code> recreation plus <code>import.sh</code>, with a coverage <code>preview()</code></td></tr>
+    <tr><td><code>cloudg.normaliser</code></td><td><code>FindingsNormaliser</code>: dedupe, cross-scanner merge, CVSS rescore, compliance mapping on any findings list</td></tr>
+    <tr><td><code>cloudg.ingest</code></td><td><code>parse_report</code> / <code>ingest_reports</code>: every scanner's parser, no engine, no credentials</td></tr>
+  </table></div>
 </section>
 
 <section id="recipes">
@@ -542,6 +592,16 @@ scan_result = engine.normalise_findings(findings)
     <span class="k">if</span> c.status.value == <span class="c">"FAIL"</span>:
         <span class="k">print</span>(c.framework, c.control_id, <span class="k">len</span>(c.finding_ids))</code></pre>
   <p>The per-scanner parsers are also public: <code>TrivyScanner.parse_report("./trivy.json")</code> and friends, one tool with no engine.</p>
+
+  <h3>Map the inventory, overlay findings later</h3>
+  <pre><code>inventory = engine.map_inventory_sync(output_dir=<span class="c">"./reports"</span>)   <span class="c"># no scanners</span>
+<span class="k">print</span>(inventory.summary[<span class="c">"assets_by_service"</span>])   <span class="c"># what exists</span>
+<span class="k">print</span>(inventory.summary[<span class="c">"internet_exposed"</span>])    <span class="c"># what faces the internet</span>
+
+<span class="c"># hours or days later, when scanner output exists:</span>
+findings = engine.ingest_reports({<span class="c">"prowler"</span>: [<span class="c">"./ci-prowler-output/"</span>]})
+InventoryMapper(config).export_merged(inventory, findings, <span class="c">"./reports"</span>)
+<span class="c"># -&gt; asset-map.json, compliance-map.json</span></code></pre>
 
   <h3>Combine live collection with ingested reports</h3>
   <pre><code>collection = <span class="k">await</span> engine.collect()
@@ -602,6 +662,12 @@ docker compose run --rm cloudg run -p aws --regions us-east-1</code></pre>
 <section id="changelog">
   <h2>Changelog</h2>
   <p>Major releases only. The full log lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+
+  <div class="release">
+    <span class="tag">0.5.0</span> <span class="date">unreleased</span>
+    <h3>Inventory mapping</h3>
+    <p>A scanner-independent inventory mapper: <code>cloudg map</code> and <code>CloudGEngine.map_inventory()</code> deep-collect everything deployed or default across AWS, Azure and GCP (network fabric included, with catch-all sweeps so every service appears) and link it into one map. Scanner findings merge in afterwards as <code>asset-map.json</code> and <code>compliance-map.json</code>. The relationship linker, deep collectors and mapper are all public API.</p>
+  </div>
 
   <div class="release">
     <span class="tag">0.4.0</span> <span class="date">unreleased</span>

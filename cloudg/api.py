@@ -263,6 +263,61 @@ class CloudGEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Inventory mapping (scanner-independent)
+    # ------------------------------------------------------------------
+
+    async def map_inventory(
+        self,
+        output_dir: str | Path | None = None,
+        findings: list[Finding] | None = None,
+        tagging_sweep: bool | None = None,
+    ) -> "Any":
+        """Map the complete infrastructure inventory — no scanners involved.
+
+        Runs the deep inventory collectors (full network fabric plus
+        catch-all sweeps: AWS Resource Groups Tagging API, Azure ARM
+        ``resources.list``, GCP Cloud Asset Inventory) and links every
+        asset into an interconnected map.
+
+        Args:
+            output_dir: When set, exports inventory-map.json / .graphml /
+                inventory-graph.json there.
+            findings: Optional scanner findings produced elsewhere; when
+                given (with output_dir), asset-map.json and
+                compliance-map.json are exported as well.
+            tagging_sweep: Override config.inventory.tagging_sweep
+                (False skips the AWS tagging-API sweep).
+
+        Returns:
+            InventoryResult with assets, edges, coverage, and summary.
+        """
+        self._emit_phase_start("inventory_mapping")
+        from cloudg.inventory import InventoryMapper
+
+        mapper = InventoryMapper(self.config, tagging_sweep=tagging_sweep)
+        try:
+            result = await mapper.map_inventory()
+        except Exception as exc:
+            logger.error("Inventory mapping failed: %s", exc)
+            self._emit_error("inventory_mapping", exc)
+            raise
+
+        if output_dir is not None:
+            result.export(output_dir)
+            if findings:
+                mapper.export_merged(result, findings, output_dir)
+        return result
+
+    def map_inventory_sync(
+        self,
+        output_dir: str | Path | None = None,
+        findings: list[Finding] | None = None,
+        tagging_sweep: bool | None = None,
+    ) -> "Any":
+        """Synchronous wrapper for :meth:`map_inventory`."""
+        return asyncio.run(self.map_inventory(output_dir, findings, tagging_sweep))
+
+    # ------------------------------------------------------------------
     # Phase 2: Scanning
     # ------------------------------------------------------------------
 
