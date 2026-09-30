@@ -179,7 +179,9 @@ class InventoryMapper:
             # partial-like subclass keeping the (session, region, account_id)
             # signature expected by MultiAccountCollector
             class _AWSNoSweep(AWSDeepInventoryCollector):
-                def __init__(self, session: Any, region: str = "us-east-1", account_id: str | None = None) -> None:
+                def __init__(
+                    self, session: Any, region: str = "us-east-1", account_id: str | None = None
+                ) -> None:
                     super().__init__(session, region, account_id, tagging_sweep=False)
 
             aws_cls = _AWSNoSweep
@@ -240,9 +242,7 @@ class InventoryMapper:
                 matched.append(f)
         return matched
 
-    def build_asset_map(
-        self, result: InventoryResult, findings: list[Finding]
-    ) -> dict[str, Any]:
+    def build_asset_map(self, result: InventoryResult, findings: list[Finding]) -> dict[str, Any]:
         """Overlay scanner findings onto the inventory: asset → risk view."""
         entries = []
         for asset in result.assets:

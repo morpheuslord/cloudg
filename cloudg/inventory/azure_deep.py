@@ -175,9 +175,7 @@ class AzureDeepInventoryCollector(AzureCollector):
                         metadata={
                             "public_ip": pip.ip_address,
                             "allocation_method": pip.public_ip_allocation_method,
-                            "fqdn": (
-                                pip.dns_settings.fqdn if pip.dns_settings else None
-                            ),
+                            "fqdn": (pip.dns_settings.fqdn if pip.dns_settings else None),
                         },
                         raw_data={"id": pip.id, "name": pip.name},
                     )
@@ -208,9 +206,7 @@ class AzureDeepInventoryCollector(AzureCollector):
                             "size_gb": disk.disk_size_gb,
                             "state": disk.disk_state,
                             "attached_instance_id": disk.managed_by,
-                            "encryption": (
-                                disk.encryption.type if disk.encryption else None
-                            ),
+                            "encryption": (disk.encryption.type if disk.encryption else None),
                         },
                         raw_data={"id": disk.id, "name": disk.name},
                     )
@@ -306,9 +302,7 @@ class AzureDeepInventoryCollector(AzureCollector):
     async def collect(self) -> list[CloudAsset]:
         """Collect base assets, fabric detail, and the ARM sweep; dedupe by
         resource ID keeping the richer, detailed asset."""
-        logger.info(
-            "Starting deep Azure inventory for subscription %s", self._subscription_id
-        )
+        logger.info("Starting deep Azure inventory for subscription %s", self._subscription_id)
         base = await super().collect()
 
         results = await asyncio.gather(
