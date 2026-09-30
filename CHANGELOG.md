@@ -29,6 +29,7 @@ Fixed (pre-release hardening, folded in before publish):
 - install.sh no longer uses `A && B || C` as if-then-else anywhere; every step is an explicit if/else, with a `pip_tool` helper for the repeated pip installs.
 - Dockerfile pins parliament to 1.6.4.
 - Codacy complexity findings: the long CLI commands (`run`, `scan`, `ingest`), the engine phases (`scan`, `analyze`, `run_pipeline`), the SVG/HTML renderers, the ontology relation inference, the RAG exporters, credentials, registry discovery and the Prowler/IAM-linter scanners were split into focused helpers; behavior is unchanged and the CLI `run` command no longer takes 27 named parameters.
+- Codacy file-length findings: the four oversized modules were split along their natural seams, with every import path preserved — the CLI helpers moved to `cli_helpers.py` / `cli_run_helpers.py` and the `run` command to `cli_commands.py`; the AWS per-service collectors moved to `aws_services.py` / `aws_services_extended.py` mixins; the ontology relation-inference layer moved to `ontology_rules.py` (re-exported from `ontology`); the SVG hierarchical layout moved to `svg_layout.py`. The SVG output is byte-identical and the whole suite passes unchanged.
 
 ## 0.4.1 (2026-09-29)
 
