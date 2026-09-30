@@ -523,3 +523,33 @@ class TestInventoryMapper:
         assert _service_of(aws) == "ec2"
         assert _service_of(azure) == "microsoft.compute"
         assert _service_of(gcp) == "compute"
+
+    def test_service_of_ignores_googleapis_mid_string(self):
+        # ".googleapis.com/" anywhere but the identifier's own host must not
+        # classify the asset as GCP (CodeQL py/incomplete-url-substring-sanitization)
+        fake = _asset(
+            "b",
+            AssetType.S3_BUCKET,
+            arn="arn:aws:s3:::backup.googleapis.com/evil",
+        )
+        assert _service_of(fake) == "s3"
+
+    def test_linker_ignores_googleapis_mid_string(self):
+        bucket = _asset(
+            "x.googleapis.com/path",
+            AssetType.S3_BUCKET,
+            arn="arn:aws:s3:::real-bucket",
+        )
+        trail = _asset(
+            "t",
+            AssetType.CLOUDTRAIL,
+            arn="arn:aws:cloudtrail:us-east-1:1:trail/t",
+            metadata={"note": "x.googleapis.com/path"},
+        )
+        linker = RelationshipLinker([bucket, trail])
+        # the value is indexed by name, but it is not identifier-shaped, so the
+        # generic scan must not produce an edge from it
+        edges = linker.link()
+        assert all(e.description != "t references x.googleapis.com/path" for e in edges)
+        assert not linker._looks_like_identifier("x.googleapis.com/path")
+        assert linker._looks_like_identifier("//compute.googleapis.com/projects/p")
