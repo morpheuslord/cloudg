@@ -772,11 +772,9 @@ class AsyncAWSCollector(BaseCollector):
             )
             return []
 
-    async def collect(self) -> list[CloudAsset]:
-        """Collect all AWS assets concurrently."""
-        logger.info("Starting AWS asset collection in %s", self._region)
-
-        service_tasks = {
+    def _service_tasks(self) -> dict[str, Any]:
+        """Coroutines to run per service. Subclasses extend this to widen coverage."""
+        return {
             "ec2": self._collect_ec2(),
             "s3": self._collect_s3(),
             "rds": self._collect_rds(),
@@ -793,6 +791,12 @@ class AsyncAWSCollector(BaseCollector):
             "secretsmanager": self._collect_secrets_manager(),
             "kms": self._collect_kms(),
         }
+
+    async def collect(self) -> list[CloudAsset]:
+        """Collect all AWS assets concurrently."""
+        logger.info("Starting AWS asset collection in %s", self._region)
+
+        service_tasks = self._service_tasks()
 
         results = await asyncio.gather(
             *(self._run_service_collector(name, coro) for name, coro in service_tasks.items()),

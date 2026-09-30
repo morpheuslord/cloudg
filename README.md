@@ -18,6 +18,8 @@
 
 One command collects assets from every configured provider in parallel, feeds them through a NetworkX graph for reachability and attack path analysis, fans out to Prowler, ScoutSuite, Checkov and Trivy, then merges and deduplicates all findings against 28 compliance frameworks. Out the other end come an interactive HTML report, GraphML, an RDF ontology, RAG chunks for LLM pipelines, and Terraform files that recreate the live infrastructure.
 
+Need the map without the security tooling? `cloudg map` is a scanner-independent inventory mapper: it deep-collects everything deployed (or default) in an account — down to the network fabric and a catch-all sweep of every service — and links it all into one interconnected asset map you can later overlay with scanner findings. See [Inventory mapping](#inventory-mapping).
+
 **Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
 
 ---
@@ -70,6 +72,39 @@ docker compose run --rm cloudg run -p aws --regions us-east-1
 ```
 
 </details>
+
+---
+
+## Inventory mapping
+
+`cloudg map` answers a different question than `cloudg run`: not *"what is wrong?"* but *"what exists, and how is it wired together?"*. It runs **no scanners** — it is an independent function of cloudg — and maps the complete infrastructure:
+
+- **Everything deployed or default.** Beyond the dedicated collectors, each provider gets a catch-all enumeration: the AWS Resource Groups Tagging API, Azure Resource Manager's full subscription listing, and GCP Cloud Asset Inventory. Services without a hand-written collector still land on the map instead of silently missing.
+- **The fabric that interlinks it.** Route tables, internet/NAT gateways, network interfaces, volumes, Elastic/public IPs, NACLs, VPC peering, transit gateways — the pieces that turn a resource list into a topology.
+- **Derived relationships.** A relationship linker walks every asset's metadata and derives attachment, containment, routing and cross-service reference edges (instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG, and a generic pass that resolves any ARN/resource-ID reference between collected assets).
+
+```bash
+# map one provider
+cloudg map -p aws --regions all
+
+# map everything, everywhere
+cloudg map -p all --regions all
+
+# overlay scanner findings you generated earlier -> asset map + compliance map
+cloudg map -p aws --regions all --findings ./reports/raw-findings.json
+```
+
+Outputs: `inventory-map.json` (assets + interconnections + summary), `inventory-map.graphml`, and `inventory-graph.json` for viewers. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets) — the inventory and the scanners stay decoupled, but their outputs merge into one picture.
+
+The same capability is a first-class library API — see [Using it as a library](#using-it-as-a-library):
+
+```python
+from cloudg import CloudGConfig, CloudGEngine
+
+engine = CloudGEngine(CloudGConfig(providers=["aws", "azure", "gcp"]))
+inventory = engine.map_inventory_sync(output_dir="./reports")
+print(inventory.summary["assets_by_service"])
+```
 
 ---
 
@@ -203,7 +238,7 @@ controls:
 | `--terraform/--no-terraform` | Terraform recreation (off by default) |
 | `-o, --output` | output directory, `./reports` by default |
 
-`cloudg collect` and `cloudg scan` run the individual phases; `cloudg ingest` aggregates scanner outputs you already have (`--prowler`, `--scoutsuite`, `--checkov`, `--trivy`, each taking a file or directory and repeatable); `cloudg report -i findings.json` re-renders reports from a previous run.
+`cloudg collect` and `cloudg scan` run the individual phases; `cloudg map` builds the scanner-independent inventory map (`--findings` merges existing findings into asset/compliance maps, `--no-sweep` skips the catch-all sweep); `cloudg ingest` aggregates scanner outputs you already have (`--prowler`, `--scoutsuite`, `--checkov`, `--trivy`, each taking a file or directory and repeatable); `cloudg report -i findings.json` re-renders reports from a previous run.
 
 </details>
 
@@ -220,6 +255,8 @@ controls:
 | `ontology.ttl`, `ontology.jsonld` | the RDF ontology |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks |
 | `terraform/*.tf.json`, `terraform/import.sh` | recreation files |
+| `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map (`cloudg map`) |
+| `asset-map.json`, `compliance-map.json` | inventory merged with scanner findings (`cloudg map --findings`) |
 
 </details>
 
@@ -241,7 +278,39 @@ result = engine.run_pipeline_sync()
 print(result.to_summary())
 ```
 
-The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, `ingest_reports()` / `run_from_reports()` for working from existing scanner output files, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
+The engine exposes `collect()`, `scan()` and `analyze()` separately if you only need part of the pipeline, `map_inventory()` for scanner-independent inventory mapping, `ingest_reports()` / `run_from_reports()` for working from existing scanner output files, and event hooks (`on_finding`, `on_phase_start`, `on_error`, `on_scan_complete`) for streaming integration.
+
+Inventory mapping composes with the rest — map now, scan whenever, merge later:
+
+```python
+from cloudg import CloudGConfig, CloudGEngine
+from cloudg.inventory import InventoryMapper, RelationshipLinker
+
+config = CloudGConfig(providers=["aws"])
+engine = CloudGEngine(config)
+
+inventory = engine.map_inventory_sync()          # no scanners involved
+findings = engine.ingest_reports({"prowler": ["./prowler-out/"]})
+
+mapper = InventoryMapper(config)
+asset_map = mapper.build_asset_map(inventory, findings)        # asset -> risk
+compliance = mapper.build_compliance_map(inventory, findings)  # framework -> assets
+
+# the linker also works standalone, on any list of CloudAssets
+edges = RelationshipLinker(inventory.assets).link()
+```
+
+Much more of cloudg is public, importable API than the CLI suggests — the [Python API chapter](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md#python-api) documents the full surface, including:
+
+| API | What it gives you |
+|---|---|
+| `cloudg.inventory.InventoryMapper` / `RelationshipLinker` | scanner-free inventory maps and metadata-derived relationship edges |
+| `cloudg.graph.builder.GraphBuilder` | NetworkX graph, attack paths, centrality/blast-radius metrics, D3/Cytoscape/GraphML export |
+| `cloudg.graph.ontology.CloudOntology` | RDF ontology (~62 typed relations), SPARQL-queryable, Turtle/JSON-LD |
+| `cloudg.graph.rag_export.RAGExporter` | retrieval-ready JSONL chunks of the infrastructure for LLM pipelines |
+| `cloudg.renderers.terraform_export.TerraformExporter` | `.tf.json` recreation of live infrastructure plus `import.sh` |
+| `cloudg.ingest.parse_report` and the scanner classes | every scanner's parser, usable standalone |
+| `cloudg.normaliser.FindingsNormaliser` | cross-scanner dedupe, CVSS rescoring, compliance mapping |
 
 Custom collectors and scanners register through entry points, no core changes needed:
 

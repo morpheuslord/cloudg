@@ -32,12 +32,20 @@ class MultiAccountCollector:
     Uses asyncio.Semaphore to limit concurrent API calls.
     """
 
-    def __init__(self, config: CloudGConfig) -> None:
+    def __init__(
+        self,
+        config: CloudGConfig,
+        collector_overrides: dict[str, type] | None = None,
+    ) -> None:
         self._config = config
         self._semaphore = asyncio.Semaphore(config.concurrency_limit)
         self._coverage: list[CollectionCoverage] = []
         self._region_discovery = RegionDiscovery()
         self._resolved_regions: dict[str, list[str]] = {}
+        # Per-provider collector class overrides (e.g. the deep inventory
+        # collectors used by `cloudg map`); constructor signatures must match
+        # the standard collector for that provider.
+        self._collector_overrides = collector_overrides or {}
 
     async def collect_all(
         self,
@@ -162,7 +170,8 @@ class MultiAccountCollector:
 
                 from cloudg.collectors.aws import AsyncAWSCollector
 
-                collector = AsyncAWSCollector(session=session, region=region, account_id=account_id)
+                collector_cls = self._collector_overrides.get("aws", AsyncAWSCollector)
+                collector = collector_cls(session=session, region=region, account_id=account_id)
 
                 start = time.time()
                 assets = await collector.collect()
@@ -238,7 +247,8 @@ class MultiAccountCollector:
                     sub = next(sub_client.subscriptions.list(), None)
                     subscription_id = sub.subscription_id if sub else ""
 
-                collector = AzureCollector(credential=credential, subscription_id=subscription_id)
+                collector_cls = self._collector_overrides.get("azure", AzureCollector)
+                collector = collector_cls(credential=credential, subscription_id=subscription_id)
 
                 start = time.time()
                 assets = await collector.collect()
@@ -308,7 +318,8 @@ class MultiAccountCollector:
                 credentials, default_project = build_gcp_credentials(self._config.gcp)
                 pid = project_id or default_project
 
-                collector = GCPCollector(project_id=pid, credentials=credentials)
+                collector_cls = self._collector_overrides.get("gcp", GCPCollector)
+                collector = collector_cls(project_id=pid, credentials=credentials)
 
                 start = time.time()
                 assets = await collector.collect()

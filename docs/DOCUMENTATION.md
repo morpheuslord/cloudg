@@ -54,6 +54,8 @@ The enabled scanners then run in parallel over the same inventory, each in its o
 
 Every phase degrades gracefully. A missing scanner binary, an unreachable provider or a failed exporter logs a warning; nothing else stops.
 
+Alongside the pipeline sits an independent function: [inventory mapping](#cloudg-map) (`cloudg map` / `CloudGEngine.map_inventory()`). It runs no scanners at all — it deep-collects everything deployed or default in the account, including a catch-all sweep of every service, and links it into one interconnected map whose output can later be merged with any scanner findings.
+
 ## CLI reference
 
 Global options go before the subcommand: `cloudg -v -c my-config.yaml run ...`
@@ -100,6 +102,34 @@ cloudg collect -p aws --profile prod --region eu-west-1 -o ./reports
 cloudg collect -p azure --subscription-id <id>
 cloudg collect -p gcp --project-id <id>
 ```
+
+### cloudg map
+
+Scanner-independent inventory mapping. Deep-collects the complete infrastructure — everything deployed or default — and links it into one interconnected map. No scanner runs and none needs to be installed.
+
+```bash
+cloudg map -p aws --regions all
+cloudg map -p all --regions all
+cloudg map -p aws --findings ./reports/raw-findings.json   # merge scanner output
+```
+
+| Flag | Meaning |
+|---|---|
+| `-p, --provider` | `aws`, `azure`, `gcp` or `all`; repeatable |
+| `--regions` | `all` for auto-discovery, or a comma-separated list |
+| `--profile` | AWS CLI profile |
+| `--subscription-id`, `--project-id` | Azure / GCP identity |
+| `--findings` | existing cloudg findings JSON (`raw-findings.json` or a report); repeatable |
+| `--sweep / --no-sweep` | catch-all sweep, on by default |
+| `-o, --output` | output directory |
+
+Coverage comes in three layers:
+
+1. **Dedicated deep collectors.** Everything the standard collectors know, plus the network fabric: route tables, internet and NAT gateways, network interfaces, EBS volumes/managed disks, Elastic/public IPs, NACLs, VPC peering connections, transit gateways, and customer-managed IAM policies (AWS); NICs, public IPs, disks, load balancers and route tables (Azure).
+2. **Catch-all sweeps.** The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate *every* resource in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). Sweep hits duplicate to dedicated collectors are deduplicated automatically, keeping the richer asset.
+3. **The relationship linker.** A post-collection pass that derives edges purely from asset metadata: instance → security group (`ATTACHED_TO`), subnet ⊃ resource (`CONTAINS`), route table → gateway (`ROUTE`), Lambda → execution role, secret → KMS key, CloudFront → origin (`REFERENCES`), VPC peering (`PEERING`), Azure VM → NIC → NSG/subnet/public IP chains, GCP parent containment and IAM policy bindings — plus a generic pass that resolves any ARN, Azure resource ID or GCP resource name found in one asset's metadata to another collected asset.
+
+Outputs: `inventory-map.json` (assets, edges, summary — services, types, regions, accounts, internet exposure, unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3). With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, sorted riskiest-first) and `compliance-map.json` (framework → findings and affected assets). Inventory and scanners stay decoupled; their outputs merge on demand.
 
 ### cloudg scan
 
@@ -215,6 +245,8 @@ All commands write into the output directory (`./reports` by default).
 | `ontology.ttl`, `ontology.jsonld` | RDF ontology, around 62 inferred relation types, SPARQL-queryable |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks, one JSON object per line |
 | `terraform/*.tf.json`, `terraform/import.sh` | Terraform recreation of live infrastructure, 25+ asset types |
+| `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, summary (`cloudg map`) |
+| `asset-map.json`, `compliance-map.json` | inventory overlaid with scanner findings (`cloudg map --findings`) |
 
 `findings.json` has this shape:
 
@@ -287,7 +319,7 @@ The unit every scanner and parser produces.
 
 ### NetworkEdge
 
-Directed edge between two asset IDs. `edge_type` is one of `SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `CONTAINS`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED`; the model also carries `ports`, `port_range`, `protocol`, `cidr` and `direction`.
+Directed edge between two asset IDs. `edge_type` is one of `SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `CONTAINS`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED`, `ATTACHED_TO`, `REFERENCES`; the model also carries `ports`, `port_range`, `protocol`, `cidr` and `direction`. `ATTACHED_TO` and `REFERENCES` are produced by the inventory relationship linker (attachment and generic cross-service dependency respectively).
 
 ### ComplianceResult
 
@@ -339,6 +371,10 @@ scanners:
   checkov_frameworks: []        # empty = auto-detect
   prowler_extra_args: []        # passthrough args, per scanner
 
+inventory:
+  tagging_sweep: true           # AWS catch-all sweep (Resource Groups Tagging API)
+  link_references: true         # generic cross-service REFERENCES edges
+
 graph:
   persist_graphml: true
   compute_attack_paths: true
@@ -379,7 +415,9 @@ config.aws.regions = ["eu-west-1", "eu-central-1"]
 
 ## Python API
 
-`CloudGEngine` in `cloudg.api` is the integration entry point: async-first, sync wrappers included, built for embedding in larger systems (SIEM pipelines, orchestration platforms, command extensions such as [hol-guard](https://github.com/hashgraph-online/hol-guard)). The package root re-exports the essentials: `CloudGEngine`, `CloudGConfig`, `load_config`, `PipelineResult`, `CollectionResult`, `AnalysisResult`.
+`CloudGEngine` in `cloudg.api` is the integration entry point: async-first, sync wrappers included, built for embedding in larger systems (SIEM pipelines, orchestration platforms, command extensions such as [hol-guard](https://github.com/hashgraph-online/hol-guard)). The package root re-exports the essentials: `CloudGEngine`, `CloudGConfig`, `load_config`, `PipelineResult`, `CollectionResult`, `AnalysisResult`, `InventoryMapper`, `InventoryResult`.
+
+The CLI is a thin layer — nearly everything cloudg does is public, importable API. Beyond the engine itself, the [inventory mapping API](#inventory-mapping-api) and the [deeper toolkit](#the-deeper-toolkit) below are designed to be used directly from code.
 
 ### Construction and hooks
 
@@ -421,6 +459,60 @@ Exceptions raised inside a hook are swallowed, so a broken callback cannot take 
 `analyze(assets, edges, findings, output_dir="./reports") -> AnalysisResult` builds the graph and produces the ontology, RAG chunks, Terraform files, attack paths and reachability findings, gated by the corresponding config sections.
 
 `run_from_reports(reports, output_dir="./reports") -> PipelineResult` and `run_from_reports_sync(...)` chain ingest, normalise and report generation in one call.
+
+`map_inventory(output_dir=None, findings=None, tagging_sweep=None) -> InventoryResult` and `map_inventory_sync(...)` run the scanner-independent inventory mapping: deep collection across all configured providers, catch-all sweeps, and relationship linking. Passing `output_dir` exports the map files; passing `findings` as well exports the merged asset and compliance maps.
+
+### Inventory mapping API
+
+`cloudg.inventory` is a standalone package — usable with or without the engine:
+
+```python
+from cloudg import CloudGConfig
+from cloudg.inventory import InventoryMapper, RelationshipLinker
+
+config = CloudGConfig(providers=["aws", "azure", "gcp"])
+mapper = InventoryMapper(config)
+
+inventory = mapper.map_inventory_sync()      # InventoryResult
+print(inventory.summary)                     # services, types, regions, exposure
+inventory.export("./reports")                # inventory-map.json / .graphml / graph
+```
+
+`InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions` and a computed `summary` (totals, per-service/type/region/account breakdowns, edge types, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml` and `inventory-graph.json`.
+
+Merging scanner findings — from `scan()`, `ingest_reports()`, or a saved `raw-findings.json` — happens after the fact, keeping inventory and scanners fully decoupled:
+
+```python
+asset_map = mapper.build_asset_map(inventory, findings)         # asset -> findings/severity
+compliance_map = mapper.build_compliance_map(inventory, findings)  # framework -> assets
+mapper.export_merged(inventory, findings, "./reports")          # asset-map.json + compliance-map.json
+```
+
+`RelationshipLinker` works on any `list[CloudAsset]`, whoever collected them:
+
+```python
+linker = RelationshipLinker(assets)
+linker.seed_existing(existing_edges)   # don't duplicate edges you already have
+edges = linker.link()                  # ATTACHED_TO / CONTAINS / ROUTE / PEERING / REFERENCES
+```
+
+The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region, account_id, tagging_sweep=True)`, `AzureDeepInventoryCollector(credential, subscription_id)` and `GCPDeepInventoryCollector(project_id, credentials)` all implement the standard `collect()` / `collect_edges()` / `run()` collector interface.
+
+### The deeper toolkit
+
+Modules the pipeline uses internally that are equally useful standalone:
+
+| Module | Class | What it does from code |
+|---|---|---|
+| `cloudg.graph.builder` | `GraphBuilder` | `build(assets, edges)` → NetworkX DiGraph; `find_attack_paths(src, dst)`, `find_lateral_movement_paths()`, `compute_centrality()` for blast-radius scoring; `to_d3_json()`, `to_cytoscape_json()`, `save_graphml()` / `load_graphml()` |
+| `cloudg.graph.reachability` | `ReachabilityAnalyzer` | BFS from the internet node over a built graph; `generate_findings()` returns exposure findings |
+| `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers ~62 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
+| `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
+| `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |
+| `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
+| `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone — no engine, no credentials |
+| `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
+| `cloudg.registry` | `PluginRegistry` | entry-point discovery of collector and scanner plugins |
 
 ### PipelineResult
 
@@ -539,6 +631,44 @@ async def main():
     await engine.analyze(collection.assets, collection.edges, scan_result.findings)
 
 asyncio.run(main())
+```
+
+### Map the inventory, overlay findings later
+
+Inventory mapping needs only read credentials — no scanner binaries. Scanners can run elsewhere (CI, a schedule, another host) and merge in whenever their output arrives:
+
+```python
+from cloudg import CloudGConfig, CloudGEngine
+from cloudg.inventory import InventoryMapper
+
+config = CloudGConfig(providers=["aws"])
+config.aws.regions = ["ALL"]
+
+engine = CloudGEngine(config)
+inventory = engine.map_inventory_sync(output_dir="./reports")   # no scanners
+
+print(inventory.summary["assets_by_service"])   # what exists
+print(inventory.summary["internet_exposed"])    # what faces the internet
+print(inventory.summary["unlinked_assets"])     # what nothing points at
+
+# hours or days later, when scanner output exists:
+findings = engine.ingest_reports({"prowler": ["./ci-prowler-output/"]})
+mapper = InventoryMapper(config)
+mapper.export_merged(inventory, findings, "./reports")
+# -> asset-map.json (asset -> risk), compliance-map.json (framework -> assets)
+```
+
+### Link relationships into someone else's inventory
+
+The linker is pure post-processing — feed it assets from any source that produces `CloudAsset` objects (a plugin collector, a CMDB import, a previous run):
+
+```python
+from cloudg.inventory import RelationshipLinker
+from cloudg.graph.builder import GraphBuilder
+
+edges = RelationshipLinker(assets).link()
+graph = GraphBuilder().build(assets, edges)
+print(graph.number_of_nodes(), graph.number_of_edges())
 ```
 
 ### Gate a CI job on severity

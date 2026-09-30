@@ -110,6 +110,12 @@ scanners:
   iac_directories: []
   timeout_seconds: 3600
 
+# ── Inventory Mapping ──
+# Scanner-independent full-infrastructure mapping (`cloudg map`).
+inventory:
+  tagging_sweep: true      # AWS: catch-all sweep via the Resource Groups Tagging API
+  link_references: true    # Derive cross-service REFERENCES edges from metadata
+
 # ── Graph Engine ──
 graph:
   persist_graphml: true

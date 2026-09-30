@@ -9,6 +9,7 @@ from cloudg.api import (
     PipelineResult,
 )
 from cloudg.config import CloudGConfig, load_config
+from cloudg.inventory import InventoryMapper, InventoryResult
 
 __all__ = [
     "__version__",
@@ -16,6 +17,8 @@ __all__ = [
     "CloudGEngine",
     "CloudGConfig",
     "CollectionResult",
+    "InventoryMapper",
+    "InventoryResult",
     "PipelineResult",
     "load_config",
 ]

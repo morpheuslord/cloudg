@@ -64,6 +64,7 @@ class AssetType(str, Enum):
     TRANSIT_GATEWAY = "TRANSIT_GATEWAY"
     PEERING_CONNECTION = "PEERING_CONNECTION"
     ELASTIC_IP = "ELASTIC_IP"
+    NETWORK_INTERFACE = "NETWORK_INTERFACE"
 
     # Storage
     S3_BUCKET = "S3_BUCKET"
@@ -111,6 +112,8 @@ class EdgeType(str, Enum):
     PEERING = "PEERING"
     LOAD_BALANCER_TARGET = "LOAD_BALANCER_TARGET"
     INTERNET_EXPOSED = "INTERNET_EXPOSED"
+    ATTACHED_TO = "ATTACHED_TO"  # ENI -> instance, SG -> resource, volume -> instance
+    REFERENCES = "REFERENCES"  # generic cross-service dependency (role, key, origin)
 
 
 class ComplianceStatus(str, Enum):
