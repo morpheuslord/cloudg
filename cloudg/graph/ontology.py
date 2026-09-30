@@ -111,7 +111,7 @@ class RelationType(str, Enum):
     PROTECTED_BY_NACL = "PROTECTED_BY_NACL"
     PROTECTED_BY_WAF = "PROTECTED_BY_WAF"
     ENCRYPTED_BY_KMS = "ENCRYPTED_BY_KMS"
-    ROTATES_SECRET = "ROTATES_SECRET"  # nosec B105 - ontology relation name, not a credential
+    ROTATES_SECRET = "ROTATES_SECRET"  # nosec B105 # nosemgrep -- ontology relation name, not a credential
     CERTIFICATE_SECURES = "CERTIFICATE_SECURES"
     FINDING_AFFECTS = "FINDING_AFFECTS"
     VULNERABILITY_EXPLOITS = "VULNERABILITY_EXPLOITS"

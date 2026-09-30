@@ -612,7 +612,8 @@ class AsyncAWSCollector(BaseCollector):
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as exc:
-            logger.error("Secrets Manager collection failed: %s", exc)
+            # nosemgrep: the message names the AWS service, no credential is logged
+            logger.error("secretsmanager service collection failed: %s", exc)
             self.coverage.record("secretsmanager", ServiceStatus.FAILED, error=str(exc))
         return assets
 

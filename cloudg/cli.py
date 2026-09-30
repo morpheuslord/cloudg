@@ -1250,4 +1250,5 @@ def run(
 
 
 if __name__ == "__main__":
-    cli()
+    # Click injects the arguments at call time
+    cli()  # pylint: disable=no-value-for-parameter

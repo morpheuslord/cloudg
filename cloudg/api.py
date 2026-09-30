@@ -433,14 +433,9 @@ class CloudGEngine:
         def _run_checkov(target_dir: str) -> list[Finding]:
             from cloudg.scanners.checkov import CheckovScanner
 
-            fw = (
-                self.config.scanners.checkov_frameworks[0]
-                if self.config.scanners.checkov_frameworks
-                else None
-            )
             scanner = CheckovScanner(
                 target_dir=target_dir,
-                framework=fw,
+                frameworks=self.config.scanners.checkov_frameworks or None,
                 extra_args=self.config.scanners.checkov_extra_args or [],
             )
             return scanner.run()

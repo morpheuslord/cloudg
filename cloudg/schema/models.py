@@ -88,7 +88,7 @@ class AssetType(str, Enum):
 
     # Secrets / Keys
     KMS_KEY = "KMS_KEY"
-    SECRET = "SECRET"  # nosec B105 - asset type name, not a credential
+    SECRET = "SECRET"  # nosec B105 # nosemgrep -- asset type name, not a credential
     CERTIFICATE = "CERTIFICATE"
     KEY_VAULT = "KEY_VAULT"
 

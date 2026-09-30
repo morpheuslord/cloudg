@@ -10,12 +10,14 @@
 # ── Stage 1: Security Scanners (heavy, rarely changes) ──
 FROM python:3.12-slim AS scanners
 
+# hadolint ignore=DL3008 -- Debian slim package versions rotate out of the
+# archive; pinning them breaks rebuilds without improving reproducibility here
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Parliament (IAM linting) — installed globally
-RUN pip install --no-cache-dir parliament
+RUN pip install --no-cache-dir parliament==1.6.4
 
 # Prowler in isolated venv
 RUN python -m venv /opt/prowler && \
