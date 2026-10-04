@@ -562,7 +562,11 @@ class TestDeepServiceCollectors:
         session = boto3.Session(region_name="us-east-1")
         self._estate(session)
         assets, collector = self._collect(session, services=["containers"], tagging_sweep=False)
-        assert {s.service for s in collector.coverage.services} == {"ecr", "ecs", "eks"}
+        from cloudg.inventory.aws_deep import SERVICE_FAMILIES
+
+        ran = {s.service for s in collector.coverage.services}
+        assert {"ecr", "ecs", "eks"} <= ran
+        assert all(SERVICE_FAMILIES.get(name) == "containers" for name in ran)
         assert {a.asset_type for a in assets} <= {
             AssetType.CONTAINER_REGISTRY, AssetType.CONTAINER_SERVICE, AssetType.TASK_DEFINITION,
             AssetType.ECS_CLUSTER,
@@ -824,3 +828,84 @@ def test_ontology_uses_declared_relationship():
     assert infer_relations(edge, {})[0] == RelationType.ENCRYPTED_BY_KMS
     typed = NetworkEdge(source_id="a", target_id="b", edge_type=EdgeType.INVOKES)
     assert infer_relations(typed, {}) == [RelationType.INVOKES]
+
+
+class TestCrossProviderExternalAccounts:
+    def test_azure_and_gcp_references_become_external_accounts(self):
+        sub_a = "11111111-1111-1111-1111-111111111111"
+        sub_b = "22222222-2222-2222-2222-222222222222"
+        vnet = CloudAsset(
+            arn=f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/spoke",
+            name="spoke", asset_type=AssetType.VNET, provider=CloudProvider.AZURE, account_id=sub_a,
+            metadata={"relations": [_rel(
+                f"/subscriptions/{sub_b}/resourceGroups/hub/providers/Microsoft.Network/virtualNetworks/hub",
+                EdgeType.PEERING, "VPC_PEERED")]},
+        )
+        net = CloudAsset(
+            arn="//compute.googleapis.com/projects/svc/global/networks/n",
+            name="n", asset_type=AssetType.VPC, provider=CloudProvider.GCP, account_id="svc",
+            metadata={"relations": [_rel(
+                "//compute.googleapis.com/projects/host/regions/r/subnetworks/shared", EdgeType.REFERENCES)]},
+        )
+        same_sub = CloudAsset(
+            arn=f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/s",
+            name="s", asset_type=AssetType.BLOB_STORAGE, provider=CloudProvider.AZURE, account_id=sub_a,
+            metadata={"relations": [_rel(
+                f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/gone",
+                EdgeType.REFERENCES)]},
+        )
+        linker = RelationshipLinker([vnet, net, same_sub])
+        edges = linker.link()
+        ext = {a.arn: a for a in linker.external_assets}
+        assert set(ext) == {
+            f"/subscriptions/{sub_b}",
+            "//cloudresourcemanager.googleapis.com/projects/host",
+        }
+        assert ext[f"/subscriptions/{sub_b}"].provider == CloudProvider.AZURE
+        assert _edge(edges, vnet, ext[f"/subscriptions/{sub_b}"], EdgeType.PEERING)
+        # same-subscription dangling reference stays unresolved, no placeholder
+        assert any(u["target"].endswith("/vaults/gone") for u in linker.unresolved)
+
+
+def test_every_asset_type_has_an_owl_class():
+    from cloudg.graph.ontology import _ASSET_TYPE_CLASSES
+
+    assert set(_ASSET_TYPE_CLASSES) == set(AssetType)
+    assert _ASSET_TYPE_CLASSES[AssetType.K8S_WORKLOAD] == "KubernetesWorkload"
+    assert _ASSET_TYPE_CLASSES[AssetType.PERMISSION_SET] == "PermissionSet"
+
+
+def test_permission_set_links_only_its_own_provisioned_roles():
+    ps = _asset("Admin", AssetType.PERMISSION_SET, arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", region="global",
+                metadata={"provisioned_role_prefix": "AWSReservedSSO_Admin_"})
+    path = "/aws-reserved/sso.amazonaws.com/"
+    own = _asset("AWSReservedSSO_Admin_0123456789abcdef", AssetType.IAM_ROLE,
+                 arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_0123456789abcdef",
+                 account="222222222222", region="global", metadata={"path": path})
+    other = _asset("AWSReservedSSO_Admin_Read_0123456789abcdef", AssetType.IAM_ROLE,
+                   arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_Read_0123456789abcdef",
+                   account="222222222222", region="global", metadata={"path": path})
+    edges = RelationshipLinker([ps, own, other]).link()
+    assert _edge(edges, ps, own, EdgeType.MANAGES)
+    assert not _edge(edges, ps, other, EdgeType.MANAGES)
+
+
+@mock_aws
+def test_account_block_public_access_overrides_bucket_policy(aws_credentials):
+    session = boto3.Session(region_name="us-east-1")
+    s3 = session.client("s3")
+    s3.create_bucket(Bucket="site")
+    s3.put_bucket_policy(Bucket="site", Policy=json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::site/*"}]}))
+    collector = AWSDeepInventoryCollector(session=session, region="us-east-1", account_id=ACCOUNT,
+                                          kubernetes=False, tagging_sweep=False, services=["s3"])
+    bucket = next(a for a in asyncio.run(collector.collect()) if a.name == "site")
+    assert bucket.is_internet_exposed
+
+    session.client("s3control").put_public_access_block(AccountId=ACCOUNT, PublicAccessBlockConfiguration={
+        "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
+    collector = AWSDeepInventoryCollector(session=session, region="us-east-1", account_id=ACCOUNT,
+                                          kubernetes=False, tagging_sweep=False, services=["s3"])
+    bucket = next(a for a in asyncio.run(collector.collect()) if a.name == "site")
+    assert not bucket.is_internet_exposed
+    assert bucket.metadata["account_public_access_block"]["RestrictPublicBuckets"]

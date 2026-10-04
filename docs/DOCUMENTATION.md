@@ -129,6 +129,7 @@ cloudg map -p aws --findings ./reports/raw-findings.json     # merge scanner out
 | `--ct-home-region` | AWS: Control Tower home region, auto-detected when omitted |
 | `--services`, `--exclude-services` | service families or collector names, comma-separated (see below) |
 | `--kubernetes / --no-kubernetes` | map workloads inside EKS clusters through the Kubernetes API |
+| `--cloud-control / --no-cloud-control` | AWS Cloud Control breadth sweep, on by default |
 | `--subscription-id`, `--project-id` | Azure / GCP identity |
 | `--findings` | existing cloudg findings JSON (`raw-findings.json` or a report); repeatable |
 | `--sweep / --no-sweep` | catch-all sweep, on by default |
@@ -136,25 +137,37 @@ cloudg map -p aws --findings ./reports/raw-findings.json     # merge scanner out
 
 Coverage comes in four layers.
 
-1. Dedicated deep collectors (AWS), grouped into service families you can select with `--services` or `inventory.services`:
+1. Dedicated deep collectors. On AWS, 133 collectors grouped into service families you can select with `--services` / `--exclude-services` (family or collector names):
 
    | Family | Collected |
    |---|---|
-   | `network` | VPCs, subnets, security groups, route tables, internet/NAT gateways, ENIs, Elastic IPs, NACLs, VPC peering, transit gateways and their attachments (including VPCs in other accounts), VPC endpoints, ALB/NLB (listeners, certificates, access logs), target groups and their registered targets, classic ELBs, CloudFront |
-   | `compute` | EC2, Auto Scaling groups, launch templates |
-   | `containers` | ECR repositories (image sample, scan findings summary, scan configuration, repository policy grants), ECS clusters, services and task definitions (images, task and execution roles, secrets, log groups, target groups), EKS clusters, nodegroups, Fargate profiles, addons, access entries and pod identity associations |
+   | `network` | VPCs, subnets, security groups, route tables, internet / NAT / egress-only gateways, ENIs, Elastic IPs, NACLs, VPC peering, transit gateways, attachments, route tables and peering, VPC endpoints and endpoint services (PrivateLink, allowed principals, consumers), managed prefix lists, ALB/NLB listeners, rules, certificates and target groups, classic ELB, CloudFront (origins, aliases, certificates, Lambda@Edge, functions, OAC, logging), Global Accelerator, VPC Lattice |
+   | `hybrid` | site-to-site VPN, customer and virtual private gateways, Direct Connect connections, VIFs and gateways, Cloud WAN / Network Manager |
+   | `compute` | EC2, Auto Scaling groups, launch templates, AMIs (with sharing), Batch, App Runner, Elastic Beanstalk |
+   | `containers` | ECR (+ public), ECS clusters, services, task definitions, capacity providers, container instances, Cloud Map, EKS clusters, nodegroups, Fargate profiles, addons, access entries, pod identity |
    | `kubernetes` | inside EKS clusters: namespaces, Deployments, StatefulSets, DaemonSets, CronJobs, Services, Ingresses, ServiceAccounts |
-   | `serverless` | Lambda (event source mappings, resource-policy invokers, function URLs, container images, layers, DLQs, EFS mounts), API Gateway REST and HTTP APIs and their integrations, Step Functions |
-   | `integration` | SQS, SNS and subscriptions, EventBridge buses, rules and targets, Kinesis |
-   | `storage`, `data` | S3 (notifications, replication, access logging, policy grants), EBS, EFS (mount targets, access points), RDS and Aurora, DynamoDB, ElastiCache, OpenSearch, Redshift |
-   | `identity` | the IAM graph: users, groups, roles, instance profiles, customer-managed policies, OIDC providers, trust policies, grants; KMS, Secrets Manager, ACM |
+   | `serverless` | Lambda (triggers, URLs, images, layers, DLQs, aliases), API Gateway REST / HTTP APIs, authorizers, VPC links and custom domains, Step Functions |
+   | `integration` | SQS, SNS, EventBridge buses, rules, archives, API destinations, Scheduler, Pipes, Kinesis, Firehose, MSK, Amazon MQ |
+   | `storage` | S3 (notifications, replication, logging, account and bucket Block Public Access), access points and multi-region access points, EBS volumes and snapshots, EFS, FSx, Transfer Family, DataSync |
+   | `data` | RDS, Aurora, proxies, global clusters, manual snapshot sharing, DynamoDB (KMS, streams, replicas, PITR, policies), ElastiCache, MemoryDB, DAX, OpenSearch (+ Serverless), Redshift (+ Serverless) |
+   | `analytics`, `ml` | Glue, Lake Formation permissions, EMR (+ Serverless), Athena; SageMaker, Bedrock agents, knowledge bases, guardrails and invocation logging |
+   | `identity` | the IAM graph (users, groups, roles, trust, grants, instance profiles, OIDC and SAML providers, access key metadata), IAM Identity Center (instances, permission sets, assignments, users, groups), Roles Anywhere, Cognito user and identity pools, KMS (aliases, rotation, key policy and grant principals), Secrets Manager, ACM |
+   | `governance` | RAM resource shares, Service Catalog portfolios and provisioned products (Account Factory), CloudFormation StackSets |
    | `security` | GuardDuty, Security Hub, Inspector (per-resource coverage), Macie, AWS Config, IAM Access Analyzer, Detective, WAF, Network Firewall, Shield Advanced |
-   | `logging` | CloudTrail, VPC flow logs, CloudWatch log groups |
-   | `dns` | Route 53 zones and A / AAAA / CNAME / alias records |
-   | `iac` | CloudFormation stacks and every resource each one manages |
+   | `logging`, `operations`, `backup` | CloudTrail, flow logs, log groups, subscription filters and destinations, cross-account observability (OAM); CloudWatch alarms, SSM parameters (metadata only), managed instances, documents, associations, maintenance windows; AWS Backup plans, selections and vaults |
+   | `dns`, `iac`, `cicd` | Route 53 zones and records, Resolver endpoints, rules and DNS Firewall; CloudFormation stacks and the resources they manage; CodePipeline, CodeBuild, CodeDeploy, CodeConnections |
 
-   Account-wide services (IAM, S3, CloudFront, Route 53, Shield) are collected once per account, in the primary region, so `--regions all` no longer repeats them per region. Security services that are not enabled in an account/region appear as placeholder nodes with `enabled: false`, so detection gaps show on the map. Azure adds NICs, public IPs, disks, load balancers and route tables to the standard collectors.
-2. Catch-all sweeps. The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate resources in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). A sweep hit that duplicates a dedicated collector's asset is dropped; the richer asset wins.
+   Account-wide services are collected once per account, in the primary region, so `--regions all` does not repeat them. Security services that are not enabled appear as placeholder nodes with `enabled: false`, so detection gaps show on the map. Values that could be secret (parameter values, environment variables, passwords, VPN pre-shared keys, Direct Connect auth keys) are never collected.
+
+   Azure is collected through Azure Resource Graph (`azure-mgmt-resourcegraph`, in the `azure` extra) with every resource's full properties, so PaaS services get real relationships: managed identities and role assignments (principal → scope, with role names), private endpoints, AKS node pools, kubelet identity and ACR pulls, App Service plans, VNet integration and container images, Container Apps, subnets, peering, NICs, disks and disk encryption sets, firewalls and route-table next hops, Application Gateway and Front Door backends and WAF policies, Key Vault access policies, storage and SQL network rules, Defender for Cloud plans per subscription. Every Enabled subscription is collected when none are configured (`azure.all_subscriptions`), and the management group → subscription → resource group hierarchy, Azure Landing Zone archetypes and Azure Policy assignments and exemptions are mapped (`azure.map_management_groups`). Without the Resource Graph SDK, cloudg falls back to the per-service SDK collectors plus the ARM sweep. Permissions: Reader at the tenant root management group (Resource Graph scopes to what the credential can read).
+
+   GCP is collected through Cloud Asset Inventory `list_assets` with the full resource JSON, once at `organizations/<organization_id>` when that is set (`gcp.collection_scope`), otherwise per project. Relations cover instances (service accounts, subnets, disks, external IPs), firewall semantics (target tags and service accounts, source ranges, priorities), the load-balancing chain down to NEGs and Cloud Armor, managed instance groups and templates, GKE clusters and node pools with Workload Identity, Cloud Run and Functions v2 (service accounts, images in Artifact Registry, secrets, VPC connectors, triggers), Pub/Sub (subscriptions, push endpoints, dead-letter and export targets), Eventarc, logging sinks, CMEK keys, Shared VPC, Cloud SQL / Redis / Filestore networks and DNS zones. IAM bindings resolve to service accounts or to principal nodes (users, groups, workload identity pools); only `allUsers` / `allAuthenticatedUsers` mark a resource internet-exposed. With an organization ID, the organization → folder → project tree, organization policies and VPC Service Controls perimeters are mapped too (`gcp.map_hierarchy`, `org_policies`, `vpc_service_controls`). Permissions: `roles/cloudasset.viewer` on the organization (or each project) and the Cloud Asset API enabled on the quota project.
+2. Breadth sweeps, so services without a dedicated collector still appear on the map.
+   - AWS Cloud Control API: every CloudFormation resource type with a list handler (800+ types) is listed, tagged or not. Types already mapped by a deep collector are skipped, account-wide types run once per account, types that need a parent identifier or fail are skipped and counted in coverage (`cloud_control_skipped_types`). The listable-type catalogue is discovered once and cached for a week (`$CLOUDG_CACHE_DIR`, default `~/.cache/cloudg`). Secret-bearing properties (passwords, tokens, SSM parameter values, environment variables, user data) are never copied. Turn it off with `--no-cloud-control`, or narrow it with `inventory.cloud_control_types` / `cloud_control_exclude` (type names or prefixes such as `AWS::Glue::`).
+   - AWS Resource Groups Tagging API: tagged resources only (AWS never returns resources that were never tagged), kept for tag enrichment.
+   - Azure Resource Manager's full `resources.list()` and GCP Cloud Asset Inventory enumerate their scopes.
+
+   Precedence when the same resource is found twice: dedicated collector, then Cloud Control, then the tagging API.
 3. The relationship linker. Collectors declare what each asset talks to; the linker resolves those identifiers across services, regions and accounts into typed edges, then applies provider rules and a generic reference pass. See [Relationships](#relationships) below.
 4. Account hierarchy. Every account gets a `CLOUD_ACCOUNT` node that contains its top-level resources. With `--org`, accounts hang under the OU tree, next to SCPs, the Control Tower landing zone and its enabled controls.
 
@@ -431,10 +444,19 @@ azure:
   certificate_path: null
   federated_token_file: null
   use_managed_identity: false
+  all_subscriptions: true       # every Enabled subscription when subscription_ids is empty
+  map_management_groups: true   # management groups, subscriptions, Azure Policy
   regions: [ALL]
 
 gcp:
   project_ids: []
+  organization_id: null         # set to collect org-wide and map folders / org policy
+  collection_scope: auto        # auto | organization | project
+  skip_asset_types: [...]       # high-churn types (Pods, ReplicaSets, Events, ...) by default
+  iam_policies: true
+  map_hierarchy: true
+  org_policies: true
+  vpc_service_controls: true
   credentials_file: null
   impersonate_service_account: null
   regions: [ALL]
@@ -458,6 +480,10 @@ inventory:
   max_images_per_repository: 20
   stack_resources: true         # CloudFormation stack -> resource edges
   account_hierarchy: true       # account nodes containing top-level resources
+  cloud_control: true           # AWS breadth sweep over every listable resource type
+  cloud_control_types: []       # only these CloudFormation types / prefixes
+  cloud_control_exclude: []
+  cloud_control_concurrency: 6
 
 graph:
   persist_graphml: true
@@ -606,6 +632,8 @@ edges = linker.link()                  # typed edges, see Relationships
 linker.external_assets                 # placeholder nodes for unmapped accounts
 linker.unresolved                      # declared references that resolved to nothing
 ```
+
+Reference data lives in YAML catalogs under `cloudg/inventory/catalogs/` rather than in code: `aws_cloudcontrol.yaml` (types the deep collectors already cover, account-wide types, CloudFormation type → asset type, per-type secret fields), `aws_arn_types.yaml` (ARN → asset type for sweep hits), `azure_arm_types.yaml` (ARM resource type → asset type) and `gcp_asset_types.yaml` (Cloud Asset Inventory type → asset type). Point `$CLOUDG_CATALOG_DIR` at a directory holding files of the same names to extend or override them without touching cloudg: mappings merge key by key, lists are extended. Unknown asset type names are rejected at load time.
 
 Your own collectors can declare relationships the same way the built-in ones do, by listing them in `metadata["relations"]`: `{"target": <any identifier>, "edge": "INVOKES", "relationship": "TRIGGERED_BY", "reverse": false}`.
 

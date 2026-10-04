@@ -33,6 +33,10 @@ from cloudg.schema.models import AssetType, CloudAsset, EdgeType
 logger = logging.getLogger(__name__)
 
 _MAX_RECORDS_PER_ZONE = 2000
+_ACM_KEY_TYPES = [
+    "RSA_1024", "RSA_2048", "RSA_3072", "RSA_4096",
+    "EC_prime256v1", "EC_secp384r1", "EC_secp521r1",
+]
 _DNS_RECORD_TYPES = {"A", "AAAA", "CNAME"}
 
 
@@ -53,7 +57,17 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
     async def _collect_s3(self) -> list[CloudAsset]:
         async with self._client("s3") as s3:
-            buckets = (await s3.list_buckets()).get("Buckets", [])
+            buckets = [b async for b in self._paginate(s3, "list_buckets", "Buckets")]
+
+            # Account-level Block Public Access overrides bucket policies.
+            account_pab: dict[str, Any] = {}
+            try:
+                async with self._client("s3control") as s3c:
+                    resp = await s3c.get_public_access_block(AccountId=self._account_id)
+                    account_pab = resp.get("PublicAccessBlockConfiguration") or {}
+            except Exception as exc:
+                if "NoSuchPublicAccessBlockConfiguration" not in error_code(exc):
+                    logger.debug("Account public access block unavailable: %s", exc)
 
             async def safe(call: Any, **kwargs: Any) -> dict:
                 try:
@@ -66,8 +80,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
             async def detail(bucket: dict) -> CloudAsset:
                 name = bucket["Name"]
-                loc = (await safe(s3.get_bucket_location, Bucket=name)).get("LocationConstraint")
-                region = loc or "us-east-1"
+                region = bucket.get("BucketRegion")
+                if not region:
+                    loc = (await safe(s3.get_bucket_location, Bucket=name)).get("LocationConstraint")
+                    region = loc or "us-east-1"
                 if region == "EU":
                     region = "eu-west-1"
                 enc_rules = ((await safe(s3.get_bucket_encryption, Bucket=name)).get("ServerSideEncryptionConfiguration") or {}).get("Rules", [])
@@ -105,7 +121,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             continue
                         relations.append(rel(principal_ref(p), EdgeType.GRANTS_ACCESS, "READS_FROM", reverse=True,
                                              description="bucket policy grant"))
-                blocked = bool(pab) and all(pab.get(k) for k in ("BlockPublicPolicy", "RestrictPublicBuckets"))
+                blocked = any(
+                    bool(cfg) and all(cfg.get(k) for k in ("BlockPublicPolicy", "RestrictPublicBuckets"))
+                    for cfg in (pab, account_pab)
+                )
                 return self._asset(
                     arn=f"arn:aws:s3:::{name}",
                     name=name,
@@ -115,6 +134,7 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                         "creation_date": str(bucket.get("CreationDate", "")),
                         "acl_grants": len(acl.get("Grants", [])) if acl else None,
                         "public_access_block": pab,
+                        "account_public_access_block": account_pab or None,
                         "encryption": bool(sse),
                         "sse_algorithm": sse.get("SSEAlgorithm"),
                         "kms_key_id": sse.get("KMSMasterKeyID"),
@@ -223,9 +243,8 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
     async def _collect_elb_classic(self) -> list[CloudAsset]:
         async with self._client("elb") as elb:
-            resp = await elb.describe_load_balancers()
             out = []
-            for lb in resp.get("LoadBalancerDescriptions", []):
+            async for lb in self._paginate(elb, "describe_load_balancers", "LoadBalancerDescriptions"):
                 name = lb.get("LoadBalancerName", "")
                 relations = [
                     rel(i.get("InstanceId"), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE")
@@ -328,7 +347,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
         assets: list[CloudAsset] = []
         async with self._client("ec2") as ec2:
             async for ep in self._paginate(ec2, "describe_vpc_endpoints", "VpcEndpoints"):
-                relations: list[dict | None] = [rel(ep.get("VpcId"), EdgeType.CONTAINS, reverse=True)]
+                relations: list[dict | None] = [
+                    rel(ep.get("VpcId"), EdgeType.CONTAINS, reverse=True),
+                    rel(ep.get("ServiceName"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO", description="consumes endpoint service"),
+                ]
                 relations += [rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in ep.get("SubnetIds", []) or []]
                 relations += [rel(r, EdgeType.ROUTE, "TRANSIT_ROUTED", reverse=True) for r in ep.get("RouteTableIds", []) or []]
                 assets.append(
@@ -534,7 +556,11 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "kms_key_id": rg.get("KmsKeyId"),
                         },
                         relations=[rel(rg.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")],
-                        aliases=[rg["ReplicationGroupId"], *members],
+                        aliases=[
+                            rg["ReplicationGroupId"],
+                            *members,
+                            *(nodes.get(m, {}).get("ARN") or self._arn("elasticache", f"cluster:{m}") for m in members),
+                        ],
                     )
                 )
             for cid, cc in nodes.items():
@@ -760,7 +786,16 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
     async def _collect_acm(self) -> list[CloudAsset]:
         async with self._client("acm") as acm:
-            certs = [c async for c in self._paginate(acm, "list_certificates", "CertificateSummaryList")]
+            # Without Includes.keyTypes only RSA_2048 certificates are listed.
+            certs = [
+                c
+                async for c in self._paginate(
+                    acm,
+                    "list_certificates",
+                    "CertificateSummaryList",
+                    Includes={"keyTypes": _ACM_KEY_TYPES},
+                )
+            ]
 
             async def detail(c: dict) -> CloudAsset:
                 cert = (await acm.describe_certificate(CertificateArn=c["CertificateArn"]))["Certificate"]

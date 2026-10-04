@@ -57,6 +57,7 @@ azure = [
     "azure-mgmt-resource>=23.0",
     "azure-mgmt-sql>=3.0",
     "azure-mgmt-keyvault>=10.0",
+    "azure-mgmt-resourcegraph>=8.0.0",
 ]
 gcp = [
     "google-cloud-asset>=3.0",

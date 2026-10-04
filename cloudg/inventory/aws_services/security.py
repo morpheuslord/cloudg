@@ -39,6 +39,15 @@ _NOT_ENABLED_CODES = {
     "NoSuchConfigurationRecorderException",
 }
 _MAX_COVERAGE = 10000
+_WAF_RESOURCE_TYPES = (
+    "APPLICATION_LOAD_BALANCER",
+    "API_GATEWAY",
+    "APPSYNC",
+    "COGNITO_USER_POOL",
+    "APP_RUNNER_SERVICE",
+    "VERIFIED_ACCESS_INSTANCE",
+    "AMPLIFY",
+)
 
 
 def _disabled_reason(exc: BaseException) -> str:
@@ -360,7 +369,7 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 except Exception as exc:
                     logger.debug("get_web_acl failed for %s: %s", acl.get("Name"), exc)
                 if scope == "REGIONAL":
-                    for rtype in ("APPLICATION_LOAD_BALANCER", "API_GATEWAY", "APPSYNC", "COGNITO_USER_POOL"):
+                    for rtype in _WAF_RESOURCE_TYPES:
                         try:
                             res = await waf.list_resources_for_web_acl(WebACLArn=acl["ARN"], ResourceType=rtype)
                             for arn in res.get("ResourceArns", []):
@@ -405,6 +414,8 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 firewall = d.get("Firewall") or {}
                 relations: list[dict | None] = [
                     rel(firewall.get("VpcId"), EdgeType.PROTECTS, "PROTECTED_BY_NACL"),
+                    rel(firewall.get("TransitGatewayId"), EdgeType.PROTECTS, "PROTECTED_BY_NACL",
+                        description="transit gateway attached firewall"),
                     rel(firewall.get("FirewallPolicyArn"), EdgeType.REFERENCES, "DEPENDS_ON"),
                 ]
                 for m in firewall.get("SubnetMappings", []) or []:
@@ -459,17 +470,28 @@ class SecurityCollectorsMixin(AWSServiceMixin):
     async def _collect_cloudtrail(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("cloudtrail") as ct:
-            trails = (await ct.describe_trails(includeShadowTrails=False)).get("trailList", [])
-            if not trails and self._is_primary_region:
-                return [self._disabled_asset("cloudtrail", AssetType.CLOUDTRAIL, "CloudTrail", "no trail homed here")]
+            # Shadow trails include multi-region trails homed elsewhere and the
+            # organization trail of the management account, so member
+            # accounts are not reported as unaudited. The same trail seen
+            # from several regions is merged by ARN in the mapper.
+            trails = (await ct.describe_trails(includeShadowTrails=True)).get("trailList", [])
+            if not trails:
+                return [self._disabled_asset("cloudtrail", AssetType.CLOUDTRAIL, "CloudTrail", "no trail covers this region")]
             for t in trails:
+                home = t.get("HomeRegion", self._region)
+                if home != self._region and not t.get("IsMultiRegionTrail") and not t.get("IsOrganizationTrail"):
+                    continue
                 logging_on = None
-                try:
-                    logging_on = (await ct.get_trail_status(Name=t["TrailARN"])).get("IsLogging")
-                except Exception as exc:
-                    logger.debug("Trail status failed: %s", exc)
+                if home == self._region:
+                    try:
+                        logging_on = (await ct.get_trail_status(Name=t["TrailARN"])).get("IsLogging")
+                    except Exception as exc:
+                        logger.debug("Trail status failed: %s", exc)
+                else:
+                    logging_on = True  # visible as a shadow trail: it is delivering here
                 relations = [
-                    rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="API audit logging"),
+                    rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="API audit logging",
+                        organization_trail=t.get("IsOrganizationTrail")),
                     rel(f"arn:aws:s3:::{t['S3BucketName']}" if t.get("S3BucketName") else None, EdgeType.LOGS_TO, "LOGS_TO"),
                     rel((t.get("CloudWatchLogsLogGroupArn") or "").removesuffix(":*"), EdgeType.LOGS_TO, "LOGS_TO"),
                     rel(t.get("CloudWatchLogsRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
@@ -481,7 +503,7 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                         arn=t["TrailARN"],
                         name=t.get("Name", ""),
                         asset_type=AssetType.CLOUDTRAIL,
-                        region=t.get("HomeRegion", self._region),
+                        region=home,
                         metadata={
                             "security_service": "cloudtrail",
                             "enabled": bool(logging_on),

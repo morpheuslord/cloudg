@@ -217,9 +217,16 @@ class MultiAccountCollector:
                 edges = await collector.collect_edges()
                 duration_ms = int((time.time() - start) * 1000)
 
+                # Surface per-service results (a denied Inspector call is
+                # otherwise invisible behind an overall SUCCESS).
+                services = list(getattr(getattr(collector, "coverage", None), "services", []) or [])
+                coverage.services.extend(services)
+                degraded = any(
+                    sc.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL) for sc in services
+                )
                 coverage.record(
                     "aws_full",
-                    ServiceStatus.SUCCESS,
+                    ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
                     asset_count=len(assets),
                     duration_ms=duration_ms,
                 )
@@ -235,22 +242,36 @@ class MultiAccountCollector:
     # ------------------------------------------------------------------
 
     async def _collect_azure_multi(self) -> list[tuple[list[CloudAsset], list[NetworkEdge]]]:
-        """Iterate Azure subscriptions × locations."""
-        sub_ids = self._config.azure.subscription_ids
+        """Iterate Azure subscriptions (every Enabled one when none are configured)."""
+        cfg = self._config.azure
+        sub_ids: list[str | None] = list(cfg.subscription_ids)
+
+        # One credential for the whole run (azure-identity credentials are thread-safe)
+        cred: Any = None
+        try:
+            from cloudg.credentials import build_azure_credential
+
+            cred = build_azure_credential(cfg)
+        except Exception as exc:
+            logger.warning("Azure credential could not be built: %s", exc)
+
+        if not sub_ids and getattr(cfg, "all_subscriptions", True) and cred is not None:
+            try:
+                from cloudg.collectors.azure import list_subscriptions
+
+                subs = await asyncio.to_thread(list_subscriptions, cred)
+                sub_ids = [s["subscription_id"] for s in subs]
+                logger.info("Azure: discovered %d enabled subscriptions", len(sub_ids))
+            except Exception as exc:
+                logger.warning("Azure subscription enumeration failed (%s); using the first one", exc)
         if not sub_ids:
             sub_ids = [None]
 
         # Region resolution
-        azure_regions = self._config.azure.regions
+        azure_regions = cfg.regions
         if is_all_regions(azure_regions):
             logger.info("Azure: discovering all locations...")
             first_sub = sub_ids[0] if sub_ids[0] else None
-            try:
-                from cloudg.credentials import build_azure_credential
-
-                cred = build_azure_credential(self._config.azure)
-            except ImportError:
-                cred = None
             azure_regions = await self._region_discovery.discover_azure(cred, first_sub)
 
         self._resolved_regions["azure"] = azure_regions
@@ -258,62 +279,85 @@ class MultiAccountCollector:
             "Azure: scanning %d subscriptions (locations auto-handled by SDK)", len(sub_ids)
         )
 
-        # Azure SDKs already return resources across all locations within a subscription.
-        # We pass the resolved regions as metadata but don't iterate per-region for Azure
-        # since list_all() calls return resources from ALL locations.
-        tasks = [self._collect_azure_single(sid) for sid in sub_ids]
+        # Azure list/graph calls return resources from ALL locations of a
+        # subscription, so there is no per-region iteration.
+        tasks = [self._collect_azure_single(sid, credential=cred) for sid in sub_ids]
         return await asyncio.gather(*tasks, return_exceptions=False)
 
     async def _collect_azure_single(
-        self, subscription_id: str | None
+        self, subscription_id: str | None, credential: Any = None
     ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
-        """Collect from a single Azure subscription."""
+        """Collect from a single Azure subscription.
+
+        Assets and edges are collected separately: an edge failure never
+        discards the subscription's assets, and per-service collector
+        failures are recorded as coverage entries.
+        """
         coverage = CollectionCoverage(provider="azure", account_id=subscription_id)
         self._coverage.append(coverage)
 
         async with self._semaphore:
+            start = time.time()
             try:
-                from cloudg.collectors.azure import AzureCollector
-                from cloudg.credentials import build_azure_credential
+                from cloudg.collectors.azure import AzureCollector, first_subscription_id
 
-                # Supports workload identity, service principal (secret or
-                # certificate), managed identity, and the default chain.
-                credential = build_azure_credential(self._config.azure)
+                if credential is None:
+                    from cloudg.credentials import build_azure_credential
+
+                    # Supports workload identity, service principal (secret or
+                    # certificate), managed identity, and the default chain.
+                    credential = build_azure_credential(self._config.azure)
                 if not subscription_id:
-                    from azure.mgmt.resource import SubscriptionClient
-
-                    sub_client = SubscriptionClient(credential)
-                    sub = next(sub_client.subscriptions.list(), None)
-                    subscription_id = sub.subscription_id if sub else ""
+                    subscription_id = await asyncio.to_thread(first_subscription_id, credential) or ""
+                    coverage.account_id = subscription_id or None
 
                 collector_cls = self._collector_overrides.get("azure", AzureCollector)
                 collector = collector_cls(credential=credential, subscription_id=subscription_id)
-
-                start = time.time()
                 assets = await collector.collect()
-                edges = await collector.collect_edges()
-                duration_ms = int((time.time() - start) * 1000)
-
-                coverage.record(
-                    "azure_full",
-                    ServiceStatus.SUCCESS,
-                    asset_count=len(assets),
-                    duration_ms=duration_ms,
-                )
-                return assets, edges
-
             except Exception as exc:
                 logger.error("Azure collection failed for %s: %s", subscription_id, exc)
                 coverage.record("azure_full", ServiceStatus.FAILED, error=str(exc))
                 return [], []
+
+            edges: list[NetworkEdge] = []
+            try:
+                edges = await collector.collect_edges()
+            except Exception as exc:
+                logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
+                coverage.record("azure_edges", ServiceStatus.FAILED, error=str(exc))
+
+            duration_ms = int((time.time() - start) * 1000)
+            service_errors = dict(getattr(collector, "service_errors", None) or {})
+            for service, error in service_errors.items():
+                coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
+            coverage.record(
+                "azure_full",
+                ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
+                asset_count=len(assets),
+                duration_ms=duration_ms,
+            )
+            return assets, edges
 
     # ------------------------------------------------------------------
     # GCP
     # ------------------------------------------------------------------
 
     async def _collect_gcp_multi(self) -> list[tuple[list[CloudAsset], list[NetworkEdge]]]:
-        """Iterate GCP projects × regions."""
-        project_ids = self._config.gcp.project_ids
+        """Collect GCP once at organization scope, or once per project.
+
+        Cloud Asset Inventory lists every region in one call, so regions are
+        never iterated. With ``gcp.organization_id`` set (and
+        ``collection_scope`` auto/organization) a single listing at
+        ``organizations/<id>`` covers every project; ``project_ids`` then
+        narrow it.
+        """
+        cfg = self._config.gcp
+        org_id = str(cfg.organization_id or "").removeprefix("organizations/") or None
+        scope_mode = getattr(cfg, "collection_scope", "auto")
+        if scope_mode == "organization" and not org_id:
+            logger.warning("GCP: collection_scope=organization needs gcp.organization_id; collecting per project")
+        org_scope = bool(org_id) and scope_mode != "project"
+        project_ids = cfg.project_ids
         if not project_ids:
             project_ids = [None]
 
@@ -331,20 +375,31 @@ class MultiAccountCollector:
             gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
 
         self._resolved_regions["gcp"] = gcp_regions
-        logger.info(
-            "GCP: scanning %d projects (Cloud Asset Inventory scans all regions)", len(project_ids)
-        )
 
-        # GCP Cloud Asset Inventory API returns resources across ALL regions for a project.
-        # No per-region iteration needed — the API is project-scoped.
-        tasks = [self._collect_gcp_single(pid) for pid in project_ids]
+        # Cloud Asset Inventory returns resources across ALL regions, so no
+        # per-region iteration is needed.
+        if org_scope:
+            logger.info("GCP: scanning organizations/%s in one Cloud Asset Inventory listing", org_id)
+            tasks = [
+                self._collect_gcp_single(
+                    project_ids[0], organization_id=org_id, project_filter=cfg.project_ids or None
+                )
+            ]
+        else:
+            logger.info("GCP: scanning %d projects (all regions per project)", len(project_ids))
+            tasks = [self._collect_gcp_single(pid) for pid in project_ids]
         return await asyncio.gather(*tasks, return_exceptions=False)
 
     async def _collect_gcp_single(
-        self, project_id: str | None
+        self,
+        project_id: str | None,
+        organization_id: str | None = None,
+        project_filter: list[str] | None = None,
     ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
-        """Collect from a single GCP project."""
-        coverage = CollectionCoverage(provider="gcp", account_id=project_id)
+        """Collect one GCP project, or a whole organization when
+        ``organization_id`` is given (``project_filter`` narrows it)."""
+        label = f"organizations/{organization_id}" if organization_id else project_id
+        coverage = CollectionCoverage(provider="gcp", account_id=label)
         self._coverage.append(coverage)
 
         async with self._semaphore:
@@ -352,28 +407,53 @@ class MultiAccountCollector:
                 from cloudg.collectors.gcp import GCPCollector
                 from cloudg.credentials import build_gcp_credentials
 
+                cfg = self._config.gcp
                 # Supports key files, workload identity federation, ADC
                 # (inherited GCE/GKE identity), and impersonation.
-                credentials, default_project = build_gcp_credentials(self._config.gcp)
+                credentials, default_project = build_gcp_credentials(cfg)
                 pid = project_id or default_project
+                if not pid and not organization_id:
+                    raise RuntimeError(
+                        "no GCP project to scan: set gcp.project_ids or gcp.organization_id, "
+                        "or use credentials that carry a default project"
+                    )
+                if coverage.account_id is None:
+                    coverage.account_id = pid
 
                 collector_cls = self._collector_overrides.get("gcp", GCPCollector)
-                collector = collector_cls(project_id=pid, credentials=credentials)
+                kwargs: dict[str, Any] = {}
+                if getattr(collector_cls, "supports_org_scope", False):
+                    kwargs = {
+                        "organization_id": organization_id,
+                        "project_filter": project_filter,
+                        "coverage": coverage,
+                        "skip_asset_types": getattr(cfg, "skip_asset_types", None),
+                        "page_size": getattr(cfg, "asset_page_size", 1000),
+                        "include_iam": getattr(cfg, "iam_policies", True),
+                        "timeout": getattr(cfg, "api_timeout_seconds", 600.0),
+                    }
+                elif organization_id:
+                    raise RuntimeError(f"{collector_cls.__name__} does not support organization scope")
+                collector = collector_cls(project_id=pid, credentials=credentials, **kwargs)
 
                 start = time.time()
                 assets = await collector.collect()
                 edges = await collector.collect_edges()
                 duration_ms = int((time.time() - start) * 1000)
 
+                degraded = [
+                    s for s in coverage.services if s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL)
+                ]
                 coverage.record(
                     "gcp_full",
-                    ServiceStatus.SUCCESS,
+                    ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
                     asset_count=len(assets),
                     duration_ms=duration_ms,
+                    error="; ".join(f"{s.service}: {s.error}" for s in degraded) or None,
                 )
                 return assets, edges
 
             except Exception as exc:
-                logger.error("GCP collection failed for %s: %s", project_id, exc)
+                logger.error("GCP collection failed for %s: %s", label, exc)
                 coverage.record("gcp_full", ServiceStatus.FAILED, error=str(exc))
                 return [], []

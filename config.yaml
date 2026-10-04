@@ -81,6 +81,11 @@ azure:
   use_managed_identity: false
   managed_identity_client_id: null   # For user-assigned managed identities
 
+  # Inventory mapping (`cloudg map`): Azure Resource Graph is used when
+  # azure-mgmt-resourcegraph is installed (pip install cloudg[azure]).
+  all_subscriptions: true       # subscription_ids empty -> every Enabled subscription
+  map_management_groups: true   # management groups, subscriptions, Azure Policy
+
   regions:
     - ALL                  # Auto-discover all Azure locations (default)
     # - eastus             # Or specify individual locations
@@ -99,6 +104,13 @@ gcp:
   # impersonate_service_account layers impersonation on top of either.
   credentials_file: null
   impersonate_service_account: null  # e.g. scanner@my-project.iam.gserviceaccount.com
+
+  # Inventory mapping (`cloudg map`)
+  collection_scope: auto   # auto: one org-wide listing when organization_id is set
+  iam_policies: true       # IAM bindings -> principal / resource access edges
+  map_hierarchy: true      # organization -> folders -> projects (needs organization_id)
+  org_policies: true
+  vpc_service_controls: true
 
   regions:
     - ALL                  # Auto-discover all GCP regions (default)
@@ -130,7 +142,11 @@ scanners:
 # ── Inventory Mapping ──
 # Scanner-independent full-infrastructure mapping (`cloudg map`).
 inventory:
-  tagging_sweep: true      # AWS: catch-all sweep via the Resource Groups Tagging API
+  tagging_sweep: true      # AWS: Resource Groups Tagging API sweep (tagged resources only)
+  cloud_control: true      # AWS: list every Cloud Control resource type, tagged or not
+  cloud_control_types: []  # Only these CloudFormation types / prefixes (e.g. AWS::Glue::)
+  cloud_control_exclude: []
+  cloud_control_concurrency: 6
   link_references: true    # Derive cross-service REFERENCES edges from metadata
   services: [all]          # Families: network, compute, containers, kubernetes, serverless,
                            # integration, storage, data, identity, security, logging, dns, iac

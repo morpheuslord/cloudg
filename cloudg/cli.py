@@ -222,6 +222,12 @@ def collect(
     help="Map workloads inside EKS clusters through the Kubernetes API",
 )
 @click.option(
+    "--cloud-control/--no-cloud-control",
+    default=None,
+    help="AWS: list every resource type with a Cloud Control list handler, "
+    "tagged or not (breadth for services without a dedicated collector)",
+)
+@click.option(
     "--findings",
     "findings_paths",
     multiple=True,
@@ -252,6 +258,7 @@ def map_inventory(
     services: str | None,
     exclude_services: str | None,
     kubernetes: bool | None,
+    cloud_control: bool | None,
     findings_paths: tuple[str, ...],
     sweep: bool,
     output: str,
@@ -329,6 +336,8 @@ def map_inventory(
         cfg.inventory.exclude_services = [s.strip() for s in exclude_services.split(",") if s.strip()]
     if kubernetes is not None:
         cfg.inventory.kubernetes = kubernetes
+    if cloud_control is not None:
+        cfg.inventory.cloud_control = cloud_control
 
     panel = {
         "Providers": ", ".join(cfg.providers),
@@ -337,6 +346,7 @@ def map_inventory(
         + (f" (excluding {', '.join(cfg.inventory.exclude_services)})" if cfg.inventory.exclude_services else ""),
         "Kubernetes workloads": "enabled" if cfg.inventory.kubernetes else "disabled",
         "Catch-all sweep": "enabled" if sweep else "disabled",
+        "Cloud Control sweep": "enabled" if cfg.inventory.cloud_control else "disabled",
         "Scanners": "none (inventory mapping is scanner-independent)",
     }
     if org_cfg.enabled:

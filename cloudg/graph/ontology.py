@@ -358,6 +358,16 @@ _TYPED_EDGE_RELATIONS: dict[EdgeType, RelationType] = {
 }
 
 
+def _class_name(asset_type: AssetType) -> str:
+    return "".join(part.capitalize() for part in asset_type.name.split("_"))
+
+
+# Every AssetType gets an OWL class: explicit names above, CamelCase of the
+# enum name otherwise, so new taxonomy values never fall back to CloudResource.
+for _t in AssetType:
+    _ASSET_TYPE_CLASSES.setdefault(_t, _class_name(_t))
+
+
 def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> list[RelationType]:
     """Infer semantic relation types from a raw NetworkEdge.
 
@@ -746,6 +756,16 @@ class CloudOntology:
         }
         for child, parent in hierarchy.items():
             g.add((CM[child], RDFS.subClassOf, CM[parent]))
+
+        # Classes for every asset type (including ones added after the
+        # literal list above), all under CloudResource.
+        for cls_name in sorted(set(_ASSET_TYPE_CLASSES.values()) - {"CloudResource"}):
+            cls_uri = CM[cls_name]
+            if (cls_uri, RDF.type, OWL.Class) not in g:
+                g.add((cls_uri, RDF.type, OWL.Class))
+                g.add((cls_uri, RDFS.label, Literal(cls_name)))
+            if cls_name not in hierarchy:
+                g.add((cls_uri, RDFS.subClassOf, CM["CloudResource"]))
 
         # Object properties (relations)
         for rt in RelationType:

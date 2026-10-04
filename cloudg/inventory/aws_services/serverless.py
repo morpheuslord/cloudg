@@ -17,18 +17,14 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
 
 from cloudg.inventory.aws_services._base import (
     AWSServiceMixin,
+    resource_policy_relations,
     arns_in,
-    condition_values,
     error_code,
     gather_limited,
     identifier_refs,
-    policy_principals,
-    policy_statements,
-    principal_ref,
     rel,
 )
 from cloudg.inventory.aws_services.containers import image_repository
@@ -39,38 +35,7 @@ logger = logging.getLogger(__name__)
 _APIGW_LAMBDA_RE = re.compile(r"functions/(arn:aws[^/]+)/invocations")
 
 
-def _resource_policy_relations(policy: Any, account_id: str | None) -> tuple[list[dict | None], bool]:
-    """Invoker / grant relations from a resource policy, plus a 'public' flag.
-
-    Service principals with a SourceArn condition become INVOKES edges from
-    that source; AWS principals become GRANTS_ACCESS edges.
-    """
-    relations: list[dict | None] = []
-    public = False
-    for st in policy_statements(policy):
-        if st.get("Effect") != "Allow":
-            continue
-        principals = policy_principals(st)
-        sources = condition_values(st, "aws:SourceArn", "AWS:SourceArn")
-        for svc in principals.get("Service", []):
-            if sources:
-                for src in sources:
-                    relations.append(
-                        rel(src.rstrip("*").rstrip("/").rstrip(":"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True,
-                            description=f"{svc} may invoke", service=svc)
-                    )
-        for p in principals.get("AWS", []):
-            if p == "*":
-                if not st.get("Condition"):
-                    public = True
-                continue
-            ref = principal_ref(p)
-            relations.append(
-                rel(ref, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                    description="resource policy grant",
-                    cross_account=bool(account_id and f":{account_id}:" not in ref))
-            )
-    return relations, public
+_resource_policy_relations = resource_policy_relations  # backward-compatible alias
 
 
 class ServerlessCollectorsMixin(AWSServiceMixin):
@@ -287,7 +252,13 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
     async def _collect_sqs(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("sqs") as sqs:
-            urls = [u async for u in self._paginate(sqs, "list_queues", "QueueUrls")]
+            # ListQueues only returns a NextToken when MaxResults is set.
+            urls = [
+                u
+                async for u in self._paginate(
+                    sqs, "list_queues", "QueueUrls", PaginationConfig={"PageSize": 1000}
+                )
+            ]
 
             async def detail(url: str) -> CloudAsset:
                 attrs = (await sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])).get("Attributes", {})
@@ -362,7 +333,7 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
     async def _collect_eventbridge(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("events") as events:
-            buses = (await events.list_event_buses()).get("EventBuses", [])
+            buses = [b async for b in self._pages(events.list_event_buses, "EventBuses")]
             for bus in buses:
                 bus_name = bus.get("Name", "default")
                 pol_rels, public = _resource_policy_relations(bus.get("Policy"), self._account_id)

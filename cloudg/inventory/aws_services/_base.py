@@ -194,6 +194,40 @@ def identifier_refs(env: dict[str, Any] | None) -> list[str]:
     return refs
 
 
+def resource_policy_relations(policy: Any, account_id: str | None) -> tuple[list[dict | None], bool]:
+    """Invoker / grant relations from a resource policy, plus a 'public' flag.
+
+    Service principals with a SourceArn condition become INVOKES edges from
+    that source; AWS principals become GRANTS_ACCESS edges.
+    """
+    relations: list[dict | None] = []
+    public = False
+    for st in policy_statements(policy):
+        if st.get("Effect") != "Allow":
+            continue
+        principals = policy_principals(st)
+        sources = condition_values(st, "aws:SourceArn", "AWS:SourceArn")
+        for svc in principals.get("Service", []):
+            if sources:
+                for src in sources:
+                    relations.append(
+                        rel(src.rstrip("*").rstrip("/").rstrip(":"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True,
+                            description=f"{svc} may invoke", service=svc)
+                    )
+        for p in principals.get("AWS", []):
+            if p == "*":
+                if not st.get("Condition"):
+                    public = True
+                continue
+            ref = principal_ref(p)
+            relations.append(
+                rel(ref, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
+                    description="resource policy grant",
+                    cross_account=bool(account_id and f":{account_id}:" not in ref))
+            )
+    return relations, public
+
+
 async def gather_limited(
     factories: Iterable[Callable[[], Awaitable[Any]]], limit: int = _ITEM_CONCURRENCY
 ) -> list[Any]:
@@ -238,6 +272,37 @@ class AWSServiceMixin:
         async for page in paginator.paginate(**kwargs):
             for item in page.get(result_key, []) or []:
                 yield item
+
+    async def _pages(
+        self,
+        call: Any,
+        result_key: str,
+        token_in: str = "NextToken",
+        token_out: str | None = None,
+        max_pages: int = 1000,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Manual token pagination for operations without a botocore
+        paginator (``_paginate`` raises OperationNotPageableError on them).
+
+        Args:
+            call: Bound client method, e.g. ``client.list_services``.
+            result_key: Response key holding the items.
+            token_in: Request parameter carrying the token.
+            token_out: Response key holding the next token (default token_in).
+        """
+        token_out = token_out or token_in
+        token = None
+        for _ in range(max_pages):
+            params = dict(kwargs)
+            if token:
+                params[token_in] = token
+            resp = await call(**params)
+            for item in resp.get(result_key, []) or []:
+                yield item
+            token = resp.get(token_out)
+            if not token:
+                return
 
     def _arn(self, service: str, resource: str, region: str | None = None) -> str:
         reg = self._region if region is None else region

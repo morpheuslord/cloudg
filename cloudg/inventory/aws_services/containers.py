@@ -358,7 +358,7 @@ class ContainerCollectorsMixin(AWSServiceMixin):
 
         relations: list[dict | None] = [
             rel(cluster.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="cluster service role"),
-            rel(vpc.get("vpcId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True),
+            rel(vpc.get("vpcId"), EdgeType.CONTAINS, reverse=True, description="cluster VPC"),
         ]
         for sn in vpc.get("subnetIds", []) or []:
             relations.append(rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))

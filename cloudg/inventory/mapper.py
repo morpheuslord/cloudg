@@ -274,8 +274,12 @@ def _service_of(asset: CloudAsset) -> str:
     if arn.startswith("arn:"):
         parts = arn.split(":", 3)
         return parts[2] if len(parts) > 2 else "unknown"
-    if arn.startswith("k8s://"):
+    if arn.startswith(("k8s://", "k8s-gke://")):
         return "kubernetes"
+    if arn.startswith("gcp-principal:"):
+        return "iam"
+    if arn.startswith("entra:"):
+        return "entra"
     if arn.startswith("cloudg:"):
         parts = arn.split(":")
         return parts[2] if len(parts) > 2 else "unknown"
@@ -447,6 +451,10 @@ class InventoryMapper:
                 iam_resource_edges=inv.iam_resource_edges,
                 max_images_per_repository=inv.max_images_per_repository,
                 stack_resources=inv.stack_resources,
+                cloud_control=inv.cloud_control,
+                cloud_control_types=list(inv.cloud_control_types),
+                cloud_control_exclude=list(inv.cloud_control_exclude),
+                cloud_control_concurrency=inv.cloud_control_concurrency,
             )
 
         # Subclass keeping the (session, region, account_id) signature that
@@ -509,6 +517,71 @@ class InventoryMapper:
         )
         return topology
 
+    async def _discover_hierarchies(
+        self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
+    ) -> list[CloudAsset]:
+        """Azure management groups / policy and GCP org / folders / policy."""
+        out: list[CloudAsset] = []
+        if "azure" in cfg.providers and getattr(cfg.azure, "map_management_groups", False):
+            cov = CollectionCoverage(provider="azure", region="global")
+            coverage.append(cov)
+            t0 = time.time()
+            errors: list[str] = []
+            try:
+                from cloudg.credentials import build_azure_credential
+                from cloudg.inventory.azure_hierarchy import discover_azure_hierarchy
+
+                credential = build_azure_credential(cfg.azure)
+                found = await asyncio.to_thread(
+                    discover_azure_hierarchy, credential, None, include_policies=True, errors=errors
+                )
+                out.extend(found)
+                cov.record(
+                    "management_groups",
+                    ServiceStatus.PARTIAL if errors else ServiceStatus.SUCCESS,
+                    asset_count=len(found),
+                    error="; ".join(errors) or None,
+                    duration_ms=int((time.time() - t0) * 1000),
+                )
+            except ImportError as exc:
+                cov.record("management_groups", ServiceStatus.SKIPPED, error=str(exc))
+            except Exception as exc:
+                logger.error("Azure hierarchy discovery failed: %s", exc)
+                cov.record("management_groups", ServiceStatus.FAILED, error=str(exc))
+
+        gcp = cfg.gcp
+        if "gcp" in cfg.providers and gcp.organization_id and getattr(gcp, "map_hierarchy", False):
+            cov = CollectionCoverage(provider="gcp", region="global", account_id=gcp.organization_id)
+            coverage.append(cov)
+            t0 = time.time()
+            try:
+                from cloudg.credentials import build_gcp_credentials
+                from cloudg.inventory.gcp_hierarchy import discover_gcp_hierarchy
+
+                credentials = build_gcp_credentials(gcp)[0]
+                found = await asyncio.to_thread(
+                    discover_gcp_hierarchy,
+                    credentials,
+                    gcp.organization_id,
+                    None,
+                    coverage=cov,
+                    org_policies=getattr(gcp, "org_policies", True),
+                    access_policies=getattr(gcp, "vpc_service_controls", True),
+                )
+                out.extend(found)
+                cov.record(
+                    "organization_hierarchy",
+                    ServiceStatus.SUCCESS,
+                    asset_count=len(found),
+                    duration_ms=int((time.time() - t0) * 1000),
+                )
+            except ImportError as exc:
+                cov.record("organization_hierarchy", ServiceStatus.SKIPPED, error=str(exc))
+            except Exception as exc:
+                logger.error("GCP hierarchy discovery failed: %s", exc)
+                cov.record("organization_hierarchy", ServiceStatus.FAILED, error=str(exc))
+        return out
+
     # ------------------------------------------------------------------
     # Mapping
     # ------------------------------------------------------------------
@@ -539,6 +612,10 @@ class InventoryMapper:
                 cov.record("organizations", ServiceStatus.FAILED, error=str(exc))
         self.organization = topology
 
+        # Cloud hierarchies beyond AWS (management groups / org folders);
+        # merged into the map like the AWS organization structure.
+        hierarchy_assets = await self._discover_hierarchies(cfg, org_coverage)
+
         from cloudg.collectors.multi import MultiAccountCollector
 
         collector = MultiAccountCollector(cfg, collector_overrides=self._collector_overrides())
@@ -546,8 +623,14 @@ class InventoryMapper:
 
         if topology is not None and cfg.aws.organization.map_structure:
             assets = topology.to_assets() + assets
+        assets = hierarchy_assets + assets
 
         assets, edges = deduplicate(assets, edges)
+        if "gcp" in cfg.providers:
+            from cloudg.inventory.gcp_relations import merge_gcp_principals
+
+            # Fold per-project service-account placeholders into the real SAs
+            assets, edges = merge_gcp_principals(assets, edges)
 
         # Link: derive cross-service relationships from asset metadata
         from cloudg.inventory.linker import RelationshipLinker

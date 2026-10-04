@@ -41,9 +41,13 @@ logger = logging.getLogger(__name__)
 
 # AWS-native short-ID shapes worth indexing (i-, vpc-, subnet-, sg-, ...)
 _AWS_ID_RE = re.compile(
-    r"^(i|vpc|subnet|sg|vol|eni|igw|nat|rtb|acl|pcx|tgw|tgw-attach|eipalloc|lt|vpce|fs|fsap|fl)-[0-9a-f]{8,17}$"
+    r"^(i|vpc|subnet|sg|vol|eni|igw|eigw|nat|rtb|acl|pcx|tgw|tgw-attach|tgw-rtb|eipalloc|lt|vpce|vpce-svc|fs|fsap|fl|pl|vgw|cgw|vpn|snap|ami)-[0-9a-f]{8,17}$"
 )
 _ARN_ACCOUNT_RE = re.compile(r"^arn:aws[a-zA-Z-]*:[a-z0-9-]+:[a-z0-9-]*:(\d{12}):")
+_AZURE_SUB_RE = re.compile(r"^/subscriptions/([0-9a-fA-F-]{36})(?:/|$)")
+_GCP_PROJECT_RE = re.compile(r"^//[a-z0-9.-]+\.googleapis\.com/projects/([a-z0-9-]+)(?:/|$)")
+_ROLE_ARN_RE = re.compile(r"^arn:aws[a-zA-Z-]*:iam::(\d{12}):role/(.+)$")
+_SSO_ROLE_HASH_RE = re.compile(r"[0-9a-f]{16}")
 _ASSUMED_ROLE_RE = re.compile(r"^arn:aws[a-zA-Z-]*:sts::(\d{12}):assumed-role/([^/]+)/")
 _LAMBDA_QUALIFIED_RE = re.compile(r"^(arn:aws[a-zA-Z-]*:lambda:[^:]+:\d{12}:function:[^:]+):.+$")
 
@@ -72,7 +76,12 @@ _SELF_ID_KEYS = {
 _SKIP_GENERIC_KEYS = {"relations", "aliases", "assume_role_policy"}
 
 # Identifiers that are globally unique; ambiguity never needs scoping
-_GLOBAL_PREFIXES = ("arn:", "/subscriptions/", "//", "k8s://", "cloudg:", "aws-security:")
+_GLOBAL_PREFIXES = (
+    "arn:", "/subscriptions/", "/providers/", "//", "k8s://", "cloudg:", "aws-security:",
+    "azure-security:", "entra:", "loganalytics:", "gcp-principal:", "k8s-gke://",
+)
+# Synthetic identifier schemes whose last path segment is not a usable short ID
+_NO_TAIL_PREFIXES = ("k8s://", "k8s-gke://", "gcp-principal:", "entra:", "loganalytics:")
 
 _MAX_SCAN_DEPTH = 6
 _MAX_UNRESOLVED = 2000
@@ -119,7 +128,8 @@ class RelationshipLinker:
             ids.append(asset_id)
         lowered = identifier.lower()
         if lowered != identifier and (
-            identifier.startswith("/subscriptions/") or "." in identifier and "/" not in identifier
+            identifier.startswith(("/subscriptions/", "/providers/"))
+            or "." in identifier and "/" not in identifier
         ):
             self._register(lowered, asset_id)
 
@@ -128,7 +138,7 @@ class RelationshipLinker:
         self._register(asset.name, asset.id)
 
         # Native short IDs (last path/colon segment of the ARN / resource ID)
-        if asset.arn and not asset.arn.startswith("k8s://"):
+        if asset.arn and not asset.arn.startswith(_NO_TAIL_PREFIXES):
             tail = asset.arn.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
             if tail != asset.arn:
                 self._register(tail, asset.id)
@@ -179,6 +189,10 @@ class RelationshipLinker:
             self._index_asset(asset)
 
     def _pick(self, candidates: list[str], identifier: str, context: CloudAsset | None) -> str | None:
+        # Real assets win over placeholders (e.g. an Entra principal that is
+        # a managed identity collected in another subscription).
+        real = [c for c in candidates if not self._by_id[c].metadata.get("placeholder")]
+        candidates = real or candidates
         if len(candidates) == 1:
             return candidates[0]
         if identifier.startswith(_GLOBAL_PREFIXES):
@@ -221,6 +235,15 @@ class RelationshipLinker:
             found = self._lookup(candidate, context)
             if found:
                 return found
+        # Role ARNs built from a bare name miss roles that have a path:
+        # fall back to the role with that name in that account.
+        m = _ROLE_ARN_RE.match(identifier)
+        if m:
+            acct, role_name = m.group(1), m.group(2).rsplit("/", 1)[-1]
+            for cid in self._index.get(role_name, []):
+                a = self._by_id[cid]
+                if a.asset_type == AssetType.IAM_ROLE and a.account_id == acct:
+                    return cid
         # Assumed-role sessions resolve to the role, scoped to its account
         m = _ASSUMED_ROLE_RE.match(identifier)
         if m:
@@ -252,28 +275,49 @@ class RelationshipLinker:
             yield _strip_image(stripped)
         if stripped.startswith("arn:aws:apigateway:") and "/stages/" in stripped:
             yield stripped.split("/stages/", 1)[0]
+        if ".azurecr.io/" in lowered:
+            yield lowered.split("/", 1)[0]  # image -> registry login server
 
     # ------------------------------------------------------------------
     # External placeholders and bookkeeping
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _foreign_account(identifier: str) -> tuple[CloudProvider, str, str] | None:
+        """(provider, account id, account node identifier) an identifier lives in."""
+        m = _ARN_ACCOUNT_RE.match(identifier) or re.match(r"^arn:aws[a-zA-Z-]*:iam::(\d{12}):", identifier)
+        if m:
+            return CloudProvider.AWS, m.group(1), f"arn:aws:iam::{m.group(1)}:root"
+        if re.fullmatch(r"\d{12}", identifier):
+            return CloudProvider.AWS, identifier, f"arn:aws:iam::{identifier}:root"
+        m = _AZURE_SUB_RE.match(identifier)
+        if m:
+            sub = m.group(1).lower()
+            return CloudProvider.AZURE, sub, f"/subscriptions/{sub}"
+        m = _GCP_PROJECT_RE.match(identifier)
+        if m:
+            return CloudProvider.GCP, m.group(1), f"//cloudresourcemanager.googleapis.com/projects/{m.group(1)}"
+        return None
+
     def _external_account(self, identifier: str, context: CloudAsset) -> str | None:
-        """Account node for an identifier living in an account we did not map."""
+        """Account node (AWS account, Azure subscription, GCP project) for an
+        identifier living in an account we did not map."""
         if not self._materialize_external or not isinstance(identifier, str):
             return None
-        m = _ARN_ACCOUNT_RE.match(identifier) or re.match(r"^arn:aws[a-zA-Z-]*:iam::(\d{12}):", identifier)
-        acct = m.group(1) if m else (identifier if re.fullmatch(r"\d{12}", identifier) else None)
-        if not acct or acct == context.account_id or acct == "aws":
+        found = self._foreign_account(identifier)
+        if found is None:
             return None
-        ref = f"arn:aws:iam::{acct}:root"
-        existing = self._index.get(ref)
+        provider, acct, ref = found
+        if acct == "aws" or acct.lower() == (context.account_id or "").lower():
+            return None
+        existing = self._index.get(ref) or self._index.get(ref.lower())
         if existing:
             return existing[0]
         placeholder = CloudAsset(
             arn=ref,
             name=f"external account {acct}",
             asset_type=AssetType.CLOUD_ACCOUNT,
-            provider=CloudProvider.AWS,
+            provider=provider,
             region="global",
             account_id=acct,
             metadata={"account_id": acct, "external": True, "discovered_via": "cross-account reference"},
@@ -438,6 +482,8 @@ class RelationshipLinker:
             if target is None and isinstance(origin, str):
                 # bucket origins look like <bucket>.s3.<region>.amazonaws.com
                 target = res(origin.split(".s3", 1)[0]) if ".s3" in origin else None
+            if target and ((asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys):
+                continue  # already linked by a declared (typed) relation
             self._add(
                 edges,
                 asset.id,
@@ -506,6 +552,24 @@ class RelationshipLinker:
         parent = md.get("parent_full_resource_name")
         if parent:
             self._add(edges, res(parent), asset.id, EdgeType.CONTAINS)
+
+    def _link_sso_roles(self, edges: list[NetworkEdge]) -> None:
+        """Identity Center permission set -> the AWSReservedSSO_<name>_<hash>
+        role it provisions in every assigned account."""
+        sets = [a for a in self._assets if a.metadata.get("provisioned_role_prefix")]
+        if not sets:
+            return
+        roles = [
+            a for a in self._assets
+            if a.asset_type == AssetType.IAM_ROLE
+            and str(a.metadata.get("path") or "").startswith("/aws-reserved/sso.amazonaws.com/")
+        ]
+        for ps in sets:
+            prefix = ps.metadata["provisioned_role_prefix"]
+            for role in roles:
+                if role.name.startswith(prefix) and _SSO_ROLE_HASH_RE.fullmatch(role.name[len(prefix):]):
+                    self._add(edges, ps.id, role.id, EdgeType.MANAGES,
+                              f"{ps.name} provisions {role.name}", "OWNED_BY")
 
     # ------------------------------------------------------------------
     # Pass 3: generic reference scan
@@ -576,6 +640,10 @@ class RelationshipLinker:
                 self._link_rules(asset, edges)
             except Exception:
                 logger.debug("Rule linking failed for %s", asset.name, exc_info=True)
+        try:
+            self._link_sso_roles(edges)
+        except Exception:
+            logger.debug("SSO role linking failed", exc_info=True)
         if include_generic:
             for asset in self._assets:
                 try:

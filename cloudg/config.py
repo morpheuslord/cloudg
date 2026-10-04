@@ -127,6 +127,17 @@ class AzureConfig(BaseModel):
         default=["ALL"],
         description="Azure locations to scan. Use ['ALL'] for auto-discovery.",
     )
+    all_subscriptions: bool = Field(
+        default=True,
+        description=(
+            "When subscription_ids is empty, collect every Enabled subscription the "
+            "credential can see (False: only the first one)"
+        ),
+    )
+    map_management_groups: bool = Field(
+        default=True,
+        description="Map the management group / subscription / Azure Policy hierarchy (inventory)",
+    )
 
 
 class GCPConfig(BaseModel):
@@ -150,6 +161,43 @@ class GCPConfig(BaseModel):
     regions: list[str] = Field(
         default=["ALL"],
         description="GCP regions to scan. Use ['ALL'] for auto-discovery.",
+    )
+    collection_scope: str = Field(
+        default="auto",
+        pattern="^(auto|organization|project)$",
+        description="auto: one Cloud Asset Inventory listing at organizations/<organization_id> "
+        "when organization_id is set (project_ids then filter it), else one per project. "
+        "organization / project force either mode.",
+    )
+    skip_asset_types: list[str] = Field(
+        default_factory=lambda: [
+            "k8s.io/Pod",
+            "k8s.io/Node",
+            "k8s.io/Event",
+            "events.k8s.io/Event",
+            "k8s.io/Endpoints",
+            "discovery.k8s.io/EndpointSlice",
+            "apps.k8s.io/ReplicaSet",
+            "apps.k8s.io/ControllerRevision",
+            "run.googleapis.com/Revision",
+            "cloudkms.googleapis.com/CryptoKeyVersion",
+            "secretmanager.googleapis.com/SecretVersion",
+            "serviceusage.googleapis.com/Service",
+        ],
+        description="Cloud Asset Inventory types left out of the map (high-churn objects)",
+    )
+    asset_page_size: int = Field(default=1000, ge=1, le=1000)
+    api_timeout_seconds: float = Field(default=600.0, ge=10.0)
+    iam_policies: bool = Field(
+        default=True, description="Map IAM policy bindings (principal -> resource access)"
+    )
+    map_hierarchy: bool = Field(
+        default=True,
+        description="With organization_id: map the organization, folders and projects",
+    )
+    org_policies: bool = Field(default=True, description="Map organization policies")
+    vpc_service_controls: bool = Field(
+        default=True, description="Map VPC Service Controls perimeters"
     )
 
 
@@ -175,8 +223,19 @@ class InventoryConfig(BaseModel):
 
     tagging_sweep: bool = Field(
         default=True,
-        description="AWS: sweep the Resource Groups Tagging API to catch every taggable resource",
+        description="AWS: sweep the Resource Groups Tagging API (tagged resources only)",
     )
+    cloud_control: bool = Field(
+        default=True,
+        description="AWS: list every resource type with a Cloud Control list handler, "
+        "tagged or not, for services without a dedicated collector",
+    )
+    cloud_control_types: list[str] = Field(
+        default_factory=list,
+        description="Only these CloudFormation types or prefixes (e.g. AWS::SSM::, AWS::Glue::Job)",
+    )
+    cloud_control_exclude: list[str] = Field(default_factory=list)
+    cloud_control_concurrency: int = Field(default=6, ge=1, le=32)
     link_references: bool = Field(
         default=True,
         description="Derive cross-service REFERENCES edges from asset metadata",

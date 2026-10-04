@@ -71,6 +71,7 @@ class AssetType(str, Enum):
     BLOB_STORAGE = "BLOB_STORAGE"
     GCS_BUCKET = "GCS_BUCKET"
     EBS_VOLUME = "EBS_VOLUME"
+    ACCESS_POINT = "ACCESS_POINT"  # S3 (multi-region) access point, EFS access point
 
     # Database
     RDS_INSTANCE = "RDS_INSTANCE"
@@ -155,7 +156,80 @@ class AssetType(str, Enum):
     CLOUD_ACCOUNT = "CLOUD_ACCOUNT"
     ORG_POLICY = "ORG_POLICY"  # SCP, RCP, tag/backup policy
     LANDING_ZONE = "LANDING_ZONE"
-    GUARDRAIL = "GUARDRAIL"  # Control Tower control / baseline
+    GUARDRAIL = "GUARDRAIL"  # Control Tower control / baseline, policy assignment, perimeter
+    RESOURCE_GROUP = "RESOURCE_GROUP"  # Azure resource group
+
+    # Identity federation and access
+    PERMISSION_SET = "PERMISSION_SET"  # IAM Identity Center
+    IDENTITY_USER = "IDENTITY_USER"  # Identity Center / Entra / workforce user
+    IDENTITY_GROUP = "IDENTITY_GROUP"
+    ACCESS_KEY = "ACCESS_KEY"  # IAM access key, service account key
+    USER_POOL = "USER_POOL"  # Cognito user pool, B2C
+    IDENTITY_POOL = "IDENTITY_POOL"
+    RESOURCE_SHARE = "RESOURCE_SHARE"  # AWS RAM
+
+    # Deployment / provisioning
+    STACK_SET = "STACK_SET"
+    PROVISIONED_PRODUCT = "PROVISIONED_PRODUCT"  # Service Catalog / Account Factory
+    PRODUCT_PORTFOLIO = "PRODUCT_PORTFOLIO"
+    CI_PIPELINE = "CI_PIPELINE"
+    BUILD_PROJECT = "BUILD_PROJECT"
+    DEPLOYMENT_GROUP = "DEPLOYMENT_GROUP"
+
+    # Images, snapshots, backups
+    MACHINE_IMAGE = "MACHINE_IMAGE"
+    SNAPSHOT = "SNAPSHOT"
+    BACKUP_PLAN = "BACKUP_PLAN"
+    BACKUP_VAULT = "BACKUP_VAULT"
+
+    # Hybrid and edge networking
+    VPN_CONNECTION = "VPN_CONNECTION"  # VPN connection / tunnel
+    VPN_GATEWAY = "VPN_GATEWAY"  # VGW, Azure VNet gateway, GCP target VPN gateway
+    CUSTOMER_GATEWAY = "CUSTOMER_GATEWAY"  # CGW, local network gateway, external VPN gateway
+    DIRECT_CONNECT = "DIRECT_CONNECT"  # DX connection / VIF / gateway, ExpressRoute, Interconnect
+    ROUTER = "ROUTER"  # GCP Cloud Router, Azure virtual hub router
+    PREFIX_LIST = "PREFIX_LIST"
+    ENDPOINT_SERVICE = "ENDPOINT_SERVICE"  # PrivateLink service, private link service, PSC attachment
+    VPC_LINK = "VPC_LINK"
+    CUSTOM_DOMAIN = "CUSTOM_DOMAIN"
+    DNS_RESOLVER = "DNS_RESOLVER"
+    GLOBAL_ACCELERATOR = "GLOBAL_ACCELERATOR"
+    SERVICE_NETWORK = "SERVICE_NETWORK"  # VPC Lattice, Cloud WAN, NCC hub
+
+    # Application integration and operations
+    SCHEDULE = "SCHEDULE"
+    EVENT_PIPE = "EVENT_PIPE"
+    API_DESTINATION = "API_DESTINATION"
+    ALARM = "ALARM"
+    DELIVERY_STREAM = "DELIVERY_STREAM"  # Firehose
+    LOG_SINK = "LOG_SINK"  # subscription filter, logging sink, diagnostic setting
+    PARAMETER = "PARAMETER"  # SSM parameter, app configuration
+    CAPACITY_PROVIDER = "CAPACITY_PROVIDER"
+    SERVICE_REGISTRY = "SERVICE_REGISTRY"  # Cloud Map namespace / service
+    EVENT_ARCHIVE = "EVENT_ARCHIVE"
+    RUNBOOK = "RUNBOOK"  # SSM document, automation runbook
+    SOURCE_CONNECTION = "SOURCE_CONNECTION"  # CodeConnections / CodeStar connection
+    LB_LISTENER = "LB_LISTENER"
+    AUTHORIZER = "AUTHORIZER"  # API Gateway authorizer
+    EDGE_FUNCTION = "EDGE_FUNCTION"  # CloudFront Function, Lambda@Edge association
+
+    # Platforms and data processing
+    MESSAGE_BROKER = "MESSAGE_BROKER"  # MSK, Amazon MQ, Event Hubs Kafka, Managed Kafka
+    BATCH_ENVIRONMENT = "BATCH_ENVIRONMENT"
+    JOB_QUEUE = "JOB_QUEUE"
+    JOB_DEFINITION = "JOB_DEFINITION"
+    DATABASE_PROXY = "DATABASE_PROXY"
+    DATA_CATALOG = "DATA_CATALOG"  # Glue database/catalog, Purview
+    ETL_JOB = "ETL_JOB"  # Glue job/crawler, Data Factory pipeline, Dataflow
+    BIG_DATA_CLUSTER = "BIG_DATA_CLUSTER"  # EMR, Dataproc, HDInsight, Databricks
+    QUERY_WORKGROUP = "QUERY_WORKGROUP"  # Athena
+    DATA_TRANSFER = "DATA_TRANSFER"  # DataSync task, Transfer Family server
+    ML_WORKSPACE = "ML_WORKSPACE"  # SageMaker domain/notebook, Vertex workbench, AML workspace
+    ML_ENDPOINT = "ML_ENDPOINT"
+    ML_MODEL = "ML_MODEL"
+    AI_AGENT = "AI_AGENT"  # Bedrock agent
+    KNOWLEDGE_BASE = "KNOWLEDGE_BASE"
+    AI_GUARDRAIL = "AI_GUARDRAIL"
 
     # Generic
     OTHER = "OTHER"
