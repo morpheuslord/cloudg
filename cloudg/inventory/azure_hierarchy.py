@@ -87,6 +87,9 @@ def alz_archetype(name: str | None, display_name: str | None = None) -> str | No
     return None
 
 
+_ASSET_FIELDS = {"account_id", "tags", "region"}
+
+
 def _asset(
     arn: str,
     name: str,
@@ -94,10 +97,17 @@ def _asset(
     metadata: dict[str, Any],
     relations: list[dict[str, Any] | None],
     aliases: list[str | None],
-    account_id: str | None = None,
-    tags: Any = None,
-    region: str = "global",
+    **fields: Any,
 ) -> CloudAsset:
+    """Build one hierarchy asset.
+
+    Args:
+        fields: Optional ``account_id`` (None), ``tags`` (None) and
+            ``region`` (``"global"``).
+    """
+    unknown = set(fields) - _ASSET_FIELDS
+    if unknown:
+        raise TypeError(f"_asset() got unexpected keyword arguments: {sorted(unknown)}")
     md = {k: v for k, v in metadata.items() if v is not None}
     rels = [r for r in relations if r]
     if rels:
@@ -110,11 +120,63 @@ def _asset(
         name=name or arn,
         asset_type=asset_type,
         provider=CloudProvider.AZURE,
-        region=region or "global",
-        account_id=account_id,
-        tags=_tags(tags),
+        region=fields.get("region", "global") or "global",
+        account_id=fields.get("account_id"),
+        tags=_tags(fields.get("tags")),
         metadata=md,
     )
+
+
+def _contained_by_group(parent: str | None) -> dict[str, Any] | None:
+    """Reverse ORG_CONTAINS_ACCOUNT edge from the parent management group."""
+    if not parent:
+        return None
+    return rel(
+        management_group_ref(parent),
+        EdgeType.CONTAINS,
+        "ORG_CONTAINS_ACCOUNT",
+        reverse=True,
+    )
+
+
+def _management_group_asset(row: dict[str, Any]) -> tuple[CloudAsset, bool] | None:
+    """One management group row -> (ORG_UNIT asset, is tenant root)."""
+    name = row.get("name") or str(row.get("id", "")).rsplit("/", 1)[-1]
+    if not name:
+        return None
+    props = row.get("properties") or {}
+    details = _get(props, "details") or {}
+    parent = _get(details, "parent") or {}
+    parent_name = _get(parent, "name") or (str(_get(parent, "id") or "").rsplit("/", 1)[-1] or None)
+    tenant = row.get("tenantId") or _get(props, "tenantId")
+    is_root = not parent_name or (tenant is not None and name.lower() == str(tenant).lower())
+    display = _get(props, "displayName") or name
+    archetype = None if is_root else alz_archetype(name, display)
+    arn = management_group_ref(name)
+    asset = _asset(
+        arn,
+        display,
+        AssetType.ORG_UNIT,
+        {
+            "resource_type": "microsoft.management/managementgroups",
+            "management_group_id": name,
+            "display_name": display,
+            "tenant_id": tenant,
+            "is_tenant_root": is_root,
+            "parent_management_group": parent_name,
+            "landing_zone": archetype is not None,
+            "alz_archetype": archetype,
+            "ancestors": [
+                _get(a, "name")
+                for a in _list(_get(details, "managementGroupAncestorsChain"))
+                if _get(a, "name")
+            ],
+        },
+        [_contained_by_group(parent_name) if not is_root else None],
+        [arn.lower(), row.get("id"), str(row.get("id") or "").lower() or None],
+        tags=row.get("tags"),
+    )
+    return asset, is_root
 
 
 def _management_group_assets(rows: list[dict[str, Any]]) -> tuple[list[CloudAsset], str | None]:
@@ -123,57 +185,51 @@ def _management_group_assets(rows: list[dict[str, Any]]) -> tuple[list[CloudAsse
     for row in rows:
         if _lower(row.get("type")) != "microsoft.management/managementgroups":
             continue
-        name = row.get("name") or str(row.get("id", "")).rsplit("/", 1)[-1]
-        if not name:
+        built = _management_group_asset(row)
+        if built is None:
             continue
-        props = row.get("properties") or {}
-        details = _get(props, "details") or {}
-        parent = _get(details, "parent") or {}
-        parent_name = _get(parent, "name") or (
-            str(_get(parent, "id") or "").rsplit("/", 1)[-1] or None
-        )
-        tenant = row.get("tenantId") or _get(props, "tenantId")
-        is_root = not parent_name or (tenant is not None and name.lower() == str(tenant).lower())
+        asset, is_root = built
         if is_root:
-            root = name
-        display = _get(props, "displayName") or name
-        archetype = None if is_root else alz_archetype(name, display)
-        arn = management_group_ref(name)
-        assets.append(
-            _asset(
-                arn,
-                display,
-                AssetType.ORG_UNIT,
-                {
-                    "resource_type": "microsoft.management/managementgroups",
-                    "management_group_id": name,
-                    "display_name": display,
-                    "tenant_id": tenant,
-                    "is_tenant_root": is_root,
-                    "parent_management_group": parent_name,
-                    "landing_zone": archetype is not None,
-                    "alz_archetype": archetype,
-                    "ancestors": [
-                        _get(a, "name")
-                        for a in _list(_get(details, "managementGroupAncestorsChain"))
-                        if _get(a, "name")
-                    ],
-                },
-                [
-                    rel(
-                        management_group_ref(parent_name),
-                        EdgeType.CONTAINS,
-                        "ORG_CONTAINS_ACCOUNT",
-                        reverse=True,
-                    )
-                    if parent_name and not is_root
-                    else None
-                ],
-                [arn.lower(), row.get("id"), str(row.get("id") or "").lower() or None],
-                tags=row.get("tags"),
-            )
-        )
+            root = asset.metadata["management_group_id"]
+        assets.append(asset)
     return assets, root
+
+
+def _subscription_asset(row: dict[str, Any]) -> CloudAsset | None:
+    sub = row.get("subscriptionId") or str(row.get("id", "")).rsplit("/", 1)[-1]
+    if not sub:
+        return None
+    props = row.get("properties") or {}
+    chain = [
+        _get(a, "name")
+        for a in _list(_get(props, "managementGroupAncestorsChain"))
+        if _get(a, "name")
+    ]
+    parent = chain[0] if chain else None
+    display = (
+        row.get("name")
+        if row.get("name") and row.get("name") != sub
+        else _get(props, "displayName")
+    )
+    return _asset(
+        subscription_ref(sub),
+        display or f"subscription {sub}",
+        AssetType.CLOUD_ACCOUNT,
+        {
+            "account_id": sub,
+            "subscription_id": sub,
+            "display_name": display,
+            "state": _get(props, "state"),
+            "tenant_id": row.get("tenantId"),
+            "parent_management_group": parent,
+            "management_group_path": list(reversed(chain)),
+            "resource_type": "microsoft.resources/subscriptions",
+        },
+        [_contained_by_group(parent)],
+        [sub],
+        account_id=sub,
+        tags=row.get("tags"),
+    )
 
 
 def _subscription_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
@@ -181,52 +237,102 @@ def _subscription_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
     for row in rows:
         if _lower(row.get("type")) != "microsoft.resources/subscriptions":
             continue
-        sub = row.get("subscriptionId") or str(row.get("id", "")).rsplit("/", 1)[-1]
-        if not sub:
-            continue
-        props = row.get("properties") or {}
-        chain = [
-            _get(a, "name")
-            for a in _list(_get(props, "managementGroupAncestorsChain"))
-            if _get(a, "name")
-        ]
-        parent = chain[0] if chain else None
-        display = (
-            row.get("name")
-            if row.get("name") and row.get("name") != sub
-            else _get(props, "displayName")
-        )
-        assets.append(
-            _asset(
-                subscription_ref(sub),
-                display or f"subscription {sub}",
-                AssetType.CLOUD_ACCOUNT,
-                {
-                    "account_id": sub,
-                    "subscription_id": sub,
-                    "display_name": display,
-                    "state": _get(props, "state"),
-                    "tenant_id": row.get("tenantId"),
-                    "parent_management_group": parent,
-                    "management_group_path": list(reversed(chain)),
-                    "resource_type": "microsoft.resources/subscriptions",
-                },
-                [
-                    rel(
-                        management_group_ref(parent),
-                        EdgeType.CONTAINS,
-                        "ORG_CONTAINS_ACCOUNT",
-                        reverse=True,
-                    )
-                    if parent
-                    else None
-                ],
-                [sub],
-                account_id=sub,
-                tags=row.get("tags"),
-            )
-        )
+        asset = _subscription_asset(row)
+        if asset is not None:
+            assets.append(asset)
     return assets
+
+
+def _policy_assignment_asset(
+    row: dict[str, Any], rid: str, display: str, props: dict[str, Any]
+) -> CloudAsset:
+    scope = normalize_scope(_get(props, "scope"))
+    definition = _get(props, "policyDefinitionId")
+    enforcement = _get(props, "enforcementMode") or "Default"
+    not_scopes = [normalize_scope(s) for s in _list(_get(props, "notScopes")) if s]
+    identity = row.get("identity") or {}
+    principal = _get(identity, "principalId") if isinstance(identity, dict) else None
+    return _asset(
+        rid,
+        display,
+        AssetType.GUARDRAIL,
+        {
+            "resource_type": row.get("type"),
+            "guardrail_kind": "azure-policy-assignment",
+            "scope": scope,
+            "policy_definition_id": definition,
+            "initiative": "/policysetdefinitions/" in _lower(definition),
+            "enforcement_mode": enforcement,
+            "enforced": _lower(enforcement) != "donotenforce",
+            "not_scopes": not_scopes,
+            "description": _get(props, "description"),
+            "assignment_identity": principal,
+        },
+        [
+            rel(
+                scope,
+                EdgeType.GOVERNS,
+                "COMPLIANCE_GOVERNS",
+                description=f"policy {display}",
+                enforcement_mode=enforcement,
+                not_scopes=not_scopes,
+            )
+            if scope and scope != "/"
+            else None
+        ],
+        [rid.lower(), principal_ref(principal)],
+        account_id=row.get("subscriptionId") or None,
+        region=row.get("location") or "global",
+    )
+
+
+def _policy_exemption_asset(
+    row: dict[str, Any], rid: str, display: str, props: dict[str, Any]
+) -> CloudAsset:
+    cut = rid.lower().find(_EXEMPTION_MARKER)
+    scope = normalize_scope(rid[:cut]) if cut > 0 else None
+    assignment = _get(props, "policyAssignmentId")
+    category = _get(props, "exemptionCategory")
+    return _asset(
+        rid,
+        display,
+        AssetType.GUARDRAIL,
+        {
+            "resource_type": row.get("type"),
+            "guardrail_kind": "azure-policy-exemption",
+            "exemption": True,
+            "scope": scope,
+            "policy_assignment_id": assignment,
+            "exemption_category": category,
+            "expires_on": _get(props, "expiresOn"),
+        },
+        [
+            rel(
+                scope,
+                EdgeType.GOVERNS,
+                "COMPLIANCE_GOVERNS",
+                description=f"exemption {display}",
+                exemption=True,
+                category=category,
+            )
+            if scope
+            else None,
+            rel(
+                assignment.lower() if isinstance(assignment, str) else None,
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+                description="exempted assignment",
+            ),
+        ],
+        [rid.lower()],
+        account_id=row.get("subscriptionId") or None,
+    )
+
+
+_POLICY_BUILDERS: dict[str, Callable[..., CloudAsset]] = {
+    "microsoft.authorization/policyassignments": _policy_assignment_asset,
+    "microsoft.authorization/policyexemptions": _policy_exemption_asset,
+}
 
 
 def _policy_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
@@ -237,93 +343,12 @@ def _policy_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
         if not rid or rid.lower() in seen:
             continue
         seen.add(rid.lower())
-        rtype = _lower(row.get("type"))
+        build = _POLICY_BUILDERS.get(_lower(row.get("type")))
+        if build is None:
+            continue
         props = row.get("properties") or {}
         display = _get(props, "displayName") or row.get("name") or rid.rsplit("/", 1)[-1]
-        sub = row.get("subscriptionId") or None
-        if rtype == "microsoft.authorization/policyassignments":
-            scope = normalize_scope(_get(props, "scope"))
-            definition = _get(props, "policyDefinitionId")
-            enforcement = _get(props, "enforcementMode") or "Default"
-            not_scopes = [normalize_scope(s) for s in _list(_get(props, "notScopes")) if s]
-            identity = row.get("identity") or {}
-            principal = _get(identity, "principalId") if isinstance(identity, dict) else None
-            assets.append(
-                _asset(
-                    rid,
-                    display,
-                    AssetType.GUARDRAIL,
-                    {
-                        "resource_type": row.get("type"),
-                        "guardrail_kind": "azure-policy-assignment",
-                        "scope": scope,
-                        "policy_definition_id": definition,
-                        "initiative": "/policysetdefinitions/" in _lower(definition),
-                        "enforcement_mode": enforcement,
-                        "enforced": _lower(enforcement) != "donotenforce",
-                        "not_scopes": not_scopes,
-                        "description": _get(props, "description"),
-                        "assignment_identity": principal,
-                    },
-                    [
-                        rel(
-                            scope,
-                            EdgeType.GOVERNS,
-                            "COMPLIANCE_GOVERNS",
-                            description=f"policy {display}",
-                            enforcement_mode=enforcement,
-                            not_scopes=not_scopes,
-                        )
-                        if scope and scope != "/"
-                        else None
-                    ],
-                    [rid.lower(), principal_ref(principal)],
-                    account_id=sub,
-                    region=row.get("location") or "global",
-                )
-            )
-        elif rtype == "microsoft.authorization/policyexemptions":
-            lowered = rid.lower()
-            cut = lowered.find(_EXEMPTION_MARKER)
-            scope = normalize_scope(rid[:cut]) if cut > 0 else None
-            assignment = _get(props, "policyAssignmentId")
-            category = _get(props, "exemptionCategory")
-            assets.append(
-                _asset(
-                    rid,
-                    display,
-                    AssetType.GUARDRAIL,
-                    {
-                        "resource_type": row.get("type"),
-                        "guardrail_kind": "azure-policy-exemption",
-                        "exemption": True,
-                        "scope": scope,
-                        "policy_assignment_id": assignment,
-                        "exemption_category": category,
-                        "expires_on": _get(props, "expiresOn"),
-                    },
-                    [
-                        rel(
-                            scope,
-                            EdgeType.GOVERNS,
-                            "COMPLIANCE_GOVERNS",
-                            description=f"exemption {display}",
-                            exemption=True,
-                            category=category,
-                        )
-                        if scope
-                        else None,
-                        rel(
-                            assignment.lower() if isinstance(assignment, str) else None,
-                            EdgeType.REFERENCES,
-                            "DEPENDS_ON",
-                            description="exempted assignment",
-                        ),
-                    ],
-                    [rid.lower()],
-                    account_id=sub,
-                )
-            )
+        assets.append(build(row, rid, display, props))
     return assets
 
 

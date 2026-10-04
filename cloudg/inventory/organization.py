@@ -12,12 +12,8 @@ administrator) to:
 3. Pick the accounts to fan collection out to (OU filters, exclusions,
    suspended accounts) and, with Control Tower, the governed regions.
 
-The topology is also turned into map nodes and edges:
-ORGANIZATION -> ORG_UNIT (tree) -> CLOUD_ACCOUNT, ORG_POLICY GOVERNS
-targets, GUARDRAIL (control) GOVERNS targets, LANDING_ZONE MANAGES OUs and
-its shared accounts. Account nodes use the ``arn:aws:iam::<id>:root``
-identifier, so IAM trust and resource policies from any collected account
-resolve onto them.
+The topology is also turned into map nodes and edges
+(:mod:`cloudg.inventory.organization_assets`).
 
 All calls are read-only (``Describe*`` / ``List*`` / ``Get*``).
 """
@@ -28,7 +24,9 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType
+# account_ref is re-exported: it is part of this module's public API.
+from cloudg.inventory.organization_assets import account_ref, topology_assets  # noqa: F401
+from cloudg.schema.models import CloudAsset
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +54,6 @@ _CT_HOME_REGION_CANDIDATES = [
     "eu-north-1",
     "sa-east-1",
 ]
-
-
-def account_ref(account_id: str) -> str:
-    """Canonical identifier of an AWS account node."""
-    return f"arn:aws:iam::{account_id}:root"
 
 
 @dataclass
@@ -182,200 +175,7 @@ class OrganizationTopology:
 
     def to_assets(self) -> list[CloudAsset]:
         """Organization structure as CloudAssets with declared relations."""
-        mgmt = self.management_account_id
-        org_arn = self.organization_arn or f"cloudg:aws:organization:{self.organization_id}"
-        home = self.control_tower_region or "global"
-
-        def asset(
-            arn: str,
-            name: str,
-            asset_type: AssetType,
-            metadata: dict[str, Any],
-            relations: list[dict[str, Any]],
-            account_id: str | None = mgmt,
-            region: str = "global",
-            aliases: list[str] | None = None,
-        ) -> CloudAsset:
-            md = dict(metadata)
-            if relations:
-                md["relations"] = relations
-            if aliases:
-                md["aliases"] = [a for a in aliases if a]
-            return CloudAsset(
-                arn=arn,
-                name=name,
-                asset_type=asset_type,
-                provider=CloudProvider.AWS,
-                region=region,
-                account_id=account_id,
-                metadata=md,
-            )
-
-        def r(
-            target: str,
-            edge: EdgeType,
-            relationship: str | None = None,
-            reverse: bool = False,
-            **props: Any,
-        ) -> dict[str, Any]:
-            out: dict[str, Any] = {"target": target, "edge": edge.value}
-            if relationship:
-                out["relationship"] = relationship
-            if reverse:
-                out["reverse"] = True
-            if props:
-                out["properties"] = props
-            return out
-
-        assets = [
-            asset(
-                org_arn,
-                f"organization {self.organization_id}",
-                AssetType.ORGANIZATION,
-                {
-                    "organization_id": self.organization_id,
-                    "feature_set": self.feature_set,
-                    "management_account_id": mgmt,
-                    "control_tower": self.control_tower_enabled,
-                    "enabled_services": self.enabled_services,
-                    "delegated_administrators": self.delegated_administrators,
-                },
-                [r(account_ref(mgmt), EdgeType.MANAGES, "OWNED_BY", reverse=True)] if mgmt else [],
-                aliases=[self.organization_id or ""],
-            )
-        ]
-        for root in self.roots:
-            assets.append(
-                asset(
-                    root.arn,
-                    "Root",
-                    AssetType.ORG_UNIT,
-                    {"ou_id": root.id, "is_root": True, "path": ["Root"]},
-                    [r(org_arn, EdgeType.CONTAINS, reverse=True)],
-                    aliases=[root.id],
-                )
-            )
-        for ou in self.ous.values():
-            assets.append(
-                asset(
-                    ou.arn,
-                    ou.name,
-                    AssetType.ORG_UNIT,
-                    {"ou_id": ou.id, "is_root": False, "path": ou.path},
-                    [r(ou.parent_id or "", EdgeType.CONTAINS, reverse=True)],
-                    aliases=[ou.id],
-                )
-            )
-        shared_roles = {acct: role for role, acct in self.shared_accounts.items()}
-        for acct in self.accounts.values():
-            assets.append(
-                asset(
-                    account_ref(acct.id),
-                    acct.name,
-                    AssetType.CLOUD_ACCOUNT,
-                    {
-                        "account_id": acct.id,
-                        "status": acct.status,
-                        "ou_path": acct.ou_path,
-                        "email": acct.email,
-                        "joined_method": acct.joined_method,
-                        "joined": acct.joined,
-                        "management_account": acct.id == mgmt,
-                        "control_tower_role": shared_roles.get(acct.id),
-                        "delegated_admin_for": sorted(
-                            svc
-                            for svc, ids in self.delegated_administrators.items()
-                            if acct.id in ids
-                        ),
-                    },
-                    [r(acct.parent_id, EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT", reverse=True)],
-                    account_id=acct.id,
-                    aliases=[acct.arn, acct.id],
-                )
-            )
-        for pol in self.policies:
-            assets.append(
-                asset(
-                    pol.arn,
-                    pol.name,
-                    AssetType.ORG_POLICY,
-                    {
-                        "policy_id": pol.id,
-                        "policy_type": pol.type,
-                        "aws_managed": pol.aws_managed,
-                        "target_count": len(pol.targets),
-                    },
-                    [
-                        r(
-                            t,
-                            EdgeType.GOVERNS,
-                            "SCP_RESTRICTS"
-                            if pol.type == "SERVICE_CONTROL_POLICY"
-                            else "COMPLIANCE_GOVERNS",
-                        )
-                        for t in pol.targets
-                    ],
-                    aliases=[pol.id],
-                )
-            )
-        if self.landing_zone:
-            lz = self.landing_zone
-            lz_rel = [r(org_arn, EdgeType.MANAGES, "COMPLIANCE_GOVERNS")]
-            for role, acct_id in self.shared_accounts.items():
-                lz_rel.append(r(account_ref(acct_id), EdgeType.MANAGES, "OWNED_BY", role=role))
-            assets.append(
-                asset(
-                    lz.get("arn") or "cloudg:aws:controltower:landing-zone",
-                    "Control Tower landing zone",
-                    AssetType.LANDING_ZONE,
-                    {
-                        "version": lz.get("version"),
-                        "latest_available_version": lz.get("latestAvailableVersion"),
-                        "status": lz.get("status"),
-                        "drift_status": (lz.get("driftStatus") or {}).get("status"),
-                        "governed_regions": self.governed_regions,
-                        "shared_accounts": self.shared_accounts,
-                        "home_region": self.control_tower_region,
-                    },
-                    lz_rel,
-                    region=home,
-                )
-            )
-        for ctl in self.enabled_controls:
-            ident = ctl.get("controlIdentifier", "")
-            assets.append(
-                asset(
-                    ctl.get("arn") or f"{ident}@{ctl.get('targetIdentifier')}",
-                    ident.rsplit("/", 1)[-1],
-                    AssetType.GUARDRAIL,
-                    {
-                        "kind": "control",
-                        "control_identifier": ident,
-                        "status": (ctl.get("statusSummary") or {}).get("status"),
-                        "drift_status": (ctl.get("driftStatusSummary") or {}).get("driftStatus"),
-                    },
-                    [r(ctl.get("targetIdentifier", ""), EdgeType.GOVERNS, "COMPLIANCE_GOVERNS")],
-                    region=home,
-                )
-            )
-        for bl in self.enabled_baselines:
-            ident = bl.get("baselineIdentifier", "")
-            assets.append(
-                asset(
-                    bl.get("arn") or f"{ident}@{bl.get('targetIdentifier')}",
-                    f"baseline {ident.rsplit('/', 1)[-1]}",
-                    AssetType.GUARDRAIL,
-                    {
-                        "kind": "baseline",
-                        "baseline_identifier": ident,
-                        "baseline_version": bl.get("baselineVersion"),
-                        "status": (bl.get("statusSummary") or {}).get("status"),
-                    },
-                    [r(bl.get("targetIdentifier", ""), EdgeType.GOVERNS, "COMPLIANCE_GOVERNS")],
-                    region=home,
-                )
-            )
-        return assets
+        return topology_assets(self)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -419,19 +219,56 @@ def _parse_manifest(manifest: Any) -> tuple[list[str], dict[str, str]]:
     return regions, shared
 
 
+def _ct_regions(session: Any, home_region: str | None) -> list[str]:
+    """Regions to probe for the landing zone: the hint, the session's, then the usual homes."""
+    regions = [home_region] if home_region else []
+    session_region = getattr(session, "region_name", None)
+    if session_region and session_region not in regions:
+        regions.append(session_region)
+    regions += [r for r in _CT_HOME_REGION_CANDIDATES if r not in regions]
+    return regions
+
+
+def _load_landing_zone(ct: Any, topology: OrganizationTopology, lz_arn: Any, region: str) -> None:
+    try:
+        lz = ct.get_landing_zone(landingZoneIdentifier=lz_arn).get("landingZone", {})
+    except Exception as exc:
+        topology.errors.append(f"controltower:get_landing_zone: {exc}")
+        lz = {"arn": lz_arn}
+    topology.landing_zone = {k: v for k, v in lz.items() if k != "manifest"}
+    topology.landing_zone.setdefault("arn", lz_arn)
+    topology.control_tower_region = region
+    topology.governed_regions, topology.shared_accounts = _parse_manifest(lz.get("manifest"))
+
+
+def _load_controls(ct: Any, topology: OrganizationTopology) -> None:
+    """Enabled controls and baselines of the landing zone."""
+    try:
+        topology.enabled_controls = _paginate(ct, "list_enabled_controls", "enabledControls")
+    except Exception:
+        # Older API revisions require a target: query each OU instead.
+        controls: list[dict[str, Any]] = []
+        for unit in list(topology.ous.values()):
+            try:
+                controls += _paginate(
+                    ct, "list_enabled_controls", "enabledControls", targetIdentifier=unit.arn
+                )
+            except Exception as exc:
+                logger.debug("Enabled controls for %s unavailable: %s", unit.id, exc)
+        topology.enabled_controls = controls
+    try:
+        topology.enabled_baselines = _paginate(ct, "list_enabled_baselines", "enabledBaselines")
+    except Exception as exc:
+        logger.debug("Enabled baselines unavailable: %s", exc)
+
+
 def discover_control_tower(
     session: Any,
     topology: OrganizationTopology,
     home_region: str | None = None,
 ) -> None:
     """Fill landing zone, governed regions, controls and baselines in place."""
-    regions = [home_region] if home_region else []
-    session_region = getattr(session, "region_name", None)
-    if session_region and session_region not in regions:
-        regions.append(session_region)
-    regions += [r for r in _CT_HOME_REGION_CANDIDATES if r not in regions]
-
-    for region in regions:
+    for region in _ct_regions(session, home_region):
         try:
             ct = session.client("controltower", region_name=region)
             zones = _paginate(ct, "list_landing_zones", "landingZones")
@@ -442,34 +279,8 @@ def discover_control_tower(
             continue
         if not zones:
             continue
-        lz_arn = zones[0].get("arn")
-        try:
-            lz = ct.get_landing_zone(landingZoneIdentifier=lz_arn).get("landingZone", {})
-        except Exception as exc:
-            topology.errors.append(f"controltower:get_landing_zone: {exc}")
-            lz = {"arn": lz_arn}
-        topology.landing_zone = {k: v for k, v in lz.items() if k != "manifest"}
-        topology.landing_zone.setdefault("arn", lz_arn)
-        topology.control_tower_region = region
-        topology.governed_regions, topology.shared_accounts = _parse_manifest(lz.get("manifest"))
-
-        try:
-            topology.enabled_controls = _paginate(ct, "list_enabled_controls", "enabledControls")
-        except Exception:
-            # Older API revisions require a target: query each OU instead.
-            controls: list[dict[str, Any]] = []
-            for unit in list(topology.ous.values()):
-                try:
-                    controls += _paginate(
-                        ct, "list_enabled_controls", "enabledControls", targetIdentifier=unit.arn
-                    )
-                except Exception as exc:
-                    logger.debug("Enabled controls for %s unavailable: %s", unit.id, exc)
-            topology.enabled_controls = controls
-        try:
-            topology.enabled_baselines = _paginate(ct, "list_enabled_baselines", "enabledBaselines")
-        except Exception as exc:
-            logger.debug("Enabled baselines unavailable: %s", exc)
+        _load_landing_zone(ct, topology, zones[0].get("arn"), region)
+        _load_controls(ct, topology)
         logger.info(
             "Control Tower landing zone %s in %s: %d governed regions, %d controls",
             topology.landing_zone.get("version"),
@@ -481,18 +292,21 @@ def discover_control_tower(
     logger.info("No Control Tower landing zone found")
 
 
-def discover_organization(
-    session: Any,
-    control_tower: bool = True,
-    home_region: str | None = None,
-) -> OrganizationTopology:
-    """Discover the organization reachable from ``session`` (blocking).
+_DELEGATED_ADMIN_SERVICES = (
+    "guardduty.amazonaws.com",
+    "securityhub.amazonaws.com",
+    "inspector2.amazonaws.com",
+    "config.amazonaws.com",
+    "access-analyzer.amazonaws.com",
+    "macie.amazonaws.com",
+    "detective.amazonaws.com",
+    "fms.amazonaws.com",
+    "sso.amazonaws.com",
+)
 
-    Raises:
-        RuntimeError: If the caller cannot describe the organization (not
-            in an organization, or not the management / delegated admin).
-    """
-    topology = OrganizationTopology()
+
+def _describe_organization(session: Any, topology: OrganizationTopology) -> Any:
+    """Caller identity and organization details; returns the Organizations client."""
     try:
         topology.caller_account_id = session.client("sts").get_caller_identity().get("Account")
     except Exception as exc:
@@ -507,77 +321,66 @@ def discover_organization(
     topology.organization_arn = info.get("Arn")
     topology.management_account_id = info.get("MasterAccountId")
     topology.feature_set = info.get("FeatureSet")
+    return org
 
-    try:
-        roots = _paginate(org, "list_roots", "Roots")
-    except Exception as exc:
-        raise RuntimeError(
-            f"Listing the organization needs the management account or a delegated administrator: {exc}"
-        ) from exc
 
-    def walk(parent_id: str, path: list[str]) -> None:
-        for acct in _paginate(org, "list_accounts_for_parent", "Accounts", ParentId=parent_id):
-            topology.accounts[acct["Id"]] = OrgAccount(
-                id=acct["Id"],
-                name=acct.get("Name", acct["Id"]),
-                arn=acct.get("Arn", ""),
-                status=acct.get("State") or acct.get("Status", "ACTIVE"),
-                parent_id=parent_id,
-                ou_path=list(path),
-                email=acct.get("Email"),
-                joined_method=acct.get("JoinedMethod"),
-                joined=str(acct.get("JoinedTimestamp", "")) or None,
-            )
-        for ou in _paginate(
-            org, "list_organizational_units_for_parent", "OrganizationalUnits", ParentId=parent_id
-        ):
-            unit = OrgUnit(
-                id=ou["Id"],
-                name=ou.get("Name", ou["Id"]),
-                arn=ou.get("Arn", ""),
-                parent_id=parent_id,
-                path=path + [ou.get("Name", ou["Id"])],
-            )
-            topology.ous[unit.id] = unit
-            walk(unit.id, unit.path)
-
-    for root in roots:
-        unit = OrgUnit(
-            id=root["Id"],
-            name=root.get("Name", "Root"),
-            arn=root.get("Arn", ""),
-            parent_id=None,
-            path=["Root"],
-            is_root=True,
+def _walk(org: Any, topology: OrganizationTopology, parent_id: str, path: list[str]) -> None:
+    """Accounts and OUs below ``parent_id``, recursively."""
+    for acct in _paginate(org, "list_accounts_for_parent", "Accounts", ParentId=parent_id):
+        topology.accounts[acct["Id"]] = OrgAccount(
+            id=acct["Id"],
+            name=acct.get("Name", acct["Id"]),
+            arn=acct.get("Arn", ""),
+            status=acct.get("State") or acct.get("Status", "ACTIVE"),
+            parent_id=parent_id,
+            ou_path=list(path),
+            email=acct.get("Email"),
+            joined_method=acct.get("JoinedMethod"),
+            joined=str(acct.get("JoinedTimestamp", "")) or None,
         )
-        topology.roots.append(unit)
-        walk(unit.id, ["Root"])
-        enabled = {
-            p.get("Type") for p in root.get("PolicyTypes", []) if p.get("Status") == "ENABLED"
-        }
-        policy_types = [t for t in _POLICY_TYPES if t in enabled or not root.get("PolicyTypes")]
-        for ptype in policy_types:
-            try:
-                for pol in _paginate(org, "list_policies", "Policies", Filter=ptype):
-                    targets = [
-                        t["TargetId"]
-                        for t in _paginate(
-                            org, "list_targets_for_policy", "Targets", PolicyId=pol["Id"]
-                        )
-                    ]
-                    topology.policies.append(
-                        OrgPolicy(
-                            id=pol["Id"],
-                            name=pol.get("Name", pol["Id"]),
-                            arn=pol.get("Arn", ""),
-                            type=ptype,
-                            aws_managed=pol.get("AwsManaged", False),
-                            targets=targets,
-                        )
-                    )
-            except Exception as exc:
-                logger.debug("Policy type %s unavailable: %s", ptype, exc)
+    for ou in _paginate(
+        org, "list_organizational_units_for_parent", "OrganizationalUnits", ParentId=parent_id
+    ):
+        unit = OrgUnit(
+            id=ou["Id"],
+            name=ou.get("Name", ou["Id"]),
+            arn=ou.get("Arn", ""),
+            parent_id=parent_id,
+            path=path + [ou.get("Name", ou["Id"])],
+        )
+        topology.ous[unit.id] = unit
+        _walk(org, topology, unit.id, unit.path)
 
+
+def _root_policies(org: Any, topology: OrganizationTopology, root: dict[str, Any]) -> None:
+    """Policies of every policy type enabled on ``root``, with their targets."""
+    enabled = {p.get("Type") for p in root.get("PolicyTypes", []) if p.get("Status") == "ENABLED"}
+    policy_types = [t for t in _POLICY_TYPES if t in enabled or not root.get("PolicyTypes")]
+    for ptype in policy_types:
+        try:
+            for pol in _paginate(org, "list_policies", "Policies", Filter=ptype):
+                targets = [
+                    t["TargetId"]
+                    for t in _paginate(
+                        org, "list_targets_for_policy", "Targets", PolicyId=pol["Id"]
+                    )
+                ]
+                topology.policies.append(
+                    OrgPolicy(
+                        id=pol["Id"],
+                        name=pol.get("Name", pol["Id"]),
+                        arn=pol.get("Arn", ""),
+                        type=ptype,
+                        aws_managed=pol.get("AwsManaged", False),
+                        targets=targets,
+                    )
+                )
+        except Exception as exc:
+            logger.debug("Policy type %s unavailable: %s", ptype, exc)
+
+
+def _service_access(org: Any, topology: OrganizationTopology) -> None:
+    """Trusted service access and delegated administrators."""
     try:
         for svc in _paginate(
             org, "list_aws_service_access_for_organization", "EnabledServicePrincipals"
@@ -585,17 +388,7 @@ def discover_organization(
             topology.enabled_services.append(svc.get("ServicePrincipal", ""))
     except Exception as exc:
         logger.debug("Trusted service access listing failed: %s", exc)
-    for svc in (
-        "guardduty.amazonaws.com",
-        "securityhub.amazonaws.com",
-        "inspector2.amazonaws.com",
-        "config.amazonaws.com",
-        "access-analyzer.amazonaws.com",
-        "macie.amazonaws.com",
-        "detective.amazonaws.com",
-        "fms.amazonaws.com",
-        "sso.amazonaws.com",
-    ):
+    for svc in _DELEGATED_ADMIN_SERVICES:
         try:
             admins = _paginate(
                 org,
@@ -609,6 +402,41 @@ def discover_organization(
             logger.debug("Delegated admin lookup for %s failed: %s", svc, exc)
             break  # usually AccessDenied for everything when not management
 
+
+def discover_organization(
+    session: Any,
+    control_tower: bool = True,
+    home_region: str | None = None,
+) -> OrganizationTopology:
+    """Discover the organization reachable from ``session`` (blocking).
+
+    Raises:
+        RuntimeError: If the caller cannot describe the organization (not
+            in an organization, or not the management / delegated admin).
+    """
+    topology = OrganizationTopology()
+    org = _describe_organization(session, topology)
+    try:
+        roots = _paginate(org, "list_roots", "Roots")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Listing the organization needs the management account or a delegated administrator: {exc}"
+        ) from exc
+
+    for root in roots:
+        unit = OrgUnit(
+            id=root["Id"],
+            name=root.get("Name", "Root"),
+            arn=root.get("Arn", ""),
+            parent_id=None,
+            path=["Root"],
+            is_root=True,
+        )
+        topology.roots.append(unit)
+        _walk(org, topology, unit.id, ["Root"])
+        _root_policies(org, topology, root)
+
+    _service_access(org, topology)
     if control_tower:
         discover_control_tower(session, topology, home_region)
 

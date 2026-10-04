@@ -19,6 +19,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def secret_base_metadata(secret: dict[str, Any]) -> dict[str, Any]:
+    """Secret metadata (never the value) shared with the deep inventory's
+    richer Secrets Manager collector, which extends these keys."""
+    return {
+        "description": secret.get("Description", ""),
+        "rotation_enabled": secret.get("RotationEnabled", False),
+        "last_accessed": str(secret.get("LastAccessedDate", "")),
+        "last_rotated": str(secret.get("LastRotatedDate", "")),
+        "kms_key_id": secret.get("KmsKeyId", ""),
+    }
+
+
 class ExtendedServiceCollectorsMixin:
     """Collectors for ECS, DynamoDB, CloudFront, Secrets Manager and KMS.
 
@@ -198,13 +210,7 @@ class ExtendedServiceCollectorsMixin:
                                 region=self._region,
                                 account_id=self._account_id,
                                 tags=tags,
-                                metadata={
-                                    "description": secret.get("Description", ""),
-                                    "rotation_enabled": secret.get("RotationEnabled", False),
-                                    "last_accessed": str(secret.get("LastAccessedDate", "")),
-                                    "last_rotated": str(secret.get("LastRotatedDate", "")),
-                                    "kms_key_id": secret.get("KmsKeyId", ""),
-                                },
+                                metadata=secret_base_metadata(secret),
                                 raw_data=secret,
                             )
                         )

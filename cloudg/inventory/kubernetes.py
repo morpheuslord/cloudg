@@ -144,158 +144,184 @@ def _lb_hostnames(obj: dict[str, Any]) -> list[str]:
     return [i.get("hostname") for i in ingress if i.get("hostname")]
 
 
-def map_cluster_objects(
-    reader: KubernetesReader,
-    cluster_arn: str,
-    region: str,
-    account_id: str | None,
-) -> list[CloudAsset]:
-    """Read namespaces, workloads, services, ingresses and service accounts."""
+def _ingress_backends(spec: dict[str, Any]) -> set[str]:
+    """Names of the services an ingress routes to (default + rule backends)."""
+    backends: set[str] = set()
+    default = ((spec.get("defaultBackend") or {}).get("service") or {}).get("name")
+    if default:
+        backends.add(default)
+    for rule in spec.get("rules", []) or []:
+        for p in (rule.get("http") or {}).get("paths") or []:
+            name = ((p.get("backend") or {}).get("service") or {}).get("name")
+            if name:
+                backends.add(name)
+    return backends
 
-    def asset(
+
+class _ClusterMapper:
+    """Maps one cluster's objects into assets, in listing order."""
+
+    def __init__(
+        self, reader: KubernetesReader, cluster_arn: str, region: str, account_id: str | None
+    ) -> None:
+        self._reader = reader
+        self._cluster_arn = cluster_arn
+        self._region = region
+        self._account_id = account_id
+        self.assets: list[CloudAsset] = []
+        # ns, kind, name, pod labels — matched against service selectors
+        self._workloads: list[tuple[str, str, str, dict[str, str]]] = []
+
+    def _add(
+        self,
         kind: str,
-        namespace: str,
-        name: str,
+        ident: tuple[str, str],
         asset_type: AssetType,
         metadata: dict[str, Any],
         relations: list[dict | None],
         labels: dict[str, str] | None = None,
         exposed: bool = False,
-    ) -> CloudAsset:
-        md = {"cluster_arn": cluster_arn, "namespace": namespace, "kind": kind, **metadata}
+    ) -> None:
+        """Append the asset for object ``ident`` = (namespace, name)."""
+        namespace, name = ident
+        md = {"cluster_arn": self._cluster_arn, "namespace": namespace, "kind": kind, **metadata}
         rels = [r for r in relations if r]
         if rels:
             md["relations"] = rels
-        return CloudAsset(
-            arn=k8s_identifier(cluster_arn, namespace, kind, name),
-            name=f"{namespace}/{name}" if namespace else name,
-            asset_type=asset_type,
-            provider=CloudProvider.AWS,
-            region=region,
-            account_id=account_id,
-            tags={k: str(v) for k, v in (labels or {}).items()},
-            metadata=md,
-            is_internet_exposed=exposed,
-        )
-
-    assets: list[CloudAsset] = []
-
-    for ns in reader.list("/api/v1/namespaces"):
-        name = ns["metadata"]["name"]
-        assets.append(
-            asset(
-                "Namespace",
-                "",
-                name,
-                AssetType.K8S_NAMESPACE,
-                {"phase": (ns.get("status") or {}).get("phase")},
-                [rel(cluster_arn, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True)],
-                labels=ns["metadata"].get("labels"),
+        self.assets.append(
+            CloudAsset(
+                arn=k8s_identifier(self._cluster_arn, namespace, kind, name),
+                name=f"{namespace}/{name}" if namespace else name,
+                asset_type=asset_type,
+                provider=CloudProvider.AWS,
+                region=self._region,
+                account_id=self._account_id,
+                tags={k: str(v) for k, v in (labels or {}).items()},
+                metadata=md,
+                is_internet_exposed=exposed,
             )
         )
 
-    def ns_rel(namespace: str) -> dict | None:
+    def _ns_rel(self, namespace: str) -> dict | None:
         return rel(
-            k8s_identifier(cluster_arn, "", "Namespace", namespace),
+            k8s_identifier(self._cluster_arn, "", "Namespace", namespace),
             EdgeType.CONTAINS,
             "CLUSTER_CONTAINS_SERVICE",
             reverse=True,
         )
 
-    for sa in reader.list("/api/v1/serviceaccounts"):
-        meta = sa["metadata"]
-        role = (meta.get("annotations") or {}).get(_IRSA_ANNOTATION)
-        assets.append(
-            asset(
+    def map_namespaces(self) -> None:
+        for ns in self._reader.list("/api/v1/namespaces"):
+            self._add(
+                "Namespace",
+                ("", ns["metadata"]["name"]),
+                AssetType.K8S_NAMESPACE,
+                {"phase": (ns.get("status") or {}).get("phase")},
+                [
+                    rel(
+                        self._cluster_arn,
+                        EdgeType.CONTAINS,
+                        "CLUSTER_CONTAINS_SERVICE",
+                        reverse=True,
+                    )
+                ],
+                labels=ns["metadata"].get("labels"),
+            )
+
+    def map_service_accounts(self) -> None:
+        for sa in self._reader.list("/api/v1/serviceaccounts"):
+            meta = sa["metadata"]
+            role = (meta.get("annotations") or {}).get(_IRSA_ANNOTATION)
+            self._add(
                 "ServiceAccount",
-                meta.get("namespace", ""),
-                meta["name"],
+                (meta.get("namespace", ""), meta["name"]),
                 AssetType.K8S_SERVICE_ACCOUNT,
                 {"irsa_role_arn": role},
                 [
-                    ns_rel(meta.get("namespace", "")),
+                    self._ns_rel(meta.get("namespace", "")),
                     rel(role, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="IRSA"),
                 ],
             )
+
+    def map_workloads(self) -> None:
+        for kind, path in _WORKLOAD_KINDS.items():
+            try:
+                items = list(self._reader.list(path))
+            except Exception as exc:
+                logger.debug("Kubernetes %s listing failed: %s", kind, exc)
+                continue
+            for obj in items:
+                self._map_workload(kind, obj)
+
+    def _map_workload(self, kind: str, obj: dict[str, Any]) -> None:
+        meta = obj["metadata"]
+        ns = meta.get("namespace", "")
+        pod = _pod_spec(kind, obj)
+        containers = (pod.get("containers") or []) + (pod.get("initContainers") or [])
+        images = [c.get("image", "") for c in containers if c.get("image")]
+        sa_name = pod.get("serviceAccountName") or pod.get("serviceAccount") or "default"
+        self._workloads.append((ns, kind, meta["name"], _pod_labels(kind, obj)))
+        relations: list[dict | None] = [self._ns_rel(ns)]
+        relations += [
+            rel(image_repository(img), EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {img}")
+            for img in dict.fromkeys(images)
+        ]
+        relations.append(
+            rel(
+                k8s_identifier(self._cluster_arn, ns, "ServiceAccount", sa_name),
+                EdgeType.REFERENCES,
+                "RUNS_ON",
+                description="runs as service account",
+            )
+        )
+        spec = obj.get("spec") or {}
+        status = obj.get("status") or {}
+        metadata = {
+            "replicas": spec.get("replicas"),
+            "ready_replicas": status.get("readyReplicas"),
+            "schedule": spec.get("schedule"),
+            "images": images,
+            "service_account": sa_name,
+            "host_network": bool(pod.get("hostNetwork")),
+            "privileged_containers": [
+                c.get("name")
+                for c in containers
+                if (c.get("securityContext") or {}).get("privileged")
+            ],
+            "node_selector": pod.get("nodeSelector") or {},
+        }
+        self._add(
+            kind,
+            (ns, meta["name"]),
+            AssetType.K8S_WORKLOAD,
+            metadata,
+            relations,
+            labels=meta.get("labels"),
         )
 
-    workloads: list[tuple[str, str, str, dict[str, str]]] = []  # ns, kind, name, pod labels
-    for kind, path in _WORKLOAD_KINDS.items():
-        try:
-            items = list(reader.list(path))
-        except Exception as exc:
-            logger.debug("Kubernetes %s listing failed: %s", kind, exc)
-            continue
-        for obj in items:
-            meta = obj["metadata"]
-            ns = meta.get("namespace", "")
-            pod = _pod_spec(kind, obj)
-            containers = (pod.get("containers") or []) + (pod.get("initContainers") or [])
-            images = [c.get("image", "") for c in containers if c.get("image")]
-            sa_name = pod.get("serviceAccountName") or pod.get("serviceAccount") or "default"
-            labels = _pod_labels(kind, obj)
-            workloads.append((ns, kind, meta["name"], labels))
-            relations: list[dict | None] = [ns_rel(ns)]
-            relations += [
-                rel(
-                    image_repository(img), EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {img}"
-                )
-                for img in dict.fromkeys(images)
-            ]
-            relations.append(
-                rel(
-                    k8s_identifier(cluster_arn, ns, "ServiceAccount", sa_name),
-                    EdgeType.REFERENCES,
-                    "RUNS_ON",
-                    description="runs as service account",
-                )
+    def _selected_workloads(self, ns: str, selector: dict[str, str]) -> list[dict | None]:
+        """LOAD_BALANCER_TARGET relations to the workloads a selector matches."""
+        return [
+            rel(
+                k8s_identifier(self._cluster_arn, w_ns, w_kind, w_name),
+                EdgeType.LOAD_BALANCER_TARGET,
+                "SERVES_TRAFFIC_TO",
             )
-            spec = obj.get("spec") or {}
-            status = obj.get("status") or {}
-            assets.append(
-                asset(
-                    kind,
-                    ns,
-                    meta["name"],
-                    AssetType.K8S_WORKLOAD,
-                    {
-                        "replicas": spec.get("replicas"),
-                        "ready_replicas": status.get("readyReplicas"),
-                        "schedule": spec.get("schedule"),
-                        "images": images,
-                        "service_account": sa_name,
-                        "host_network": bool(pod.get("hostNetwork")),
-                        "privileged_containers": [
-                            c.get("name")
-                            for c in containers
-                            if (c.get("securityContext") or {}).get("privileged")
-                        ],
-                        "node_selector": pod.get("nodeSelector") or {},
-                    },
-                    relations,
-                    labels=meta.get("labels"),
-                )
-            )
+            for w_ns, w_kind, w_name, w_labels in self._workloads
+            if w_ns == ns and all(w_labels.get(k) == v for k, v in selector.items())
+        ]
 
-    for svc in reader.list("/api/v1/services"):
-        meta = svc["metadata"]
-        ns = meta.get("namespace", "")
-        spec = svc.get("spec") or {}
-        selector = spec.get("selector") or {}
-        relations = [ns_rel(ns)]
-        if selector:
-            for w_ns, w_kind, w_name, w_labels in workloads:
-                if w_ns == ns and all(w_labels.get(k) == v for k, v in selector.items()):
-                    relations.append(
-                        rel(
-                            k8s_identifier(cluster_arn, w_ns, w_kind, w_name),
-                            EdgeType.LOAD_BALANCER_TARGET,
-                            "SERVES_TRAFFIC_TO",
-                        )
-                    )
-        hostnames = _lb_hostnames(svc)
-        for host in hostnames:
-            relations.append(
+    def map_services(self) -> None:
+        for svc in self._reader.list("/api/v1/services"):
+            meta = svc["metadata"]
+            ns = meta.get("namespace", "")
+            spec = svc.get("spec") or {}
+            selector = spec.get("selector") or {}
+            relations = [self._ns_rel(ns)]
+            if selector:
+                relations += self._selected_workloads(ns, selector)
+            hostnames = _lb_hostnames(svc)
+            relations += [
                 rel(
                     host,
                     EdgeType.ROUTE,
@@ -303,74 +329,83 @@ def map_cluster_objects(
                     reverse=True,
                     description="cloud load balancer",
                 )
+                for host in hostnames
+            ]
+            svc_type = spec.get("type", "ClusterIP")
+            scheme = (meta.get("annotations") or {}).get(
+                "service.beta.kubernetes.io/aws-load-balancer-scheme"
             )
-        svc_type = spec.get("type", "ClusterIP")
-        assets.append(
-            asset(
+            self._add(
                 "Service",
-                ns,
-                meta["name"],
+                (ns, meta["name"]),
                 AssetType.K8S_SERVICE,
                 {
                     "service_type": svc_type,
                     "ports": [p.get("port") for p in spec.get("ports", []) or []],
                     "load_balancer_hostnames": hostnames,
-                    "internal": (meta.get("annotations") or {}).get(
-                        "service.beta.kubernetes.io/aws-load-balancer-scheme"
-                    )
-                    == "internal",
+                    "internal": scheme == "internal",
                 },
                 relations,
                 labels=meta.get("labels"),
                 exposed=svc_type == "LoadBalancer" and bool(hostnames),
             )
-        )
 
-    try:
-        ingresses = list(reader.list("/apis/networking.k8s.io/v1/ingresses"))
-    except Exception as exc:
-        logger.debug("Ingress listing failed: %s", exc)
-        ingresses = []
-    for ing in ingresses:
+    def map_ingresses(self) -> None:
+        try:
+            ingresses = list(self._reader.list("/apis/networking.k8s.io/v1/ingresses"))
+        except Exception as exc:
+            logger.debug("Ingress listing failed: %s", exc)
+            ingresses = []
+        for ing in ingresses:
+            self._map_ingress(ing)
+
+    def _map_ingress(self, ing: dict[str, Any]) -> None:
         meta = ing["metadata"]
         ns = meta.get("namespace", "")
         spec = ing.get("spec") or {}
-        backends: set[str] = set()
-        default = ((spec.get("defaultBackend") or {}).get("service") or {}).get("name")
-        if default:
-            backends.add(default)
-        for rule in spec.get("rules", []) or []:
-            for p in (rule.get("http") or {}).get("paths") or []:
-                name = ((p.get("backend") or {}).get("service") or {}).get("name")
-                if name:
-                    backends.add(name)
-        relations = [ns_rel(ns)]
+        backends = sorted(_ingress_backends(spec))
+        relations = [self._ns_rel(ns)]
         relations += [
-            rel(k8s_identifier(cluster_arn, ns, "Service", b), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
-            for b in sorted(backends)
+            rel(
+                k8s_identifier(self._cluster_arn, ns, "Service", b),
+                EdgeType.ROUTE,
+                "SERVES_TRAFFIC_TO",
+            )
+            for b in backends
         ]
         hostnames = _lb_hostnames(ing)
         relations += [rel(h, EdgeType.ROUTE, "LOAD_BALANCED_BY", reverse=True) for h in hostnames]
-        assets.append(
-            asset(
-                "Ingress",
-                ns,
-                meta["name"],
-                AssetType.K8S_INGRESS,
-                {
-                    "ingress_class": spec.get("ingressClassName"),
-                    "hosts": [r.get("host") for r in spec.get("rules", []) or [] if r.get("host")],
-                    "backends": sorted(backends),
-                    "load_balancer_hostnames": hostnames,
-                    "tls": bool(spec.get("tls")),
-                },
-                relations,
-                labels=meta.get("labels"),
-                exposed=bool(hostnames),
-            )
+        self._add(
+            "Ingress",
+            (ns, meta["name"]),
+            AssetType.K8S_INGRESS,
+            {
+                "ingress_class": spec.get("ingressClassName"),
+                "hosts": [r.get("host") for r in spec.get("rules", []) or [] if r.get("host")],
+                "backends": backends,
+                "load_balancer_hostnames": hostnames,
+                "tls": bool(spec.get("tls")),
+            },
+            relations,
+            labels=meta.get("labels"),
+            exposed=bool(hostnames),
         )
 
-    return assets
+
+def map_cluster_objects(
+    reader: KubernetesReader,
+    cluster_arn: str,
+    region: str,
+    account_id: str | None,
+) -> list[CloudAsset]:
+    """Read namespaces, workloads, services, ingresses and service accounts."""
+    mapper = _ClusterMapper(reader, cluster_arn, region, account_id)
+    mapper.map_namespaces()
+    mapper.map_service_accounts()
+    mapper.map_workloads()
+    mapper.map_services()
+    mapper.map_ingresses()
+    return mapper.assets
 
 
 def collect_eks_workloads(

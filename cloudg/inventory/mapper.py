@@ -51,14 +51,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from cloudg.config import CloudGConfig
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+
+# InventoryResult and _service_of live in mapper_result; re-exported here
+from cloudg.inventory.mapper_result import (  # noqa: F401
+    _HIERARCHY_TYPES,
+    InventoryResult,
+    _service_of,
+)
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -69,246 +74,6 @@ from cloudg.schema.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-_HIERARCHY_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT, AssetType.CLOUD_ACCOUNT}
-
-# GCP identifiers, anchored so ".googleapis.com" cannot match mid-string:
-# full resource name "//compute.googleapis.com/projects/..." and
-# asset type "compute.googleapis.com/Instance"
-_GCP_RESOURCE_NAME_RE = re.compile(r"^//([a-z0-9-]+)\.googleapis\.com/")
-_GCP_ASSET_TYPE_RE = re.compile(r"^([a-z0-9-]+)\.googleapis\.com/")
-
-
-@dataclass
-class InventoryResult:
-    """Complete inventory map — assets, interconnections, and summary."""
-
-    assets: list[CloudAsset] = field(default_factory=list)
-    edges: list[NetworkEdge] = field(default_factory=list)
-    coverage: list[CollectionCoverage] = field(default_factory=list)
-    providers: list[str] = field(default_factory=list)
-    regions: dict[str, list[str]] = field(default_factory=dict)
-    duration_ms: int = 0
-    organization: dict[str, Any] | None = None
-    unresolved_references: list[dict[str, Any]] = field(default_factory=list)
-
-    @property
-    def summary(self) -> dict[str, Any]:
-        by_type: dict[str, int] = {}
-        by_region: dict[str, int] = {}
-        by_account: dict[str, int] = {}
-        by_service: dict[str, int] = {}
-        by_id = {a.id: a for a in self.assets}
-        for a in self.assets:
-            by_type[a.asset_type.value] = by_type.get(a.asset_type.value, 0) + 1
-            by_region[a.region] = by_region.get(a.region, 0) + 1
-            acct = a.account_id or "unknown"
-            by_account[acct] = by_account.get(acct, 0) + 1
-            svc = _service_of(a)
-            by_service[svc] = by_service.get(svc, 0) + 1
-
-        edge_types: dict[str, int] = {}
-        relationships: dict[str, int] = {}
-        linked_ids: set[str] = set()
-        cross_account = 0
-        for e in self.edges:
-            edge_types[e.edge_type.value] = edge_types.get(e.edge_type.value, 0) + 1
-            if e.relationship:
-                relationships[e.relationship] = relationships.get(e.relationship, 0) + 1
-            if (e.properties or {}).get("hierarchy"):
-                continue
-            linked_ids.add(e.source_id)
-            linked_ids.add(e.target_id)
-            s, t = by_id.get(e.source_id), by_id.get(e.target_id)
-            if s and t and s.account_id and t.account_id and s.account_id != t.account_id:
-                if not (s.asset_type in _HIERARCHY_TYPES and t.asset_type in _HIERARCHY_TYPES):
-                    cross_account += 1
-        orphans = [
-            a
-            for a in self.assets
-            if a.id not in linked_ids and a.asset_type not in _HIERARCHY_TYPES
-        ]
-        security_gaps = sum(
-            1
-            for a in self.assets
-            if a.metadata.get("security_service") and a.metadata.get("enabled") is False
-        )
-
-        out = {
-            "total_assets": len(self.assets),
-            "total_edges": len(self.edges),
-            "providers": self.providers,
-            "assets_by_type": dict(sorted(by_type.items(), key=lambda x: -x[1])),
-            "assets_by_service": dict(sorted(by_service.items(), key=lambda x: -x[1])),
-            "assets_by_region": by_region,
-            "assets_by_account": by_account,
-            "edges_by_type": edge_types,
-            "edges_by_relationship": dict(sorted(relationships.items(), key=lambda x: -x[1])),
-            "unlinked_assets": len(orphans),
-            "internet_exposed": sum(1 for a in self.assets if a.is_internet_exposed),
-            "accounts": len([k for k in by_account if k != "unknown"]),
-            "cross_account_edges": cross_account,
-            "external_accounts": sum(
-                1
-                for a in self.assets
-                if a.asset_type == AssetType.CLOUD_ACCOUNT and a.metadata.get("external")
-            ),
-            "security_service_gaps": security_gaps,
-            "unresolved_references": len(self.unresolved_references),
-        }
-        if self.organization:
-            out["organization"] = {
-                "id": self.organization.get("organization_id"),
-                "accounts": len(self.organization.get("accounts", {})),
-                "ous": len(self.organization.get("ous", {})),
-                "control_tower": self.organization.get("control_tower_enabled", False),
-                "governed_regions": self.organization.get("governed_regions", []),
-            }
-        return out
-
-    # ------------------------------------------------------------------
-    # Analysis
-    # ------------------------------------------------------------------
-
-    def dependency_graph(self, include_hierarchy: bool = False) -> Any:
-        """A :class:`~cloudg.inventory.dependencies.DependencyGraph` view."""
-        from cloudg.inventory.dependencies import DependencyGraph
-
-        return DependencyGraph(self.assets, self.edges, include_hierarchy=include_hierarchy)
-
-    def analysis(self, top: int = 25) -> dict[str, Any]:
-        """Interdependency and coverage analysis of the whole map."""
-        from cloudg.inventory.dependencies import cross_account_edges, security_coverage
-
-        graph = self.dependency_graph()
-        return {
-            "shared_dependencies": graph.shared_dependencies(top),
-            "largest_blast_radius": graph.blast_radius(top=top),
-            "cross_account_edges": cross_account_edges(self.assets, self.edges),
-            "security_coverage": security_coverage(self.assets, self.edges),
-            "unresolved_references": self.unresolved_references,
-        }
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def export(self, output_dir: str | Path) -> dict[str, Path]:
-        """Write the inventory map to disk.
-
-        Produces:
-        - ``inventory-map.json``: assets + edges + summary (self-contained)
-        - ``inventory-map.graphml``: the interconnection graph
-        - ``inventory-graph.json``: D3-compatible graph for viewers
-        - ``inventory-dependencies.json``: shared dependencies, blast radius,
-          cross-account edges, security coverage
-        - ``inventory-organization.json``: the org / Control Tower topology
-          (only when the organization was mapped)
-        """
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        paths: dict[str, Path] = {}
-
-        map_path = out / "inventory-map.json"
-        with open(map_path, "w") as f:
-            json.dump(
-                {
-                    "summary": self.summary,
-                    "providers": self.providers,
-                    "regions": self.regions,
-                    "assets": [a.model_dump(mode="json") for a in self.assets],
-                    "edges": [e.model_dump(mode="json") for e in self.edges],
-                    "unresolved_references": self.unresolved_references,
-                },
-                f,
-                indent=2,
-                default=str,
-            )
-        paths["map"] = map_path
-
-        from cloudg.graph.builder import GraphBuilder
-
-        builder = GraphBuilder()
-        builder.build(self.assets, self.edges)
-        paths["graphml"] = builder.save_graphml(out / "inventory-map.graphml")
-
-        graph_path = out / "inventory-graph.json"
-        with open(graph_path, "w") as f:
-            json.dump(builder.to_d3_json(), f, indent=2, default=str)
-        paths["graph"] = graph_path
-
-        deps_path = out / "inventory-dependencies.json"
-        with open(deps_path, "w") as f:
-            json.dump(self.analysis(), f, indent=2, default=str)
-        paths["dependencies"] = deps_path
-
-        if self.organization:
-            org_path = out / "inventory-organization.json"
-            with open(org_path, "w") as f:
-                json.dump(self.organization, f, indent=2, default=str)
-            paths["organization"] = org_path
-
-        return paths
-
-    @classmethod
-    def load(cls, path: str | Path) -> "InventoryResult":
-        """Load an ``inventory-map.json`` written by :meth:`export`
-        (or the directory containing it)."""
-        p = Path(path)
-        if p.is_dir():
-            p = p / "inventory-map.json"
-        with open(p) as f:
-            data = json.load(f)
-        assets = []
-        for raw in data.get("assets", []):
-            raw = {k: v for k, v in raw.items() if k != "display_id"}
-            assets.append(CloudAsset.model_validate(raw))
-        edges = [NetworkEdge.model_validate(e) for e in data.get("edges", [])]
-        org = None
-        org_path = p.parent / "inventory-organization.json"
-        if org_path.exists():
-            with open(org_path) as f:
-                org = json.load(f)
-        return cls(
-            assets=assets,
-            edges=edges,
-            providers=data.get("providers") or data.get("summary", {}).get("providers", []),
-            regions=data.get("regions", {}),
-            organization=org,
-            unresolved_references=data.get("unresolved_references", []),
-        )
-
-
-def _service_of(asset: CloudAsset) -> str:
-    """Cloud service an asset belongs to, derived from its identifier."""
-    arn = asset.arn or ""
-    if arn.startswith("arn:"):
-        parts = arn.split(":", 3)
-        return parts[2] if len(parts) > 2 else "unknown"
-    if arn.startswith(("k8s://", "k8s-gke://")):
-        return "kubernetes"
-    if arn.startswith("gcp-principal:"):
-        return "iam"
-    if arn.startswith("entra:"):
-        return "entra"
-    if arn.startswith("cloudg:"):
-        parts = arn.split(":")
-        return parts[2] if len(parts) > 2 else "unknown"
-    if arn.startswith("/subscriptions/"):
-        rtype = asset.metadata.get("resource_type") or ""
-        if rtype:
-            return rtype.split("/")[0].lower()
-        lowered = arn.lower()
-        if "/providers/" in lowered:
-            return lowered.split("/providers/", 1)[1].split("/", 1)[0]
-        return "microsoft.resources"
-    gcp_name = _GCP_RESOURCE_NAME_RE.match(arn)
-    if gcp_name:
-        return gcp_name.group(1)
-    gcp_type = _GCP_ASSET_TYPE_RE.match(asset.metadata.get("gcp_asset_type", ""))
-    if gcp_type:
-        return gcp_type.group(1)
-    return "unknown"
 
 
 def deduplicate(
@@ -533,120 +298,121 @@ class InventoryMapper:
         )
         return topology
 
+    async def _discover_azure_hierarchy(
+        self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
+    ) -> list[CloudAsset]:
+        """Azure management groups and policy assignments."""
+        cov = CollectionCoverage(provider="azure", region="global")
+        coverage.append(cov)
+        t0 = time.time()
+        errors: list[str] = []
+        try:
+            from cloudg.credentials import build_azure_credential
+            from cloudg.inventory.azure_hierarchy import discover_azure_hierarchy
+
+            credential = build_azure_credential(cfg.azure)
+            found = await asyncio.to_thread(
+                discover_azure_hierarchy, credential, None, include_policies=True, errors=errors
+            )
+            cov.record(
+                "management_groups",
+                ServiceStatus.PARTIAL if errors else ServiceStatus.SUCCESS,
+                asset_count=len(found),
+                error="; ".join(errors) or None,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+            return found
+        except ImportError as exc:
+            cov.record("management_groups", ServiceStatus.SKIPPED, error=str(exc))
+        except Exception as exc:
+            logger.error("Azure hierarchy discovery failed: %s", exc)
+            cov.record("management_groups", ServiceStatus.FAILED, error=str(exc))
+        return []
+
+    async def _discover_gcp_hierarchy(
+        self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
+    ) -> list[CloudAsset]:
+        """GCP organization, folders, org policies and access policies."""
+        gcp = cfg.gcp
+        cov = CollectionCoverage(provider="gcp", region="global", account_id=gcp.organization_id)
+        coverage.append(cov)
+        t0 = time.time()
+        try:
+            from cloudg.credentials import build_gcp_credentials
+            from cloudg.inventory.gcp_hierarchy import discover_gcp_hierarchy
+
+            credentials = build_gcp_credentials(gcp)[0]
+            found = await asyncio.to_thread(
+                discover_gcp_hierarchy,
+                credentials,
+                gcp.organization_id,
+                None,
+                coverage=cov,
+                org_policies=getattr(gcp, "org_policies", True),
+                access_policies=getattr(gcp, "vpc_service_controls", True),
+            )
+            cov.record(
+                "organization_hierarchy",
+                ServiceStatus.SUCCESS,
+                asset_count=len(found),
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+            return found
+        except ImportError as exc:
+            cov.record("organization_hierarchy", ServiceStatus.SKIPPED, error=str(exc))
+        except Exception as exc:
+            logger.error("GCP hierarchy discovery failed: %s", exc)
+            cov.record("organization_hierarchy", ServiceStatus.FAILED, error=str(exc))
+        return []
+
     async def _discover_hierarchies(
         self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
     ) -> list[CloudAsset]:
         """Azure management groups / policy and GCP org / folders / policy."""
         out: list[CloudAsset] = []
         if "azure" in cfg.providers and getattr(cfg.azure, "map_management_groups", False):
-            cov = CollectionCoverage(provider="azure", region="global")
-            coverage.append(cov)
-            t0 = time.time()
-            errors: list[str] = []
-            try:
-                from cloudg.credentials import build_azure_credential
-                from cloudg.inventory.azure_hierarchy import discover_azure_hierarchy
-
-                credential = build_azure_credential(cfg.azure)
-                found = await asyncio.to_thread(
-                    discover_azure_hierarchy, credential, None, include_policies=True, errors=errors
-                )
-                out.extend(found)
-                cov.record(
-                    "management_groups",
-                    ServiceStatus.PARTIAL if errors else ServiceStatus.SUCCESS,
-                    asset_count=len(found),
-                    error="; ".join(errors) or None,
-                    duration_ms=int((time.time() - t0) * 1000),
-                )
-            except ImportError as exc:
-                cov.record("management_groups", ServiceStatus.SKIPPED, error=str(exc))
-            except Exception as exc:
-                logger.error("Azure hierarchy discovery failed: %s", exc)
-                cov.record("management_groups", ServiceStatus.FAILED, error=str(exc))
-
+            out.extend(await self._discover_azure_hierarchy(cfg, coverage))
         gcp = cfg.gcp
         if "gcp" in cfg.providers and gcp.organization_id and getattr(gcp, "map_hierarchy", False):
-            cov = CollectionCoverage(
-                provider="gcp", region="global", account_id=gcp.organization_id
-            )
-            coverage.append(cov)
-            t0 = time.time()
-            try:
-                from cloudg.credentials import build_gcp_credentials
-                from cloudg.inventory.gcp_hierarchy import discover_gcp_hierarchy
-
-                credentials = build_gcp_credentials(gcp)[0]
-                found = await asyncio.to_thread(
-                    discover_gcp_hierarchy,
-                    credentials,
-                    gcp.organization_id,
-                    None,
-                    coverage=cov,
-                    org_policies=getattr(gcp, "org_policies", True),
-                    access_policies=getattr(gcp, "vpc_service_controls", True),
-                )
-                out.extend(found)
-                cov.record(
-                    "organization_hierarchy",
-                    ServiceStatus.SUCCESS,
-                    asset_count=len(found),
-                    duration_ms=int((time.time() - t0) * 1000),
-                )
-            except ImportError as exc:
-                cov.record("organization_hierarchy", ServiceStatus.SKIPPED, error=str(exc))
-            except Exception as exc:
-                logger.error("GCP hierarchy discovery failed: %s", exc)
-                cov.record("organization_hierarchy", ServiceStatus.FAILED, error=str(exc))
+            out.extend(await self._discover_gcp_hierarchy(cfg, coverage))
         return out
 
-    # ------------------------------------------------------------------
-    # Mapping
-    # ------------------------------------------------------------------
+    async def _discover_aws_organization(
+        self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
+    ) -> Any:
+        """AWS Organizations / Control Tower discovery, recorded as coverage.
 
-    async def map_inventory(self) -> InventoryResult:
-        """Deep-collect every provider and link the assets into a map."""
-        start = time.time()
-        cfg = self._config.model_copy(deep=True)
-        org_coverage: list[CollectionCoverage] = []
+        Returns the topology, or None when discovery is off or failed (the
+        caller account alone is then mapped).
+        """
+        if not ("aws" in cfg.providers and cfg.aws.organization.enabled):
+            return None
+        cov = CollectionCoverage(provider="aws", region="global")
+        coverage.append(cov)
+        t0 = time.time()
+        try:
+            topology = await asyncio.to_thread(self._discover_organization, cfg)
+            cov.record(
+                "organizations",
+                ServiceStatus.SUCCESS,
+                asset_count=len(topology.accounts),
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+            if topology.errors:
+                cov.record("controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors))
+            return topology
+        except Exception as exc:
+            logger.error("Organization discovery failed; mapping the caller account only: %s", exc)
+            cov.record("organizations", ServiceStatus.FAILED, error=str(exc))
+            return None
 
-        topology = None
-        if "aws" in cfg.providers and cfg.aws.organization.enabled:
-            cov = CollectionCoverage(provider="aws", region="global")
-            org_coverage.append(cov)
-            t0 = time.time()
-            try:
-                topology = await asyncio.to_thread(self._discover_organization, cfg)
-                cov.record(
-                    "organizations",
-                    ServiceStatus.SUCCESS,
-                    asset_count=len(topology.accounts),
-                    duration_ms=int((time.time() - t0) * 1000),
-                )
-                if topology.errors:
-                    cov.record(
-                        "controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors)
-                    )
-            except Exception as exc:
-                logger.error(
-                    "Organization discovery failed; mapping the caller account only: %s", exc
-                )
-                cov.record("organizations", ServiceStatus.FAILED, error=str(exc))
-        self.organization = topology
+    def _link(
+        self, cfg: CloudGConfig, assets: list[CloudAsset], edges: list[NetworkEdge]
+    ) -> tuple[list[CloudAsset], list[NetworkEdge], list[dict[str, Any]]]:
+        """Deduplicate, link and add the account hierarchy.
 
-        # Cloud hierarchies beyond AWS (management groups / org folders);
-        # merged into the map like the AWS organization structure.
-        hierarchy_assets = await self._discover_hierarchies(cfg, org_coverage)
-
-        from cloudg.collectors.multi import MultiAccountCollector
-
-        collector = MultiAccountCollector(cfg, collector_overrides=self._collector_overrides())
-        assets, edges, coverage = await collector.collect_all()
-
-        if topology is not None and cfg.aws.organization.map_structure:
-            assets = topology.to_assets() + assets
-        assets = hierarchy_assets + assets
-
+        Returns the final assets, edges and the linker's unresolved references.
+        """
         assets, edges = deduplicate(assets, edges)
         if "gcp" in cfg.providers:
             from cloudg.inventory.gcp_relations import merge_gcp_principals
@@ -664,6 +430,34 @@ class InventoryMapper:
 
         if self._inventory is None or self._inventory.account_hierarchy:
             assets, edges = add_account_hierarchy(assets, edges)
+        return assets, edges, linker.unresolved
+
+    # ------------------------------------------------------------------
+    # Mapping
+    # ------------------------------------------------------------------
+
+    async def map_inventory(self) -> InventoryResult:
+        """Deep-collect every provider and link the assets into a map."""
+        start = time.time()
+        cfg = self._config.model_copy(deep=True)
+        org_coverage: list[CollectionCoverage] = []
+
+        topology = await self._discover_aws_organization(cfg, org_coverage)
+        self.organization = topology
+
+        # Cloud hierarchies beyond AWS (management groups / org folders);
+        # merged into the map like the AWS organization structure.
+        hierarchy_assets = await self._discover_hierarchies(cfg, org_coverage)
+
+        from cloudg.collectors.multi import MultiAccountCollector
+
+        collector = MultiAccountCollector(cfg, collector_overrides=self._collector_overrides())
+        assets, edges, coverage = await collector.collect_all()
+
+        if topology is not None and cfg.aws.organization.map_structure:
+            assets = topology.to_assets() + assets
+        assets = hierarchy_assets + assets
+        assets, edges, unresolved = self._link(cfg, assets, edges)
 
         return InventoryResult(
             assets=assets,
@@ -673,7 +467,7 @@ class InventoryMapper:
             regions=getattr(collector, "_resolved_regions", {}),
             duration_ms=int((time.time() - start) * 1000),
             organization=topology.to_dict() if topology is not None else None,
-            unresolved_references=linker.unresolved,
+            unresolved_references=unresolved,
         )
 
     def map_inventory_sync(self) -> InventoryResult:

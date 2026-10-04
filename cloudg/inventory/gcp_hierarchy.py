@@ -148,6 +148,66 @@ def perimeter_assets(results: list[dict[str, Any]]) -> list[CloudAsset]:
     return assets
 
 
+def _org_placeholder(org: str) -> CloudAsset:
+    """The configured organization, when the listing did not return it."""
+    return CloudAsset(
+        arn=f"//cloudresourcemanager.googleapis.com/organizations/{org}",
+        name=f"organization {org}",
+        asset_type=AssetType.ORGANIZATION,
+        provider=CloudProvider.GCP,
+        region="global",
+        metadata={
+            "gcp_asset_type": "cloudresourcemanager.googleapis.com/Organization",
+            "aliases": [f"organizations/{org}"],
+            "discovered_via": "configured organization_id",
+        },
+    )
+
+
+def _hierarchy_assets(collector: GCPCollector, org: str, org_policies: bool) -> list[CloudAsset]:
+    """Organization, folders and projects (plus orgpolicy resources) of ``org``."""
+    cov = collector.coverage
+    start = time.time()
+    types = HIERARCHY_TYPES if org_policies else HIERARCHY_TYPES[:3]
+    raw, error = collector._list_assets("RESOURCE", asset_types=types)
+    if error is not None and not raw:
+        cov.record("gcp_hierarchy", ServiceStatus.FAILED, error=str(error))
+        raise RuntimeError(f"GCP hierarchy discovery failed for organizations/{org}: {error}")
+    records = [collector._record_from_asset(r) for r in raw]
+    assets = collector._build_assets(records)
+    cov.record(
+        "gcp_hierarchy",
+        ServiceStatus.PARTIAL if error else ServiceStatus.SUCCESS,
+        asset_count=len(assets),
+        error=str(error) if error else None,
+        duration_ms=int((time.time() - start) * 1000),
+    )
+    org_arn = f"//cloudresourcemanager.googleapis.com/organizations/{org}"
+    if not any(a.arn == org_arn for a in assets):
+        assets.insert(0, _org_placeholder(org))
+    return assets
+
+
+def _record_part(
+    cov: CollectionCoverage,
+    service: str,
+    listing: tuple[list[dict[str, Any]], Exception | None],
+    count: int,
+    start: float,
+) -> None:
+    """Coverage for an optional listing: failed only when nothing came back."""
+    results, error = listing
+    cov.record(
+        service,
+        ServiceStatus.SUCCESS
+        if error is None
+        else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
+        asset_count=count,
+        error=str(error) if error else None,
+        duration_ms=int((time.time() - start) * 1000),
+    )
+
+
 def discover_gcp_hierarchy(
     credentials: Any,
     organization_id: str,
@@ -183,72 +243,22 @@ def discover_gcp_hierarchy(
         include_iam=False,
         coverage=coverage,
     )
-    cov = collector.coverage
-
-    start = time.time()
-    types = HIERARCHY_TYPES if org_policies else HIERARCHY_TYPES[:3]
-    raw, error = collector._list_assets("RESOURCE", asset_types=types)
-    if error is not None and not raw:
-        cov.record("gcp_hierarchy", ServiceStatus.FAILED, error=str(error))
-        raise RuntimeError(f"GCP hierarchy discovery failed for organizations/{org}: {error}")
-    records = [collector._record_from_asset(r) for r in raw]
-    assets = collector._build_assets(records)
-    cov.record(
-        "gcp_hierarchy",
-        ServiceStatus.PARTIAL if error else ServiceStatus.SUCCESS,
-        asset_count=len(assets),
-        error=str(error) if error else None,
-        duration_ms=int((time.time() - start) * 1000),
-    )
-    org_arn = f"//cloudresourcemanager.googleapis.com/organizations/{org}"
-    if not any(a.arn == org_arn for a in assets):
-        assets.insert(
-            0,
-            CloudAsset(
-                arn=org_arn,
-                name=f"organization {org}",
-                asset_type=AssetType.ORGANIZATION,
-                provider=CloudProvider.GCP,
-                region="global",
-                metadata={
-                    "gcp_asset_type": "cloudresourcemanager.googleapis.com/Organization",
-                    "aliases": [f"organizations/{org}"],
-                    "discovered_via": "configured organization_id",
-                },
-            ),
-        )
-
+    assets = _hierarchy_assets(collector, org, org_policies)
     if org_policies:
         start = time.time()
         results, error = collector._list_assets("ORG_POLICY")
         policies = org_policy_assets(results, collector._number_to_id)
         known = {a.arn for a in assets}
         assets.extend(p for p in policies if p.arn not in known)
-        cov.record(
-            "gcp_org_policies",
-            ServiceStatus.SUCCESS
-            if error is None
-            else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
-            asset_count=len(policies),
-            error=str(error) if error else None,
-            duration_ms=int((time.time() - start) * 1000),
-        )
-
+        _record_part(collector.coverage, "gcp_org_policies", (results, error), len(policies), start)
     if access_policies:
         start = time.time()
         results, error = collector._list_assets("ACCESS_POLICY")
         perimeters = perimeter_assets(results)
         assets.extend(perimeters)
-        cov.record(
-            "gcp_vpc_service_controls",
-            ServiceStatus.SUCCESS
-            if error is None
-            else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
-            asset_count=len(perimeters),
-            error=str(error) if error else None,
-            duration_ms=int((time.time() - start) * 1000),
+        _record_part(
+            collector.coverage, "gcp_vpc_service_controls", (results, error), len(perimeters), start
         )
-
     logger.info("GCP hierarchy for organizations/%s: %d assets", org, len(assets))
     return assets
 

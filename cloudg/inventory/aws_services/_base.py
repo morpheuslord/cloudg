@@ -22,8 +22,9 @@ import json
 import logging
 import re
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterable
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
+from cloudg.inventory._util import walk_strings
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType
 
 logger = logging.getLogger(__name__)
@@ -153,26 +154,28 @@ def principal_ref(principal: str) -> str:
 def arns_in(value: Any, limit: int = 200) -> list[str]:
     """Every ARN mentioned anywhere inside a (possibly nested) value."""
     found: list[str] = []
-    seen: set[str] = set()
-
-    def walk(v: Any, depth: int = 0) -> None:
-        if depth > 12 or len(found) >= limit:
-            return
-        if isinstance(v, str):
-            for m in _ARN_IN_TEXT_RE.findall(v):
-                m = m.rstrip(".")
-                if m not in seen:
-                    seen.add(m)
-                    found.append(m)
-        elif isinstance(v, dict):
-            for item in v.values():
-                walk(item, depth + 1)
-        elif isinstance(v, (list, tuple)):
-            for item in v:
-                walk(item, depth + 1)
-
-    walk(value)
+    for text in walk_strings(value):
+        for match in _ARN_IN_TEXT_RE.findall(text):
+            match = match.rstrip(".")
+            if match not in found:
+                found.append(match)
+                if len(found) >= limit:
+                    return found
     return found
+
+
+_SQS_HOST_RE = re.compile(r"sqs\.[a-z0-9-]+\.amazonaws\.com(\.cn)?|queue\.amazonaws\.com")
+
+
+def _is_sqs_queue_url(value: str) -> bool:
+    """True for an SQS queue URL, judged on the parsed host (not a substring)."""
+    parsed = urlsplit(value)
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and bool(_SQS_HOST_RE.fullmatch(host))
+        and parsed.path not in ("", "/")
+    )
 
 
 def identifier_refs(env: dict[str, Any] | None) -> list[str]:
@@ -189,7 +192,7 @@ def identifier_refs(env: dict[str, Any] | None) -> list[str]:
         v = value.strip()
         if v.startswith("arn:aws"):
             refs.append(v)
-        elif v.startswith("https://sqs.") and ".amazonaws.com/" in v:
+        elif _is_sqs_queue_url(v):
             refs.append(v)
     return refs
 

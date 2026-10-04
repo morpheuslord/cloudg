@@ -182,19 +182,8 @@ class MultiAccountCollector:
 
         async with self._semaphore:
             try:
-                from cloudg.credentials import build_aws_session
-
-                # Supports direct keys, OIDC web identity, profiles, the
-                # default chain (instance/task roles), and AssumeRole with
-                # optional ExternalId — see cloudg.credentials.
-                assume_into = account_id
-                if account_id and account_id == self._caller_account:
-                    assume_into = None
-                try:
-                    session = build_aws_session(cfg, region, account_id=assume_into)
-                except RuntimeError as exc:
-                    logger.error("AWS auth failed for %s/%s: %s", account_id, region, exc)
-                    coverage.record("sts_assume_role", ServiceStatus.FAILED, error=str(exc))
+                session = self._aws_session(account_id, region, cfg, coverage)
+                if session is None:
                     return [], []
 
                 # Resolve account ID if not provided
@@ -204,40 +193,72 @@ class MultiAccountCollector:
                     except Exception:
                         account_id = "unknown"
 
-                from cloudg.collectors.aws import AsyncAWSCollector
-
-                collector_cls = self._collector_overrides.get("aws", AsyncAWSCollector)
-                kwargs: dict[str, Any] = {}
-                if getattr(collector_cls, "supports_region_scoping", False):
-                    kwargs["is_primary_region"] = is_primary
-                collector = collector_cls(
-                    session=session, region=region, account_id=account_id, **kwargs
-                )
-
-                start = time.time()
-                assets = await collector.collect()
-                edges = await collector.collect_edges()
-                duration_ms = int((time.time() - start) * 1000)
-
-                # Surface per-service results (a denied Inspector call is
-                # otherwise invisible behind an overall SUCCESS).
-                services = list(getattr(getattr(collector, "coverage", None), "services", []) or [])
-                coverage.services.extend(services)
-                degraded = any(
-                    sc.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL) for sc in services
-                )
-                coverage.record(
-                    "aws_full",
-                    ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
-                    asset_count=len(assets),
-                    duration_ms=duration_ms,
-                )
+                collector = self._build_aws_collector(session, region, account_id, is_primary)
+                assets, edges, duration_ms = await self._timed_collect(collector)
+                self._record_aws_coverage(coverage, collector, len(assets), duration_ms)
                 return assets, edges
 
             except Exception as exc:
                 logger.error("AWS collection failed for %s/%s: %s", account_id, region, exc)
                 coverage.record("aws_full", ServiceStatus.FAILED, error=str(exc))
                 return [], []
+
+    @staticmethod
+    async def _timed_collect(collector: Any) -> tuple[list[CloudAsset], list[NetworkEdge], int]:
+        """Run a collector's asset and edge passes; returns their duration in ms too."""
+        start = time.time()
+        assets = await collector.collect()
+        edges = await collector.collect_edges()
+        return assets, edges, int((time.time() - start) * 1000)
+
+    def _aws_session(
+        self, account_id: str | None, region: str, cfg: Any, coverage: CollectionCoverage
+    ) -> Any:
+        """boto3 session for an account/region, or None when auth fails
+        (recorded on ``coverage``)."""
+        from cloudg.credentials import build_aws_session
+
+        # Supports direct keys, OIDC web identity, profiles, the
+        # default chain (instance/task roles), and AssumeRole with
+        # optional ExternalId — see cloudg.credentials.
+        assume_into = account_id
+        if account_id and account_id == self._caller_account:
+            assume_into = None
+        try:
+            return build_aws_session(cfg, region, account_id=assume_into)
+        except RuntimeError as exc:
+            logger.error("AWS auth failed for %s/%s: %s", account_id, region, exc)
+            coverage.record("sts_assume_role", ServiceStatus.FAILED, error=str(exc))
+            return None
+
+    def _build_aws_collector(
+        self, session: Any, region: str, account_id: str | None, is_primary: bool
+    ) -> Any:
+        from cloudg.collectors.aws import AsyncAWSCollector
+
+        collector_cls = self._collector_overrides.get("aws", AsyncAWSCollector)
+        kwargs: dict[str, Any] = {}
+        if getattr(collector_cls, "supports_region_scoping", False):
+            kwargs["is_primary_region"] = is_primary
+        return collector_cls(session=session, region=region, account_id=account_id, **kwargs)
+
+    @staticmethod
+    def _record_aws_coverage(
+        coverage: CollectionCoverage, collector: Any, asset_count: int, duration_ms: int
+    ) -> None:
+        # Surface per-service results (a denied Inspector call is
+        # otherwise invisible behind an overall SUCCESS).
+        services = list(getattr(getattr(collector, "coverage", None), "services", []) or [])
+        coverage.services.extend(services)
+        degraded = any(
+            sc.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL) for sc in services
+        )
+        coverage.record(
+            "aws_full",
+            ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
+            asset_count=asset_count,
+            duration_ms=duration_ms,
+        )
 
     # ------------------------------------------------------------------
     # Azure
@@ -431,43 +452,56 @@ class MultiAccountCollector:
                     coverage.account_id = pid
 
                 collector_cls = self._collector_overrides.get("gcp", GCPCollector)
-                kwargs: dict[str, Any] = {}
-                if getattr(collector_cls, "supports_org_scope", False):
-                    kwargs = {
-                        "organization_id": organization_id,
-                        "project_filter": project_filter,
-                        "coverage": coverage,
-                        "skip_asset_types": getattr(cfg, "skip_asset_types", None),
-                        "page_size": getattr(cfg, "asset_page_size", 1000),
-                        "include_iam": getattr(cfg, "iam_policies", True),
-                        "timeout": getattr(cfg, "api_timeout_seconds", 600.0),
-                    }
-                elif organization_id:
-                    raise RuntimeError(
-                        f"{collector_cls.__name__} does not support organization scope"
-                    )
+                kwargs = self._gcp_collector_kwargs(
+                    collector_cls, cfg, organization_id, project_filter, coverage
+                )
                 collector = collector_cls(project_id=pid, credentials=credentials, **kwargs)
 
-                start = time.time()
-                assets = await collector.collect()
-                edges = await collector.collect_edges()
-                duration_ms = int((time.time() - start) * 1000)
-
-                degraded = [
-                    s
-                    for s in coverage.services
-                    if s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL)
-                ]
-                coverage.record(
-                    "gcp_full",
-                    ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
-                    asset_count=len(assets),
-                    duration_ms=duration_ms,
-                    error="; ".join(f"{s.service}: {s.error}" for s in degraded) or None,
-                )
+                assets, edges, duration_ms = await self._timed_collect(collector)
+                self._record_gcp_coverage(coverage, len(assets), duration_ms)
                 return assets, edges
 
             except Exception as exc:
                 logger.error("GCP collection failed for %s: %s", label, exc)
                 coverage.record("gcp_full", ServiceStatus.FAILED, error=str(exc))
                 return [], []
+
+    @staticmethod
+    def _gcp_collector_kwargs(
+        collector_cls: Any,
+        cfg: Any,
+        organization_id: str | None,
+        project_filter: list[str] | None,
+        coverage: CollectionCoverage,
+    ) -> dict[str, Any]:
+        """Organization-scope options for collectors that support them."""
+        if getattr(collector_cls, "supports_org_scope", False):
+            return {
+                "organization_id": organization_id,
+                "project_filter": project_filter,
+                "coverage": coverage,
+                "skip_asset_types": getattr(cfg, "skip_asset_types", None),
+                "page_size": getattr(cfg, "asset_page_size", 1000),
+                "include_iam": getattr(cfg, "iam_policies", True),
+                "timeout": getattr(cfg, "api_timeout_seconds", 600.0),
+            }
+        if organization_id:
+            raise RuntimeError(f"{collector_cls.__name__} does not support organization scope")
+        return {}
+
+    @staticmethod
+    def _record_gcp_coverage(
+        coverage: CollectionCoverage, asset_count: int, duration_ms: int
+    ) -> None:
+        degraded = [
+            s
+            for s in coverage.services
+            if s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL)
+        ]
+        coverage.record(
+            "gcp_full",
+            ServiceStatus.PARTIAL if degraded else ServiceStatus.SUCCESS,
+            asset_count=asset_count,
+            duration_ms=duration_ms,
+            error="; ".join(f"{s.service}: {s.error}" for s in degraded) or None,
+        )
