@@ -198,23 +198,28 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
             return []
 
     def _service_tasks(self) -> dict[str, Any]:
-        """Coroutines to run per service. Subclasses extend this to widen coverage."""
+        """Collector callables per service, invoked lazily by :meth:`collect`.
+
+        Values are zero-argument callables returning a coroutine (normally
+        bound ``_collect_*`` methods). Subclasses extend or prune this dict
+        to widen or narrow coverage without creating unawaited coroutines.
+        """
         return {
-            "ec2": self._collect_ec2(),
-            "s3": self._collect_s3(),
-            "rds": self._collect_rds(),
-            "vpc": self._collect_vpcs(),
-            "subnets": self._collect_subnets(),
-            "security_groups": self._collect_security_groups(),
-            "iam_users": self._collect_iam_users(),
-            "iam_roles": self._collect_iam_roles(),
-            "lambda": self._collect_lambda(),
-            "elbv2": self._collect_elbv2(),
-            "ecs": self._collect_ecs(),
-            "dynamodb": self._collect_dynamodb(),
-            "cloudfront": self._collect_cloudfront(),
-            "secretsmanager": self._collect_secrets_manager(),
-            "kms": self._collect_kms(),
+            "ec2": self._collect_ec2,
+            "s3": self._collect_s3,
+            "rds": self._collect_rds,
+            "vpc": self._collect_vpcs,
+            "subnets": self._collect_subnets,
+            "security_groups": self._collect_security_groups,
+            "iam_users": self._collect_iam_users,
+            "iam_roles": self._collect_iam_roles,
+            "lambda": self._collect_lambda,
+            "elbv2": self._collect_elbv2,
+            "ecs": self._collect_ecs,
+            "dynamodb": self._collect_dynamodb,
+            "cloudfront": self._collect_cloudfront,
+            "secretsmanager": self._collect_secrets_manager,
+            "kms": self._collect_kms,
         }
 
     async def collect(self) -> list[CloudAsset]:
@@ -224,7 +229,10 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         service_tasks = self._service_tasks()
 
         results = await asyncio.gather(
-            *(self._run_service_collector(name, coro) for name, coro in service_tasks.items()),
+            *(
+                self._run_service_collector(name, task() if callable(task) else task)
+                for name, task in service_tasks.items()
+            ),
             return_exceptions=True,
         )
 

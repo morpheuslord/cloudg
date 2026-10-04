@@ -4,11 +4,25 @@ Extends the standard :class:`AsyncAWSCollector` with:
 
 - The network fabric that connects everything: route tables, internet
   gateways, NAT gateways, network interfaces, EBS volumes, Elastic IPs,
-  NACLs, VPC peering connections, and transit gateways.
-- Customer-managed IAM policies (the glue of most cross-service access).
+  NACLs, VPC peering connections, transit gateways and their attachments,
+  VPC endpoints and flow logs.
+- The service collectors in :mod:`cloudg.inventory.aws_services`:
+  identity (the full IAM graph), containers (ECR, ECS, EKS and in-cluster
+  Kubernetes workloads), serverless and integration (Lambda, API Gateway,
+  SQS, SNS, EventBridge, Step Functions, Kinesis), security services and
+  scanners (GuardDuty, Security Hub, Inspector, Macie, Config, Access
+  Analyzer, WAF, Network Firewall, Shield, CloudTrail, Detective), and
+  platform/data/DNS/deployment services.
 - A catch-all sweep over the Resource Groups Tagging API, which returns
   every taggable resource in the region — so services without a dedicated
   collector still appear on the map instead of silently missing.
+
+Global services (IAM, S3, CloudFront, Route 53, Shield, CloudFront-scope
+WAF) are collected once per account, in the primary region only.
+
+Every collector is assigned to a service family (see
+:data:`SERVICE_FAMILIES`) so a run can be narrowed with
+``inventory.services`` / ``inventory.exclude_services``.
 
 This collector is used by the inventory mapper (``cloudg map``) and never
 runs a security scanner.
@@ -17,63 +31,96 @@ runs a security scanner.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from cloudg.collectors.aws import AsyncAWSCollector
-from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
+from cloudg.inventory.aws_services import (
+    ApplicationCollectorsMixin,
+    CloudControlCollectorsMixin,
+    ContainerCollectorsMixin,
+    DataMLCollectorsMixin,
+    GovernanceCollectorsMixin,
+    IdentityCollectorsMixin,
+    NetworkExtCollectorsMixin,
+    PlatformCollectorsMixin,
+    SecurityCollectorsMixin,
+    ServerlessCollectorsMixin,
+)
+from cloudg.inventory.aws_services._base import rel
+
+# The task catalog lives in aws_deep_tasks; re-exported here
+from cloudg.inventory.aws_deep_tasks import (
+    _ARN_TYPE_MAP,
+    DEEP_TASK_METHODS,
+    GLOBAL_TASKS,
+    SERVICE_FAMILIES,
+    _arn_resource_type,
+    asset_type_from_arn,
+    select_tasks,
+)
+from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType
 
 logger = logging.getLogger(__name__)
 
-# Maps "service" or "service:resource-type" (from an ARN) to an AssetType,
-# used to classify resources found only by the tagging-API sweep.
-_ARN_TYPE_MAP: dict[str, AssetType] = {
-    "ec2:instance": AssetType.EC2,
-    "ec2:volume": AssetType.EBS_VOLUME,
-    "ec2:vpc": AssetType.VPC,
-    "ec2:subnet": AssetType.SUBNET,
-    "ec2:security-group": AssetType.SECURITY_GROUP,
-    "ec2:route-table": AssetType.ROUTE_TABLE,
-    "ec2:internet-gateway": AssetType.INTERNET_GATEWAY,
-    "ec2:natgateway": AssetType.NAT_GATEWAY,
-    "ec2:network-interface": AssetType.NETWORK_INTERFACE,
-    "ec2:network-acl": AssetType.NACL,
-    "ec2:elastic-ip": AssetType.ELASTIC_IP,
-    "ec2:vpc-peering-connection": AssetType.PEERING_CONNECTION,
-    "ec2:transit-gateway": AssetType.TRANSIT_GATEWAY,
-    "s3": AssetType.S3_BUCKET,
-    "rds:db": AssetType.RDS_INSTANCE,
-    "rds:cluster": AssetType.AURORA_CLUSTER,
-    "lambda:function": AssetType.LAMBDA_FUNCTION,
-    "elasticloadbalancing:loadbalancer": AssetType.LOAD_BALANCER,
-    "cloudfront:distribution": AssetType.CLOUDFRONT,
-    "dynamodb:table": AssetType.DYNAMODB_TABLE,
-    "ecs:cluster": AssetType.ECS_CLUSTER,
-    "eks:cluster": AssetType.EKS_CLUSTER,
-    "iam:user": AssetType.IAM_USER,
-    "iam:role": AssetType.IAM_ROLE,
-    "iam:policy": AssetType.IAM_POLICY,
-    "iam:group": AssetType.IAM_GROUP,
-    "kms:key": AssetType.KMS_KEY,
-    "secretsmanager:secret": AssetType.SECRET,
-    "acm:certificate": AssetType.CERTIFICATE,
-    "cloudtrail:trail": AssetType.CLOUDTRAIL,
-}
+
+@dataclass
+class DeepInventoryOptions:
+    """Mapping options of :class:`AWSDeepInventoryCollector` (see its Args)."""
+
+    tagging_sweep: bool = True
+    is_primary_region: bool = True
+    services: list[str] | None = None
+    exclude_services: list[str] | None = None
+    kubernetes: bool = True
+    kubernetes_timeout: int = 10
+    iam_resource_edges: bool = True
+    max_images_per_repository: int = 20
+    stack_resources: bool = True
+    cloud_control: bool = True
+    cloud_control_types: list[str] | None = None
+    cloud_control_exclude: list[str] | None = None
+    cloud_control_concurrency: int = 6
 
 
-def asset_type_from_arn(arn: str) -> AssetType:
-    """Best-effort AssetType classification from an ARN."""
-    parts = arn.split(":", 5)
-    if len(parts) < 6:
-        return AssetType.OTHER
-    service = parts[2]
-    resource = parts[5]
-    rtype = resource.split("/", 1)[0].split(":", 1)[0] if resource else ""
-    return _ARN_TYPE_MAP.get(f"{service}:{rtype}", _ARN_TYPE_MAP.get(service, AssetType.OTHER))
+class AWSDeepInventoryCollector(
+    GovernanceCollectorsMixin,
+    NetworkExtCollectorsMixin,
+    ApplicationCollectorsMixin,
+    DataMLCollectorsMixin,
+    IdentityCollectorsMixin,
+    ContainerCollectorsMixin,
+    ServerlessCollectorsMixin,
+    SecurityCollectorsMixin,
+    PlatformCollectorsMixin,
+    CloudControlCollectorsMixin,
+    AsyncAWSCollector,
+):
+    """AWS collector with full network-fabric and service coverage plus a
+    tagging-API sweep that catches every taggable resource the dedicated
+    collectors miss.
 
+    Args:
+        session: boto3 session for the target account.
+        region: Region to collect.
+        account_id: Account the session belongs to.
+        tagging_sweep: Run the Resource Groups Tagging API sweep.
+        is_primary_region: Collect account-wide (global) services here.
+            The orchestrator sets this for exactly one region per account.
+        services: Families / task names to include (default: all).
+        exclude_services: Families / task names to skip.
+        kubernetes: Map workloads inside EKS clusters via the k8s API.
+        kubernetes_timeout: Kubernetes API timeout in seconds.
+        iam_resource_edges: Link principals to resources their policies grant.
+        max_images_per_repository: ECR images sampled per repository.
+        stack_resources: Link CloudFormation stacks to managed resources.
+        cloud_control: Run the Cloud Control API breadth sweep.
+        cloud_control_types: Only these CloudFormation types / prefixes.
+        cloud_control_exclude: Skip these CloudFormation types / prefixes.
+        cloud_control_concurrency: Types listed in parallel per region.
+    """
 
-class AWSDeepInventoryCollector(AsyncAWSCollector):
-    """AWS collector with full network-fabric coverage plus a tagging-API
-    sweep that catches every taggable resource the dedicated collectors miss."""
+    supports_region_scoping = True
 
     def __init__(
         self,
@@ -81,9 +128,30 @@ class AWSDeepInventoryCollector(AsyncAWSCollector):
         region: str = "us-east-1",
         account_id: str | None = None,
         tagging_sweep: bool = True,
+        **options: Any,
     ) -> None:
         super().__init__(session=session, region=region, account_id=account_id)
-        self._tagging_sweep = tagging_sweep
+        # tagging_sweep stays the 4th positional parameter (0.5.0 public API);
+        # unknown option names raise TypeError, as keyword parameters did
+        opts = DeepInventoryOptions(tagging_sweep=tagging_sweep, **options)
+        self._tagging_sweep = opts.tagging_sweep
+        self._is_primary_region = opts.is_primary_region
+        self._services = opts.services or ["all"]
+        self._exclude_services = list(opts.exclude_services or [])
+        inc = {s.lower() for s in self._services}
+        self._kubernetes_enabled = (
+            opts.kubernetes
+            and "kubernetes" not in {e.lower() for e in self._exclude_services}
+            and ("all" in inc or "kubernetes" in inc or "containers" in inc or "eks" in inc)
+        )
+        self._kubernetes_timeout = opts.kubernetes_timeout
+        self._iam_resource_edges = opts.iam_resource_edges
+        self._max_images = opts.max_images_per_repository
+        self._stack_resources = opts.stack_resources
+        self._cloud_control = opts.cloud_control
+        self._cloud_control_types = list(opts.cloud_control_types or [])
+        self._cloud_control_exclude = list(opts.cloud_control_exclude or [])
+        self._cloud_control_concurrency = opts.cloud_control_concurrency
 
     # ------------------------------------------------------------------
     # Network fabric collectors
@@ -340,37 +408,46 @@ class AWSDeepInventoryCollector(AsyncAWSCollector):
                             metadata={
                                 "transit_gateway_id": tgw.get("TransitGatewayId"),
                                 "state": tgw.get("State"),
+                                "owner_id": tgw.get("OwnerId"),
                             },
                             raw_data=tgw,
                         )
                     )
+
+            # Attachments (VPCs, VPNs, peerings — possibly in other accounts)
+            try:
+                await self._link_tgw_attachments(ec2, assets)
+            except Exception as exc:
+                logger.debug("Transit gateway attachment listing failed: %s", exc)
         return assets
 
-    async def _collect_iam_policies(self) -> list[CloudAsset]:
-        """Customer-managed IAM policies (AWS-managed ones are noise)."""
-        assets: list[CloudAsset] = []
-        session = self._get_aio_session()
-        async with session.client("iam", region_name="us-east-1") as iam:
-            paginator = iam.get_paginator("list_policies")
-            async for page in paginator.paginate(Scope="Local"):
-                for pol in page.get("Policies", []):
-                    assets.append(
-                        CloudAsset(
-                            arn=pol.get("Arn", ""),
-                            name=pol.get("PolicyName", ""),
-                            asset_type=AssetType.IAM_POLICY,
-                            provider=CloudProvider.AWS,
-                            region="global",
-                            account_id=self._account_id,
-                            metadata={
-                                "policy_id": pol.get("PolicyId"),
-                                "attachment_count": pol.get("AttachmentCount", 0),
-                                "default_version": pol.get("DefaultVersionId"),
-                            },
-                            raw_data=pol,
-                        )
+    @staticmethod
+    async def _link_tgw_attachments(ec2: Any, assets: list[CloudAsset]) -> None:
+        """Record each transit gateway attachment as a routed relation."""
+        by_tgw = {a.metadata["transit_gateway_id"]: a for a in assets}
+        paginator = ec2.get_paginator("describe_transit_gateway_attachments")
+        async for page in paginator.paginate():
+            for att in page.get("TransitGatewayAttachments", []):
+                owner = by_tgw.get(att.get("TransitGatewayId"))
+                if owner is None:
+                    continue
+                r = rel(
+                    att.get("ResourceId"),
+                    EdgeType.ROUTE,
+                    "TRANSIT_ROUTED",
+                    description=f"{att.get('ResourceType')} attachment",
+                    resource_owner=att.get("ResourceOwnerId"),
+                    state=att.get("State"),
+                )
+                if r:
+                    owner.metadata.setdefault("relations", []).append(r)
+                    owner.metadata.setdefault("attachments", []).append(
+                        {
+                            "resource_id": att.get("ResourceId"),
+                            "resource_type": att.get("ResourceType"),
+                            "resource_owner": att.get("ResourceOwnerId"),
+                        }
                     )
-        return assets
 
     # ------------------------------------------------------------------
     # Catch-all tagging-API sweep
@@ -412,39 +489,82 @@ class AWSDeepInventoryCollector(AsyncAWSCollector):
     # Main interface
     # ------------------------------------------------------------------
 
+    def _merge_registries(self, tasks: dict[str, Any]) -> set[str]:
+        """Add the service-mixin task registries; returns the global tasks."""
+        global_tasks = set(GLOBAL_TASKS)
+        for registry in (
+            self._governance_tasks(),
+            self._network_ext_tasks(),
+            self._application_tasks(),
+            self._data_ml_tasks(),
+            self._cloudcontrol_tasks(),
+        ):
+            for name, (task, family, is_global) in registry.items():
+                tasks[name] = task
+                SERVICE_FAMILIES.setdefault(name, family)
+                if is_global:
+                    global_tasks.add(name)
+        return global_tasks
+
     def _service_tasks(self) -> dict[str, Any]:
         tasks = super()._service_tasks()
-        tasks.update(
-            {
-                "route_tables": self._collect_route_tables(),
-                "internet_gateways": self._collect_internet_gateways(),
-                "nat_gateways": self._collect_nat_gateways(),
-                "network_interfaces": self._collect_network_interfaces(),
-                "ebs_volumes": self._collect_ebs_volumes(),
-                "elastic_ips": self._collect_elastic_ips(),
-                "nacls": self._collect_nacls(),
-                "vpc_peering": self._collect_vpc_peering(),
-                "transit_gateways": self._collect_transit_gateways(),
-                "iam_policies": self._collect_iam_policies(),
-            }
-        )
+        # The identity mixin maps users, roles, groups, policies and
+        # instance profiles in one call; drop the shallow per-type tasks.
+        tasks.pop("iam_users", None)
+        tasks.pop("iam_roles", None)
+        tasks.update({name: getattr(self, method) for name, method in DEEP_TASK_METHODS})
+        global_tasks = self._merge_registries(tasks)
         if self._tagging_sweep:
-            tasks["tagging_sweep"] = self._collect_tagging_sweep()
-        return tasks
+            tasks["tagging_sweep"] = self._collect_tagging_sweep
+        if not self._is_primary_region:
+            for name in global_tasks:
+                tasks.pop(name, None)
+        selected = set(select_tasks(list(tasks), self._services, self._exclude_services))
+        return {name: task for name, task in tasks.items() if name in selected}
 
     async def collect(self) -> list[CloudAsset]:
-        """Collect all assets, deduplicating tagging-sweep hits against the
-        richer assets produced by the dedicated collectors."""
+        """Collect all assets, deduplicating breadth-sweep hits against the
+        richer assets produced by the dedicated collectors.
+
+        Precedence: dedicated collector > Cloud Control > tagging API. A
+        sweep hit is dropped when its ARN or identifier matches an asset
+        that ranks higher."""
         assets = await super().collect()
 
-        detailed = [a for a in assets if a.metadata.get("discovered_via") != "tagging-api"]
-        swept = [a for a in assets if a.metadata.get("discovered_via") == "tagging-api"]
+        def tier(a: CloudAsset) -> int:
+            via = a.metadata.get("discovered_via")
+            return {"cloud-control": 1, "tagging-api": 2}.get(via, 0)
 
-        known_arns = {a.arn for a in detailed if a.arn}
-        merged = detailed + [a for a in swept if a.arn not in known_arns]
+        merged: list[CloudAsset] = []
+        known: set[str] = set()
+        for rank in (0, 1, 2):
+            for a in assets:
+                if tier(a) != rank:
+                    continue
+                keys = {a.arn} if a.arn else set()
+                if rank:
+                    keys |= set(a.metadata.get("aliases") or [])
+                    if keys & known:
+                        continue
+                merged.append(a)
+                known.update(k for k in ({a.arn} | set(a.metadata.get("aliases") or [])) if k)
 
         dropped = len(assets) - len(merged)
         if dropped:
-            logger.debug("Tagging sweep: %d duplicates dropped, kept detailed assets", dropped)
+            logger.debug("Breadth sweeps: %d duplicates dropped, kept detailed assets", dropped)
         self._cached_assets = merged
         return merged
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "asset_type_from_arn",
+    "AWSDeepInventoryCollector",
+    "DEEP_TASK_METHODS",
+    "DeepInventoryOptions",
+    "GLOBAL_TASKS",
+    "select_tasks",
+    "SERVICE_FAMILIES",
+    "_arn_resource_type",
+    "_ARN_TYPE_MAP",
+]

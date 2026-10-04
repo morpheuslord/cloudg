@@ -11,6 +11,44 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+class AWSOrganizationConfig(BaseModel):
+    """AWS Organizations / Control Tower account discovery.
+
+    When enabled, cloudg runs from the management account (or an
+    Organizations delegated administrator), enumerates the OU tree and
+    every member account, and fans collection out to each account by
+    assuming ``role_name`` there. Control Tower is detected automatically:
+    its landing zone, governed regions, shared accounts and enabled
+    controls are mapped, and governed regions can drive the region list.
+    """
+
+    enabled: bool = Field(default=False, description="Discover and map every account in the org")
+    role_name: str | None = Field(
+        default=None,
+        description="Role assumed in member accounts. Falls back to aws.role_name, then "
+        "AWSControlTowerExecution. A dedicated read-only role (SecurityAudit + "
+        "ViewOnlyAccess) deployed with a StackSet is recommended.",
+    )
+    include_ous: list[str] = Field(
+        default_factory=list,
+        description="Only accounts under these OUs (ID, ARN or name; nested OUs included)",
+    )
+    exclude_accounts: list[str] = Field(default_factory=list)
+    include_management_account: bool = Field(default=True)
+    include_suspended: bool = Field(default=False)
+    use_governed_regions: bool = Field(
+        default=True,
+        description="With regions=['ALL'], scan only the Control Tower governed regions",
+    )
+    control_tower: bool = Field(default=True, description="Detect and map Control Tower")
+    home_region: str | None = Field(
+        default=None, description="Control Tower home region (auto-detected when unset)"
+    )
+    map_structure: bool = Field(
+        default=True, description="Emit org, OU, account, SCP and control nodes on the map"
+    )
+
+
 class AWSConfig(BaseModel):
     """AWS-specific configuration.
 
@@ -56,6 +94,7 @@ class AWSConfig(BaseModel):
     )
     max_retries: int = Field(default=10, ge=1, le=30)
     retry_mode: str = Field(default="adaptive", pattern="^(legacy|standard|adaptive)$")
+    organization: AWSOrganizationConfig = Field(default_factory=AWSOrganizationConfig)
 
 
 class AzureConfig(BaseModel):
@@ -88,6 +127,17 @@ class AzureConfig(BaseModel):
         default=["ALL"],
         description="Azure locations to scan. Use ['ALL'] for auto-discovery.",
     )
+    all_subscriptions: bool = Field(
+        default=True,
+        description=(
+            "When subscription_ids is empty, collect every Enabled subscription the "
+            "credential can see (False: only the first one)"
+        ),
+    )
+    map_management_groups: bool = Field(
+        default=True,
+        description="Map the management group / subscription / Azure Policy hierarchy (inventory)",
+    )
 
 
 class GCPConfig(BaseModel):
@@ -111,6 +161,43 @@ class GCPConfig(BaseModel):
     regions: list[str] = Field(
         default=["ALL"],
         description="GCP regions to scan. Use ['ALL'] for auto-discovery.",
+    )
+    collection_scope: str = Field(
+        default="auto",
+        pattern="^(auto|organization|project)$",
+        description="auto: one Cloud Asset Inventory listing at organizations/<organization_id> "
+        "when organization_id is set (project_ids then filter it), else one per project. "
+        "organization / project force either mode.",
+    )
+    skip_asset_types: list[str] = Field(
+        default_factory=lambda: [
+            "k8s.io/Pod",
+            "k8s.io/Node",
+            "k8s.io/Event",
+            "events.k8s.io/Event",
+            "k8s.io/Endpoints",
+            "discovery.k8s.io/EndpointSlice",
+            "apps.k8s.io/ReplicaSet",
+            "apps.k8s.io/ControllerRevision",
+            "run.googleapis.com/Revision",
+            "cloudkms.googleapis.com/CryptoKeyVersion",
+            "secretmanager.googleapis.com/SecretVersion",
+            "serviceusage.googleapis.com/Service",
+        ],
+        description="Cloud Asset Inventory types left out of the map (high-churn objects)",
+    )
+    asset_page_size: int = Field(default=1000, ge=1, le=1000)
+    api_timeout_seconds: float = Field(default=600.0, ge=10.0)
+    iam_policies: bool = Field(
+        default=True, description="Map IAM policy bindings (principal -> resource access)"
+    )
+    map_hierarchy: bool = Field(
+        default=True,
+        description="With organization_id: map the organization, folders and projects",
+    )
+    org_policies: bool = Field(default=True, description="Map organization policies")
+    vpc_service_controls: bool = Field(
+        default=True, description="Map VPC Service Controls perimeters"
     )
 
 
@@ -136,11 +223,47 @@ class InventoryConfig(BaseModel):
 
     tagging_sweep: bool = Field(
         default=True,
-        description="AWS: sweep the Resource Groups Tagging API to catch every taggable resource",
+        description="AWS: sweep the Resource Groups Tagging API (tagged resources only)",
     )
+    cloud_control: bool = Field(
+        default=True,
+        description="AWS: list every resource type with a Cloud Control list handler, "
+        "tagged or not, for services without a dedicated collector",
+    )
+    cloud_control_types: list[str] = Field(
+        default_factory=list,
+        description="Only these CloudFormation types or prefixes (e.g. AWS::SSM::, AWS::Glue::Job)",
+    )
+    cloud_control_exclude: list[str] = Field(default_factory=list)
+    cloud_control_concurrency: int = Field(default=6, ge=1, le=32)
     link_references: bool = Field(
         default=True,
         description="Derive cross-service REFERENCES edges from asset metadata",
+    )
+    services: list[str] = Field(
+        default=["all"],
+        description="Service families or collector names to map: all, network, compute, "
+        "containers, kubernetes, serverless, integration, data, storage, identity, security, "
+        "dns, iac, logging",
+    )
+    exclude_services: list[str] = Field(default_factory=list)
+    kubernetes: bool = Field(
+        default=True,
+        description="Read workloads, services, ingresses and service accounts from inside "
+        "EKS clusters through the Kubernetes API (needs a cluster access entry)",
+    )
+    kubernetes_timeout: int = Field(default=10, ge=1, le=120)
+    iam_resource_edges: bool = Field(
+        default=True,
+        description="Link IAM principals to the concrete resources their policies grant",
+    )
+    max_images_per_repository: int = Field(default=20, ge=0, le=1000)
+    stack_resources: bool = Field(
+        default=True, description="Link CloudFormation stacks to the resources they manage"
+    )
+    account_hierarchy: bool = Field(
+        default=True,
+        description="Add account nodes and account -> top-level resource containment",
     )
 
 

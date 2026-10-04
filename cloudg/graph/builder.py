@@ -76,6 +76,7 @@ class GraphBuilder:
             provider=asset.provider.value,
             region=asset.region,
             arn=asset.arn,
+            account_id=asset.account_id or "",
             tags=json.dumps(asset.tags) if asset.tags else "{}",
             is_internet_exposed=asset.is_internet_exposed,
         )
@@ -106,6 +107,7 @@ class GraphBuilder:
             cidr=edge.cidr or "",
             direction=edge.direction or "",
             description=edge.description or "",
+            relationship=edge.relationship or "",
         )
 
     def compute_centrality(self) -> dict[str, dict[str, float]]:
@@ -278,6 +280,7 @@ class GraphBuilder:
                     "provider": data.get("provider", "UNKNOWN"),
                     "region": data.get("region", ""),
                     "arn": data.get("arn", ""),
+                    "account_id": data.get("account_id", ""),
                     "is_internet_exposed": data.get("is_internet_exposed", False),
                     "is_external": data.get("is_external", False),
                 }
@@ -294,6 +297,8 @@ class GraphBuilder:
                     "protocol": data.get("protocol"),
                     "cidr": data.get("cidr"),
                     "direction": data.get("direction"),
+                    "relationship": data.get("relationship", ""),
+                    "description": data.get("description", ""),
                 }
             )
 

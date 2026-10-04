@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def rds_instance_metadata(db: dict[str, Any]) -> dict[str, Any]:
+    """Engine, size and exposure fields of an RDS instance, shared by the
+    base collector and the deep inventory collector."""
+    return {
+        "engine": db.get("Engine"),
+        "engine_version": db.get("EngineVersion"),
+        "instance_class": db.get("DBInstanceClass"),
+        "multi_az": db.get("MultiAZ", False),
+        "publicly_accessible": db.get("PubliclyAccessible", False),
+        "storage_encrypted": db.get("StorageEncrypted", False),
+    }
+
+
 class CoreServiceCollectorsMixin:
     """Collectors for EC2, S3, RDS, VPC networking, IAM, Lambda and ELBv2.
 
@@ -136,12 +149,7 @@ class CoreServiceCollectorsMixin:
                                 region=self._region,
                                 account_id=self._account_id,
                                 metadata={
-                                    "engine": db.get("Engine"),
-                                    "engine_version": db.get("EngineVersion"),
-                                    "instance_class": db.get("DBInstanceClass"),
-                                    "multi_az": db.get("MultiAZ", False),
-                                    "publicly_accessible": db.get("PubliclyAccessible", False),
-                                    "storage_encrypted": db.get("StorageEncrypted", False),
+                                    **rds_instance_metadata(db),
                                     "vpc_id": db.get("DBSubnetGroup", {}).get("VpcId"),
                                 },
                                 raw_data=db,

@@ -21,10 +21,10 @@ from cloudg.cli_helpers import (
     _build_scan_jobs,
     _gather_ingest_reports,
     _parse_ingest_reports,
-    _parse_region_flag,
     _render_ingest_reports,
     _run_scan_jobs,
 )
+from cloudg.cli_inventory import deps, map_inventory
 from cloudg.ui import console
 
 # Global config reference (set by CLI group)
@@ -167,157 +167,6 @@ def collect(
         {"Assets": len(result["assets"]), "Edges": len(result["edges"])},
     )
     ui.artifact("Inventory", inventory_path)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# MAP command (scanner-independent inventory mapping)
-# ─────────────────────────────────────────────────────────────────────
-
-
-@cli.command(name="map")
-@click.option(
-    "-p",
-    "--provider",
-    type=click.Choice(["aws", "azure", "gcp", "all"], case_sensitive=False),
-    multiple=True,
-    default=("aws",),
-    show_default=True,
-    help="Provider(s) to map. Use multiple times or 'all'.",
-)
-@click.option("--profile", default=None, help="AWS profile name")
-@click.option(
-    "--regions",
-    "scan_regions",
-    default=None,
-    help="Regions: 'all' for auto-discovery, or comma-separated list",
-)
-@click.option("--subscription-id", default=None, help="Azure subscription ID")
-@click.option("--project-id", default=None, help="GCP project ID")
-@click.option(
-    "--findings",
-    "findings_paths",
-    multiple=True,
-    help="Existing cloudg findings JSON (raw-findings.json or a cloudg report) "
-    "to merge into asset/compliance maps. Repeatable.",
-)
-@click.option(
-    "--sweep/--no-sweep",
-    default=True,
-    show_default=True,
-    help="Catch-all sweep (AWS Resource Groups Tagging API) for resources "
-    "without a dedicated collector",
-)
-@click.option("-o", "--output", default="./reports", help="Output directory")
-def map_inventory(
-    provider: tuple[str, ...],
-    profile: str | None,
-    scan_regions: str | None,
-    subscription_id: str | None,
-    project_id: str | None,
-    findings_paths: tuple[str, ...],
-    sweep: bool,
-    output: str,
-) -> None:
-    """Map the complete infrastructure inventory — no scanners involved.
-
-    Deep-collects everything deployed (or default) across the configured
-    providers, including the network fabric (route tables, gateways, ENIs,
-    volumes, peering) and a catch-all sweep so services without a dedicated
-    collector still appear. Every asset is then linked into an
-    interconnected map: attachment, containment, routing, and
-    cross-service references.
-
-    Optionally merge previously generated scanner findings to produce an
-    asset map and a compliance map:
-
-        cloudg map -p aws --regions all --findings ./reports/raw-findings.json
-    """
-    ui.section("Inventory Mapping")
-
-    from cloudg.config import CloudGConfig
-    from cloudg.inventory import InventoryMapper
-
-    cfg: CloudGConfig = _config or CloudGConfig()
-
-    providers_list = list(provider)
-    if "all" in providers_list:
-        providers_list = ["aws", "azure", "gcp"]
-    cfg.providers = providers_list
-
-    if scan_regions:
-        region_list = _parse_region_flag(scan_regions)
-        cfg.aws.regions = region_list
-        cfg.azure.regions = region_list
-        cfg.gcp.regions = region_list
-    if profile:
-        cfg.aws.profile = profile
-    if subscription_id:
-        cfg.azure.subscription_ids = [subscription_id]
-    if project_id:
-        cfg.gcp.project_ids = [project_id]
-
-    ui.config_panel(
-        "Map Configuration",
-        {
-            "Providers": ", ".join(cfg.providers),
-            "AWS regions": ", ".join(cfg.aws.regions),
-            "Catch-all sweep": "enabled" if sweep else "disabled",
-            "Scanners": "none (inventory mapping is scanner-independent)",
-        },
-    )
-
-    mapper = InventoryMapper(cfg, tagging_sweep=sweep)
-
-    try:
-        with console.status("[accent]Mapping infrastructure inventory…[/]", spinner="dots"):
-            result = mapper.map_inventory_sync()
-    except Exception as exc:
-        ui.error_panel("Inventory mapping failed", exc)
-        sys.exit(1)
-
-    output_dir = Path(output)
-    paths = result.export(output_dir)
-
-    summary = result.summary
-    ui.stats_table(
-        "Inventory Summary",
-        {
-            "Assets": summary["total_assets"],
-            "Interconnections": summary["total_edges"],
-            "Services": len(summary["assets_by_service"]),
-            "Internet-exposed": summary["internet_exposed"],
-            "Unlinked assets": summary["unlinked_assets"],
-        },
-    )
-    for svc, count in list(summary["assets_by_service"].items())[:15]:
-        ui.detail(f"{svc}: {count} assets")
-
-    ui.artifact("Inventory map", paths["map"])
-    ui.artifact("GraphML", paths["graphml"])
-    ui.artifact("Graph JSON", paths["graph"])
-
-    # Optional merge with existing scanner findings
-    if findings_paths:
-        from cloudg.schema.models import Finding
-
-        findings: list[Any] = []
-        for fpath in findings_paths:
-            try:
-                with open(fpath) as f:
-                    data = json.load(f)
-                raw = data if isinstance(data, list) else data.get("findings", [])
-                findings.extend(Finding.model_validate(item) for item in raw)
-            except (OSError, ValueError) as exc:
-                ui.warn(f"Skipping findings file {fpath}: {exc}")
-
-        if findings:
-            merged_paths = mapper.export_merged(result, findings, output_dir)
-            ui.success(f"Merged [metric]{len(findings)}[/] findings into the inventory")
-            ui.artifact("Asset map", merged_paths["asset_map"])
-            ui.artifact("Compliance map", merged_paths["compliance_map"])
-
-    console.print()
-    ui.success(f"Inventory map saved to [path]{output_dir}[/]")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -565,9 +414,12 @@ def ingest(
 
 # ─────────────────────────────────────────────────────────────────────
 # RUN command (full pipeline) — defined in cloudg.cli_commands
+# MAP / DEPS commands (inventory mapping) — defined in cloudg.cli_inventory
 # ─────────────────────────────────────────────────────────────────────
 
 cli.add_command(run)
+cli.add_command(map_inventory)
+cli.add_command(deps)
 
 
 if __name__ == "__main__":

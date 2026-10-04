@@ -106,7 +106,65 @@ _ASSET_TYPE_CLASSES: dict[AssetType, str] = {
     AssetType.CLOUDTRAIL: "AuditLog",
     AssetType.FLOW_LOG: "FlowLog",
     AssetType.OTHER: "CloudResource",
+    AssetType.NETWORK_INTERFACE: "NetworkInterface",
+    AssetType.LOG_GROUP: "LogGroup",
+    AssetType.CONTAINER_REGISTRY: "ContainerRegistry",
+    AssetType.CONTAINER_SERVICE: "ContainerService",
+    AssetType.TASK_DEFINITION: "TaskDefinition",
+    AssetType.NODE_GROUP: "NodeGroup",
+    AssetType.FARGATE_PROFILE: "FargateProfile",
+    AssetType.CLUSTER_ADDON: "ClusterAddon",
+    AssetType.K8S_NAMESPACE: "KubernetesNamespace",
+    AssetType.K8S_WORKLOAD: "KubernetesWorkload",
+    AssetType.K8S_SERVICE: "KubernetesService",
+    AssetType.K8S_INGRESS: "KubernetesIngress",
+    AssetType.K8S_SERVICE_ACCOUNT: "KubernetesServiceAccount",
+    AssetType.AUTOSCALING_GROUP: "AutoScalingGroup",
+    AssetType.LAUNCH_TEMPLATE: "LaunchTemplate",
+    AssetType.TARGET_GROUP: "TargetGroup",
+    AssetType.API_GATEWAY: "APIGateway",
+    AssetType.VPC_ENDPOINT: "VPCEndpoint",
+    AssetType.INSTANCE_PROFILE: "InstanceProfile",
+    AssetType.IDENTITY_PROVIDER: "IdentityProvider",
+    AssetType.MESSAGE_QUEUE: "MessageQueue",
+    AssetType.NOTIFICATION_TOPIC: "NotificationTopic",
+    AssetType.EVENT_BUS: "EventBus",
+    AssetType.EVENT_RULE: "EventRule",
+    AssetType.STATE_MACHINE: "StateMachine",
+    AssetType.DATA_STREAM: "DataStream",
+    AssetType.CACHE_CLUSTER: "CacheCluster",
+    AssetType.SEARCH_DOMAIN: "SearchDomain",
+    AssetType.DATA_WAREHOUSE: "DataWarehouse",
+    AssetType.FILE_SYSTEM: "FileSystem",
+    AssetType.DNS_ZONE: "DNSZone",
+    AssetType.DNS_RECORD: "DNSRecord",
+    AssetType.IAC_STACK: "IaCStack",
+    AssetType.WAF_WEB_ACL: "WebApplicationFirewall",
+    AssetType.NETWORK_FIREWALL: "NetworkFirewall",
+    AssetType.DDOS_PROTECTION: "DDoSProtection",
+    AssetType.THREAT_DETECTOR: "ThreatDetector",
+    AssetType.SECURITY_HUB: "SecurityPostureHub",
+    AssetType.VULNERABILITY_SCANNER: "VulnerabilityScanner",
+    AssetType.DATA_SECURITY_SCANNER: "DataSecurityScanner",
+    AssetType.CONFIG_RECORDER: "ConfigurationRecorder",
+    AssetType.ACCESS_ANALYZER: "AccessAnalyzer",
+    AssetType.ORGANIZATION: "Organization",
+    AssetType.ORG_UNIT: "OrganizationalUnit",
+    AssetType.CLOUD_ACCOUNT: "Account",
+    AssetType.ORG_POLICY: "OrganizationPolicy",
+    AssetType.LANDING_ZONE: "LandingZone",
+    AssetType.GUARDRAIL: "Guardrail",
 }
+
+
+def _class_name(asset_type: AssetType) -> str:
+    return "".join(part.capitalize() for part in asset_type.name.split("_"))
+
+
+# Every AssetType gets an OWL class: explicit names above, CamelCase of the
+# enum name otherwise, so new taxonomy values never fall back to CloudResource.
+for _t in AssetType:
+    _ASSET_TYPE_CLASSES.setdefault(_t, _class_name(_t))
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +293,16 @@ class CloudOntology:
         # Class hierarchy
         for child, parent in _CLASS_HIERARCHY.items():
             g.add((CM[child], RDFS.subClassOf, CM[parent]))
+
+        # Classes for every asset type (including ones not in the literal
+        # list above), all under CloudResource.
+        for cls_name in sorted(set(_ASSET_TYPE_CLASSES.values()) - {"CloudResource"}):
+            cls_uri = CM[cls_name]
+            if (cls_uri, RDF.type, OWL.Class) not in g:
+                g.add((cls_uri, RDF.type, OWL.Class))
+                g.add((cls_uri, RDFS.label, Literal(cls_name)))
+            if cls_name not in _CLASS_HIERARCHY:
+                g.add((cls_uri, RDFS.subClassOf, CM["CloudResource"]))
 
         # Object properties (relations)
         for rt in RelationType:

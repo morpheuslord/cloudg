@@ -54,3 +54,39 @@ def patch_aiobotocore_for_moto(monkeypatch):
         _convert_to_response_dict,
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_cloudcontrol_cache(monkeypatch, tmp_path):
+    """Keep the Cloud Control type cache out of the user's home and reset
+    the in-process cache between tests."""
+    monkeypatch.setenv("CLOUDG_CACHE_DIR", str(tmp_path / "cloudg-cache"))
+    try:
+        from cloudg.inventory.aws_services import cloudcontrol
+    except ImportError:
+        yield
+        return
+    monkeypatch.setattr(cloudcontrol, "_types_cache", None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def skip_ddb_crc32_under_moto(monkeypatch):
+    """DynamoDB responses carry x-amz-crc32; aiobotocore awaits moto's
+    synchronous body to verify it and fails. Skip the check in tests."""
+    try:
+        from aiobotocore import retryhandler
+        from aiobotocore.retries import special
+    except ImportError:
+        yield
+        return
+
+    async def _no_check(self, attempt_number, response):
+        return None
+
+    async def _not_retryable(self, context):
+        return False
+
+    monkeypatch.setattr(retryhandler.AioCRC32Checker, "_check_response", _no_check)
+    monkeypatch.setattr(special.AioRetryDDBChecksumError, "is_retryable", _not_retryable)
+    yield

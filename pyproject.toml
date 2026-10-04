@@ -1,6 +1,6 @@
 [project]
 name = "cloudg"
-version = "0.5.0"
+version = "0.5.1"
 description = "cloudg (cloud graphing) - multi-cloud infrastructure mapping, knowledge graphs and security intelligence for AWS, Azure and GCP"
 # The PyPI project page renders the full documentation, not the repo README
 readme = "docs/DOCUMENTATION.md"
@@ -57,6 +57,7 @@ azure = [
     "azure-mgmt-resource>=23.0",
     "azure-mgmt-sql>=3.0",
     "azure-mgmt-keyvault>=10.0",
+    "azure-mgmt-resourcegraph>=8.0.0",
 ]
 gcp = [
     "google-cloud-asset>=3.0",

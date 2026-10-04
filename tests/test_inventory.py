@@ -63,7 +63,12 @@ class TestTypeClassification:
             asset_type_from_arn("arn:aws:lambda:us-east-1:1:function:fn")
             == AssetType.LAMBDA_FUNCTION
         )
-        assert asset_type_from_arn("arn:aws:sns:us-east-1:1:topic") == AssetType.OTHER
+        assert asset_type_from_arn("arn:aws:sns:us-east-1:1:topic") == AssetType.NOTIFICATION_TOPIC
+        assert (
+            asset_type_from_arn("arn:aws:ecr:us-east-1:1:repository/app")
+            == AssetType.CONTAINER_REGISTRY
+        )
+        assert asset_type_from_arn("arn:aws:braket:us-east-1:1:quantum-task/x") == AssetType.OTHER
         assert asset_type_from_arn("not-an-arn") == AssetType.OTHER
 
     def test_asset_type_from_arm(self):
@@ -154,7 +159,10 @@ class TestRelationshipLinker:
         )
         edges = RelationshipLinker([role, fn]).link()
         assert any(
-            e.source_id == fn.id and e.target_id == role.id and e.edge_type == EdgeType.REFERENCES
+            e.source_id == fn.id
+            and e.target_id == role.id
+            and e.edge_type == EdgeType.ASSUMES_ROLE
+            and e.relationship == "RUNS_ON"
             for e in edges
         )
 

@@ -1,0 +1,334 @@
+# Cloud Control breadth sweep reference (cloudg.inventory.aws_services.cloudcontrol).
+#
+# Grow this file instead of editing code:
+#   covered_types   CloudFormation types a dedicated deep collector already maps in
+#                   detail; the sweep skips them. Add a type here when you add a
+#                   collector for it.
+#   global_prefixes Types listed once per account, in the primary region only.
+#   asset_types     CloudFormation type -> cloudg AssetType name for sweep hits.
+#                   Unlisted types fall back to the ARN classifier, then OTHER.
+#   sensitive_fields Top-level properties dropped for a type (secret-bearing values).
+#                   Keys matching the generic secret pattern are always dropped.
+#
+# Extra YAML files with the same keys in $CLOUDG_CATALOG_DIR are merged on top.
+
+covered_types:
+  network:
+    - AWS::CloudFront::Distribution
+    - AWS::EC2::EIP
+    - AWS::EC2::FlowLog
+    - AWS::EC2::InternetGateway
+    - AWS::EC2::NatGateway
+    - AWS::EC2::NetworkAcl
+    - AWS::EC2::NetworkInterface
+    - AWS::EC2::RouteTable
+    - AWS::EC2::SecurityGroup
+    - AWS::EC2::Subnet
+    - AWS::EC2::TransitGateway
+    - AWS::EC2::TransitGatewayAttachment
+    - AWS::EC2::TransitGatewayVpcAttachment
+    - AWS::EC2::VPC
+    - AWS::EC2::VPCEndpoint
+    - AWS::EC2::VPCPeeringConnection
+    - AWS::ElasticLoadBalancing::LoadBalancer
+    - AWS::ElasticLoadBalancingV2::Listener
+    - AWS::ElasticLoadBalancingV2::LoadBalancer
+    - AWS::ElasticLoadBalancingV2::TargetGroup
+  compute:
+    - AWS::AutoScaling::AutoScalingGroup
+    - AWS::EC2::Instance
+    - AWS::EC2::LaunchTemplate
+  storage:
+    - AWS::EC2::Volume
+    - AWS::EFS::AccessPoint
+    - AWS::EFS::FileSystem
+    - AWS::EFS::MountTarget
+    - AWS::S3::Bucket
+  data:
+    - AWS::DynamoDB::GlobalTable
+    - AWS::DynamoDB::Table
+    - AWS::ElastiCache::CacheCluster
+    - AWS::ElastiCache::ReplicationGroup
+    - AWS::Elasticsearch::Domain
+    - AWS::OpenSearchService::Domain
+    - AWS::RDS::DBCluster
+    - AWS::RDS::DBInstance
+    - AWS::Redshift::Cluster
+  identity:
+    - AWS::CertificateManager::Certificate
+    - AWS::IAM::Group
+    - AWS::IAM::InstanceProfile
+    - AWS::IAM::ManagedPolicy
+    - AWS::IAM::OIDCProvider
+    - AWS::IAM::Role
+    - AWS::IAM::User
+    - AWS::KMS::Key
+    - AWS::SecretsManager::Secret
+  containers:
+    - AWS::ECR::Repository
+    - AWS::ECS::Cluster
+    - AWS::ECS::Service
+    - AWS::ECS::TaskDefinition
+    - AWS::EKS::AccessEntry
+    - AWS::EKS::Addon
+    - AWS::EKS::Cluster
+    - AWS::EKS::FargateProfile
+    - AWS::EKS::Nodegroup
+    - AWS::EKS::PodIdentityAssociation
+  serverless:
+    - AWS::ApiGateway::RestApi
+    - AWS::ApiGatewayV2::Api
+    - AWS::Lambda::EventSourceMapping
+    - AWS::Lambda::Function
+    - AWS::Lambda::Url
+    - AWS::StepFunctions::StateMachine
+  integration:
+    - AWS::Events::EventBus
+    - AWS::Events::Rule
+    - AWS::Kinesis::Stream
+    - AWS::SNS::Subscription
+    - AWS::SNS::Topic
+    - AWS::SQS::Queue
+  security:
+    - AWS::AccessAnalyzer::Analyzer
+    - AWS::Config::ConfigurationRecorder
+    - AWS::Config::DeliveryChannel
+    - AWS::Detective::Graph
+    - AWS::GuardDuty::Detector
+    - AWS::Macie::Session
+    - AWS::NetworkFirewall::Firewall
+    - AWS::SecurityHub::Hub
+    - AWS::Shield::Protection
+    - AWS::WAFv2::WebACL
+  logging:
+    - AWS::CloudTrail::Trail
+    - AWS::Logs::LogGroup
+  dns:
+    - AWS::Route53::HostedZone
+    - AWS::Route53::RecordSet
+  iac:
+    - AWS::CloudFormation::Stack
+  governance:
+    - AWS::SSO::Instance
+    - AWS::SSO::PermissionSet
+    - AWS::SSO::Assignment
+    - AWS::IdentityStore::Group
+    - AWS::IdentityStore::GroupMembership
+    - AWS::RAM::ResourceShare
+    - AWS::ServiceCatalog::Portfolio
+    - AWS::ServiceCatalog::CloudFormationProvisionedProduct
+    - AWS::CloudFormation::StackSet
+    - AWS::IAM::SAMLProvider
+    - AWS::RolesAnywhere::TrustAnchor
+    - AWS::RolesAnywhere::Profile
+    - AWS::Cognito::UserPool
+    - AWS::Cognito::IdentityPool
+    - AWS::S3::AccessPoint
+    - AWS::S3::MultiRegionAccessPoint
+    - AWS::EC2::Snapshot
+    - AWS::RDS::DBClusterSnapshot
+  network_ext:
+    - AWS::EC2::VPNConnection
+    - AWS::EC2::VPNGateway
+    - AWS::EC2::CustomerGateway
+    - AWS::EC2::EgressOnlyInternetGateway
+    - AWS::EC2::PrefixList
+    - AWS::EC2::TransitGatewayRouteTable
+    - AWS::EC2::TransitGatewayPeeringAttachment
+    - AWS::EC2::VPCEndpointService
+    - AWS::ApiGateway::Authorizer
+    - AWS::ApiGateway::VpcLink
+    - AWS::ApiGateway::DomainName
+    - AWS::ApiGatewayV2::VpcLink
+    - AWS::ApiGatewayV2::DomainName
+    - AWS::ApiGatewayV2::Authorizer
+    - AWS::CloudFront::Function
+    - AWS::CloudFront::OriginAccessControl
+    - AWS::Route53Resolver::ResolverEndpoint
+    - AWS::Route53Resolver::ResolverRule
+    - AWS::Route53Resolver::ResolverRuleAssociation
+    - AWS::Route53Resolver::FirewallRuleGroupAssociation
+    - AWS::Route53Resolver::ResolverQueryLoggingConfig
+    - AWS::DirectConnect::Connection
+    - AWS::DirectConnect::Lag
+    - AWS::DirectConnect::DirectConnectGateway
+    - AWS::GlobalAccelerator::Accelerator
+    - AWS::ElasticLoadBalancingV2::ListenerRule
+    - AWS::ElasticLoadBalancingV2::TrustStore
+    - AWS::VpcLattice::ServiceNetwork
+    - AWS::VpcLattice::Service
+    - AWS::VpcLattice::TargetGroup
+    - AWS::NetworkManager::GlobalNetwork
+    - AWS::NetworkManager::CoreNetwork
+  application:
+    - AWS::CodePipeline::Pipeline
+    - AWS::CodeBuild::Project
+    - AWS::CodeDeploy::DeploymentGroup
+    - AWS::CodeConnections::Connection
+    - AWS::CodeStarConnections::Connection
+    - AWS::SSM::Parameter
+    - AWS::SSM::Document
+    - AWS::SSM::Association
+    - AWS::SSM::MaintenanceWindow
+    - AWS::CloudWatch::Alarm
+    - AWS::CloudWatch::CompositeAlarm
+    - AWS::Backup::BackupPlan
+    - AWS::Backup::BackupVault
+    - AWS::Backup::BackupSelection
+    - AWS::ECS::CapacityProvider
+    - AWS::ServiceDiscovery::PrivateDnsNamespace
+    - AWS::ServiceDiscovery::PublicDnsNamespace
+    - AWS::ServiceDiscovery::HttpNamespace
+    - AWS::ServiceDiscovery::Service
+    - AWS::Lambda::Alias
+    - AWS::Scheduler::Schedule
+    - AWS::Pipes::Pipe
+    - AWS::Events::ApiDestination
+    - AWS::Events::Connection
+    - AWS::Events::Archive
+    - AWS::KinesisFirehose::DeliveryStream
+    - AWS::Logs::SubscriptionFilter
+    - AWS::Logs::Destination
+    - AWS::Logs::ResourcePolicy
+    - AWS::Oam::Sink
+    - AWS::Oam::Link
+    - AWS::Batch::ComputeEnvironment
+    - AWS::Batch::JobQueue
+    - AWS::Batch::JobDefinition
+    - AWS::AppRunner::Service
+    - AWS::AppRunner::VpcConnector
+    - AWS::ElasticBeanstalk::Application
+    - AWS::ElasticBeanstalk::Environment
+  data_ml:
+    - AWS::MSK::Cluster
+    - AWS::MSK::ServerlessCluster
+    - AWS::AmazonMQ::Broker
+    - AWS::SageMaker::Domain
+    - AWS::SageMaker::NotebookInstance
+    - AWS::SageMaker::Endpoint
+    - AWS::SageMaker::Model
+    - AWS::Bedrock::Agent
+    - AWS::Bedrock::KnowledgeBase
+    - AWS::Bedrock::Guardrail
+    - AWS::OpenSearchServerless::Collection
+    - AWS::OpenSearchServerless::SecurityPolicy
+    - AWS::OpenSearchServerless::AccessPolicy
+    - AWS::RedshiftServerless::Workgroup
+    - AWS::RedshiftServerless::Namespace
+    - AWS::RDS::DBProxy
+    - AWS::RDS::GlobalCluster
+    - AWS::MemoryDB::Cluster
+    - AWS::DAX::Cluster
+    - AWS::Glue::Database
+    - AWS::Glue::Job
+    - AWS::Glue::Crawler
+    - AWS::Glue::Connection
+    - AWS::Glue::Trigger
+    - AWS::LakeFormation::DataLakeSettings
+    - AWS::EMR::Cluster
+    - AWS::EMRServerless::Application
+    - AWS::Athena::WorkGroup
+    - AWS::Transfer::Server
+    - AWS::Transfer::User
+    - AWS::DataSync::Task
+    - AWS::FSx::FileSystem
+    - AWS::ECR::PublicRepository
+
+global_prefixes:
+  - "AWS::IAM::"
+  - "AWS::CloudFront::"
+  - "AWS::Route53::"
+  - "AWS::Organizations::"
+  - "AWS::Shield::"
+  - "AWS::GlobalAccelerator::"
+  - "AWS::NetworkManager::"
+  - "AWS::Route53RecoveryControl::"
+  - "AWS::Route53RecoveryReadiness::"
+  - "AWS::S3::Bucket"
+  - "AWS::SSO::"
+  - "AWS::IdentityStore::"
+  - "AWS::Budgets::"
+  - "AWS::CE::"
+  - "AWS::BCMDataExports::"
+  - "AWS::ECR::PublicRepository"
+  - "AWS::RDS::GlobalCluster"
+
+asset_types:
+  AWS::SSO::PermissionSet: PERMISSION_SET
+  AWS::RAM::ResourceShare: RESOURCE_SHARE
+  AWS::CloudFormation::StackSet: STACK_SET
+  AWS::ServiceCatalog::Portfolio: PRODUCT_PORTFOLIO
+  AWS::ServiceCatalog::CloudFormationProvisionedProduct: PROVISIONED_PRODUCT
+  AWS::Cognito::UserPool: USER_POOL
+  AWS::Cognito::IdentityPool: IDENTITY_POOL
+  AWS::EC2::VPNConnection: VPN_CONNECTION
+  AWS::EC2::VPNGateway: VPN_GATEWAY
+  AWS::EC2::CustomerGateway: CUSTOMER_GATEWAY
+  AWS::EC2::PrefixList: PREFIX_LIST
+  AWS::EC2::VPCEndpointService: ENDPOINT_SERVICE
+  AWS::EC2::TransitGatewayRouteTable: ROUTE_TABLE
+  AWS::EC2::EgressOnlyInternetGateway: INTERNET_GATEWAY
+  AWS::EC2::Image: MACHINE_IMAGE
+  AWS::EC2::Snapshot: SNAPSHOT
+  AWS::ApiGateway::DomainName: CUSTOM_DOMAIN
+  AWS::ApiGatewayV2::DomainName: CUSTOM_DOMAIN
+  AWS::ApiGateway::VpcLink: VPC_LINK
+  AWS::ApiGatewayV2::VpcLink: VPC_LINK
+  AWS::Route53Resolver::ResolverEndpoint: DNS_RESOLVER
+  AWS::Route53Resolver::ResolverRule: DNS_RESOLVER
+  AWS::DirectConnect::Connection: DIRECT_CONNECT
+  AWS::GlobalAccelerator::Accelerator: GLOBAL_ACCELERATOR
+  AWS::VpcLattice::ServiceNetwork: SERVICE_NETWORK
+  AWS::NetworkManager::CoreNetwork: SERVICE_NETWORK
+  AWS::CodePipeline::Pipeline: CI_PIPELINE
+  AWS::CodeBuild::Project: BUILD_PROJECT
+  AWS::CodeDeploy::DeploymentGroup: DEPLOYMENT_GROUP
+  AWS::SSM::Parameter: PARAMETER
+  AWS::Backup::BackupPlan: BACKUP_PLAN
+  AWS::Backup::BackupVault: BACKUP_VAULT
+  AWS::ECS::CapacityProvider: CAPACITY_PROVIDER
+  AWS::Scheduler::Schedule: SCHEDULE
+  AWS::Pipes::Pipe: EVENT_PIPE
+  AWS::Events::ApiDestination: API_DESTINATION
+  AWS::CloudWatch::Alarm: ALARM
+  AWS::CloudWatch::CompositeAlarm: ALARM
+  AWS::KinesisFirehose::DeliveryStream: DELIVERY_STREAM
+  AWS::Logs::SubscriptionFilter: LOG_SINK
+  AWS::Batch::ComputeEnvironment: BATCH_ENVIRONMENT
+  AWS::Batch::JobQueue: JOB_QUEUE
+  AWS::Batch::JobDefinition: JOB_DEFINITION
+  AWS::AppRunner::Service: APP_SERVICE
+  AWS::ElasticBeanstalk::Environment: APP_SERVICE
+  AWS::MSK::Cluster: MESSAGE_BROKER
+  AWS::AmazonMQ::Broker: MESSAGE_BROKER
+  AWS::SageMaker::Domain: ML_WORKSPACE
+  AWS::SageMaker::NotebookInstance: ML_WORKSPACE
+  AWS::SageMaker::Endpoint: ML_ENDPOINT
+  AWS::SageMaker::Model: ML_MODEL
+  AWS::Bedrock::Agent: AI_AGENT
+  AWS::Bedrock::KnowledgeBase: KNOWLEDGE_BASE
+  AWS::Bedrock::Guardrail: AI_GUARDRAIL
+  AWS::Glue::Database: DATA_CATALOG
+  AWS::Glue::Job: ETL_JOB
+  AWS::Glue::Crawler: ETL_JOB
+  AWS::EMR::Cluster: BIG_DATA_CLUSTER
+  AWS::Athena::WorkGroup: QUERY_WORKGROUP
+  AWS::Transfer::Server: DATA_TRANSFER
+  AWS::DataSync::Task: DATA_TRANSFER
+  AWS::RDS::DBProxy: DATABASE_PROXY
+  AWS::MemoryDB::Cluster: CACHE_CLUSTER
+  AWS::DAX::Cluster: CACHE_CLUSTER
+  AWS::FSx::FileSystem: FILE_SYSTEM
+  AWS::DocDB::DBCluster: AURORA_CLUSTER
+  AWS::Neptune::DBCluster: AURORA_CLUSTER
+  AWS::RedshiftServerless::Workgroup: DATA_WAREHOUSE
+  AWS::OpenSearchServerless::Collection: SEARCH_DOMAIN
+  AWS::Cassandra::Keyspace: DYNAMODB_TABLE
+  AWS::Timestream::Database: DATA_WAREHOUSE
+  AWS::AppSync::GraphQLApi: API_GATEWAY
+  AWS::IoT::Thing: OTHER
+
+sensitive_fields:
+  AWS::SSM::Parameter: [Value]
+  AWS::AppConfig::HostedConfigurationVersion: [Content]
+  AWS::Lambda::Function: [Code]

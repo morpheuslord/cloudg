@@ -43,6 +43,23 @@ aws:
   accounts: []             # Target account IDs (only if cross-account scanning)
   role_name: null          # IAM role to assume in each account
 
+  # AWS Organizations / Control Tower discovery (`cloudg map --org`).
+  # Run with management-account credentials; every selected member account
+  # is mapped by assuming role_name there. AWSControlTowerExecution is admin:
+  # prefer a read-only role (SecurityAudit + ViewOnlyAccess) deployed to all
+  # accounts with a StackSet.
+  organization:
+    enabled: false
+    role_name: null        # default: aws.role_name, then AWSControlTowerExecution
+    include_ous: []        # OU IDs, ARNs or names (nested OUs included)
+    exclude_accounts: []
+    include_management_account: true
+    include_suspended: false
+    use_governed_regions: true   # regions [ALL] -> Control Tower governed regions
+    control_tower: true    # map the landing zone, controls and baselines
+    home_region: null      # Control Tower home region (auto-detected)
+    map_structure: true    # org / OU / account / SCP / control nodes on the map
+
   max_retries: 10
   retry_mode: adaptive     # legacy | standard | adaptive
 
@@ -64,6 +81,11 @@ azure:
   use_managed_identity: false
   managed_identity_client_id: null   # For user-assigned managed identities
 
+  # Inventory mapping (`cloudg map`): Azure Resource Graph is used when
+  # azure-mgmt-resourcegraph is installed (pip install cloudg[azure]).
+  all_subscriptions: true       # subscription_ids empty -> every Enabled subscription
+  map_management_groups: true   # management groups, subscriptions, Azure Policy
+
   regions:
     - ALL                  # Auto-discover all Azure locations (default)
     # - eastus             # Or specify individual locations
@@ -82,6 +104,13 @@ gcp:
   # impersonate_service_account layers impersonation on top of either.
   credentials_file: null
   impersonate_service_account: null  # e.g. scanner@my-project.iam.gserviceaccount.com
+
+  # Inventory mapping (`cloudg map`)
+  collection_scope: auto   # auto: one org-wide listing when organization_id is set
+  iam_policies: true       # IAM bindings -> principal / resource access edges
+  map_hierarchy: true      # organization -> folders -> projects (needs organization_id)
+  org_policies: true
+  vpc_service_controls: true
 
   regions:
     - ALL                  # Auto-discover all GCP regions (default)
@@ -113,8 +142,21 @@ scanners:
 # ── Inventory Mapping ──
 # Scanner-independent full-infrastructure mapping (`cloudg map`).
 inventory:
-  tagging_sweep: true      # AWS: catch-all sweep via the Resource Groups Tagging API
+  tagging_sweep: true      # AWS: Resource Groups Tagging API sweep (tagged resources only)
+  cloud_control: true      # AWS: list every Cloud Control resource type, tagged or not
+  cloud_control_types: []  # Only these CloudFormation types / prefixes (e.g. AWS::Glue::)
+  cloud_control_exclude: []
+  cloud_control_concurrency: 6
   link_references: true    # Derive cross-service REFERENCES edges from metadata
+  services: [all]          # Families: network, compute, containers, kubernetes, serverless,
+                           # integration, storage, data, identity, security, logging, dns, iac
+  exclude_services: []
+  kubernetes: true         # Map workloads inside EKS clusters (needs an EKS access entry)
+  kubernetes_timeout: 10
+  iam_resource_edges: true # Link IAM principals to the resources their policies grant
+  max_images_per_repository: 20
+  stack_resources: true    # Link CloudFormation stacks to the resources they manage
+  account_hierarchy: true  # Account nodes containing their top-level resources
 
 # ── Graph Engine ──
 graph:

@@ -366,6 +366,34 @@ _SIMPLE_EDGE_RELATIONS: dict[EdgeType, list[RelationType]] = {
     EdgeType.PEERING: [RelationType.VPC_PEERED],
     EdgeType.ROUTE: [RelationType.TRANSIT_ROUTED],
     EdgeType.INTERNET_EXPOSED: [RelationType.INTERNET_REACHABLE],
+    # Typed inventory edges (used when the edge declares no relationship)
+    EdgeType.INVOKES: [RelationType.INVOKES],
+    EdgeType.USES_IMAGE: [RelationType.RUNS_ON],
+    EdgeType.ASSUMES_ROLE: [RelationType.RUNS_ON],
+    EdgeType.GRANTS_ACCESS: [RelationType.POLICY_ALLOWS_ACTION],
+    EdgeType.LOGS_TO: [RelationType.LOGS_TO],
+    EdgeType.PROTECTS: [RelationType.PROTECTED_BY_WAF],
+    EdgeType.MONITORS: [RelationType.MONITORED_BY],
+    EdgeType.MANAGES: [RelationType.OWNED_BY],
+    EdgeType.GOVERNS: [RelationType.COMPLIANCE_GOVERNS],
+    EdgeType.REFERENCES: [RelationType.DEPENDS_ON],
+    EdgeType.ATTACHED_TO: [RelationType.DEPENDS_ON],
+}
+
+# Edge types whose default relation is only used when the edge carries no
+# explicit ``relationship`` of its own.
+_TYPED_EDGE_TYPES = {
+    EdgeType.INVOKES,
+    EdgeType.USES_IMAGE,
+    EdgeType.ASSUMES_ROLE,
+    EdgeType.GRANTS_ACCESS,
+    EdgeType.LOGS_TO,
+    EdgeType.PROTECTS,
+    EdgeType.MONITORS,
+    EdgeType.MANAGES,
+    EdgeType.GOVERNS,
+    EdgeType.REFERENCES,
+    EdgeType.ATTACHED_TO,
 }
 
 
@@ -377,12 +405,19 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
     """
     relations: list[RelationType] = []
 
+    # An explicit relationship declared by the collector comes first
+    declared = getattr(edge, "relationship", None)
+    if declared and declared in RelationType.__members__:
+        relations.append(RelationType[declared])
+
     # --- Network / containment / IAM relations by edge type ---
     rule = _EDGE_RELATION_RULES.get(edge.edge_type)
     if rule:
-        relations.extend(rule(edge, assets_by_id))
-    else:
-        relations.extend(_SIMPLE_EDGE_RELATIONS.get(edge.edge_type, []))
+        relations.extend(r for r in rule(edge, assets_by_id) if r not in relations)
+    elif not (relations and edge.edge_type in _TYPED_EDGE_TYPES):
+        relations.extend(
+            r for r in _SIMPLE_EDGE_RELATIONS.get(edge.edge_type, []) if r not in relations
+        )
 
     # --- Security relations from asset metadata ---
     relations.extend(_infer_target_security_relations(edge, assets_by_id))

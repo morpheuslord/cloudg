@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/version-0.5.0-4c1.svg" alt="Version 0.5.0">
+  <img src="https://img.shields.io/badge/version-0.5.1-4c1.svg" alt="Version 0.5.1">
   <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
 </p>
 
@@ -77,24 +77,31 @@ docker compose run --rm cloudg run -p aws --regions us-east-1
 
 ## Inventory mapping
 
-`cloudg map` answers a different question than `cloudg run`: what exists, and how is it wired together. Finding out what is wrong stays the scanners' job, and none of them runs here or even needs to be installed. Three things make the map complete:
+`cloudg map` answers a different question than `cloudg run`: what exists, and how is it wired together. Finding out what is wrong stays the scanners' job, and none of them runs here or even needs to be installed. What makes the map complete:
 
-- Catch-all enumeration per provider. Beyond the dedicated collectors, the AWS Resource Groups Tagging API, Azure Resource Manager's full subscription listing, and GCP Cloud Asset Inventory each list every resource in scope, so a service without a hand-written collector still lands on the map instead of silently missing.
-- The network fabric: route tables, internet and NAT gateways, network interfaces, volumes, Elastic and public IPs, NACLs, VPC peering, transit gateways. These are the pieces that turn a resource list into a topology.
-- A relationship linker that walks every asset's metadata and derives attachment, containment, routing and reference edges: instance → security group, subnet ⊃ database, route table → gateway, Lambda → IAM role, secret → KMS key, CloudFront → origin bucket, VM → NIC → NSG, plus a generic pass that resolves any ARN or resource-ID reference between collected assets.
+- Deep service collectors. Containers (ECR repositories, ECS services and task definitions, EKS clusters, nodegroups, Fargate profiles, addons, access entries) and the Kubernetes workloads running inside EKS; Lambda with its triggers, function URLs, images and layers; API Gateway, SQS, SNS, EventBridge, Step Functions, Kinesis; data stores; Route 53; CloudFormation stacks and the resources they manage; the whole IAM graph; and the security services and scanners watching the account (GuardDuty, Security Hub, Inspector, Macie, Config, Access Analyzer, WAF, Network Firewall, Shield, CloudTrail), including where they are not enabled.
+- Breadth across every service. On AWS, a Cloud Control API sweep lists every resource type that supports listing (800+), tagged or not, next to 133 dedicated collectors. Azure is read through Azure Resource Graph across every subscription and management group, GCP through Cloud Asset Inventory across the whole organization, both with full resource properties.
+- Every account at once. `--org` discovers the AWS Organization from the management account (OU tree, accounts, SCPs, and the Control Tower landing zone with its governed regions and enabled controls) and maps every member account.
+- Typed interdependencies. Edges say what they mean: S3 `INVOKES` Lambda, task definition `USES_IMAGE` ECR repository, function `ASSUMES_ROLE` role, WAF `PROTECTS` ALB, Inspector `MONITORS` instance, stack `MANAGES` resource, SCP `GOVERNS` OU, plus cross-account trust to accounts you did not map. `cloudg deps` then answers "what does this need" and "what breaks if it goes".
 
 ```bash
 # map one provider
 cloudg map -p aws --regions all
 
+# every account in the AWS Organization / Control Tower landing zone
+cloudg map -p aws --org --regions all
+
 # map everything, everywhere
 cloudg map -p all --regions all
+
+# what depends on this role, and what does it depend on?
+cloudg deps arn:aws:iam::123456789012:role/app-role
 
 # overlay scanner findings you generated earlier -> asset map + compliance map
 cloudg map -p aws --regions all --findings ./reports/raw-findings.json
 ```
 
-Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, and `inventory-graph.json` for viewers. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week.
+Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, `inventory-graph.json` for viewers, `inventory-dependencies.json` (shared dependencies, blast radius, cross-account edges, security coverage gaps) and, with `--org`, `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week.
 
 All of this is also a library API, see [Using it as a library](#using-it-as-a-library):
 
