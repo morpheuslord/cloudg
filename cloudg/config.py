@@ -11,6 +11,44 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+class AWSOrganizationConfig(BaseModel):
+    """AWS Organizations / Control Tower account discovery.
+
+    When enabled, cloudg runs from the management account (or an
+    Organizations delegated administrator), enumerates the OU tree and
+    every member account, and fans collection out to each account by
+    assuming ``role_name`` there. Control Tower is detected automatically:
+    its landing zone, governed regions, shared accounts and enabled
+    controls are mapped, and governed regions can drive the region list.
+    """
+
+    enabled: bool = Field(default=False, description="Discover and map every account in the org")
+    role_name: str | None = Field(
+        default=None,
+        description="Role assumed in member accounts. Falls back to aws.role_name, then "
+        "AWSControlTowerExecution. A dedicated read-only role (SecurityAudit + "
+        "ViewOnlyAccess) deployed with a StackSet is recommended.",
+    )
+    include_ous: list[str] = Field(
+        default_factory=list,
+        description="Only accounts under these OUs (ID, ARN or name; nested OUs included)",
+    )
+    exclude_accounts: list[str] = Field(default_factory=list)
+    include_management_account: bool = Field(default=True)
+    include_suspended: bool = Field(default=False)
+    use_governed_regions: bool = Field(
+        default=True,
+        description="With regions=['ALL'], scan only the Control Tower governed regions",
+    )
+    control_tower: bool = Field(default=True, description="Detect and map Control Tower")
+    home_region: str | None = Field(
+        default=None, description="Control Tower home region (auto-detected when unset)"
+    )
+    map_structure: bool = Field(
+        default=True, description="Emit org, OU, account, SCP and control nodes on the map"
+    )
+
+
 class AWSConfig(BaseModel):
     """AWS-specific configuration.
 
@@ -56,6 +94,7 @@ class AWSConfig(BaseModel):
     )
     max_retries: int = Field(default=10, ge=1, le=30)
     retry_mode: str = Field(default="adaptive", pattern="^(legacy|standard|adaptive)$")
+    organization: AWSOrganizationConfig = Field(default_factory=AWSOrganizationConfig)
 
 
 class AzureConfig(BaseModel):
@@ -141,6 +180,31 @@ class InventoryConfig(BaseModel):
     link_references: bool = Field(
         default=True,
         description="Derive cross-service REFERENCES edges from asset metadata",
+    )
+    services: list[str] = Field(
+        default=["all"],
+        description="Service families or collector names to map: all, network, compute, "
+        "containers, kubernetes, serverless, integration, data, storage, identity, security, "
+        "dns, iac, logging",
+    )
+    exclude_services: list[str] = Field(default_factory=list)
+    kubernetes: bool = Field(
+        default=True,
+        description="Read workloads, services, ingresses and service accounts from inside "
+        "EKS clusters through the Kubernetes API (needs a cluster access entry)",
+    )
+    kubernetes_timeout: int = Field(default=10, ge=1, le=120)
+    iam_resource_edges: bool = Field(
+        default=True,
+        description="Link IAM principals to the concrete resources their policies grant",
+    )
+    max_images_per_repository: int = Field(default=20, ge=0, le=1000)
+    stack_resources: bool = Field(
+        default=True, description="Link CloudFormation stacks to the resources they manage"
+    )
+    account_hierarchy: bool = Field(
+        default=True,
+        description="Add account nodes and account -> top-level resource containment",
     )
 
 

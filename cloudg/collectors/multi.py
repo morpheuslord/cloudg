@@ -22,6 +22,13 @@ from cloudg.schema.models import CloudAsset, NetworkEdge
 logger = logging.getLogger(__name__)
 
 
+def primary_region(regions: list[str]) -> str:
+    """Region where account-wide services are collected (us-east-1 if scanned)."""
+    if "us-east-1" in regions:
+        return "us-east-1"
+    return regions[0] if regions else "us-east-1"
+
+
 class MultiAccountCollector:
     """Orchestrates collection across multiple providers, accounts, and regions.
 
@@ -46,6 +53,7 @@ class MultiAccountCollector:
         # collectors used by `cloudg map`); constructor signatures must match
         # the standard collector for that provider.
         self._collector_overrides = collector_overrides or {}
+        self._caller_account: str | None = None
 
     async def collect_all(
         self,
@@ -122,18 +130,41 @@ class MultiAccountCollector:
         self._resolved_regions["aws"] = regions
         logger.info("AWS: scanning %d regions × %d accounts", len(regions), len(accounts))
 
+        # Account-wide services are collected once per account, here.
+        primary = primary_region(regions)
+
+        # The caller's own account (e.g. the Organizations management
+        # account) is collected with the base credentials: member-account
+        # roles such as AWSControlTowerExecution do not exist there.
+        if cfg.accounts and cfg.role_name and not cfg.role_arn:
+            self._caller_account = await asyncio.to_thread(self._lookup_caller_account, cfg, primary)
+
         tasks = []
         for account_id in accounts:
             for region in regions:
-                tasks.append(self._collect_aws_single(account_id, region, cfg))
+                tasks.append(
+                    self._collect_aws_single(account_id, region, cfg, is_primary=region == primary)
+                )
 
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    @staticmethod
+    def _lookup_caller_account(cfg: Any, region: str) -> str | None:
+        try:
+            from cloudg.credentials import build_aws_session
+
+            session = build_aws_session(cfg, region, account_id=None)
+            return session.client("sts").get_caller_identity().get("Account")
+        except Exception as exc:
+            logger.debug("Caller account lookup failed: %s", exc)
+            return None
 
     async def _collect_aws_single(
         self,
         account_id: str | None,
         region: str,
         cfg: Any,
+        is_primary: bool = True,
     ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
         """Collect from a single AWS account/region.
 
@@ -154,8 +185,11 @@ class MultiAccountCollector:
                 # Supports direct keys, OIDC web identity, profiles, the
                 # default chain (instance/task roles), and AssumeRole with
                 # optional ExternalId — see cloudg.credentials.
+                assume_into = account_id
+                if account_id and account_id == self._caller_account:
+                    assume_into = None
                 try:
-                    session = build_aws_session(cfg, region, account_id=account_id)
+                    session = build_aws_session(cfg, region, account_id=assume_into)
                 except RuntimeError as exc:
                     logger.error("AWS auth failed for %s/%s: %s", account_id, region, exc)
                     coverage.record("sts_assume_role", ServiceStatus.FAILED, error=str(exc))
@@ -171,7 +205,12 @@ class MultiAccountCollector:
                 from cloudg.collectors.aws import AsyncAWSCollector
 
                 collector_cls = self._collector_overrides.get("aws", AsyncAWSCollector)
-                collector = collector_cls(session=session, region=region, account_id=account_id)
+                kwargs: dict[str, Any] = {}
+                if getattr(collector_cls, "supports_region_scoping", False):
+                    kwargs["is_primary_region"] = is_primary
+                collector = collector_cls(
+                    session=session, region=region, account_id=account_id, **kwargs
+                )
 
                 start = time.time()
                 assets = await collector.collect()

@@ -289,7 +289,72 @@ _ASSET_TYPE_CLASSES: dict[AssetType, str] = {
     AssetType.KEY_VAULT: "KeyVault",
     AssetType.CLOUDTRAIL: "AuditLog",
     AssetType.FLOW_LOG: "FlowLog",
+    AssetType.NETWORK_INTERFACE: "NetworkInterface",
+    AssetType.LOG_GROUP: "LogGroup",
+    AssetType.CONTAINER_REGISTRY: "ContainerRegistry",
+    AssetType.CONTAINER_SERVICE: "ContainerService",
+    AssetType.TASK_DEFINITION: "TaskDefinition",
+    AssetType.NODE_GROUP: "NodeGroup",
+    AssetType.FARGATE_PROFILE: "FargateProfile",
+    AssetType.CLUSTER_ADDON: "ClusterAddon",
+    AssetType.K8S_NAMESPACE: "KubernetesNamespace",
+    AssetType.K8S_WORKLOAD: "KubernetesWorkload",
+    AssetType.K8S_SERVICE: "KubernetesService",
+    AssetType.K8S_INGRESS: "KubernetesIngress",
+    AssetType.K8S_SERVICE_ACCOUNT: "KubernetesServiceAccount",
+    AssetType.AUTOSCALING_GROUP: "AutoScalingGroup",
+    AssetType.LAUNCH_TEMPLATE: "LaunchTemplate",
+    AssetType.TARGET_GROUP: "TargetGroup",
+    AssetType.API_GATEWAY: "APIGateway",
+    AssetType.VPC_ENDPOINT: "VPCEndpoint",
+    AssetType.INSTANCE_PROFILE: "InstanceProfile",
+    AssetType.IDENTITY_PROVIDER: "IdentityProvider",
+    AssetType.MESSAGE_QUEUE: "MessageQueue",
+    AssetType.NOTIFICATION_TOPIC: "NotificationTopic",
+    AssetType.EVENT_BUS: "EventBus",
+    AssetType.EVENT_RULE: "EventRule",
+    AssetType.STATE_MACHINE: "StateMachine",
+    AssetType.DATA_STREAM: "DataStream",
+    AssetType.CACHE_CLUSTER: "CacheCluster",
+    AssetType.SEARCH_DOMAIN: "SearchDomain",
+    AssetType.DATA_WAREHOUSE: "DataWarehouse",
+    AssetType.FILE_SYSTEM: "FileSystem",
+    AssetType.DNS_ZONE: "DNSZone",
+    AssetType.DNS_RECORD: "DNSRecord",
+    AssetType.IAC_STACK: "IaCStack",
+    AssetType.WAF_WEB_ACL: "WebApplicationFirewall",
+    AssetType.NETWORK_FIREWALL: "NetworkFirewall",
+    AssetType.DDOS_PROTECTION: "DDoSProtection",
+    AssetType.THREAT_DETECTOR: "ThreatDetector",
+    AssetType.SECURITY_HUB: "SecurityPostureHub",
+    AssetType.VULNERABILITY_SCANNER: "VulnerabilityScanner",
+    AssetType.DATA_SECURITY_SCANNER: "DataSecurityScanner",
+    AssetType.CONFIG_RECORDER: "ConfigurationRecorder",
+    AssetType.ACCESS_ANALYZER: "AccessAnalyzer",
+    AssetType.ORGANIZATION: "Organization",
+    AssetType.ORG_UNIT: "OrganizationalUnit",
+    AssetType.CLOUD_ACCOUNT: "Account",
+    AssetType.ORG_POLICY: "OrganizationPolicy",
+    AssetType.LANDING_ZONE: "LandingZone",
+    AssetType.GUARDRAIL: "Guardrail",
     AssetType.OTHER: "CloudResource",
+}
+
+
+# Default ontology relation for the typed inventory edges (used when the
+# edge carries no explicit ``relationship``)
+_TYPED_EDGE_RELATIONS: dict[EdgeType, RelationType] = {
+    EdgeType.INVOKES: RelationType.INVOKES,
+    EdgeType.USES_IMAGE: RelationType.RUNS_ON,
+    EdgeType.ASSUMES_ROLE: RelationType.RUNS_ON,
+    EdgeType.GRANTS_ACCESS: RelationType.POLICY_ALLOWS_ACTION,
+    EdgeType.LOGS_TO: RelationType.LOGS_TO,
+    EdgeType.PROTECTS: RelationType.PROTECTED_BY_WAF,
+    EdgeType.MONITORS: RelationType.MONITORED_BY,
+    EdgeType.MANAGES: RelationType.OWNED_BY,
+    EdgeType.GOVERNS: RelationType.COMPLIANCE_GOVERNS,
+    EdgeType.REFERENCES: RelationType.DEPENDS_ON,
+    EdgeType.ATTACHED_TO: RelationType.DEPENDS_ON,
 }
 
 
@@ -300,6 +365,9 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
     to produce a list of semantic relations for the edge.
     """
     relations: list[RelationType] = []
+    declared = getattr(edge, "relationship", None)
+    if declared and declared in RelationType.__members__:
+        relations.append(RelationType[declared])
     cidr = edge.cidr or ""
     ports = edge.ports or []
     protocol = (edge.protocol or "").upper()
@@ -400,6 +468,9 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
 
     elif edge_type == EdgeType.INTERNET_EXPOSED:
         relations.append(RelationType.INTERNET_REACHABLE)
+
+    elif edge_type in _TYPED_EDGE_RELATIONS and not relations:
+        relations.append(_TYPED_EDGE_RELATIONS[edge_type])
 
     # --- Security relations from asset metadata ---
     tgt_asset = assets_by_id.get(edge.target_id)
@@ -555,6 +626,52 @@ class CloudOntology:
             "Account",
             "Organization",
             "TagValue",
+            "NetworkInterface",
+            "LogGroup",
+            "ContainerRegistry",
+            "ContainerService",
+            "TaskDefinition",
+            "NodeGroup",
+            "FargateProfile",
+            "ClusterAddon",
+            "KubernetesNamespace",
+            "KubernetesWorkload",
+            "KubernetesService",
+            "KubernetesIngress",
+            "KubernetesServiceAccount",
+            "AutoScalingGroup",
+            "LaunchTemplate",
+            "TargetGroup",
+            "APIGateway",
+            "VPCEndpoint",
+            "InstanceProfile",
+            "IdentityProvider",
+            "MessageQueue",
+            "NotificationTopic",
+            "EventBus",
+            "EventRule",
+            "StateMachine",
+            "DataStream",
+            "CacheCluster",
+            "SearchDomain",
+            "DataWarehouse",
+            "FileSystem",
+            "DNSZone",
+            "DNSRecord",
+            "IaCStack",
+            "WebApplicationFirewall",
+            "NetworkFirewall",
+            "DDoSProtection",
+            "ThreatDetector",
+            "SecurityPostureHub",
+            "VulnerabilityScanner",
+            "DataSecurityScanner",
+            "ConfigurationRecorder",
+            "AccessAnalyzer",
+            "OrganizationalUnit",
+            "OrganizationPolicy",
+            "LandingZone",
+            "Guardrail",
         ]:
             cls_uri = CM[cls_name]
             g.add((cls_uri, RDF.type, OWL.Class))
@@ -581,6 +698,51 @@ class CloudOntology:
             "IAMPolicy": "CloudResource",
             "EncryptionKey": "CloudResource",
             "Secret": "CloudResource",  # nosec B105 - class hierarchy label, not a credential
+            "LogGroup": "CloudResource",
+            "ContainerRegistry": "CloudResource",
+            "ContainerService": "CloudResource",
+            "TaskDefinition": "CloudResource",
+            "NodeGroup": "CloudResource",
+            "FargateProfile": "CloudResource",
+            "ClusterAddon": "CloudResource",
+            "KubernetesNamespace": "CloudResource",
+            "KubernetesWorkload": "CloudResource",
+            "KubernetesService": "CloudResource",
+            "KubernetesIngress": "CloudResource",
+            "KubernetesServiceAccount": "CloudResource",
+            "AutoScalingGroup": "CloudResource",
+            "LaunchTemplate": "CloudResource",
+            "TargetGroup": "CloudResource",
+            "APIGateway": "CloudResource",
+            "VPCEndpoint": "CloudResource",
+            "InstanceProfile": "CloudResource",
+            "IdentityProvider": "CloudResource",
+            "MessageQueue": "CloudResource",
+            "NotificationTopic": "CloudResource",
+            "EventBus": "CloudResource",
+            "EventRule": "CloudResource",
+            "StateMachine": "CloudResource",
+            "DataStream": "CloudResource",
+            "CacheCluster": "CloudResource",
+            "SearchDomain": "CloudResource",
+            "DataWarehouse": "CloudResource",
+            "FileSystem": "CloudResource",
+            "DNSZone": "CloudResource",
+            "DNSRecord": "CloudResource",
+            "IaCStack": "CloudResource",
+            "WebApplicationFirewall": "CloudResource",
+            "NetworkFirewall": "CloudResource",
+            "DDoSProtection": "CloudResource",
+            "ThreatDetector": "CloudResource",
+            "SecurityPostureHub": "CloudResource",
+            "VulnerabilityScanner": "CloudResource",
+            "DataSecurityScanner": "CloudResource",
+            "ConfigurationRecorder": "CloudResource",
+            "AccessAnalyzer": "CloudResource",
+            "OrganizationalUnit": "CloudResource",
+            "OrganizationPolicy": "CloudResource",
+            "LandingZone": "CloudResource",
+            "Guardrail": "CloudResource",
         }
         for child, parent in hierarchy.items():
             g.add((CM[child], RDFS.subClassOf, CM[parent]))

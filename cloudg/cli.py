@@ -184,6 +184,44 @@ def collect(
 @click.option("--subscription-id", default=None, help="Azure subscription ID")
 @click.option("--project-id", default=None, help="GCP project ID")
 @click.option(
+    "--accounts",
+    default=None,
+    help="AWS: comma-separated account IDs to map (assumes --role-name in each)",
+)
+@click.option("--role-name", default=None, help="AWS: role to assume in each mapped account")
+@click.option(
+    "--org/--no-org",
+    "org",
+    default=None,
+    help="AWS: discover every account in the Organization / Control Tower "
+    "landing zone and map them all (run from the management account)",
+)
+@click.option(
+    "--org-role",
+    default=None,
+    help="AWS: role assumed in member accounts (default AWSControlTowerExecution)",
+)
+@click.option("--ou", "ous", multiple=True, help="AWS: only accounts under this OU (ID or name). Repeatable.")
+@click.option(
+    "--exclude-account", "exclude_accounts", multiple=True, help="AWS: skip this account. Repeatable."
+)
+@click.option(
+    "--ct-home-region", default=None, help="AWS: Control Tower home region (auto-detected)"
+)
+@click.option(
+    "--services",
+    default=None,
+    help="Service families/collectors to map, comma-separated (e.g. containers,serverless,security)",
+)
+@click.option(
+    "--exclude-services", default=None, help="Service families/collectors to skip, comma-separated"
+)
+@click.option(
+    "--kubernetes/--no-kubernetes",
+    default=None,
+    help="Map workloads inside EKS clusters through the Kubernetes API",
+)
+@click.option(
     "--findings",
     "findings_paths",
     multiple=True,
@@ -204,6 +242,16 @@ def map_inventory(
     scan_regions: str | None,
     subscription_id: str | None,
     project_id: str | None,
+    accounts: str | None,
+    role_name: str | None,
+    org: bool | None,
+    org_role: str | None,
+    ous: tuple[str, ...],
+    exclude_accounts: tuple[str, ...],
+    ct_home_region: str | None,
+    services: str | None,
+    exclude_services: str | None,
+    kubernetes: bool | None,
     findings_paths: tuple[str, ...],
     sweep: bool,
     output: str,
@@ -211,16 +259,27 @@ def map_inventory(
     """Map the complete infrastructure inventory — no scanners involved.
 
     Deep-collects everything deployed (or default) across the configured
-    providers, including the network fabric (route tables, gateways, ENIs,
-    volumes, peering) and a catch-all sweep so services without a dedicated
-    collector still appear. Every asset is then linked into an
-    interconnected map: attachment, containment, routing, and
-    cross-service references.
+    providers: the network fabric, compute, containers (ECR, ECS, EKS and
+    the Kubernetes workloads inside clusters), serverless and event wiring,
+    data stores, DNS, CloudFormation stacks, IAM, and the security services
+    and scanners watching it all. Every asset is linked into an
+    interconnected map with typed relationships (invokes, uses image,
+    assumes role, protects, monitors, manages, governs, ...).
+
+    With --org, every account of the AWS Organization is mapped, together
+    with the OU tree, SCPs and, when present, the Control Tower landing
+    zone, its governed regions and enabled controls:
+
+    \b
+        cloudg map -p aws --org --regions all
 
     Optionally merge previously generated scanner findings to produce an
     asset map and a compliance map:
 
+    \b
         cloudg map -p aws --regions all --findings ./reports/raw-findings.json
+
+    Explore interdependencies afterwards with `cloudg deps`.
     """
     ui.section("Inventory Mapping")
 
@@ -248,16 +307,46 @@ def map_inventory(
         cfg.azure.subscription_ids = [subscription_id]
     if project_id:
         cfg.gcp.project_ids = [project_id]
+    if accounts:
+        cfg.aws.accounts = [a.strip() for a in accounts.split(",") if a.strip()]
+    if role_name:
+        cfg.aws.role_name = role_name
 
-    ui.config_panel(
-        "Map Configuration",
-        {
-            "Providers": ", ".join(cfg.providers),
-            "AWS regions": ", ".join(cfg.aws.regions),
-            "Catch-all sweep": "enabled" if sweep else "disabled",
-            "Scanners": "none (inventory mapping is scanner-independent)",
-        },
-    )
+    org_cfg = cfg.aws.organization
+    if org is not None:
+        org_cfg.enabled = org
+    if org_role:
+        org_cfg.role_name = org_role
+    if ous:
+        org_cfg.include_ous = list(ous)
+    if exclude_accounts:
+        org_cfg.exclude_accounts = list(exclude_accounts)
+    if ct_home_region:
+        org_cfg.home_region = ct_home_region
+    if services:
+        cfg.inventory.services = [s.strip() for s in services.split(",") if s.strip()]
+    if exclude_services:
+        cfg.inventory.exclude_services = [s.strip() for s in exclude_services.split(",") if s.strip()]
+    if kubernetes is not None:
+        cfg.inventory.kubernetes = kubernetes
+
+    panel = {
+        "Providers": ", ".join(cfg.providers),
+        "AWS regions": ", ".join(cfg.aws.regions),
+        "Services": ", ".join(cfg.inventory.services)
+        + (f" (excluding {', '.join(cfg.inventory.exclude_services)})" if cfg.inventory.exclude_services else ""),
+        "Kubernetes workloads": "enabled" if cfg.inventory.kubernetes else "disabled",
+        "Catch-all sweep": "enabled" if sweep else "disabled",
+        "Scanners": "none (inventory mapping is scanner-independent)",
+    }
+    if org_cfg.enabled:
+        panel["Organization"] = "discover all accounts" + (
+            f" under {', '.join(org_cfg.include_ous)}" if org_cfg.include_ous else ""
+        )
+        panel["Member role"] = org_cfg.role_name or cfg.aws.role_name or "AWSControlTowerExecution"
+    elif cfg.aws.accounts:
+        panel["AWS accounts"] = ", ".join(cfg.aws.accounts)
+    ui.config_panel("Map Configuration", panel)
 
     mapper = InventoryMapper(cfg, tagging_sweep=sweep)
 
@@ -272,22 +361,68 @@ def map_inventory(
     paths = result.export(output_dir)
 
     summary = result.summary
+    org_summary = summary.get("organization")
+    if org_summary:
+        ui.stats_table(
+            "Organization",
+            {
+                "Organization": org_summary["id"],
+                "Accounts": org_summary["accounts"],
+                "Organizational units": org_summary["ous"],
+                "Control Tower": "yes" if org_summary["control_tower"] else "no",
+                "Governed regions": ", ".join(org_summary["governed_regions"]) or "—",
+            },
+        )
     ui.stats_table(
         "Inventory Summary",
         {
             "Assets": summary["total_assets"],
             "Interconnections": summary["total_edges"],
+            "Accounts": summary["accounts"],
             "Services": len(summary["assets_by_service"]),
             "Internet-exposed": summary["internet_exposed"],
+            "Cross-account edges": summary["cross_account_edges"],
+            "External accounts referenced": summary["external_accounts"],
+            "Security service gaps": summary["security_service_gaps"],
             "Unlinked assets": summary["unlinked_assets"],
+            "Unresolved references": summary["unresolved_references"],
         },
     )
     for svc, count in list(summary["assets_by_service"].items())[:15]:
         ui.detail(f"{svc}: {count} assets")
 
+    analysis = json.loads(paths["dependencies"].read_text())
+    ui.ranked_table(
+        "Most shared dependencies",
+        ["Asset", "Type", "Direct dependents"],
+        [[d["name"], d["type"], d["direct_dependents"]] for d in analysis["shared_dependencies"][:10]],
+    )
+    ui.ranked_table(
+        "Largest blast radius",
+        ["Asset", "Type", "Dependents", "Accounts", "Exposed"],
+        [
+            [d["name"], d["type"], d["transitive_dependents"], d["accounts_affected"], d["internet_exposed_dependents"]]
+            for d in analysis["largest_blast_radius"][:10]
+        ],
+    )
+    for gap in analysis["security_coverage"]["gaps"][:15]:
+        ui.warn(f"Security service not enabled: {gap}")
+
+    failed = [
+        f"{c.account_id or '-'} {c.region or ''} {s.service}"
+        for c in result.coverage
+        for s in c.services
+        if s.status.value == "FAILED"
+    ]
+    if failed:
+        ui.warn(f"{len(failed)} collectors failed (see inventory coverage / -v): {', '.join(failed[:8])}")
+
     ui.artifact("Inventory map", paths["map"])
     ui.artifact("GraphML", paths["graphml"])
     ui.artifact("Graph JSON", paths["graph"])
+    ui.artifact("Dependencies", paths["dependencies"])
+    if "organization" in paths:
+        ui.artifact("Organization", paths["organization"])
 
     # Optional merge with existing scanner findings
     if findings_paths:
@@ -311,6 +446,99 @@ def map_inventory(
 
     console.print()
     ui.success(f"Inventory map saved to [path]{output_dir}[/]")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# DEPS command (interdependency queries over a saved inventory map)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@cli.command(name="deps")
+@click.argument("asset", required=False)
+@click.option(
+    "-m",
+    "--map",
+    "map_path",
+    default="./reports",
+    show_default=True,
+    help="inventory-map.json, or the directory holding it",
+)
+@click.option(
+    "-d",
+    "--direction",
+    type=click.Choice(["up", "down", "both"]),
+    default="both",
+    show_default=True,
+    help="up = what the asset depends on, down = what depends on it (blast radius)",
+)
+@click.option("--depth", default=3, show_default=True, help="Levels to expand")
+@click.option("--top", default=15, show_default=True, help="Rows in the overview tables")
+@click.option("--json", "as_json", is_flag=True, help="Print JSON instead of tables/trees")
+def deps(asset: str | None, map_path: str, direction: str, depth: int, top: int, as_json: bool) -> None:
+    """Explore interdependencies in a saved inventory map.
+
+    With an ASSET (ARN, resource ID, internal ID, or unique name), show what
+    it depends on and what depends on it. Without one, show the most shared
+    dependencies, the largest blast radius and cross-account edges.
+
+    \b
+        cloudg deps arn:aws:iam::123456789012:role/app-role
+        cloudg deps my-queue --direction down --depth 5
+        cloudg deps --map ./reports
+    """
+    from cloudg.inventory import InventoryResult
+
+    try:
+        result = InventoryResult.load(map_path)
+    except (OSError, ValueError) as exc:
+        ui.error_panel("Could not load the inventory map", exc)
+        sys.exit(1)
+    graph = result.dependency_graph()
+
+    if asset:
+        found = graph.find(asset)
+        if found is None:
+            ui.fail(f"No unique asset matches {asset!r}; use its ARN or resource ID")
+            sys.exit(1)
+        view = graph.tree(found.id, direction=direction, max_depth=depth)
+        if as_json:
+            console.print_json(json.dumps(view, default=str))
+        else:
+            ui.dependency_tree(view)
+        return
+
+    from cloudg.inventory.dependencies import cross_account_edges
+
+    overview = {
+        "shared_dependencies": graph.shared_dependencies(top),
+        "largest_blast_radius": graph.blast_radius(top=top),
+        "cross_account_edges": cross_account_edges(result.assets, result.edges),
+    }
+    if as_json:
+        console.print_json(json.dumps(overview, default=str))
+        return
+    ui.section("Interdependencies")
+    ui.ranked_table(
+        "Most shared dependencies",
+        ["Asset", "Type", "Account", "Direct dependents"],
+        [[d["name"], d["type"], d["account_id"] or "-", d["direct_dependents"]] for d in overview["shared_dependencies"]],
+    )
+    ui.ranked_table(
+        "Largest blast radius",
+        ["Asset", "Type", "Dependents", "Accounts", "Exposed"],
+        [
+            [d["name"], d["type"], d["transitive_dependents"], d["accounts_affected"], d["internet_exposed_dependents"]]
+            for d in overview["largest_blast_radius"]
+        ],
+    )
+    ui.ranked_table(
+        "Cross-account edges",
+        ["Source", "Relationship", "Target", "External"],
+        [
+            [e["source"], e["relationship"] or e["edge_type"], e["target"], "yes" if e["external"] else ""]
+            for e in overview["cross_account_edges"][:top]
+        ],
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────

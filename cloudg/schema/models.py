@@ -95,6 +95,67 @@ class AssetType(str, Enum):
     # Logging
     CLOUDTRAIL = "CLOUDTRAIL"
     FLOW_LOG = "FLOW_LOG"
+    LOG_GROUP = "LOG_GROUP"
+
+    # Containers / Kubernetes
+    CONTAINER_REGISTRY = "CONTAINER_REGISTRY"  # ECR repository, ACR, Artifact Registry
+    CONTAINER_SERVICE = "CONTAINER_SERVICE"  # ECS service, Azure Container App
+    TASK_DEFINITION = "TASK_DEFINITION"  # ECS task definition
+    NODE_GROUP = "NODE_GROUP"  # EKS nodegroup, AKS agent pool, GKE node pool
+    FARGATE_PROFILE = "FARGATE_PROFILE"
+    CLUSTER_ADDON = "CLUSTER_ADDON"
+    K8S_NAMESPACE = "K8S_NAMESPACE"
+    K8S_WORKLOAD = "K8S_WORKLOAD"  # Deployment, StatefulSet, DaemonSet, CronJob
+    K8S_SERVICE = "K8S_SERVICE"
+    K8S_INGRESS = "K8S_INGRESS"
+    K8S_SERVICE_ACCOUNT = "K8S_SERVICE_ACCOUNT"
+
+    # Compute fabric
+    AUTOSCALING_GROUP = "AUTOSCALING_GROUP"
+    LAUNCH_TEMPLATE = "LAUNCH_TEMPLATE"
+    TARGET_GROUP = "TARGET_GROUP"
+    API_GATEWAY = "API_GATEWAY"
+    VPC_ENDPOINT = "VPC_ENDPOINT"
+    INSTANCE_PROFILE = "INSTANCE_PROFILE"
+    IDENTITY_PROVIDER = "IDENTITY_PROVIDER"
+
+    # Integration / messaging
+    MESSAGE_QUEUE = "MESSAGE_QUEUE"
+    NOTIFICATION_TOPIC = "NOTIFICATION_TOPIC"
+    EVENT_BUS = "EVENT_BUS"
+    EVENT_RULE = "EVENT_RULE"
+    STATE_MACHINE = "STATE_MACHINE"
+    DATA_STREAM = "DATA_STREAM"
+
+    # Data services
+    CACHE_CLUSTER = "CACHE_CLUSTER"
+    SEARCH_DOMAIN = "SEARCH_DOMAIN"
+    DATA_WAREHOUSE = "DATA_WAREHOUSE"
+    FILE_SYSTEM = "FILE_SYSTEM"
+
+    # DNS / deployment
+    DNS_ZONE = "DNS_ZONE"
+    DNS_RECORD = "DNS_RECORD"
+    IAC_STACK = "IAC_STACK"  # CloudFormation stack
+
+    # Security services and scanners
+    WAF_WEB_ACL = "WAF_WEB_ACL"
+    NETWORK_FIREWALL = "NETWORK_FIREWALL"
+    DDOS_PROTECTION = "DDOS_PROTECTION"
+    THREAT_DETECTOR = "THREAT_DETECTOR"  # GuardDuty, Detective
+    SECURITY_HUB = "SECURITY_HUB"
+    VULNERABILITY_SCANNER = "VULNERABILITY_SCANNER"  # Inspector
+    DATA_SECURITY_SCANNER = "DATA_SECURITY_SCANNER"  # Macie
+    CONFIG_RECORDER = "CONFIG_RECORDER"
+    ACCESS_ANALYZER = "ACCESS_ANALYZER"
+
+    # Organization / governance
+    ORGANIZATION = "ORGANIZATION"
+    ORG_UNIT = "ORG_UNIT"
+    CLOUD_ACCOUNT = "CLOUD_ACCOUNT"
+    ORG_POLICY = "ORG_POLICY"  # SCP, RCP, tag/backup policy
+    LANDING_ZONE = "LANDING_ZONE"
+    GUARDRAIL = "GUARDRAIL"  # Control Tower control / baseline
 
     # Generic
     OTHER = "OTHER"
@@ -114,6 +175,17 @@ class EdgeType(str, Enum):
     INTERNET_EXPOSED = "INTERNET_EXPOSED"
     ATTACHED_TO = "ATTACHED_TO"  # ENI -> instance, SG -> resource, volume -> instance
     REFERENCES = "REFERENCES"  # generic cross-service dependency (role, key, origin)
+
+    # Typed inventory relationships. Direction is always "source <verb> target".
+    INVOKES = "INVOKES"  # event source / trigger -> consumer (S3 -> Lambda, rule -> target)
+    USES_IMAGE = "USES_IMAGE"  # task definition / workload / function -> image repository
+    ASSUMES_ROLE = "ASSUMES_ROLE"  # compute or service account -> IAM role it runs as
+    GRANTS_ACCESS = "GRANTS_ACCESS"  # principal -> resource it was explicitly granted
+    LOGS_TO = "LOGS_TO"  # trail / flow log / LB -> log destination
+    PROTECTS = "PROTECTS"  # WAF / firewall / shield -> protected resource
+    MONITORS = "MONITORS"  # security service or scanner -> monitored resource
+    MANAGES = "MANAGES"  # stack / service / ASG / landing zone -> managed resource
+    GOVERNS = "GOVERNS"  # org policy / control -> OU or account
 
 
 class ComplianceStatus(str, Enum):
@@ -177,6 +249,13 @@ class NetworkEdge(BaseModel):
     cidr: str | None = None  # e.g. "0.0.0.0/0"
     direction: str = "ingress"  # ingress | egress
     description: str | None = None
+    relationship: str | None = Field(
+        default=None,
+        description="Fine-grained semantic relation (an ontology RelationType name, e.g. TRIGGERED_BY)",
+    )
+    properties: dict[str, Any] = Field(
+        default_factory=dict, description="Relation-specific detail (access policies, actions, ...)"
+    )
 
 
 class Finding(BaseModel):

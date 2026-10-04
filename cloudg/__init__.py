@@ -1,6 +1,6 @@
 """cloudg — cloud graphing: multi-cloud mapping and security intelligence."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from cloudg.api import (
     AnalysisResult,

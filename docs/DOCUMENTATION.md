@@ -105,12 +105,15 @@ cloudg collect -p gcp --project-id <id>
 
 ### cloudg map
 
-Scanner-independent inventory mapping: everything deployed or default, linked into one map. No scanner runs and none needs to be installed.
+Scanner-independent inventory mapping: everything deployed or default, linked into one map of typed interdependencies. No scanner runs and none needs to be installed.
 
 ```bash
 cloudg map -p aws --regions all
 cloudg map -p all --regions all
-cloudg map -p aws --findings ./reports/raw-findings.json   # merge scanner output
+cloudg map -p aws --org --regions all                       # every account in the Organization / Control Tower
+cloudg map -p aws --org --ou Workloads --exclude-account 111122223333
+cloudg map -p aws --services containers,serverless,security  # narrow the run
+cloudg map -p aws --findings ./reports/raw-findings.json     # merge scanner output
 ```
 
 | Flag | Meaning |
@@ -118,18 +121,80 @@ cloudg map -p aws --findings ./reports/raw-findings.json   # merge scanner outpu
 | `-p, --provider` | `aws`, `azure`, `gcp` or `all`; repeatable |
 | `--regions` | `all` for auto-discovery, or a comma-separated list |
 | `--profile` | AWS CLI profile |
+| `--accounts`, `--role-name` | AWS: explicit account list and the role to assume in each |
+| `--org / --no-org` | AWS: discover and map every account of the Organization (run from the management account or a delegated administrator) |
+| `--org-role` | AWS: role assumed in member accounts; defaults to `AWSControlTowerExecution` |
+| `--ou` | AWS: only accounts under this OU (ID, ARN or name, nested OUs included); repeatable |
+| `--exclude-account` | AWS: skip an account; repeatable |
+| `--ct-home-region` | AWS: Control Tower home region, auto-detected when omitted |
+| `--services`, `--exclude-services` | service families or collector names, comma-separated (see below) |
+| `--kubernetes / --no-kubernetes` | map workloads inside EKS clusters through the Kubernetes API |
 | `--subscription-id`, `--project-id` | Azure / GCP identity |
 | `--findings` | existing cloudg findings JSON (`raw-findings.json` or a report); repeatable |
 | `--sweep / --no-sweep` | catch-all sweep, on by default |
 | `-o, --output` | output directory |
 
-Coverage comes in three layers:
+Coverage comes in four layers.
 
-1. Dedicated deep collectors. Everything the standard collectors know, plus the network fabric: route tables, internet and NAT gateways, network interfaces, EBS volumes and managed disks, Elastic and public IPs, NACLs, VPC peering connections, transit gateways, and customer-managed IAM policies (AWS); NICs, public IPs, disks, load balancers and route tables (Azure).
-2. Catch-all sweeps. The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate every resource in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). A sweep hit that duplicates a dedicated collector's asset is dropped; the richer asset wins.
-3. The relationship linker. A post-collection pass that derives edges purely from asset metadata: instance → security group (`ATTACHED_TO`), subnet ⊃ resource (`CONTAINS`), route table → gateway (`ROUTE`), Lambda → execution role, secret → KMS key, CloudFront → origin (`REFERENCES`), VPC peering (`PEERING`), Azure VM → NIC → NSG/subnet/public IP chains, GCP parent containment and IAM policy bindings, and finally a generic pass that resolves any ARN, Azure resource ID or GCP resource name found in one asset's metadata to another collected asset.
+1. Dedicated deep collectors (AWS), grouped into service families you can select with `--services` or `inventory.services`:
 
-Outputs: `inventory-map.json` (assets, edges, and a summary covering services, types, regions, accounts, internet exposure and unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3). With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, riskiest first) and `compliance-map.json` (framework → findings and affected assets). The map does not depend on the scanners; findings from any earlier run merge in whenever they exist.
+   | Family | Collected |
+   |---|---|
+   | `network` | VPCs, subnets, security groups, route tables, internet/NAT gateways, ENIs, Elastic IPs, NACLs, VPC peering, transit gateways and their attachments (including VPCs in other accounts), VPC endpoints, ALB/NLB (listeners, certificates, access logs), target groups and their registered targets, classic ELBs, CloudFront |
+   | `compute` | EC2, Auto Scaling groups, launch templates |
+   | `containers` | ECR repositories (image sample, scan findings summary, scan configuration, repository policy grants), ECS clusters, services and task definitions (images, task and execution roles, secrets, log groups, target groups), EKS clusters, nodegroups, Fargate profiles, addons, access entries and pod identity associations |
+   | `kubernetes` | inside EKS clusters: namespaces, Deployments, StatefulSets, DaemonSets, CronJobs, Services, Ingresses, ServiceAccounts |
+   | `serverless` | Lambda (event source mappings, resource-policy invokers, function URLs, container images, layers, DLQs, EFS mounts), API Gateway REST and HTTP APIs and their integrations, Step Functions |
+   | `integration` | SQS, SNS and subscriptions, EventBridge buses, rules and targets, Kinesis |
+   | `storage`, `data` | S3 (notifications, replication, access logging, policy grants), EBS, EFS (mount targets, access points), RDS and Aurora, DynamoDB, ElastiCache, OpenSearch, Redshift |
+   | `identity` | the IAM graph: users, groups, roles, instance profiles, customer-managed policies, OIDC providers, trust policies, grants; KMS, Secrets Manager, ACM |
+   | `security` | GuardDuty, Security Hub, Inspector (per-resource coverage), Macie, AWS Config, IAM Access Analyzer, Detective, WAF, Network Firewall, Shield Advanced |
+   | `logging` | CloudTrail, VPC flow logs, CloudWatch log groups |
+   | `dns` | Route 53 zones and A / AAAA / CNAME / alias records |
+   | `iac` | CloudFormation stacks and every resource each one manages |
+
+   Account-wide services (IAM, S3, CloudFront, Route 53, Shield) are collected once per account, in the primary region, so `--regions all` no longer repeats them per region. Security services that are not enabled in an account/region appear as placeholder nodes with `enabled: false`, so detection gaps show on the map. Azure adds NICs, public IPs, disks, load balancers and route tables to the standard collectors.
+2. Catch-all sweeps. The AWS Resource Groups Tagging API, Azure Resource Manager's full `resources.list()`, and GCP Cloud Asset Inventory each enumerate resources in scope, so services without a dedicated collector still appear on the map (classified by ARN/ARM/asset type, or `OTHER`). A sweep hit that duplicates a dedicated collector's asset is dropped; the richer asset wins.
+3. The relationship linker. Collectors declare what each asset talks to; the linker resolves those identifiers across services, regions and accounts into typed edges, then applies provider rules and a generic reference pass. See [Relationships](#relationships) below.
+4. Account hierarchy. Every account gets a `CLOUD_ACCOUNT` node that contains its top-level resources. With `--org`, accounts hang under the OU tree, next to SCPs, the Control Tower landing zone and its enabled controls.
+
+Outputs: `inventory-map.json` (assets, edges, unresolved references, and a summary covering services, types, regions, accounts, relationship counts, cross-account edges, external accounts, security service gaps, internet exposure and unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3, with account and relationship attributes), `inventory-dependencies.json` (most shared dependencies, largest blast radius, cross-account edges, security coverage including workloads no vulnerability scanner covers and internet-facing endpoints without a WAF), and with `--org` `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, riskiest first) and `compliance-map.json` (framework → findings and affected assets). The map does not depend on the scanners; findings from any earlier run merge in whenever they exist.
+
+#### Relationships
+
+Every edge has a coarse `edge_type` and, when known, a fine-grained `relationship` (an ontology relation name) plus `properties`. Direction always reads "source verb target".
+
+| Edge type | Example |
+|---|---|
+| `INVOKES` | S3 bucket → Lambda (notification), SQS → Lambda (`TRIGGERED_BY`, event source mapping), SNS → SQS (`STREAMS_TO`), EventBridge rule → target, API Gateway → Lambda, Step Functions → anything its definition calls |
+| `USES_IMAGE` | task definition / Kubernetes workload / Lambda → ECR repository |
+| `ASSUMES_ROLE` | Lambda, task definition, nodegroup, Kubernetes service account (IRSA or Pod Identity), instance profile → IAM role |
+| `IAM_TRUST` | principal / external account / OIDC provider → role it may assume (`CROSS_ACCOUNT_TRUST` across accounts) |
+| `GRANTS_ACCESS` | principal → resource its policy names; principal → EKS cluster (access entry, with access policies); bucket / queue / repository policy grants |
+| `IAM_POLICY_ATTACHMENT` | user, group or role → managed policy |
+| `PROTECTS` | WAF → ALB / API Gateway / CloudFront, Network Firewall → VPC, Shield → resource |
+| `MONITORS` | Inspector → each scanned EC2 / ECR / Lambda, GuardDuty / Config / CloudTrail / Macie → account, Security Hub → the services it ingests from, flow log → VPC/subnet/ENI |
+| `MANAGES` | CloudFormation stack → resource, ASG → instance, nodegroup → ASG, landing zone → OUs and shared accounts |
+| `GOVERNS` | SCP / RCP / tag policy and Control Tower control or baseline → OU or account |
+| `LOGS_TO` | trail, flow log, load balancer, API stage, task definition, function → log destination |
+| `LOAD_BALANCER_TARGET` | load balancer → target group → instance / IP / Lambda, Kubernetes Service → workload |
+| `ROUTE` | route table → gateway, DNS record → load balancer / distribution, transit gateway → attached VPC, Ingress → Service |
+| `CONTAINS`, `ATTACHED_TO`, `PEERING`, `REFERENCES` | containment, security-group attachment, VPC peering, everything else (KMS keys, secrets, DLQs, layers, ...) |
+
+Identifier resolution is scoped: an ambiguous name such as `default` resolves within the referencing asset's account and region, and is left unresolved rather than guessed when it could belong to several accounts. References into accounts that were not mapped become `CLOUD_ACCOUNT` nodes with `external: true`, so a role trusted by a vendor account or a bucket replicating to another account stays visible. References that resolve to nothing (a deleted queue still configured as a DLQ) are listed under `unresolved_references`.
+
+### cloudg deps
+
+Interdependency queries over a saved map; no cloud access needed.
+
+```bash
+cloudg deps arn:aws:iam::123456789012:role/app-role        # both directions
+cloudg deps jobs-queue --direction down --depth 5           # blast radius
+cloudg deps --map ./reports                                 # overview
+cloudg deps my-function --direction up --json               # machine-readable
+```
+
+Each edge is read as "dependent needs dependency": a function needs its role, image, key and the queue that triggers it; an ALB needs the WAF protecting it; a resource needs the stack managing it. `--direction up` shows what an asset needs, `down` what needs it (what breaks or changes with it), `both` the two trees. Without an asset, `deps` prints the most shared dependencies (one KMS key behind forty resources), the largest blast radius, and every cross-account edge. Assets are matched by ARN or resource ID, internal ID, or a unique name.
 
 ### cloudg scan
 
@@ -346,6 +411,17 @@ aws:
   profile: null
   max_retries: 10
   retry_mode: adaptive
+  organization:                 # AWS Organizations / Control Tower (cloudg map)
+    enabled: false
+    role_name: null             # default AWSControlTowerExecution
+    include_ous: []             # IDs, ARNs or names; nested OUs included
+    exclude_accounts: []
+    include_management_account: true
+    include_suspended: false
+    use_governed_regions: true  # regions [all] -> Control Tower governed regions
+    control_tower: true
+    home_region: null           # auto-detected
+    map_structure: true         # org, OU, account, SCP, control nodes
 
 azure:
   subscription_ids: []
@@ -374,6 +450,14 @@ scanners:
 inventory:
   tagging_sweep: true           # AWS catch-all sweep (Resource Groups Tagging API)
   link_references: true         # generic cross-service REFERENCES edges
+  services: [all]               # families or collector names (see cloudg map)
+  exclude_services: []
+  kubernetes: true              # workloads inside EKS clusters
+  kubernetes_timeout: 10
+  iam_resource_edges: true      # principal -> granted resource edges
+  max_images_per_repository: 20
+  stack_resources: true         # CloudFormation stack -> resource edges
+  account_hierarchy: true       # account nodes containing top-level resources
 
 graph:
   persist_graphml: true
@@ -478,7 +562,32 @@ print(inventory.summary)                     # services, types, regions, exposur
 inventory.export("./reports")                # inventory-map.json / .graphml / graph
 ```
 
-`InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions` and a computed `summary` (totals, per-service/type/region/account breakdowns, edge types, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml` and `inventory-graph.json`.
+`InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions`, `organization` (the discovered topology, when mapped) and `unresolved_references`, plus a computed `summary` (totals, per-service/type/region/account breakdowns, edge types and relationships, cross-account edges, external accounts, security service gaps, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json`, `inventory-dependencies.json` and, for an organization, `inventory-organization.json`; `InventoryResult.load(dir_or_file)` reads a map back.
+
+Interdependency questions go through `DependencyGraph`:
+
+```python
+graph = inventory.dependency_graph()
+role = graph.find("arn:aws:iam::123456789012:role/app-role")
+needs = graph.depends_on(role.id)           # upstream, breadth-first
+needed_by = graph.dependents(role.id)       # downstream: blast radius
+view = graph.tree(role.id, direction="both", max_depth=3)
+graph.shared_dependencies(top=25)
+graph.blast_radius(top=25)
+inventory.analysis()                        # everything above + coverage
+```
+
+Organizations and Control Tower discovery is usable on its own:
+
+```python
+import boto3
+from cloudg.inventory import discover_organization
+
+topology = discover_organization(boto3.Session())
+topology.governed_regions, topology.shared_accounts      # Control Tower
+topology.target_accounts(include_ous=["Workloads"])     # nested OUs included
+assets = topology.to_assets()                            # org, OUs, accounts, SCPs, controls
+```
 
 Merging scanner findings (from `scan()`, `ingest_reports()`, or a saved `raw-findings.json`) happens after the fact, so the mapper never touches the scanners:
 
@@ -493,10 +602,14 @@ mapper.export_merged(inventory, findings, "./reports")          # asset-map.json
 ```python
 linker = RelationshipLinker(assets)
 linker.seed_existing(existing_edges)   # don't duplicate edges you already have
-edges = linker.link()                  # ATTACHED_TO / CONTAINS / ROUTE / PEERING / REFERENCES
+edges = linker.link()                  # typed edges, see Relationships
+linker.external_assets                 # placeholder nodes for unmapped accounts
+linker.unresolved                      # declared references that resolved to nothing
 ```
 
-The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region, account_id, tagging_sweep=True)`, `AzureDeepInventoryCollector(credential, subscription_id)` and `GCPDeepInventoryCollector(project_id, credentials)` all implement the standard `collect()` / `collect_edges()` / `run()` collector interface.
+Your own collectors can declare relationships the same way the built-in ones do, by listing them in `metadata["relations"]`: `{"target": <any identifier>, "edge": "INVOKES", "relationship": "TRIGGERED_BY", "reverse": false}`.
+
+The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region, account_id, tagging_sweep=True, is_primary_region=True, services=None, exclude_services=None, kubernetes=True, ...)`, `AzureDeepInventoryCollector(credential, subscription_id)` and `GCPDeepInventoryCollector(project_id, credentials)` all implement the standard `collect()` / `collect_edges()` / `run()` collector interface.
 
 ### The deeper toolkit
 
@@ -729,7 +842,9 @@ After `pip install`, the name is available in `scanners.enabled` and `--scanners
 
 Every provider supports several methods, resolved in a fixed priority order, so the same config works on a laptop, in CI and on cloud compute.
 
-AWS, in priority order: direct keys (`--aws-key`, `--aws-secret`, `--aws-session-token` or the standard env vars); OIDC web identity federation (`--aws-role-arn` with `--aws-web-identity-token-file`, the GitHub Actions, GitLab CI and EKS pattern with no long-lived keys); a named CLI profile via `--profile`, SSO included; or nothing, letting the default chain pick up env vars, cached SSO or the instance role. On top of any of these, STS role assumption with `--aws-role-arn` and, for the third-party auditor pattern, `--aws-external-id`. Multi-account fan-out uses `accounts` plus `role_name` in the config, assuming that role in each account before collecting.
+AWS, in priority order: direct keys (`--aws-key`, `--aws-secret`, `--aws-session-token` or the standard env vars); OIDC web identity federation (`--aws-role-arn` with `--aws-web-identity-token-file`, the GitHub Actions, GitLab CI and EKS pattern with no long-lived keys); a named CLI profile via `--profile`, SSO included; or nothing, letting the default chain pick up env vars, cached SSO or the instance role. On top of any of these, STS role assumption with `--aws-role-arn` and, for the third-party auditor pattern, `--aws-external-id`. Multi-account fan-out uses `accounts` plus `role_name` in the config, assuming that role in each account before collecting; the caller's own account is collected with the base credentials.
+
+AWS Organizations and Control Tower: run `cloudg map --org` with credentials for the management account (Organizations APIs also work from a delegated administrator; the Control Tower APIs need the management account). cloudg lists the org read-only (`organizations:Describe*`/`List*`, `controltower:List*`/`Get*`) and then assumes the member role in each selected account. `AWSControlTowerExecution` exists in every account Control Tower enrolled, but it carries administrator permissions; the `aws-controltower-ReadOnlyExecutionRole` cannot be used directly because it only trusts a Lambda-only role in the audit account. For production, deploy a dedicated read-only role (for example `cloudg-readonly` with the `SecurityAudit` and `ViewOnlyAccess` managed policies, trusting the management account) to all accounts with a service-managed CloudFormation StackSet targeting your OUs, and pass it with `--org-role cloudg-readonly`. Mapping Kubernetes workloads additionally needs an EKS access entry for that role with `AmazonEKSViewPolicy`.
 
 Azure, in priority order: workload identity federation (`--azure-tenant-id`, `--azure-client-id`, `--azure-federated-token-file`); a service principal with a client secret (`--azure-client-secret`) or a certificate (`--azure-cert-path`); managed identity (`--azure-managed-identity`, with `managed_identity_client_id` in config for user-assigned identities); or the `DefaultAzureCredential` chain, which covers `az login`.
 

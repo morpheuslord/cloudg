@@ -43,6 +43,23 @@ aws:
   accounts: []             # Target account IDs (only if cross-account scanning)
   role_name: null          # IAM role to assume in each account
 
+  # AWS Organizations / Control Tower discovery (`cloudg map --org`).
+  # Run with management-account credentials; every selected member account
+  # is mapped by assuming role_name there. AWSControlTowerExecution is admin:
+  # prefer a read-only role (SecurityAudit + ViewOnlyAccess) deployed to all
+  # accounts with a StackSet.
+  organization:
+    enabled: false
+    role_name: null        # default: aws.role_name, then AWSControlTowerExecution
+    include_ous: []        # OU IDs, ARNs or names (nested OUs included)
+    exclude_accounts: []
+    include_management_account: true
+    include_suspended: false
+    use_governed_regions: true   # regions [ALL] -> Control Tower governed regions
+    control_tower: true    # map the landing zone, controls and baselines
+    home_region: null      # Control Tower home region (auto-detected)
+    map_structure: true    # org / OU / account / SCP / control nodes on the map
+
   max_retries: 10
   retry_mode: adaptive     # legacy | standard | adaptive
 
@@ -115,6 +132,15 @@ scanners:
 inventory:
   tagging_sweep: true      # AWS: catch-all sweep via the Resource Groups Tagging API
   link_references: true    # Derive cross-service REFERENCES edges from metadata
+  services: [all]          # Families: network, compute, containers, kubernetes, serverless,
+                           # integration, storage, data, identity, security, logging, dns, iac
+  exclude_services: []
+  kubernetes: true         # Map workloads inside EKS clusters (needs an EKS access entry)
+  kubernetes_timeout: 10
+  iam_resource_edges: true # Link IAM principals to the resources their policies grant
+  max_images_per_repository: 20
+  stack_resources: true    # Link CloudFormation stacks to the resources they manage
+  account_hierarchy: true  # Account nodes containing their top-level resources
 
 # ── Graph Engine ──
 graph:

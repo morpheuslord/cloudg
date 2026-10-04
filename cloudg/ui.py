@@ -253,3 +253,51 @@ def task_done(progress: Progress, task_id: Any, message: str) -> None:
 def task_failed(progress: Progress, task_id: Any, message: str) -> None:
     """Mark a progress task finished with a failure description."""
     progress.update(task_id, description=f"[error]✗[/] {message}", completed=1, total=1)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Inventory / dependency views
+# ─────────────────────────────────────────────────────────────────────
+
+
+def ranked_table(title: str, columns: list[str], rows: list[list[Any]]) -> None:
+    """Generic ranked table (first column is the subject, the rest values)."""
+    if not rows:
+        return
+    table = Table(
+        title=title, box=box.ROUNDED, border_style="accent", header_style="bold", title_style="bold"
+    )
+    table.add_column(columns[0], style="accent", overflow="fold")
+    for col in columns[1:]:
+        table.add_column(col, style="metric", justify="right")
+    for row in rows:
+        table.add_row(*(escape(str(v)) for v in row))
+    console.print(table)
+
+
+def dependency_tree(view: Mapping[str, Any]) -> None:
+    """Render a DependencyGraph.tree() view as two Rich trees."""
+    from rich.tree import Tree
+
+    asset = view["asset"]
+
+    def label(node: Mapping[str, Any]) -> str:
+        rel = node.get("relationship") or node.get("via", "")
+        where = "/".join(x for x in (node.get("account_id"), node.get("region")) if x)
+        return (
+            f"[accent]{escape(str(node.get('name')))}[/] [muted]{node.get('type')}"
+            f"{' · ' + escape(where) if where else ''}[/] [muted]({escape(str(rel))})[/]"
+        )
+
+    def grow(tree: Any, children: list[Mapping[str, Any]]) -> None:
+        for child in children:
+            grow(tree.add(label(child)), child.get("children", []))
+
+    title = f"[bold]{escape(str(asset['name']))}[/] [muted]{asset['type']} {escape(str(asset.get('arn') or ''))}[/]"
+    for key, heading in (("depends_on", "depends on"), ("dependents", "needed by (blast radius)")):
+        if key in view:
+            tree = Tree(f"{title} [accent]{heading}[/]")
+            grow(tree, view[key])
+            if not view[key]:
+                tree.add("[muted]nothing[/]")
+            console.print(tree)
