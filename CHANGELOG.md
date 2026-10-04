@@ -2,6 +2,13 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## Unreleased
+
+Fixed:
+
+- AWS `SECURITY_GROUP_RULE` edges from `collect_edges()` now use the security group asset's `id` as the security group endpoint instead of the native `sg-…` ID, as Azure NSG rule edges already did. The graph exports no longer contain a disconnected `EXTERNAL` node per security group, and sensitive-port findings carry the security group's asset ID and ARN. The CIDR endpoint is unchanged.
+- Reachability analysis no longer reports security groups and NSGs themselves as "unexpected internet-exposed resources"; their open rules are still reported by the sensitive-port findings.
+
 ## 0.5.2 (2026-10-04)
 
 A documentation release: the inventory mapper's return structures, asset types and internals are now documented in full. No code changes.

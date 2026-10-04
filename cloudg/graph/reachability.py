@@ -43,6 +43,13 @@ EXPECTED_EXPOSED_TYPES = {
     AssetType.INTERNET_GATEWAY,
 }
 
+# Rule containers sit on SG/NSG rule edges but are not reachable workloads;
+# their open rules are reported by the sensitive-port findings instead.
+RULE_CONTAINER_TYPES = {
+    AssetType.SECURITY_GROUP,
+    AssetType.NSG,
+}
+
 
 class ReachabilityAnalyzer:
     """Analyses network reachability via BFS on the infrastructure graph.
@@ -167,7 +174,7 @@ class ReachabilityAnalyzer:
         # Check for sensitive asset types exposed to internet
         if asset_type in SENSITIVE_ASSET_TYPES:
             return self._sensitive_exposure_finding(node_id, node_data, asset_type)
-        if asset_type not in EXPECTED_EXPOSED_TYPES:
+        if asset_type not in EXPECTED_EXPOSED_TYPES | RULE_CONTAINER_TYPES:
             # Non-database but unexpected exposure
             return self._unexpected_exposure_finding(node_id, node_data, asset_type)
         return None
