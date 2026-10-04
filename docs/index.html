@@ -286,6 +286,7 @@
     <li><a href="#inputs">Input requirements</a></li>
     <li><a href="#outputs">Output contract</a></li>
     <li><a href="#models">Data models</a></li>
+    <li><a href="#inventory-docs">Inventory deep dives</a></li>
     <li><a href="#config">Configuration</a></li>
     <li class="group">Integrate</li>
     <li><a href="#api">Python API</a></li>
@@ -389,7 +390,7 @@ cloudg map -p aws --findings ./reports/raw-findings.json      <span class="c"># 
     <tr><td><strong>Relationship linker</strong></td><td>resolves what each asset declares it talks to into typed edges: <code>INVOKES</code>, <code>USES_IMAGE</code>, <code>ASSUMES_ROLE</code>, <code>IAM_TRUST</code>, <code>GRANTS_ACCESS</code>, <code>PROTECTS</code>, <code>MONITORS</code>, <code>MANAGES</code>, <code>GOVERNS</code>, <code>LOGS_TO</code>, <code>ROUTE</code>, <code>LOAD_BALANCER_TARGET</code>, <code>CONTAINS</code>, each with a fine-grained ontology <code>relationship</code>. Resolution is scoped to account and region; references into unmapped accounts become external account nodes</td></tr>
     <tr><td><strong>Account hierarchy</strong></td><td>account nodes containing their top-level resources; with <code>--org</code>, under the OU tree next to SCPs, the Control Tower landing zone (governed regions, log archive and audit accounts) and enabled controls</td></tr>
   </table></div>
-  <p>Outputs: <code>inventory-map.json</code> (assets, interconnections, unresolved references, summary), <code>inventory-map.graphml</code>, <code>inventory-graph.json</code>, <code>inventory-dependencies.json</code> (shared dependencies, blast radius, cross-account edges, security coverage) and, with <code>--org</code>, <code>inventory-organization.json</code>. With <code>--findings</code>, additionally <code>asset-map.json</code> (per-asset risk, riskiest first) and <code>compliance-map.json</code> (framework → affected assets). The map never depends on the scanners; findings merge in whenever they exist.</p>
+  <p>Outputs: <code>inventory-map.json</code> (assets, interconnections, unresolved references, summary), <code>inventory-map.graphml</code>, <code>inventory-graph.json</code>, <code>inventory-dependencies.json</code> (shared dependencies, blast radius, cross-account edges, security coverage) and, with <code>--org</code>, <code>inventory-organization.json</code>. With <code>--findings</code>, additionally <code>asset-map.json</code> (per-asset risk, riskiest first) and <code>compliance-map.json</code> (framework → affected assets). The map never depends on the scanners; findings merge in whenever they exist. Every file is specified field by field in the <a href="#inventory-docs">inventory reference</a>.</p>
   <div class="note">
     <p>Control Tower: run from the management account. Member accounts are reached through <code>AWSControlTowerExecution</code> by default, which is an administrator role; deploy a read-only role (SecurityAudit + ViewOnlyAccess) with a StackSet and pass <code>--org-role</code> for production use.</p>
   </div>
@@ -500,7 +501,18 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
     <tr><td><code>risk_score</code></td><td>computed</td><td>severity base averaged with CVSS when present</td></tr>
   </table></div>
   <h3>The rest</h3>
-  <p><code>CloudAsset</code> carries <code>arn</code>, <code>name</code>, a 45-value <code>asset_type</code> taxonomy (EC2, S3_BUCKET, IAM_ROLE, VPC, KMS_KEY, ...), <code>provider</code>, <code>region</code>, <code>tags</code>, <code>metadata</code> and <code>is_internet_exposed</code>. <code>NetworkEdge</code> is a directed edge with an <code>edge_type</code> (SECURITY_GROUP_RULE, IAM_TRUST, CONTAINS, INTERNET_EXPOSED, ATTACHED_TO, REFERENCES, ...), ports, protocol and CIDR. <code>ComplianceResult</code> is one control-level verdict with <code>framework</code>, <code>control_id</code>, <code>status</code> and the <code>finding_ids</code> behind it. <code>ScanResult</code> is the aggregate container the normaliser returns and the renderers consume, with a computed <code>summary</code>.</p>
+  <p><code>CloudAsset</code> carries <code>arn</code> (the stable identifier; <code>id</code> is regenerated each run), <code>name</code>, a 156-value <code>asset_type</code> taxonomy (EC2, LAMBDA_FUNCTION, CONTAINER_REGISTRY, K8S_WORKLOAD, IAM_ROLE, THREAT_DETECTOR, ORG_UNIT, ...), <code>provider</code>, <code>region</code>, <code>account_id</code>, <code>tags</code>, <code>metadata</code> (with declared <code>relations</code> and <code>aliases</code> on inventory assets) and <code>is_internet_exposed</code>. <code>NetworkEdge</code> is a directed edge with an <code>edge_type</code> (network: SECURITY_GROUP_RULE, NACL_RULE, ROUTE, PEERING, LOAD_BALANCER_TARGET, INTERNET_EXPOSED; structure: CONTAINS, ATTACHED_TO, REFERENCES; identity: IAM_TRUST, IAM_POLICY_ATTACHMENT, ASSUMES_ROLE, GRANTS_ACCESS; workload: INVOKES, USES_IMAGE, LOGS_TO; security and governance: PROTECTS, MONITORS, MANAGES, GOVERNS), a fine-grained ontology <code>relationship</code>, <code>properties</code>, and ports, protocol and CIDR for network rules. <code>ComplianceResult</code> is one control-level verdict with <code>framework</code>, <code>control_id</code>, <code>status</code> and the <code>finding_ids</code> behind it. <code>ScanResult</code> is the aggregate container the normaliser returns and the renderers consume, with a computed <code>summary</code>.</p>
+</section>
+
+<section id="inventory-docs">
+  <h2>Inventory deep dives</h2>
+  <p>The inventory mapper is documented in three further markdown documents, for people consuming its output and people extending it.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Document</th><th>What is in it</th></tr>
+    <tr><td><a href="https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md">Inventory reference</a></td><td>The structure of every return value and exported file, field by field, with annotated examples from a real run: <code>CloudAsset</code>, <code>NetworkEdge</code>, identifier formats, edge direction and dependency semantics, the relation object, <code>InventoryResult</code>, every <code>summary</code> key and how it is computed, coverage records and service names, unresolved references, dependency trees, shared dependencies, blast radius, cross-account edges, security coverage, <code>inventory-map.json</code>, <code>inventory-graph.json</code>, GraphML attributes, <code>inventory-organization.json</code>, organization map nodes, <code>asset-map.json</code>, <code>compliance-map.json</code> and <code>cloudg deps --json</code>.</td></tr>
+    <tr><td><a href="https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md">Inventory catalog</a></td><td>All 156 asset types by category; for each, the AWS ARN, CloudFormation, Azure ARM and GCP Cloud Asset Inventory types mapped to it, the metadata keys and value types it carries, the relations its collectors declare, and the edges entering and leaving it; the full relationship matrix and relationship vocabulary.</td></tr>
+    <tr><td><a href="https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md">Inventory internals</a></td><td>Architecture and data flow, a code map of every module, a mapping run step by step, the AWS deep collector (mixins, task registry, all 133 tasks, helpers, Cloud Control and Tagging sweeps, Kubernetes, security service gaps), Organizations and Control Tower discovery, the linker's index and resolution rules, the Azure and GCP extractor frameworks with every registered type, dependency semantics, catalogs, recipes for new collectors, extractors and asset types, security rules, code quality limits and testing.</td></tr>
+  </table></div>
 </section>
 
 <section id="config">
@@ -678,17 +690,29 @@ docker compose run --rm cloudg run -p aws --regions us-east-1</code></pre>
 
 <section id="changelog">
   <h2>Changelog</h2>
-  <p>Major releases only. The full log lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+  <p>Every release, newest first. The full detail lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
 
   <div class="release">
-    <span class="tag">0.5.0</span> <span class="date">unreleased</span>
-    <h3>Inventory mapping</h3>
-    <p>A scanner-independent inventory mapper: <code>cloudg map</code> and <code>CloudGEngine.map_inventory()</code> deep-collect everything deployed or default across AWS, Azure and GCP (network fabric included, with catch-all sweeps so every service appears) and link it into one map. Scanner findings merge in afterwards as <code>asset-map.json</code> and <code>compliance-map.json</code>. The relationship linker, deep collectors and mapper are all public API.</p>
-    <p>0.5.1 deepens the map: containers down to Kubernetes workloads, serverless and event wiring, security services and scanners, the IAM graph, typed relationships, AWS Organizations / Control Tower multi-account mapping, and dependency analysis with <code>cloudg deps</code>.</p>
+    <span class="tag">0.5.1</span> <span class="date">2026-10-04</span>
+    <h3>Deep inventory: interdependencies, every account, every service</h3>
+    <p>The inventory map now follows workloads into containers and Kubernetes (ECR, ECS services and task definitions, EKS nodegroups, Fargate, addons, access entries, pod identity, and the Deployments, Services, Ingresses and ServiceAccounts inside clusters), through serverless and event wiring (Lambda triggers and URLs, API Gateway, SQS, SNS, EventBridge, Step Functions, Kinesis), across the full IAM graph and Identity Center, and into the security services and scanners watching the estate, including where they are not enabled. AWS now has 133 collectors plus a Cloud Control API sweep that lists every listable resource type, tagged or not; Azure is read through Azure Resource Graph across every subscription and management group; GCP through Cloud Asset Inventory across the whole organization.</p>
+    <p><code>cloudg map --org</code> maps every account of an AWS Organization / Control Tower landing zone (OU tree, SCPs, landing zone, governed regions, controls). Edges are typed (<code>INVOKES</code>, <code>USES_IMAGE</code>, <code>ASSUMES_ROLE</code>, <code>GRANTS_ACCESS</code>, <code>PROTECTS</code>, <code>MONITORS</code>, <code>MANAGES</code>, <code>GOVERNS</code>, <code>LOGS_TO</code>) and <code>cloudg deps</code> answers what an asset needs and what breaks with it. Type maps moved into YAML catalogs. Fixes include global services duplicated per region, a single Azure NSG rule discarding a whole subscription, a GCP state-field crash that truncated projects, and CodeQL / Codacy security findings.</p>
   </div>
 
   <div class="release">
-    <span class="tag">0.4.0</span> <span class="date">unreleased</span>
+    <span class="tag">0.5.0</span> <span class="date">2026-09-30</span>
+    <h3>Inventory mapping</h3>
+    <p>A scanner-independent inventory mapper: <code>cloudg map</code> and <code>CloudGEngine.map_inventory()</code> deep-collect everything deployed or default across AWS, Azure and GCP (network fabric included, with catch-all sweeps so every service appears) and link it into one map. Scanner findings merge in afterwards as <code>asset-map.json</code> and <code>compliance-map.json</code>. The relationship linker, deep collectors and mapper are all public API.</p>
+  </div>
+
+  <div class="release">
+    <span class="tag">0.4.1</span> <span class="date">2026-09-29</span>
+    <h3>Security hardening</h3>
+    <p>A pass over the Checkov and Codacy findings: the Docker image runs as a non-root user with a healthcheck, the installers no longer pipe downloads straight into a shell, third-party GitHub Actions are pinned to commit SHAs, plugin loading validates <code>module:Class</code> paths, swallowed errors are logged, and log messages no longer place credential-like words next to runtime values.</p>
+  </div>
+
+  <div class="release">
+    <span class="tag">0.4.0</span> <span class="date">2026-09-29</span>
     <h3>Ingest mode</h3>
     <p>cloudg now works entirely from scanner outputs you already have: the <code>cloudg ingest</code> command, public <code>parse_report()</code> parsers on all four scanner wrappers, and <code>ingest_reports()</code> / <code>normalise_findings()</code> / <code>run_from_reports()</code> on the engine. No cloud credentials, no scanner binaries. Plus this documentation and a least-privilege fix to the publish workflow.</p>
   </div>

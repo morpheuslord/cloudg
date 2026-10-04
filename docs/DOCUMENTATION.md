@@ -8,6 +8,12 @@ cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, run
 
 This is the complete reference: every CLI command, the exact input and output formats, the data models, the full Python API with integration examples, configuration, plugins and authentication. Release history lives in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
 
+The inventory mapper (`cloudg map`, `cloudg deps`, `cloudg.inventory`) has three deeper companion documents:
+
+- [Inventory reference](INVENTORY_REFERENCE.md): the structure of every return value and exported file, field by field, with annotated examples (`CloudAsset`, `NetworkEdge`, relation objects, `InventoryResult`, `summary`, coverage records, dependency trees, blast radius, security coverage, `inventory-map.json`, `inventory-graph.json`, GraphML, `inventory-organization.json`, `asset-map.json`, `compliance-map.json`, `cloudg deps --json`).
+- [Inventory catalog](INVENTORY_CATALOG.md): all 156 asset types with the native resource types mapped to each, the metadata keys and relations each one carries, and the full relationship matrix.
+- [Inventory internals](INVENTORY_INTERNALS.md): how a mapping run works, every module, the 133 AWS collector tasks, the linker's resolution rules, the Azure and GCP extractor frameworks, dependency semantics, catalogs, and recipes for adding collectors, extractors and asset types.
+
 Contents:
 
 - [Installation](#installation)
@@ -324,7 +330,11 @@ All commands write into the output directory (`./reports` by default).
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks, one JSON object per line |
 | `terraform/*.tf.json`, `terraform/import.sh` | Terraform recreation of live infrastructure, 25+ asset types |
 | `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, summary (`cloudg map`) |
+| `inventory-dependencies.json` | shared dependencies, blast radius, cross-account edges, security service coverage (`cloudg map`) |
+| `inventory-organization.json` | AWS Organization / Control Tower topology (`cloudg map --org`) |
 | `asset-map.json`, `compliance-map.json` | inventory overlaid with scanner findings (`cloudg map --findings`) |
+
+The inventory files are specified field by field in the [inventory reference](INVENTORY_REFERENCE.md).
 
 `findings.json` has this shape:
 
@@ -387,17 +397,44 @@ The unit every scanner and parser produces.
 | `id` | `str` | auto UUID |
 | `arn` | `str \| None` | native identifier |
 | `name` | `str` | |
-| `asset_type` | `AssetType` | 45-value taxonomy: `EC2`, `S3_BUCKET`, `IAM_ROLE`, `VPC`, `KMS_KEY`, ... |
+| `asset_type` | `AssetType` | 156-value taxonomy covering compute, networking, storage, databases, IAM and identity federation, keys and secrets, logging, containers and Kubernetes, integration, data and ML platforms, DNS and deployment, security services and scanners, organization and governance, hybrid networking, `OTHER`; the full list with what maps to each is in the [inventory catalog](INVENTORY_CATALOG.md#asset-types-by-category) |
 | `provider` | `CloudProvider` | `AWS`, `AZURE`, `GCP` |
 | `region` | `str` | `"global"` for regionless resources |
 | `account_id` | `str \| None` | |
 | `tags` | `dict[str, str]` | |
-| `metadata` | `dict[str, Any]` | normalised extra attributes |
-| `is_internet_exposed` | `bool` | set by the graph analysis |
+| `metadata` | `dict[str, Any]` | normalised extra attributes; inventory assets also carry declared `relations` and identifier `aliases` |
+| `collected_at` | `datetime` | when the asset was built |
+| `is_internet_exposed` | `bool` | set by the collector or the graph analysis |
+| `raw_data` | `dict[str, Any]` | raw API payload, never serialised |
+| `display_id` | computed `str` | `arn` or `id` |
+
+`id` is regenerated on every run; correlate assets across runs by `arn`.
 
 ### NetworkEdge
 
-Directed edge between two asset IDs. `edge_type` is one of `SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `CONTAINS`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED`, `ATTACHED_TO`, `REFERENCES`; the model also carries `ports`, `port_range`, `protocol`, `cidr` and `direction`. `ATTACHED_TO` and `REFERENCES` are produced by the inventory relationship linker (attachment and generic cross-service dependency respectively).
+Directed edge between two asset IDs (`source_id`, `target_id`); direction always reads "source verb target".
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `str` | auto UUID |
+| `source_id`, `target_id` | `str` | asset IDs; network rule edges can use a CIDR or native security group ID as an endpoint |
+| `edge_type` | `EdgeType` | coarse class, below |
+| `relationship` | `str \| None` | fine-grained ontology relation (`TRIGGERED_BY`, `RUNS_ON`, `CROSS_ACCOUNT_TRUST`, `ENCRYPTED_BY_KMS`, ...) |
+| `properties` | `dict[str, Any]` | relation detail: trust conditions, granted actions, EKS access policies, notification events, `cross_account`, `external_reference`, `hierarchy` |
+| `description` | `str \| None` | human-readable explanation |
+| `ports`, `port_range`, `protocol`, `cidr`, `direction` | | network rule edges |
+
+`edge_type` values:
+
+| Group | Values |
+|---|---|
+| Network | `SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED` |
+| Structure | `CONTAINS`, `ATTACHED_TO`, `REFERENCES` |
+| Identity | `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `ASSUMES_ROLE`, `GRANTS_ACCESS` |
+| Workload | `INVOKES`, `USES_IMAGE`, `LOGS_TO` |
+| Security and governance | `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS` |
+
+What each one means, its typical endpoints and how it counts for dependency analysis is in the [inventory reference](INVENTORY_REFERENCE.md#6-edge-types-and-direction); every observed source type → relationship → target type combination is in the [relationship matrix](INVENTORY_CATALOG.md#relationship-matrix).
 
 ### ComplianceResult
 
@@ -637,7 +674,9 @@ Reference data lives in YAML catalogs under `cloudg/inventory/catalogs/` rather 
 
 Your own collectors can declare relationships the same way the built-in ones do, by listing them in `metadata["relations"]`: `{"target": <any identifier>, "edge": "INVOKES", "relationship": "TRIGGERED_BY", "reverse": false}`.
 
-The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region, account_id, tagging_sweep=True, is_primary_region=True, services=None, exclude_services=None, kubernetes=True, ...)`, `AzureDeepInventoryCollector(credential, subscription_id)` and `GCPDeepInventoryCollector(project_id, credentials)` all implement the standard `collect()` / `collect_edges()` / `run()` collector interface.
+The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region="us-east-1", account_id=None, tagging_sweep=True, **options)` (keyword options `is_primary_region`, `services`, `exclude_services`, `kubernetes`, `kubernetes_timeout`, `iam_resource_edges`, `max_images_per_repository`, `stack_resources`, `cloud_control`, `cloud_control_types`, `cloud_control_exclude`, `cloud_control_concurrency`; an unknown option raises `TypeError`), `AzureDeepInventoryCollector(credential, subscription_id, graph_client_factory=None, use_resource_graph=True)` and `GCPDeepInventoryCollector(project_id, credentials=None, **options)` (keyword options `organization_id`, `scope`, `project_filter`, `skip_asset_types`, `page_size`, `include_iam`, `client`, `coverage`, `timeout`, `link_locally`) all implement the standard `collect()` / `collect_edges()` / `run()` collector interface. Their assets carry declared relations; pass them through `RelationshipLinker` for the typed edges.
+
+Every structure above, from `summary` to the dependency tree, is specified field by field in the [inventory reference](INVENTORY_REFERENCE.md).
 
 ### The deeper toolkit
 
@@ -653,6 +692,11 @@ Modules the pipeline uses internally that are equally useful standalone:
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
 | `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone; no engine, no credentials |
 | `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
+| `cloudg.inventory.dependencies` | `DependencyGraph`, `cross_account_edges`, `security_coverage` | dependency walks, shared dependencies, blast radius, cross-account edges and security service coverage over any assets and edges |
+| `cloudg.inventory.linker` | `RelationshipLinker` | resolve declared relations and identifiers across services, regions and accounts into typed edges |
+| `cloudg.inventory.organization` | `discover_organization`, `OrganizationTopology` | AWS Organizations and Control Tower discovery, account selection, map nodes |
+| `cloudg.inventory.kubernetes` | `collect_eks_workloads`, `KubernetesReader` | read-only Kubernetes object mapping for EKS clusters |
+| `cloudg.inventory.catalogs` | `load_catalog`, `asset_type_map` | the YAML reference catalogs with `$CLOUDG_CATALOG_DIR` overlays |
 | `cloudg.registry` | `PluginRegistry` | entry-point discovery of collector and scanner plugins |
 
 ### PipelineResult
@@ -864,7 +908,7 @@ myscanner = "my_package.scanner:MyScanner"
 mycloud = "my_package.collector:MyCollector"
 ```
 
-After `pip install`, the name is available in `scanners.enabled` and `--scanners`. Collectors follow the base interface in `cloudg/collectors/base.py`. If your scanner emits a stable check ID in `source_finding_id`, you can add it to `rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
+After `pip install`, the name is available in `scanners.enabled` and `--scanners`. Collectors follow the base interface in `cloudg/collectors/base.py`. A collector plugin's assets join the inventory map like the built-in ones: declare what each asset talks to in `metadata["relations"]` and extra identifiers in `metadata["aliases"]`, and the relationship linker resolves them (see [Inventory internals](INVENTORY_INTERNALS.md#156-declare-relations-from-your-own-collector-or-plugin)). If your scanner emits a stable check ID in `source_finding_id`, you can add it to `rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
 
 ## Authentication
 

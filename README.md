@@ -20,7 +20,7 @@ One command collects assets from every configured provider in parallel, feeds th
 
 Need the map without the security tooling? `cloudg map` is a scanner-independent inventory mapper: it deep-collects everything deployed (or default) in an account, down to the network fabric, sweeps every service for the rest, and links it all into one asset map you can overlay with scanner findings later. See [Inventory mapping](#inventory-mapping).
 
-**Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
+**Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md). The inventory mapper has its own deep-dive documents: the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md) (every return structure and output file, field by field), the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md) (all 156 asset types, their metadata and relationships) and the [inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md) (how it works and how to extend it).
 
 ---
 
@@ -101,7 +101,7 @@ cloudg deps arn:aws:iam::123456789012:role/app-role
 cloudg map -p aws --regions all --findings ./reports/raw-findings.json
 ```
 
-Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, `inventory-graph.json` for viewers, `inventory-dependencies.json` (shared dependencies, blast radius, cross-account edges, security coverage gaps) and, with `--org`, `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week.
+Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, `inventory-graph.json` for viewers, `inventory-dependencies.json` (shared dependencies, blast radius, cross-account edges, security coverage gaps) and, with `--org`, `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week. Every file is specified field by field, with annotated examples, in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md).
 
 All of this is also a library API, see [Using it as a library](#using-it-as-a-library):
 
