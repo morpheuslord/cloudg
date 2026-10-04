@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from cloudg.collectors.base import BaseCollector
-from cloudg.collectors.gcp_assets import (  # noqa: F401  (_INTERNET, state_str re-exported)
+from cloudg.collectors.gcp_assets import (
     _INTERNET,
     MappedRecord,
     _num,
@@ -531,3 +531,24 @@ class GCPCollector(BaseCollector):
             edges.extend(linker.link(include_generic=False))
         logger.info("Collected %d GCP edges", len(edges))
         return edges
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "apply_firewalls",
+    "asset_location",
+    "build_cloud_asset",
+    "display_name",
+    "extract_location",
+    "GCPCollector",
+    "GCPCollectorOptions",
+    "internet_edges",
+    "MappedRecord",
+    "record_from_asset",
+    "record_from_search",
+    "state_str",
+    "to_plain",
+    "_INTERNET",
+    "_num",
+    "_project_segment",
+]

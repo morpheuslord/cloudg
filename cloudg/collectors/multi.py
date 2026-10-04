@@ -276,7 +276,7 @@ class MultiAccountCollector:
 
             cred = build_azure_credential(cfg)
         except Exception as exc:
-            logger.warning("Azure credential could not be built: %s", exc)
+            logger.warning("Azure authentication setup failed: %s", exc)
 
         if not sub_ids and getattr(cfg, "all_subscriptions", True) and cred is not None:
             try:

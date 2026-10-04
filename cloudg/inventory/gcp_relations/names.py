@@ -112,39 +112,57 @@ def full_name(ref: Any, service: str | None = None) -> str | None:
     if not isinstance(ref, str):
         return None
     s = ref.strip()
-    if not s:
-        return None
-    out: str | None = None
+    out = _raw_full_name(s, service) if s else None
+    return _canonical_full_name(out) if out else None
+
+
+def _raw_full_name(s: str, service: str | None) -> str | None:
+    """Map one stripped reference to ``//svc.googleapis.com/...`` (uncanonicalised)."""
     if s.startswith("//"):
-        out = s
-    elif s.startswith("gs://"):
+        return s
+    if s.startswith("gs://"):
         bucket = s[5:].split("/", 1)[0]
-        out = f"//storage.googleapis.com/{bucket}" if bucket else None
-    elif s.startswith(("https://", "http://")):
-        m = _COMPUTE_URL_RE.match(s)
-        if m:
-            out = f"//compute.googleapis.com/{m.group(1)}"
-        elif (m := _STORAGE_URL_RE.match(s)) is not None:
-            out = f"//storage.googleapis.com/{m.group(1)}"
-        elif (m := _API_URL_RE.match(s)) is not None and m.group(1) != "www":
-            svc = _SERVICE_ALIASES.get(m.group(1), m.group(1))
-            out = f"//{svc}.googleapis.com/{m.group(2)}"
-    elif (m := _BARE_API_RE.match(s)) is not None:
-        svc = _SERVICE_ALIASES.get(m.group(1), m.group(1))
-        rest = m.group(2)
-        if svc == "logging" and re.fullmatch(r"projects/[^/]+", rest):
-            out = f"//cloudresourcemanager.googleapis.com/{rest}"
-        else:
-            out = f"//{svc}.googleapis.com/{rest}"
-    elif s.startswith("projects/_/buckets/"):
-        out = f"//storage.googleapis.com/{s.split('/')[3]}"
-    elif s.startswith(
+        return f"//storage.googleapis.com/{bucket}" if bucket else None
+    if s.startswith(("https://", "http://")):
+        return _url_full_name(s)
+    m = _BARE_API_RE.match(s)
+    if m is not None:
+        return _bare_api_full_name(m.group(1), m.group(2))
+    if s.startswith("projects/_/buckets/"):
+        return f"//storage.googleapis.com/{s.split('/')[3]}"
+    if s.startswith(
         ("projects/", "organizations/", "folders/", "locations/", "apps/", "accessPolicies/")
     ):
         svc = service or _guess_service(s)
-        out = f"//{svc}.googleapis.com/{s}" if svc else None
-    if not out:
-        return None
+        return f"//{svc}.googleapis.com/{s}" if svc else None
+    return None
+
+
+def _url_full_name(s: str) -> str | None:
+    """selfLink / API URL -> full resource name."""
+    m = _COMPUTE_URL_RE.match(s)
+    if m:
+        return f"//compute.googleapis.com/{m.group(1)}"
+    m = _STORAGE_URL_RE.match(s)
+    if m is not None:
+        return f"//storage.googleapis.com/{m.group(1)}"
+    m = _API_URL_RE.match(s)
+    if m is not None and m.group(1) != "www":
+        svc = _SERVICE_ALIASES.get(m.group(1), m.group(1))
+        return f"//{svc}.googleapis.com/{m.group(2)}"
+    return None
+
+
+def _bare_api_full_name(service: str, rest: str) -> str:
+    """``<svc>.googleapis.com/<rest>`` (sink-style destination) -> full name."""
+    svc = _SERVICE_ALIASES.get(service, service)
+    if svc == "logging" and re.fullmatch(r"projects/[^/]+", rest):
+        return f"//cloudresourcemanager.googleapis.com/{rest}"
+    return f"//{svc}.googleapis.com/{rest}"
+
+
+def _canonical_full_name(out: str) -> str:
+    """Drop query/fragment and key versions; fold service aliases."""
     out = out.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     out = _KEY_VERSION_RE.sub("", out)
     if out.startswith("//sqladmin.googleapis.com/"):

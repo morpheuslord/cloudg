@@ -59,7 +59,7 @@ from cloudg.config import CloudGConfig
 from cloudg.coverage import CollectionCoverage, ServiceStatus
 
 # InventoryResult and _service_of live in mapper_result; re-exported here
-from cloudg.inventory.mapper_result import (  # noqa: F401
+from cloudg.inventory.mapper_result import (
     _HIERARCHY_TYPES,
     InventoryResult,
     _service_of,
@@ -579,3 +579,14 @@ class InventoryMapper:
         paths["compliance_map"] = compliance_path
 
         return paths
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "add_account_hierarchy",
+    "deduplicate",
+    "InventoryMapper",
+    "InventoryResult",
+    "_HIERARCHY_TYPES",
+    "_service_of",
+]

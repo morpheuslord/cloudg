@@ -123,7 +123,9 @@ class DirectConnectCollectorsMixin(NetworkExtBase):
 
     async def _dx_connections(self, dx: Any) -> list[CloudAsset]:
         out = []
-        async for c in self._pages(dx.describe_connections, "connections", token_in="nextToken"):
+        async for c in self._pages(
+            dx.describe_connections, "connections", cursor_param="nextToken"
+        ):
             if c.get("connectionState") in ("deleted", "deleting", "rejected"):
                 continue
             cid = c["connectionId"]
@@ -158,7 +160,7 @@ class DirectConnectCollectorsMixin(NetworkExtBase):
 
     async def _dx_lags(self, dx: Any) -> list[CloudAsset]:
         out = []
-        async for lag in self._pages(dx.describe_lags, "lags", token_in="nextToken"):
+        async for lag in self._pages(dx.describe_lags, "lags", cursor_param="nextToken"):
             if lag.get("lagState") in ("deleted", "deleting"):
                 continue
             lid = lag["lagId"]
@@ -188,7 +190,7 @@ class DirectConnectCollectorsMixin(NetworkExtBase):
     async def _dx_virtual_interfaces(self, dx: Any) -> list[CloudAsset]:
         out = []
         async for v in self._pages(
-            dx.describe_virtual_interfaces, "virtualInterfaces", token_in="nextToken"
+            dx.describe_virtual_interfaces, "virtualInterfaces", cursor_param="nextToken"
         ):
             if v.get("virtualInterfaceState") in ("deleted", "deleting", "rejected"):
                 continue

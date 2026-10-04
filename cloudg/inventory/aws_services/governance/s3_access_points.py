@@ -110,7 +110,7 @@ class S3AccessPointCollectorsMixin(GovernanceHelpersMixin):
         policy_rels, policy_info = await self._policy_access(
             lambda: s3c.get_access_point_policy(AccountId=acct, Name=name),
             "Policy",
-            ("Access point %s policy failed: %s", name),
+            f"Access point {name} policy",
             quiet_code="NoSuchAccessPointPolicy",
         )
         ap_pab = _pab(info.get("PublicAccessBlockConfiguration"))

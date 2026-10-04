@@ -39,7 +39,7 @@ from cloudg.inventory._util import walk_strings
 
 # Identifier index / resolution live in linker_index; the helpers below are
 # re-exported so existing imports from this module keep working.
-from cloudg.inventory.linker_index import (  # noqa: F401
+from cloudg.inventory.linker_index import (
     _ECR_HOST_RE,
     _GLOBAL_PREFIXES,
     _NO_TAIL_PREFIXES,
@@ -505,3 +505,14 @@ class RelationshipLinker(IdentifierIndex):
         for edge in edges:
             self._edge_keys.add((edge.source_id, edge.target_id, edge.edge_type.value))
             self._pair_keys.add((edge.source_id, edge.target_id))
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "IdentifierIndex",
+    "RelationshipLinker",
+    "_ECR_HOST_RE",
+    "_GLOBAL_PREFIXES",
+    "_image_registry_host",
+    "_NO_TAIL_PREFIXES",
+]

@@ -190,7 +190,7 @@ class DataProtectionCollectorsMixin(GovernanceHelpersMixin):
         policy_rels, policy_info = await self._policy_access(
             lambda: kms.get_key_policy(KeyId=key_id, PolicyName="default"),
             "Policy",
-            ("KMS key policy for %s failed: %s", key_id),
+            "KMS key policy",
             skip_empty=False,
         )
         grants, grant_count = await self._kms_grants(kms, key_id)
@@ -264,11 +264,11 @@ class DataProtectionCollectorsMixin(GovernanceHelpersMixin):
         try:
             replicas = (await sm.describe_secret(SecretId=arn)).get("ReplicationStatus") or []
         except Exception as exc:
-            logger.debug("Secret %s describe failed: %s", secret.get("Name"), exc)
+            logger.debug("Replication status lookup failed: %s", exc)
         policy_rels, policy_info = await self._policy_access(
             lambda: sm.get_resource_policy(SecretId=arn),
             "ResourcePolicy",
-            ("Secret %s policy failed: %s", secret.get("Name")),
+            "Resource policy lookup",
         )
         rules = secret.get("RotationRules") or {}
         return self._asset(
@@ -381,7 +381,7 @@ class DataProtectionCollectorsMixin(GovernanceHelpersMixin):
         policy_rels, policy_info = await self._policy_access(
             lambda: ddb.get_resource_policy(ResourceArn=arn),
             "Policy",
-            ("Resource policy for %s failed: %s", table_name),
+            f"DynamoDB resource policy for {table_name}",
             quiet_code="PolicyNotFoundException",
         )
         destinations, tags = await self._dynamodb_destinations_and_tags(ddb, table_name, arn)

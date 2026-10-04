@@ -3,6 +3,8 @@ composite children and the resources a metric alarm monitors."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from cloudg.inventory.aws_services._base import rel
 from cloudg.inventory.aws_services.application._common import (
     _ALARM_RULE_RE,
@@ -51,47 +53,10 @@ class AlarmCollectorsMixin(ApplicationBase):
     def _alarm_dimension_targets(self, namespace: str, dims: list[dict]) -> list[str]:
         d = {x.get("Name"): x.get("Value") for x in dims or [] if x.get("Name") and x.get("Value")}
         out: list[str] = []
-        if d.get("InstanceId"):
-            out.append(d["InstanceId"])
-        if d.get("AutoScalingGroupName"):
-            out.append(d["AutoScalingGroupName"])
-        if namespace == "AWS/Lambda" and d.get("FunctionName"):
-            res = d.get("Resource") or d["FunctionName"]
-            out.append(self._arn("lambda", f"function:{res}"))
-        if d.get("QueueName"):
-            out.append(self._arn("sqs", d["QueueName"]))
-        if d.get("TopicName"):
-            out.append(self._arn("sns", d["TopicName"]))
-        if d.get("TableName"):
-            out.append(self._arn("dynamodb", f"table/{d['TableName']}"))
-        if d.get("DBInstanceIdentifier"):
-            out.append(self._arn("rds", f"db:{d['DBInstanceIdentifier']}"))
-        if d.get("DBClusterIdentifier"):
-            out.append(self._arn("rds", f"cluster:{d['DBClusterIdentifier']}"))
-        if d.get("TargetGroup"):
-            out.append(self._arn("elasticloadbalancing", d["TargetGroup"]))
-        elif d.get("LoadBalancer"):
-            out.append(self._arn("elasticloadbalancing", f"loadbalancer/{d['LoadBalancer']}"))
-        if d.get("LoadBalancerName"):
-            out.append(d["LoadBalancerName"])
-        if namespace == "AWS/ECS" and d.get("ClusterName"):
-            if d.get("ServiceName"):
-                out.append(self._arn("ecs", f"service/{d['ClusterName']}/{d['ServiceName']}"))
-            else:
-                out.append(self._arn("ecs", f"cluster/{d['ClusterName']}"))
-        if d.get("StateMachineArn"):
-            out.append(d["StateMachineArn"])
-        if namespace == "AWS/Kinesis" and d.get("StreamName"):
-            out.append(self._arn("kinesis", f"stream/{d['StreamName']}"))
-        if d.get("DeliveryStreamName"):
-            out.append(self._arn("firehose", f"deliverystream/{d['DeliveryStreamName']}"))
-        if namespace == "AWS/S3" and d.get("BucketName"):
-            out.append(f"arn:aws:s3:::{d['BucketName']}")
-        for key in ("CacheClusterId", "VolumeId", "NatGatewayId", "ApiId", "FileSystemId"):
-            if d.get(key):
-                out.append(d[key])
-        if namespace == "AWS/ApiGateway" and d.get("ApiName"):
-            out.append(d["ApiName"])
+        for rule in _DIMENSION_RULES:
+            target = rule(self, namespace, d)
+            if target:
+                out.append(target)
         return out
 
     def _alarm_target_relations(
@@ -165,3 +130,70 @@ class AlarmCollectorsMixin(ApplicationBase):
                 for alarm in page.get("CompositeAlarms", []) or []:
                     assets.append(self._alarm_asset(alarm, composite=True))
         return assets
+
+
+# Alarm dimension -> monitored resource identifier. Each rule takes
+# (collector, namespace, dimensions) and returns an identifier or None;
+# evaluated in order, which fixes the order of the resulting relations.
+def _raw(key: str) -> Any:
+    return lambda c, ns, d: d.get(key)
+
+
+def _arn_of(key: str, service: str, fmt: str, namespace: str | None = None) -> Any:
+    def rule(c: Any, ns: str, d: dict) -> str | None:
+        if not d.get(key) or (namespace and ns != namespace):
+            return None
+        return c._arn(service, fmt.format(d[key]))
+
+    return rule
+
+
+def _lambda_target(c: Any, ns: str, d: dict) -> str | None:
+    if ns != "AWS/Lambda" or not d.get("FunctionName"):
+        return None
+    return c._arn("lambda", f"function:{d.get('Resource') or d['FunctionName']}")
+
+
+def _elb_target(c: Any, ns: str, d: dict) -> str | None:
+    if d.get("TargetGroup"):
+        return c._arn("elasticloadbalancing", d["TargetGroup"])
+    if d.get("LoadBalancer"):
+        return c._arn("elasticloadbalancing", f"loadbalancer/{d['LoadBalancer']}")
+    return None
+
+
+def _ecs_target(c: Any, ns: str, d: dict) -> str | None:
+    if ns != "AWS/ECS" or not d.get("ClusterName"):
+        return None
+    if d.get("ServiceName"):
+        return c._arn("ecs", f"service/{d['ClusterName']}/{d['ServiceName']}")
+    return c._arn("ecs", f"cluster/{d['ClusterName']}")
+
+
+def _s3_target(c: Any, ns: str, d: dict) -> str | None:
+    return f"arn:aws:s3:::{d['BucketName']}" if ns == "AWS/S3" and d.get("BucketName") else None
+
+
+def _api_name_target(c: Any, ns: str, d: dict) -> str | None:
+    return d.get("ApiName") if ns == "AWS/ApiGateway" else None
+
+
+_DIMENSION_RULES = (
+    _raw("InstanceId"),
+    _raw("AutoScalingGroupName"),
+    _lambda_target,
+    _arn_of("QueueName", "sqs", "{}"),
+    _arn_of("TopicName", "sns", "{}"),
+    _arn_of("TableName", "dynamodb", "table/{}"),
+    _arn_of("DBInstanceIdentifier", "rds", "db:{}"),
+    _arn_of("DBClusterIdentifier", "rds", "cluster:{}"),
+    _elb_target,
+    _raw("LoadBalancerName"),
+    _ecs_target,
+    _raw("StateMachineArn"),
+    _arn_of("StreamName", "kinesis", "stream/{}", "AWS/Kinesis"),
+    _arn_of("DeliveryStreamName", "firehose", "deliverystream/{}"),
+    _s3_target,
+    *(_raw(k) for k in ("CacheClusterId", "VolumeId", "NatGatewayId", "ApiId", "FileSystemId")),
+    _api_name_target,
+)

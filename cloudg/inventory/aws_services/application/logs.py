@@ -112,7 +112,7 @@ class LogsCollectorsMixin(ApplicationBase):
             async for pol in self._pages(
                 logs.describe_account_policies,
                 "accountPolicies",
-                token_in="nextToken",
+                cursor_param="nextToken",
                 policyType="SUBSCRIPTION_FILTER_POLICY",
             ):
                 assets.append(self._account_subscription_asset(pol))

@@ -293,31 +293,31 @@ class AWSServiceMixin:
         self,
         call: Any,
         result_key: str,
-        token_in: str = "NextToken",
-        token_out: str | None = None,
+        cursor_param: str = "NextToken",
+        cursor_key: str | None = None,
         max_pages: int = 1000,
         **kwargs: Any,
     ) -> AsyncIterator[Any]:
-        """Manual token pagination for operations without a botocore
+        """Manual cursor pagination for operations without a botocore
         paginator (``_paginate`` raises OperationNotPageableError on them).
 
         Args:
             call: Bound client method, e.g. ``client.list_services``.
             result_key: Response key holding the items.
-            token_in: Request parameter carrying the token.
-            token_out: Response key holding the next token (default token_in).
+            cursor_param: Request parameter carrying the pagination cursor.
+            cursor_key: Response key holding the next cursor (default cursor_param).
         """
-        token_out = token_out or token_in
-        token = None
+        cursor_key = cursor_key or cursor_param
+        cursor = None
         for _ in range(max_pages):
             params = dict(kwargs)
-            if token:
-                params[token_in] = token
+            if cursor:
+                params[cursor_param] = cursor
             resp = await call(**params)
             for item in resp.get(result_key, []) or []:
                 yield item
-            token = resp.get(token_out)
-            if not token:
+            cursor = resp.get(cursor_key)
+            if not cursor:
                 return
 
     def _arn(self, service: str, resource: str, region: str | None = None) -> str:

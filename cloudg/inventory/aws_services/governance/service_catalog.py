@@ -95,8 +95,8 @@ class ServiceCatalogCollectorsMixin(AWSServiceMixin):
                 async for a in self._pages(
                     sc.list_portfolio_access,
                     "AccountIds",
-                    token_in="PageToken",
-                    token_out="NextPageToken",
+                    cursor_param="PageToken",
+                    cursor_key="NextPageToken",
                     PortfolioId=pid,
                 )
             ]
@@ -156,8 +156,8 @@ class ServiceCatalogCollectorsMixin(AWSServiceMixin):
             async for o in self._pages(
                 sc.get_provisioned_product_outputs,
                 "Outputs",
-                token_in="PageToken",
-                token_out="NextPageToken",
+                cursor_param="PageToken",
+                cursor_key="NextPageToken",
                 ProvisionedProductId=pp_id,
             ):
                 key = o.get("OutputKey") or ""
@@ -252,8 +252,8 @@ class ServiceCatalogCollectorsMixin(AWSServiceMixin):
             async for p in self._pages(
                 sc.search_provisioned_products,
                 "ProvisionedProducts",
-                token_in="PageToken",
-                token_out="NextPageToken",
+                cursor_param="PageToken",
+                cursor_key="NextPageToken",
                 AccessLevelFilter={"Key": "Account", "Value": "self"},
             )
         ]

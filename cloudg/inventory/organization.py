@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # account_ref is re-exported: it is part of this module's public API.
-from cloudg.inventory.organization_assets import account_ref, topology_assets  # noqa: F401
+from cloudg.inventory.organization_assets import account_ref, topology_assets
 from cloudg.schema.models import CloudAsset
 
 logger = logging.getLogger(__name__)
@@ -448,3 +448,17 @@ def discover_organization(
         len(topology.policies),
     )
     return topology
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "account_ref",
+    "DEFAULT_MEMBER_ROLE",
+    "discover_control_tower",
+    "discover_organization",
+    "OrgAccount",
+    "OrganizationTopology",
+    "OrgPolicy",
+    "OrgUnit",
+    "topology_assets",
+]

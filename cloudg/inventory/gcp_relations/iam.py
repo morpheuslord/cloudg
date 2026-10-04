@@ -420,39 +420,54 @@ def merge_gcp_principals(
         (assets, edges) with placeholders merged.
     """
     edges = list(edges or [])
+    real = _real_principals(assets)
+    remap: dict[str, str] = {}
+    out: list[CloudAsset] = []
+    for a in assets:
+        target = _placeholder_target(a, real)
+        if target is not None:
+            for r in a.metadata.get("relations") or []:
+                _append_relation(target, r)
+            if a.is_internet_exposed:
+                target.is_internet_exposed = True
+            remap[a.id] = target.id
+            continue
+        out.append(a)
+    return out, _repoint_edges(edges, remap) if remap else edges
+
+
+def _real_principals(assets: list[CloudAsset]) -> dict[str, CloudAsset]:
+    """Collected (non-placeholder) GCP identities by lower-cased alias."""
     real: dict[str, CloudAsset] = {}
     for a in assets:
         if a.provider != CloudProvider.GCP or a.metadata.get("placeholder"):
             continue
         for ident in a.metadata.get("aliases") or []:
-            if isinstance(ident, str) and (ident.startswith(("serviceAccount:", K8S_GKE_PREFIX))):
+            if isinstance(ident, str) and ident.startswith(("serviceAccount:", K8S_GKE_PREFIX)):
                 real.setdefault(ident.lower(), a)
-    remap: dict[str, str] = {}
-    out: list[CloudAsset] = []
-    for a in assets:
-        if a.provider == CloudProvider.GCP and a.metadata.get("placeholder"):
-            target = None
-            for ident in [a.arn, *(a.metadata.get("aliases") or [])]:
-                if isinstance(ident, str):
-                    target = real.get(ident.lower())
-                    if target is not None:
-                        break
-            if target is not None and target.id != a.id:
-                for r in a.metadata.get("relations") or []:
-                    _append_relation(target, r)
-                if a.is_internet_exposed:
-                    target.is_internet_exposed = True
-                remap[a.id] = target.id
-                continue
-        out.append(a)
-    if remap:
-        new_edges = []
-        for e in edges:
-            s, t = remap.get(e.source_id, e.source_id), remap.get(e.target_id, e.target_id)
-            if s == t:
-                continue
-            if s != e.source_id or t != e.target_id:
-                e = e.model_copy(update={"source_id": s, "target_id": t})
-            new_edges.append(e)
-        edges = new_edges
-    return out, edges
+    return real
+
+
+def _placeholder_target(a: CloudAsset, real: dict[str, CloudAsset]) -> CloudAsset | None:
+    """The real asset a GCP placeholder stands for, or None to keep it."""
+    if a.provider != CloudProvider.GCP or not a.metadata.get("placeholder"):
+        return None
+    for ident in [a.arn, *(a.metadata.get("aliases") or [])]:
+        if isinstance(ident, str):
+            target = real.get(ident.lower())
+            if target is not None:
+                return target if target.id != a.id else None
+    return None
+
+
+def _repoint_edges(edges: list[NetworkEdge], remap: dict[str, str]) -> list[NetworkEdge]:
+    """Re-point edges at merged placeholders; drop edges that became loops."""
+    new_edges = []
+    for e in edges:
+        s, t = remap.get(e.source_id, e.source_id), remap.get(e.target_id, e.target_id)
+        if s == t:
+            continue
+        if s != e.source_id or t != e.target_id:
+            e = e.model_copy(update={"source_id": s, "target_id": t})
+        new_edges.append(e)
+    return new_edges

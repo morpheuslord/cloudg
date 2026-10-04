@@ -11,7 +11,6 @@ collector uses. One failing service never discards the others.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import logging
 import threading
@@ -36,31 +35,28 @@ _ARM_ENDPOINT = "https://management.azure.com"
 # ---------------------------------------------------------------------------
 
 
-def _import_client(class_name: str, *modules: str) -> Any:
-    last: Exception | None = None
-    for module in modules:
-        try:
-            cls = getattr(importlib.import_module(module), class_name, None)
-        except ImportError as exc:
-            last = exc
-            continue
-        if cls is not None:
-            return cls
-    raise ImportError(f"{class_name} not available ({last})")
+def _resource_client_class() -> Any:
+    try:
+        from azure.mgmt.resource.resources import ResourceManagementClient
+    except ImportError:
+        from azure.mgmt.resource import ResourceManagementClient
+    return ResourceManagementClient
+
+
+def _subscription_client_class() -> Any:
+    try:
+        from azure.mgmt.resource.subscriptions import SubscriptionClient
+    except ImportError:
+        from azure.mgmt.resource import SubscriptionClient
+    return SubscriptionClient
 
 
 def resource_management_client(credential: Any, subscription_id: str) -> Any:
-    cls = _import_client(
-        "ResourceManagementClient", "azure.mgmt.resource.resources", "azure.mgmt.resource"
-    )
-    return cls(credential, subscription_id)
+    return _resource_client_class()(credential, subscription_id)
 
 
 def subscription_client(credential: Any) -> Any:
-    cls = _import_client(
-        "SubscriptionClient", "azure.mgmt.resource.subscriptions", "azure.mgmt.resource"
-    )
-    return cls(credential)
+    return _subscription_client_class()(credential)
 
 
 def _subscription_dict(sub: Any) -> dict[str, Any]:

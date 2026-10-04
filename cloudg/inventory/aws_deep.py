@@ -50,7 +50,7 @@ from cloudg.inventory.aws_services import (
 from cloudg.inventory.aws_services._base import rel
 
 # The task catalog lives in aws_deep_tasks; re-exported here
-from cloudg.inventory.aws_deep_tasks import (  # noqa: F401
+from cloudg.inventory.aws_deep_tasks import (
     _ARN_TYPE_MAP,
     DEEP_TASK_METHODS,
     GLOBAL_TASKS,
@@ -554,3 +554,17 @@ class AWSDeepInventoryCollector(
             logger.debug("Breadth sweeps: %d duplicates dropped, kept detailed assets", dropped)
         self._cached_assets = merged
         return merged
+
+
+# Public API, including names re-exported from the split-out modules
+__all__ = [
+    "asset_type_from_arn",
+    "AWSDeepInventoryCollector",
+    "DEEP_TASK_METHODS",
+    "DeepInventoryOptions",
+    "GLOBAL_TASKS",
+    "select_tasks",
+    "SERVICE_FAMILIES",
+    "_arn_resource_type",
+    "_ARN_TYPE_MAP",
+]

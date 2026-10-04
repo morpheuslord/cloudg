@@ -101,7 +101,9 @@ class ServerlessDataCollectorsMixin(DataMLHelpersMixin):
         detail_key = "securityPolicyDetail" if family == "security" else "accessPolicyDetail"
         out: list[dict] = []
         try:
-            async for p in self._pages(lister, summary_key, token_in="nextToken", type=policy_type):
+            async for p in self._pages(
+                lister, summary_key, cursor_param="nextToken", type=policy_type
+            ):
                 try:
                     detail = (await getter(type=policy_type, name=p["name"])).get(detail_key) or {}
                     out.append({"name": p["name"], "policy": _document(detail.get("policy"))})
@@ -118,7 +120,7 @@ class ServerlessDataCollectorsMixin(DataMLHelpersMixin):
         summaries = [
             c
             async for c in self._pages(
-                aoss.list_collections, "collectionSummaries", token_in="nextToken"
+                aoss.list_collections, "collectionSummaries", cursor_param="nextToken"
             )
         ]
         details: dict[str, dict] = {c["id"]: c for c in summaries if c.get("id")}

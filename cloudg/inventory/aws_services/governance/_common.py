@@ -184,13 +184,13 @@ class GovernanceHelpersMixin(AWSServiceMixin):
         self,
         call: Callable[[], Awaitable[dict[str, Any]]],
         key: str,
-        failure: tuple[str, Any],
+        failure: str,
         quiet_code: str | None = None,
         skip_empty: bool = True,
     ) -> tuple[list[dict], dict[str, Any]]:
         """Fetch a resource policy (``call()[key]``) and summarise it with
-        :meth:`_resource_policy_access`. Failures are logged with the
-        ``(format, subject)`` pair unless their error code is ``quiet_code``;
+        :meth:`_resource_policy_access`. Failures are logged under the
+        ``failure`` label (no secret material) unless their error code is ``quiet_code``;
         an absent policy is skipped unless ``skip_empty`` is False."""
         try:
             policy = (await call()).get(key)
@@ -198,5 +198,5 @@ class GovernanceHelpersMixin(AWSServiceMixin):
                 return self._resource_policy_access(policy)
         except Exception as exc:
             if error_code(exc) != quiet_code:
-                logger.debug(failure[0], failure[1], exc)
+                logger.debug("%s failed: %s", failure, exc)
         return [], {}

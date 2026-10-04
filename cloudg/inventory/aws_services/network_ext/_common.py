@@ -25,7 +25,9 @@ _MAX_RULES_PER_LISTENER = 100
 _MAX_LIST_METADATA = 100
 
 _LAMBDA_URI_RE = re.compile(r"functions/(arn:aws[^/]+)/invocations")
-_S3_ORIGIN_RE = re.compile(r"^([a-z0-9][a-z0-9.\-]*?)\.s3(?:[.-][a-z0-9-]+)*\.amazonaws\.com$")
+# Bucket names in S3 origin hosts; matched on a pre-split label, so there is
+# no nested quantifier for crafted hosts to backtrack on.
+_S3_ORIGIN_RE = re.compile(r"[a-z0-9][a-z0-9.-]*")
 _EXECUTE_API_RE = re.compile(r"^([a-z0-9]{10})\.execute-api\.[a-z0-9-]+\.amazonaws\.com$")
 _COGNITO_ISSUER_RE = re.compile(
     r"^https://cognito-idp\.[a-z0-9-]+\.amazonaws\.com/([\w-]+_[0-9A-Za-z]+)"
@@ -70,8 +72,41 @@ def _policy_is_public(policy: Any) -> bool:
 
 
 def _bucket_from_domain(domain: str) -> str | None:
-    m = _S3_ORIGIN_RE.match(_dns(domain))
-    return m.group(1) if m else None
+    """Bucket of an S3 origin host (``<bucket>.s3[.-]<labels>.amazonaws.com``).
+
+    Equivalent to the lazy pattern
+    ``^([a-z0-9][a-z0-9.-]*?)\\.s3(?:[.-][a-z0-9-]+)*\\.amazonaws\\.com$`` but
+    parsed with plain string checks: that regex nests quantifiers and
+    backtracks exponentially on crafted hosts (CodeQL py/redos).
+    """
+    host = _dns(domain)
+    suffix = ".amazonaws.com"
+    if not host.endswith(suffix):
+        return None
+    body = host[: -len(suffix)]
+    cut = body.find(".s3")
+    while cut > 0:
+        bucket, middle = body[:cut], body[cut + 3 :]
+        if _S3_ORIGIN_RE.fullmatch(bucket) and _s3_endpoint_labels_ok(middle):
+            return bucket
+        cut = body.find(".s3", cut + 1)
+    return None
+
+
+def _s3_endpoint_labels_ok(middle: str) -> bool:
+    """``(?:[.-][a-z0-9-]+)*`` without backtracking: empty, or separator-led
+    labels of ``[a-z0-9-]`` where every ``.`` is followed by a label char."""
+    if not middle:
+        return True
+    if middle[0] not in ".-" or len(middle) < 2:
+        return False
+    for i, ch in enumerate(middle):
+        if ch == ".":
+            if i + 1 >= len(middle) or middle[i + 1] == ".":
+                return False
+        elif not (ch.isascii() and (ch.isalnum() or ch == "-")):
+            return False
+    return not (middle[0] == "-" and middle[1] == ".")
 
 
 def _ec2_arn(region: str | None, owner: str | None, resource: str, rid: str | None) -> str | None:

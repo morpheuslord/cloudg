@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 from typing import TYPE_CHECKING, Any
 
 from cloudg.inventory.aws_services._base import rel
@@ -27,6 +29,15 @@ from cloudg.inventory.azure_graph.registry import (
     extractor,
 )
 from cloudg.schema.models import EdgeType
+
+
+def _is_unspecified(address: Any) -> bool:
+    """True for 0.0.0.0, which Azure SQL uses for "allow Azure services"."""
+    try:
+        return ipaddress.ip_address(str(address)).is_unspecified
+    except ValueError:
+        return False
+
 
 if TYPE_CHECKING:
     from cloudg.inventory.azure_graph.builder import AzureAssetBuilder
@@ -107,7 +118,7 @@ def _sql_firewall_rules(d: _Draft, fw: list[Any]) -> list[dict[str, Any]]:
     for rule in fw:
         rp = _props(rule)
         start, end = _get(rp, "startIpAddress"), _get(rp, "endIpAddress")
-        if start == "0.0.0.0" and end == "0.0.0.0":
+        if _is_unspecified(start) and _is_unspecified(end):
             d.md["allow_azure_services"] = True
         elif start:
             internet_rules.append({"name": _get(rule, "name"), "start": start, "end": end})

@@ -106,7 +106,7 @@ class ContainersExtCollectorsMixin(ApplicationBase):
                 async for p in self._pages(
                     ecs.describe_capacity_providers,
                     "capacityProviders",
-                    token_in="nextToken",
+                    cursor_param="nextToken",
                     include=["TAGS"],
                 )
             ]
