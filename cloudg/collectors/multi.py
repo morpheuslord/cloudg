@@ -137,7 +137,9 @@ class MultiAccountCollector:
         # account) is collected with the base credentials: member-account
         # roles such as AWSControlTowerExecution do not exist there.
         if cfg.accounts and cfg.role_name and not cfg.role_arn:
-            self._caller_account = await asyncio.to_thread(self._lookup_caller_account, cfg, primary)
+            self._caller_account = await asyncio.to_thread(
+                self._lookup_caller_account, cfg, primary
+            )
 
         tasks = []
         for account_id in accounts:
@@ -263,7 +265,9 @@ class MultiAccountCollector:
                 sub_ids = [s["subscription_id"] for s in subs]
                 logger.info("Azure: discovered %d enabled subscriptions", len(sub_ids))
             except Exception as exc:
-                logger.warning("Azure subscription enumeration failed (%s); using the first one", exc)
+                logger.warning(
+                    "Azure subscription enumeration failed (%s); using the first one", exc
+                )
         if not sub_ids:
             sub_ids = [None]
 
@@ -308,7 +312,9 @@ class MultiAccountCollector:
                     # certificate), managed identity, and the default chain.
                     credential = build_azure_credential(self._config.azure)
                 if not subscription_id:
-                    subscription_id = await asyncio.to_thread(first_subscription_id, credential) or ""
+                    subscription_id = (
+                        await asyncio.to_thread(first_subscription_id, credential) or ""
+                    )
                     coverage.account_id = subscription_id or None
 
                 collector_cls = self._collector_overrides.get("azure", AzureCollector)
@@ -355,7 +361,9 @@ class MultiAccountCollector:
         org_id = str(cfg.organization_id or "").removeprefix("organizations/") or None
         scope_mode = getattr(cfg, "collection_scope", "auto")
         if scope_mode == "organization" and not org_id:
-            logger.warning("GCP: collection_scope=organization needs gcp.organization_id; collecting per project")
+            logger.warning(
+                "GCP: collection_scope=organization needs gcp.organization_id; collecting per project"
+            )
         org_scope = bool(org_id) and scope_mode != "project"
         project_ids = cfg.project_ids
         if not project_ids:
@@ -379,7 +387,9 @@ class MultiAccountCollector:
         # Cloud Asset Inventory returns resources across ALL regions, so no
         # per-region iteration is needed.
         if org_scope:
-            logger.info("GCP: scanning organizations/%s in one Cloud Asset Inventory listing", org_id)
+            logger.info(
+                "GCP: scanning organizations/%s in one Cloud Asset Inventory listing", org_id
+            )
             tasks = [
                 self._collect_gcp_single(
                     project_ids[0], organization_id=org_id, project_filter=cfg.project_ids or None
@@ -433,7 +443,9 @@ class MultiAccountCollector:
                         "timeout": getattr(cfg, "api_timeout_seconds", 600.0),
                     }
                 elif organization_id:
-                    raise RuntimeError(f"{collector_cls.__name__} does not support organization scope")
+                    raise RuntimeError(
+                        f"{collector_cls.__name__} does not support organization scope"
+                    )
                 collector = collector_cls(project_id=pid, credentials=credentials, **kwargs)
 
                 start = time.time()
@@ -442,7 +454,9 @@ class MultiAccountCollector:
                 duration_ms = int((time.time() - start) * 1000)
 
                 degraded = [
-                    s for s in coverage.services if s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL)
+                    s
+                    for s in coverage.services
+                    if s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL)
                 ]
                 coverage.record(
                     "gcp_full",

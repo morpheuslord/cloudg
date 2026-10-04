@@ -124,10 +124,13 @@ class InventoryResult:
                 if not (s.asset_type in _HIERARCHY_TYPES and t.asset_type in _HIERARCHY_TYPES):
                     cross_account += 1
         orphans = [
-            a for a in self.assets if a.id not in linked_ids and a.asset_type not in _HIERARCHY_TYPES
+            a
+            for a in self.assets
+            if a.id not in linked_ids and a.asset_type not in _HIERARCHY_TYPES
         ]
         security_gaps = sum(
-            1 for a in self.assets
+            1
+            for a in self.assets
             if a.metadata.get("security_service") and a.metadata.get("enabled") is False
         )
 
@@ -146,7 +149,8 @@ class InventoryResult:
             "accounts": len([k for k in by_account if k != "unknown"]),
             "cross_account_edges": cross_account,
             "external_accounts": sum(
-                1 for a in self.assets
+                1
+                for a in self.assets
                 if a.asset_type == AssetType.CLOUD_ACCOUNT and a.metadata.get("external")
             ),
             "security_service_gaps": security_gaps,
@@ -515,7 +519,11 @@ class InventoryMapper:
             accounts = [a for a in accounts if a in wanted]
         cfg.aws.accounts = accounts
         cfg.aws.role_name = org_cfg.role_name or cfg.aws.role_name or DEFAULT_MEMBER_ROLE
-        if org_cfg.use_governed_regions and topology.governed_regions and is_all_regions(cfg.aws.regions):
+        if (
+            org_cfg.use_governed_regions
+            and topology.governed_regions
+            and is_all_regions(cfg.aws.regions)
+        ):
             cfg.aws.regions = list(topology.governed_regions)
             logger.info("Using %d Control Tower governed regions", len(cfg.aws.regions))
         logger.info(
@@ -559,7 +567,9 @@ class InventoryMapper:
 
         gcp = cfg.gcp
         if "gcp" in cfg.providers and gcp.organization_id and getattr(gcp, "map_hierarchy", False):
-            cov = CollectionCoverage(provider="gcp", region="global", account_id=gcp.organization_id)
+            cov = CollectionCoverage(
+                provider="gcp", region="global", account_id=gcp.organization_id
+            )
             coverage.append(cov)
             t0 = time.time()
             try:
@@ -614,9 +624,13 @@ class InventoryMapper:
                     duration_ms=int((time.time() - t0) * 1000),
                 )
                 if topology.errors:
-                    cov.record("controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors))
+                    cov.record(
+                        "controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors)
+                    )
             except Exception as exc:
-                logger.error("Organization discovery failed; mapping the caller account only: %s", exc)
+                logger.error(
+                    "Organization discovery failed; mapping the caller account only: %s", exc
+                )
                 cov.record("organizations", ServiceStatus.FAILED, error=str(exc))
         self.organization = topology
 

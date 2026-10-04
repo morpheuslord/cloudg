@@ -39,7 +39,6 @@ _resource_policy_relations = resource_policy_relations  # backward-compatible al
 
 
 class ServerlessCollectorsMixin(AWSServiceMixin):
-
     # ------------------------------------------------------------------
     # Lambda (overrides the shallow base collector)
     # ------------------------------------------------------------------
@@ -51,7 +50,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
 
             mappings: dict[str, list[dict]] = {}
             try:
-                async for esm in self._paginate(lam, "list_event_source_mappings", "EventSourceMappings"):
+                async for esm in self._paginate(
+                    lam, "list_event_source_mappings", "EventSourceMappings"
+                ):
                     fn = (esm.get("FunctionArn") or "").split(":function:", 1)
                     key = fn[1].split(":", 1)[0] if len(fn) == 2 else ""
                     mappings.setdefault(key, []).append(esm)
@@ -62,19 +63,49 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                 name = fn.get("FunctionName", "")
                 arn = fn.get("FunctionArn", "")
                 relations: list[dict | None] = [
-                    rel(fn.get("Role"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="execution role"),
+                    rel(
+                        fn.get("Role"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="execution role",
+                    ),
                     rel(fn.get("KMSKeyArn"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                    rel((fn.get("DeadLetterConfig") or {}).get("TargetArn"), EdgeType.REFERENCES, "WRITES_TO", description="dead-letter target"),
+                    rel(
+                        (fn.get("DeadLetterConfig") or {}).get("TargetArn"),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="dead-letter target",
+                    ),
                 ]
                 for layer in fn.get("Layers", []) or []:
-                    relations.append(rel(layer.get("Arn"), EdgeType.REFERENCES, "DEPENDS_ON", description="layer"))
+                    relations.append(
+                        rel(
+                            layer.get("Arn"), EdgeType.REFERENCES, "DEPENDS_ON", description="layer"
+                        )
+                    )
                 for fs in fn.get("FileSystemConfigs", []) or []:
-                    relations.append(rel(fs.get("Arn"), EdgeType.REFERENCES, "READS_FROM", description="EFS mount"))
+                    relations.append(
+                        rel(
+                            fs.get("Arn"),
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            description="EFS mount",
+                        )
+                    )
                 env = (fn.get("Environment") or {}).get("Variables") or {}
                 for ref in identifier_refs(env):
-                    relations.append(rel(ref, EdgeType.REFERENCES, "DEPENDS_ON", description="environment reference"))
+                    relations.append(
+                        rel(
+                            ref,
+                            EdgeType.REFERENCES,
+                            "DEPENDS_ON",
+                            description="environment reference",
+                        )
+                    )
                 log_group = (fn.get("LoggingConfig") or {}).get("LogGroup") or f"/aws/lambda/{name}"
-                relations.append(rel(self._arn("logs", f"log-group:{log_group}"), EdgeType.LOGS_TO, "LOGS_TO"))
+                relations.append(
+                    rel(self._arn("logs", f"log-group:{log_group}"), EdgeType.LOGS_TO, "LOGS_TO")
+                )
 
                 image_uri = None
                 if fn.get("PackageType") == "Image":
@@ -82,18 +113,41 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                         full = await lam.get_function(FunctionName=name)
                         image_uri = (full.get("Code") or {}).get("ImageUri")
                         if image_uri:
-                            relations.append(rel(image_repository(image_uri), EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {image_uri}"))
+                            relations.append(
+                                rel(
+                                    image_repository(image_uri),
+                                    EdgeType.USES_IMAGE,
+                                    "RUNS_ON",
+                                    description=f"runs {image_uri}",
+                                )
+                            )
                     except Exception as exc:
                         logger.debug("get_function failed for %s: %s", name, exc)
 
                 for esm in mappings.get(name, []):
                     src = esm.get("EventSourceArn")
                     relations.append(
-                        rel(src, EdgeType.INVOKES, "TRIGGERED_BY", reverse=True, description="event source mapping",
-                            state=esm.get("State"), batch_size=esm.get("BatchSize"))
+                        rel(
+                            src,
+                            EdgeType.INVOKES,
+                            "TRIGGERED_BY",
+                            reverse=True,
+                            description="event source mapping",
+                            state=esm.get("State"),
+                            batch_size=esm.get("BatchSize"),
+                        )
                     )
-                    on_failure = ((esm.get("DestinationConfig") or {}).get("OnFailure") or {}).get("Destination")
-                    relations.append(rel(on_failure, EdgeType.REFERENCES, "WRITES_TO", description="ESM failure destination"))
+                    on_failure = ((esm.get("DestinationConfig") or {}).get("OnFailure") or {}).get(
+                        "Destination"
+                    )
+                    relations.append(
+                        rel(
+                            on_failure,
+                            EdgeType.REFERENCES,
+                            "WRITES_TO",
+                            description="ESM failure destination",
+                        )
+                    )
 
                 url_auth = None
                 try:
@@ -106,7 +160,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                 public_policy = False
                 try:
                     pol = await lam.get_policy(FunctionName=name)
-                    pol_rels, public_policy = _resource_policy_relations(pol.get("Policy"), self._account_id)
+                    pol_rels, public_policy = _resource_policy_relations(
+                        pol.get("Policy"), self._account_id
+                    )
                     relations.extend(pol_rels)
                 except Exception as exc:
                     if error_code(exc) != "ResourceNotFoundException":
@@ -158,7 +214,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                 relations: list[dict | None] = []
                 integrations: list[dict] = []
                 try:
-                    async for res in self._paginate(apigw, "get_resources", "items", restApiId=api_id, embed=["methods"]):
+                    async for res in self._paginate(
+                        apigw, "get_resources", "items", restApiId=api_id, embed=["methods"]
+                    ):
                         for method, spec in (res.get("resourceMethods") or {}).items():
                             integ = (spec or {}).get("methodIntegration") or {}
                             uri = integ.get("uri") or ""
@@ -166,12 +224,31 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                             target = m.group(1) if m else None
                             if target:
                                 relations.append(
-                                    rel(target, EdgeType.INVOKES, "INVOKES", description=f"{method} {res.get('path')}")
+                                    rel(
+                                        target,
+                                        EdgeType.INVOKES,
+                                        "INVOKES",
+                                        description=f"{method} {res.get('path')}",
+                                    )
                                 )
                             if integ.get("connectionId"):
-                                relations.append(rel(integ["connectionId"], EdgeType.ROUTE, "SERVES_TRAFFIC_TO", description="VPC link"))
-                            integrations.append({"path": res.get("path"), "method": method, "type": integ.get("type"),
-                                                 "auth": (spec or {}).get("authorizationType"), "target": target or (uri if uri.startswith("http") else None)})
+                                relations.append(
+                                    rel(
+                                        integ["connectionId"],
+                                        EdgeType.ROUTE,
+                                        "SERVES_TRAFFIC_TO",
+                                        description="VPC link",
+                                    )
+                                )
+                            integrations.append(
+                                {
+                                    "path": res.get("path"),
+                                    "method": method,
+                                    "type": integ.get("type"),
+                                    "auth": (spec or {}).get("authorizationType"),
+                                    "target": target or (uri if uri.startswith("http") else None),
+                                }
+                            )
                 except Exception as exc:
                     logger.debug("API Gateway resource listing failed for %s: %s", api_id, exc)
                 stages: list[str] = []
@@ -179,7 +256,14 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                     resp = await apigw.get_stages(restApiId=api_id)
                     for stage in resp.get("item", []):
                         stages.append(stage.get("stageName"))
-                        relations.append(rel(stage.get("webAclArn"), EdgeType.PROTECTS, "PROTECTED_BY_WAF", reverse=True))
+                        relations.append(
+                            rel(
+                                stage.get("webAclArn"),
+                                EdgeType.PROTECTS,
+                                "PROTECTED_BY_WAF",
+                                reverse=True,
+                            )
+                        )
                         dest = (stage.get("accessLogSettings") or {}).get("destinationArn")
                         relations.append(rel(dest, EdgeType.LOGS_TO, "LOGS_TO"))
                 except Exception as exc:
@@ -198,7 +282,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                             "endpoint_types": endpoint_types,
                             "stages": stages,
                             "integrations": integrations[:200],
-                            "unauthenticated_methods": sum(1 for i in integrations if i.get("auth") == "NONE"),
+                            "unauthenticated_methods": sum(
+                                1 for i in integrations if i.get("auth") == "NONE"
+                            ),
                         },
                         relations=relations + pol_rels,
                         exposed="PRIVATE" not in endpoint_types,
@@ -215,15 +301,33 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                 api_id = api["ApiId"]
                 relations: list[dict | None] = []
                 try:
-                    async for integ in self._paginate(apigw, "get_integrations", "Items", ApiId=api_id):
+                    async for integ in self._paginate(
+                        apigw, "get_integrations", "Items", ApiId=api_id
+                    ):
                         uri = integ.get("IntegrationUri") or ""
                         m = _APIGW_LAMBDA_RE.search(uri)
                         target = m.group(1) if m else uri
                         if target.startswith("arn:"):
-                            relations.append(rel(target, EdgeType.INVOKES, "INVOKES", description=integ.get("IntegrationType")))
+                            relations.append(
+                                rel(
+                                    target,
+                                    EdgeType.INVOKES,
+                                    "INVOKES",
+                                    description=integ.get("IntegrationType"),
+                                )
+                            )
                         if integ.get("ConnectionId"):
-                            relations.append(rel(integ["ConnectionId"], EdgeType.ROUTE, "SERVES_TRAFFIC_TO", description="VPC link"))
-                        relations.append(rel(integ.get("CredentialsArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"))
+                            relations.append(
+                                rel(
+                                    integ["ConnectionId"],
+                                    EdgeType.ROUTE,
+                                    "SERVES_TRAFFIC_TO",
+                                    description="VPC link",
+                                )
+                            )
+                        relations.append(
+                            rel(integ.get("CredentialsArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")
+                        )
                 except Exception as exc:
                     logger.debug("HTTP API integration listing failed for %s: %s", api_id, exc)
                 assets.append(
@@ -236,7 +340,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                             "api_type": api.get("ProtocolType"),
                             "api_id": api_id,
                             "endpoint": api.get("ApiEndpoint"),
-                            "default_endpoint_disabled": api.get("DisableExecuteApiEndpoint", False),
+                            "default_endpoint_disabled": api.get(
+                                "DisableExecuteApiEndpoint", False
+                            ),
                         },
                         relations=relations,
                         exposed=not api.get("DisableExecuteApiEndpoint", False),
@@ -261,11 +367,22 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
             ]
 
             async def detail(url: str) -> CloudAsset:
-                attrs = (await sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])).get("Attributes", {})
+                attrs = (await sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])).get(
+                    "Attributes", {}
+                )
                 arn = attrs.get("QueueArn", url)
-                relations: list[dict | None] = [rel(attrs.get("KmsMasterKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")]
+                relations: list[dict | None] = [
+                    rel(attrs.get("KmsMasterKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                ]
                 redrive = json.loads(attrs["RedrivePolicy"]) if attrs.get("RedrivePolicy") else {}
-                relations.append(rel(redrive.get("deadLetterTargetArn"), EdgeType.REFERENCES, "WRITES_TO", description="dead-letter queue"))
+                relations.append(
+                    rel(
+                        redrive.get("deadLetterTargetArn"),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="dead-letter queue",
+                    )
+                )
                 pol_rels, public = _resource_policy_relations(attrs.get("Policy"), self._account_id)
                 relations.extend(pol_rels)
                 return self._asset(
@@ -303,13 +420,22 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
 
             async def detail(arn: str) -> CloudAsset:
                 attrs = (await sns.get_topic_attributes(TopicArn=arn)).get("Attributes", {})
-                relations: list[dict | None] = [rel(attrs.get("KmsMasterKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")]
+                relations: list[dict | None] = [
+                    rel(attrs.get("KmsMasterKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                ]
                 protocols: dict[str, int] = {}
                 for s in subs.get(arn, []):
                     proto = s.get("Protocol", "")
                     protocols[proto] = protocols.get(proto, 0) + 1
                     if proto in ("sqs", "lambda", "firehose", "application"):
-                        relations.append(rel(s.get("Endpoint"), EdgeType.INVOKES, "STREAMS_TO", description=f"{proto} subscription"))
+                        relations.append(
+                            rel(
+                                s.get("Endpoint"),
+                                EdgeType.INVOKES,
+                                "STREAMS_TO",
+                                description=f"{proto} subscription",
+                            )
+                        )
                 pol_rels, public = _resource_policy_relations(attrs.get("Policy"), self._account_id)
                 relations.extend(pol_rels)
                 return self._asset(
@@ -347,19 +473,43 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                         exposed=public,
                     )
                 )
-                async for rule in self._paginate(events, "list_rules", "Rules", EventBusName=bus_name):
+                async for rule in self._paginate(
+                    events, "list_rules", "Rules", EventBusName=bus_name
+                ):
                     relations: list[dict | None] = [
                         rel(bus["Arn"], EdgeType.CONTAINS, reverse=True),
                         rel(rule.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                     ]
                     targets: list[str] = []
                     try:
-                        async for t in self._paginate(events, "list_targets_by_rule", "Targets", Rule=rule["Name"], EventBusName=bus_name):
+                        async for t in self._paginate(
+                            events,
+                            "list_targets_by_rule",
+                            "Targets",
+                            Rule=rule["Name"],
+                            EventBusName=bus_name,
+                        ):
                             targets.append(t.get("Arn", ""))
-                            relations.append(rel(t.get("Arn"), EdgeType.INVOKES, "INVOKES", description=f"target {t.get('Id')}"))
-                            relations.append(rel(t.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="target role"))
+                            relations.append(
+                                rel(
+                                    t.get("Arn"),
+                                    EdgeType.INVOKES,
+                                    "INVOKES",
+                                    description=f"target {t.get('Id')}",
+                                )
+                            )
+                            relations.append(
+                                rel(
+                                    t.get("RoleArn"),
+                                    EdgeType.ASSUMES_ROLE,
+                                    "RUNS_ON",
+                                    description="target role",
+                                )
+                            )
                             dlq = (t.get("DeadLetterConfig") or {}).get("Arn")
-                            relations.append(rel(dlq, EdgeType.REFERENCES, "WRITES_TO", description="target DLQ"))
+                            relations.append(
+                                rel(dlq, EdgeType.REFERENCES, "WRITES_TO", description="target DLQ")
+                            )
                     except Exception as exc:
                         logger.debug("Target listing failed for %s: %s", rule.get("Name"), exc)
                     assets.append(
@@ -383,7 +533,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
     async def _collect_stepfunctions(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("stepfunctions") as sfn:
-            machines = [m async for m in self._paginate(sfn, "list_state_machines", "stateMachines")]
+            machines = [
+                m async for m in self._paginate(sfn, "list_state_machines", "stateMachines")
+            ]
 
             async def detail(sm: dict) -> CloudAsset:
                 desc = await sfn.describe_state_machine(stateMachineArn=sm["stateMachineArn"])
@@ -396,11 +548,22 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
                 relations: list[dict | None] = [
                     rel(desc.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                 ]
-                relations += [rel(a, EdgeType.INVOKES, "INVOKES", description="called by definition") for a in called]
+                relations += [
+                    rel(a, EdgeType.INVOKES, "INVOKES", description="called by definition")
+                    for a in called
+                ]
                 for dest in (desc.get("loggingConfiguration") or {}).get("destinations", []) or []:
-                    group = ((dest.get("cloudWatchLogsLogGroup") or {}).get("logGroupArn") or "").removesuffix(":*")
+                    group = (
+                        (dest.get("cloudWatchLogsLogGroup") or {}).get("logGroupArn") or ""
+                    ).removesuffix(":*")
                     relations.append(rel(group, EdgeType.LOGS_TO, "LOGS_TO"))
-                integrations = sorted({a.split(":::", 1)[1].split(".", 1)[0] for a in arns_in(parsed) if a.startswith("arn:aws:states:::")})
+                integrations = sorted(
+                    {
+                        a.split(":::", 1)[1].split(".", 1)[0]
+                        for a in arns_in(parsed)
+                        if a.startswith("arn:aws:states:::")
+                    }
+                )
                 return self._asset(
                     arn=sm["stateMachineArn"],
                     name=sm.get("name", ""),
@@ -425,7 +588,9 @@ class ServerlessCollectorsMixin(AWSServiceMixin):
             names = [n async for n in self._paginate(kinesis, "list_streams", "StreamNames")]
 
             async def detail(name: str) -> CloudAsset:
-                s = (await kinesis.describe_stream_summary(StreamName=name))["StreamDescriptionSummary"]
+                s = (await kinesis.describe_stream_summary(StreamName=name))[
+                    "StreamDescriptionSummary"
+                ]
                 return self._asset(
                     arn=s["StreamARN"],
                     name=name,

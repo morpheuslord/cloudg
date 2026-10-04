@@ -211,7 +211,13 @@ class OrganizationTopology:
                 metadata=md,
             )
 
-        def r(target: str, edge: EdgeType, relationship: str | None = None, reverse: bool = False, **props: Any) -> dict[str, Any]:
+        def r(
+            target: str,
+            edge: EdgeType,
+            relationship: str | None = None,
+            reverse: bool = False,
+            **props: Any,
+        ) -> dict[str, Any]:
             out: dict[str, Any] = {"target": target, "edge": edge.value}
             if relationship:
                 out["relationship"] = relationship
@@ -240,13 +246,25 @@ class OrganizationTopology:
         ]
         for root in self.roots:
             assets.append(
-                asset(root.arn, "Root", AssetType.ORG_UNIT, {"ou_id": root.id, "is_root": True, "path": ["Root"]},
-                      [r(org_arn, EdgeType.CONTAINS, reverse=True)], aliases=[root.id])
+                asset(
+                    root.arn,
+                    "Root",
+                    AssetType.ORG_UNIT,
+                    {"ou_id": root.id, "is_root": True, "path": ["Root"]},
+                    [r(org_arn, EdgeType.CONTAINS, reverse=True)],
+                    aliases=[root.id],
+                )
             )
         for ou in self.ous.values():
             assets.append(
-                asset(ou.arn, ou.name, AssetType.ORG_UNIT, {"ou_id": ou.id, "is_root": False, "path": ou.path},
-                      [r(ou.parent_id or "", EdgeType.CONTAINS, reverse=True)], aliases=[ou.id])
+                asset(
+                    ou.arn,
+                    ou.name,
+                    AssetType.ORG_UNIT,
+                    {"ou_id": ou.id, "is_root": False, "path": ou.path},
+                    [r(ou.parent_id or "", EdgeType.CONTAINS, reverse=True)],
+                    aliases=[ou.id],
+                )
             )
         shared_roles = {acct: role for role, acct in self.shared_accounts.items()}
         for acct in self.accounts.values():
@@ -265,7 +283,9 @@ class OrganizationTopology:
                         "management_account": acct.id == mgmt,
                         "control_tower_role": shared_roles.get(acct.id),
                         "delegated_admin_for": sorted(
-                            svc for svc, ids in self.delegated_administrators.items() if acct.id in ids
+                            svc
+                            for svc, ids in self.delegated_administrators.items()
+                            if acct.id in ids
                         ),
                     },
                     [r(acct.parent_id, EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT", reverse=True)],
@@ -279,10 +299,22 @@ class OrganizationTopology:
                     pol.arn,
                     pol.name,
                     AssetType.ORG_POLICY,
-                    {"policy_id": pol.id, "policy_type": pol.type, "aws_managed": pol.aws_managed,
-                     "target_count": len(pol.targets)},
-                    [r(t, EdgeType.GOVERNS, "SCP_RESTRICTS" if pol.type == "SERVICE_CONTROL_POLICY" else "COMPLIANCE_GOVERNS")
-                     for t in pol.targets],
+                    {
+                        "policy_id": pol.id,
+                        "policy_type": pol.type,
+                        "aws_managed": pol.aws_managed,
+                        "target_count": len(pol.targets),
+                    },
+                    [
+                        r(
+                            t,
+                            EdgeType.GOVERNS,
+                            "SCP_RESTRICTS"
+                            if pol.type == "SERVICE_CONTROL_POLICY"
+                            else "COMPLIANCE_GOVERNS",
+                        )
+                        for t in pol.targets
+                    ],
                     aliases=[pol.id],
                 )
             )
@@ -428,7 +460,9 @@ def discover_control_tower(
             controls: list[dict[str, Any]] = []
             for unit in list(topology.ous.values()):
                 try:
-                    controls += _paginate(ct, "list_enabled_controls", "enabledControls", targetIdentifier=unit.arn)
+                    controls += _paginate(
+                        ct, "list_enabled_controls", "enabledControls", targetIdentifier=unit.arn
+                    )
                 except Exception as exc:
                     logger.debug("Enabled controls for %s unavailable: %s", unit.id, exc)
             topology.enabled_controls = controls
@@ -494,40 +528,81 @@ def discover_organization(
                 joined_method=acct.get("JoinedMethod"),
                 joined=str(acct.get("JoinedTimestamp", "")) or None,
             )
-        for ou in _paginate(org, "list_organizational_units_for_parent", "OrganizationalUnits", ParentId=parent_id):
-            unit = OrgUnit(id=ou["Id"], name=ou.get("Name", ou["Id"]), arn=ou.get("Arn", ""),
-                           parent_id=parent_id, path=path + [ou.get("Name", ou["Id"])])
+        for ou in _paginate(
+            org, "list_organizational_units_for_parent", "OrganizationalUnits", ParentId=parent_id
+        ):
+            unit = OrgUnit(
+                id=ou["Id"],
+                name=ou.get("Name", ou["Id"]),
+                arn=ou.get("Arn", ""),
+                parent_id=parent_id,
+                path=path + [ou.get("Name", ou["Id"])],
+            )
             topology.ous[unit.id] = unit
             walk(unit.id, unit.path)
 
     for root in roots:
-        unit = OrgUnit(id=root["Id"], name=root.get("Name", "Root"), arn=root.get("Arn", ""),
-                       parent_id=None, path=["Root"], is_root=True)
+        unit = OrgUnit(
+            id=root["Id"],
+            name=root.get("Name", "Root"),
+            arn=root.get("Arn", ""),
+            parent_id=None,
+            path=["Root"],
+            is_root=True,
+        )
         topology.roots.append(unit)
         walk(unit.id, ["Root"])
-        enabled = {p.get("Type") for p in root.get("PolicyTypes", []) if p.get("Status") == "ENABLED"}
+        enabled = {
+            p.get("Type") for p in root.get("PolicyTypes", []) if p.get("Status") == "ENABLED"
+        }
         policy_types = [t for t in _POLICY_TYPES if t in enabled or not root.get("PolicyTypes")]
         for ptype in policy_types:
             try:
                 for pol in _paginate(org, "list_policies", "Policies", Filter=ptype):
-                    targets = [t["TargetId"] for t in _paginate(org, "list_targets_for_policy", "Targets", PolicyId=pol["Id"])]
+                    targets = [
+                        t["TargetId"]
+                        for t in _paginate(
+                            org, "list_targets_for_policy", "Targets", PolicyId=pol["Id"]
+                        )
+                    ]
                     topology.policies.append(
-                        OrgPolicy(id=pol["Id"], name=pol.get("Name", pol["Id"]), arn=pol.get("Arn", ""),
-                                  type=ptype, aws_managed=pol.get("AwsManaged", False), targets=targets)
+                        OrgPolicy(
+                            id=pol["Id"],
+                            name=pol.get("Name", pol["Id"]),
+                            arn=pol.get("Arn", ""),
+                            type=ptype,
+                            aws_managed=pol.get("AwsManaged", False),
+                            targets=targets,
+                        )
                     )
             except Exception as exc:
                 logger.debug("Policy type %s unavailable: %s", ptype, exc)
 
     try:
-        for svc in _paginate(org, "list_aws_service_access_for_organization", "EnabledServicePrincipals"):
+        for svc in _paginate(
+            org, "list_aws_service_access_for_organization", "EnabledServicePrincipals"
+        ):
             topology.enabled_services.append(svc.get("ServicePrincipal", ""))
     except Exception as exc:
         logger.debug("Trusted service access listing failed: %s", exc)
-    for svc in ("guardduty.amazonaws.com", "securityhub.amazonaws.com", "inspector2.amazonaws.com",
-                "config.amazonaws.com", "access-analyzer.amazonaws.com", "macie.amazonaws.com",
-                "detective.amazonaws.com", "fms.amazonaws.com", "sso.amazonaws.com"):
+    for svc in (
+        "guardduty.amazonaws.com",
+        "securityhub.amazonaws.com",
+        "inspector2.amazonaws.com",
+        "config.amazonaws.com",
+        "access-analyzer.amazonaws.com",
+        "macie.amazonaws.com",
+        "detective.amazonaws.com",
+        "fms.amazonaws.com",
+        "sso.amazonaws.com",
+    ):
         try:
-            admins = _paginate(org, "list_delegated_administrators", "DelegatedAdministrators", ServicePrincipal=svc)
+            admins = _paginate(
+                org,
+                "list_delegated_administrators",
+                "DelegatedAdministrators",
+                ServicePrincipal=svc,
+            )
             if admins:
                 topology.delegated_administrators[svc.split(".", 1)[0]] = [a["Id"] for a in admins]
         except Exception as exc:

@@ -198,7 +198,11 @@ class IdentityCollectorsMixin(AWSServiceMixin):
         for pol in policies:
             arn = pol.get("Arn", "")
             doc = next(
-                (v.get("Document") for v in pol.get("PolicyVersionList", []) if v.get("IsDefaultVersion")),
+                (
+                    v.get("Document")
+                    for v in pol.get("PolicyVersionList", [])
+                    if v.get("IsDefaultVersion")
+                ),
                 None,
             )
             policy_docs[arn] = doc
@@ -240,9 +244,7 @@ class IdentityCollectorsMixin(AWSServiceMixin):
                 )
             boundary = (entity.get("PermissionsBoundary") or {}).get("PermissionsBoundaryArn")
             if boundary:
-                out.append(
-                    rel(boundary, EdgeType.REFERENCES, "PERMISSION_BOUNDARY_LIMITS")
-                )
+                out.append(rel(boundary, EdgeType.REFERENCES, "PERMISSION_BOUNDARY_LIMITS"))
             return [r for r in out if r]
 
         def managed_names(entity: dict) -> list[str]:
@@ -267,7 +269,9 @@ class IdentityCollectorsMixin(AWSServiceMixin):
                     metadata={
                         "group_id": group.get("GroupId"),
                         "attached_policies": managed_names(group),
-                        "inline_policies": [p.get("PolicyName") for p in group.get("GroupPolicyList", [])],
+                        "inline_policies": [
+                            p.get("PolicyName") for p in group.get("GroupPolicyList", [])
+                        ],
                         "is_admin": admin or has_admin_managed(group),
                     },
                     relations=attachment_relations(group, "GROUP_HAS_POLICY") + grants,
@@ -277,7 +281,12 @@ class IdentityCollectorsMixin(AWSServiceMixin):
         for user in users:
             grants, admin = self._grant_relations(principal_docs(user, "UserPolicyList"))
             membership = [
-                rel(group_arns.get(g, g), EdgeType.CONTAINS, reverse=True, description=f"member of {g}")
+                rel(
+                    group_arns.get(g, g),
+                    EdgeType.CONTAINS,
+                    reverse=True,
+                    description=f"member of {g}",
+                )
                 for g in user.get("GroupList", [])
             ]
             assets.append(
@@ -292,7 +301,9 @@ class IdentityCollectorsMixin(AWSServiceMixin):
                         "create_date": str(user.get("CreateDate", "")),
                         "groups": user.get("GroupList", []),
                         "attached_policies": managed_names(user),
-                        "inline_policies": [p.get("PolicyName") for p in user.get("UserPolicyList", [])],
+                        "inline_policies": [
+                            p.get("PolicyName") for p in user.get("UserPolicyList", [])
+                        ],
                         "is_admin": admin or has_admin_managed(user),
                     },
                     relations=membership + attachment_relations(user, "USER_HAS_POLICY") + grants,
@@ -322,7 +333,9 @@ class IdentityCollectorsMixin(AWSServiceMixin):
                         "assume_role_policy": policy_document(role.get("AssumeRolePolicyDocument")),
                         "service_linked": path.startswith("/aws-service-role/"),
                         "attached_policies": managed_names(role),
-                        "inline_policies": [p.get("PolicyName") for p in role.get("RolePolicyList", [])],
+                        "inline_policies": [
+                            p.get("PolicyName") for p in role.get("RolePolicyList", [])
+                        ],
                         "is_admin": admin or has_admin_managed(role),
                         "last_used": str(last_used.get("LastUsedDate", "")),
                         "last_used_region": last_used.get("Region"),
@@ -343,7 +356,9 @@ class IdentityCollectorsMixin(AWSServiceMixin):
                     region="global",
                     metadata={"instance_profile_id": prof.get("InstanceProfileId")},
                     relations=[
-                        rel(r, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="instance profile role")
+                        rel(
+                            r, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="instance profile role"
+                        )
                         for r in sorted(entry["roles"])
                     ],
                 )

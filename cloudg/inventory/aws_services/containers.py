@@ -61,7 +61,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
             registry: dict[str, Any] = {}
             try:
                 scan_cfg = await ecr.get_registry_scanning_configuration()
-                registry["scan_type"] = (scan_cfg.get("scanningConfiguration") or {}).get("scanType")
+                registry["scan_type"] = (scan_cfg.get("scanningConfiguration") or {}).get(
+                    "scanType"
+                )
             except Exception as exc:
                 logger.debug("ECR registry scanning config unavailable: %s", exc)
             try:
@@ -91,7 +93,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                 images.sort(key=lambda i: str(i.get("imagePushedAt", "")), reverse=True)
                 severities: dict[str, int] = {}
                 for img in images:
-                    counts = (img.get("imageScanFindingsSummary") or {}).get("findingSeverityCounts", {})
+                    counts = (img.get("imageScanFindingsSummary") or {}).get(
+                        "findingSeverityCounts", {}
+                    )
                     for sev, n in counts.items():
                         severities[sev] = severities.get(sev, 0) + int(n)
 
@@ -129,7 +133,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                         "registry": "ecr",
                         "repository_uri": repo.get("repositoryUri"),
                         "image_tag_mutability": repo.get("imageTagMutability"),
-                        "scan_on_push": (repo.get("imageScanningConfiguration") or {}).get("scanOnPush"),
+                        "scan_on_push": (repo.get("imageScanningConfiguration") or {}).get(
+                            "scanOnPush"
+                        ),
                         "registry_scan_type": registry.get("scan_type"),
                         "replication_destinations": registry.get("replication_destinations", []),
                         "encryption_type": enc.get("encryptionType"),
@@ -168,18 +174,38 @@ class ContainerCollectorsMixin(AWSServiceMixin):
         for c in td.get("containerDefinitions", []):
             image = c.get("image", "")
             relations.append(
-                rel(image_repository(image), EdgeType.USES_IMAGE, "RUNS_ON", description=f"container {c.get('name')} runs {image}")
+                rel(
+                    image_repository(image),
+                    EdgeType.USES_IMAGE,
+                    "RUNS_ON",
+                    description=f"container {c.get('name')} runs {image}",
+                )
             )
             for secret in c.get("secrets", []) or []:
-                relations.append(rel(secret.get("valueFrom"), EdgeType.REFERENCES, "READS_FROM", description=f"secret {secret.get('name')}"))
+                relations.append(
+                    rel(
+                        secret.get("valueFrom"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description=f"secret {secret.get('name')}",
+                    )
+                )
             env = {e.get("name"): e.get("value") for e in c.get("environment", []) or []}
             for ref in identifier_refs(env):
-                relations.append(rel(ref, EdgeType.REFERENCES, "DEPENDS_ON", description="environment reference"))
+                relations.append(
+                    rel(ref, EdgeType.REFERENCES, "DEPENDS_ON", description="environment reference")
+                )
             log_opts = (c.get("logConfiguration") or {}).get("options") or {}
             group = log_opts.get("awslogs-group")
             if group:
                 region = log_opts.get("awslogs-region", self._region)
-                relations.append(rel(f"arn:aws:logs:{region}:{self._account_id}:log-group:{group}", EdgeType.LOGS_TO, "LOGS_TO"))
+                relations.append(
+                    rel(
+                        f"arn:aws:logs:{region}:{self._account_id}:log-group:{group}",
+                        EdgeType.LOGS_TO,
+                        "LOGS_TO",
+                    )
+                )
             containers.append(
                 {
                     "name": c.get("name"),
@@ -192,11 +218,23 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                     "log_driver": (c.get("logConfiguration") or {}).get("logDriver"),
                 }
             )
-        relations.append(rel(td.get("taskRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="task role"))
-        relations.append(rel(td.get("executionRoleArn"), EdgeType.ASSUMES_ROLE, "DEPENDS_ON", description="execution role", purpose="execution"))
+        relations.append(
+            rel(td.get("taskRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="task role")
+        )
+        relations.append(
+            rel(
+                td.get("executionRoleArn"),
+                EdgeType.ASSUMES_ROLE,
+                "DEPENDS_ON",
+                description="execution role",
+                purpose="execution",
+            )
+        )
         for vol in td.get("volumes", []) or []:
             efs = (vol.get("efsVolumeConfiguration") or {}).get("fileSystemId")
-            relations.append(rel(efs, EdgeType.REFERENCES, "READS_FROM", description=f"volume {vol.get('name')}"))
+            relations.append(
+                rel(efs, EdgeType.REFERENCES, "READS_FROM", description=f"volume {vol.get('name')}")
+            )
         return self._asset(
             arn=td["taskDefinitionArn"],
             name=f"{td.get('family')}:{td.get('revision')}",
@@ -230,15 +268,25 @@ class ContainerCollectorsMixin(AWSServiceMixin):
             task_def_arns: dict[str, int] = {}
             for cluster in clusters:
                 carn = cluster["clusterArn"]
-                service_arns = [s async for s in self._paginate(ecs, "list_services", "serviceArns", cluster=carn)]
+                service_arns = [
+                    s
+                    async for s in self._paginate(ecs, "list_services", "serviceArns", cluster=carn)
+                ]
                 services: list[dict] = []
                 for chunk in _chunks(service_arns, 10):
-                    resp = await ecs.describe_services(cluster=carn, services=chunk, include=["TAGS"])
+                    resp = await ecs.describe_services(
+                        cluster=carn, services=chunk, include=["TAGS"]
+                    )
                     services.extend(resp.get("services", []))
 
                 running_defs: set[str] = set()
                 try:
-                    task_arns = [t async for t in self._paginate(ecs, "list_tasks", "taskArns", cluster=carn, desiredStatus="RUNNING")]
+                    task_arns = [
+                        t
+                        async for t in self._paginate(
+                            ecs, "list_tasks", "taskArns", cluster=carn, desiredStatus="RUNNING"
+                        )
+                    ]
                     for chunk in _chunks(task_arns, 100):
                         resp = await ecs.describe_tasks(cluster=carn, tasks=chunk)
                         for t in resp.get("tasks", []):
@@ -252,18 +300,38 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                     net = (svc.get("networkConfiguration") or {}).get("awsvpcConfiguration") or {}
                     relations: list[dict | None] = [
                         rel(carn, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True),
-                        rel(td, EdgeType.REFERENCES, "DEPENDS_ON", description="runs task definition"),
-                        rel(svc.get("roleArn"), EdgeType.ASSUMES_ROLE, "DEPENDS_ON", description="service role"),
+                        rel(
+                            td,
+                            EdgeType.REFERENCES,
+                            "DEPENDS_ON",
+                            description="runs task definition",
+                        ),
+                        rel(
+                            svc.get("roleArn"),
+                            EdgeType.ASSUMES_ROLE,
+                            "DEPENDS_ON",
+                            description="service role",
+                        ),
                     ]
                     for sn in net.get("subnets", []) or []:
-                        relations.append(rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+                        relations.append(
+                            rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+                        )
                     for lb in svc.get("loadBalancers", []) or []:
                         relations.append(
-                            rel(lb.get("targetGroupArn"), EdgeType.LOAD_BALANCER_TARGET, "LOAD_BALANCED_BY", reverse=True,
-                                container=lb.get("containerName"), port=lb.get("containerPort"))
+                            rel(
+                                lb.get("targetGroupArn"),
+                                EdgeType.LOAD_BALANCER_TARGET,
+                                "LOAD_BALANCED_BY",
+                                reverse=True,
+                                container=lb.get("containerName"),
+                                port=lb.get("containerPort"),
+                            )
                         )
                     for reg in svc.get("serviceRegistries", []) or []:
-                        relations.append(rel(reg.get("registryArn"), EdgeType.REFERENCES, "DNS_RESOLVED"))
+                        relations.append(
+                            rel(reg.get("registryArn"), EdgeType.REFERENCES, "DNS_RESOLVED")
+                        )
                     assets.append(
                         self._asset(
                             arn=svc["serviceArn"],
@@ -302,7 +370,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                             "running_tasks": cluster.get("runningTasksCount", 0),
                             "pending_tasks": cluster.get("pendingTasksCount", 0),
                             "active_services": cluster.get("activeServicesCount", 0),
-                            "container_instances": cluster.get("registeredContainerInstancesCount", 0),
+                            "container_instances": cluster.get(
+                                "registeredContainerInstancesCount", 0
+                            ),
                             "capacity_providers": cluster.get("capacityProviders", []),
                             "container_insights": any(
                                 s.get("name") == "containerInsights" and s.get("value") == "enabled"
@@ -311,7 +381,12 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                             "standalone_task_definitions": sorted(d for d in running_defs if d),
                         },
                         relations=[
-                            rel(d, EdgeType.MANAGES, "SCHEDULED_BY", description="runs standalone tasks")
+                            rel(
+                                d,
+                                EdgeType.MANAGES,
+                                "SCHEDULED_BY",
+                                description="runs standalone tasks",
+                            )
                             for d in running_defs
                             if d and d not in {s.get("taskDefinition") for s in services}
                         ],
@@ -357,33 +432,65 @@ class ContainerCollectorsMixin(AWSServiceMixin):
         assets: list[CloudAsset] = []
 
         relations: list[dict | None] = [
-            rel(cluster.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="cluster service role"),
+            rel(
+                cluster.get("roleArn"),
+                EdgeType.ASSUMES_ROLE,
+                "RUNS_ON",
+                description="cluster service role",
+            ),
             rel(vpc.get("vpcId"), EdgeType.CONTAINS, reverse=True, description="cluster VPC"),
         ]
         for sn in vpc.get("subnetIds", []) or []:
             relations.append(rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
         for enc in cluster.get("encryptionConfig", []) or []:
-            relations.append(rel((enc.get("provider") or {}).get("keyArn"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"))
+            relations.append(
+                rel(
+                    (enc.get("provider") or {}).get("keyArn"),
+                    EdgeType.REFERENCES,
+                    "ENCRYPTED_BY_KMS",
+                )
+            )
         issuer = ((cluster.get("identity") or {}).get("oidc") or {}).get("issuer")
         if issuer:
-            relations.append(rel(issuer, EdgeType.REFERENCES, "DEPENDS_ON", description="IRSA OIDC issuer"))
+            relations.append(
+                rel(issuer, EdgeType.REFERENCES, "DEPENDS_ON", description="IRSA OIDC issuer")
+            )
 
         # Access entries: which IAM principals can reach the Kubernetes API
         access_entries: list[dict] = []
         try:
-            principals = [p async for p in self._paginate(eks, "list_access_entries", "accessEntries", clusterName=name)]
+            principals = [
+                p
+                async for p in self._paginate(
+                    eks, "list_access_entries", "accessEntries", clusterName=name
+                )
+            ]
 
             async def entry(principal: str) -> dict:
-                detail = (await eks.describe_access_entry(clusterName=name, principalArn=principal))["accessEntry"]
-                pols = [p async for p in self._paginate(eks, "list_associated_access_policies", "associatedAccessPolicies", clusterName=name, principalArn=principal)]
+                detail = (
+                    await eks.describe_access_entry(clusterName=name, principalArn=principal)
+                )["accessEntry"]
+                pols = [
+                    p
+                    async for p in self._paginate(
+                        eks,
+                        "list_associated_access_policies",
+                        "associatedAccessPolicies",
+                        clusterName=name,
+                        principalArn=principal,
+                    )
+                ]
                 return {
                     "principal_arn": principal,
                     "type": detail.get("type"),
                     "username": detail.get("username"),
                     "kubernetes_groups": detail.get("kubernetesGroups", []),
                     "access_policies": [
-                        {"policy": p.get("policyArn", "").rsplit("/", 1)[-1], "scope": (p.get("accessScope") or {}).get("type"),
-                         "namespaces": (p.get("accessScope") or {}).get("namespaces", [])}
+                        {
+                            "policy": p.get("policyArn", "").rsplit("/", 1)[-1],
+                            "scope": (p.get("accessScope") or {}).get("type"),
+                            "namespaces": (p.get("accessScope") or {}).get("namespaces", []),
+                        }
                         for p in pols
                     ],
                 }
@@ -392,7 +499,10 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                 if not e:
                     continue
                 access_entries.append(e)
-                is_admin = any(p["policy"] == "AmazonEKSClusterAdminPolicy" for p in e["access_policies"]) or "system:masters" in e["kubernetes_groups"]
+                is_admin = (
+                    any(p["policy"] == "AmazonEKSClusterAdminPolicy" for p in e["access_policies"])
+                    or "system:masters" in e["kubernetes_groups"]
+                )
                 relations.append(
                     rel(
                         e["principal_arn"],
@@ -410,23 +520,52 @@ class ContainerCollectorsMixin(AWSServiceMixin):
 
         # Pod identity associations: service account -> IAM role
         try:
-            assocs = [a async for a in self._paginate(eks, "list_pod_identity_associations", "associations", clusterName=name)]
+            assocs = [
+                a
+                async for a in self._paginate(
+                    eks, "list_pod_identity_associations", "associations", clusterName=name
+                )
+            ]
             for a in await gather_limited(
-                [lambda a=a: eks.describe_pod_identity_association(clusterName=name, associationId=a["associationId"]) for a in assocs]
+                [
+                    lambda a=a: eks.describe_pod_identity_association(
+                        clusterName=name, associationId=a["associationId"]
+                    )
+                    for a in assocs
+                ]
             ):
                 if not a:
                     continue
                 assoc = a["association"]
-                sa_id = k8s_identifier(carn, assoc.get("namespace", ""), "ServiceAccount", assoc.get("serviceAccount", ""))
+                sa_id = k8s_identifier(
+                    carn,
+                    assoc.get("namespace", ""),
+                    "ServiceAccount",
+                    assoc.get("serviceAccount", ""),
+                )
                 assets.append(
                     self._asset(
                         arn=sa_id,
                         name=f"{assoc.get('namespace')}/{assoc.get('serviceAccount')}",
                         asset_type=AssetType.K8S_SERVICE_ACCOUNT,
-                        metadata={"cluster_arn": carn, "namespace": assoc.get("namespace"), "discovered_via": "eks-pod-identity"},
+                        metadata={
+                            "cluster_arn": carn,
+                            "namespace": assoc.get("namespace"),
+                            "discovered_via": "eks-pod-identity",
+                        },
                         relations=[
-                            rel(assoc.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="EKS Pod Identity"),
-                            rel(assoc.get("targetRoleArn"), EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE", description="pod identity target role"),
+                            rel(
+                                assoc.get("roleArn"),
+                                EdgeType.ASSUMES_ROLE,
+                                "RUNS_ON",
+                                description="EKS Pod Identity",
+                            ),
+                            rel(
+                                assoc.get("targetRoleArn"),
+                                EdgeType.ASSUMES_ROLE,
+                                "ROLE_ASSUMES_ROLE",
+                                description="pod identity target role",
+                            ),
                             rel(carn, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True),
                         ],
                     )
@@ -453,13 +592,25 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                 "vpc_id": vpc.get("vpcId"),
                 "subnets": vpc.get("subnetIds", []),
                 "security_groups": list(
-                    dict.fromkeys((vpc.get("securityGroupIds") or []) + ([vpc["clusterSecurityGroupId"]] if vpc.get("clusterSecurityGroupId") else []))
+                    dict.fromkeys(
+                        (vpc.get("securityGroupIds") or [])
+                        + (
+                            [vpc["clusterSecurityGroupId"]]
+                            if vpc.get("clusterSecurityGroupId")
+                            else []
+                        )
+                    )
                 ),
                 "oidc_issuer": issuer,
-                "authentication_mode": (cluster.get("accessConfig") or {}).get("authenticationMode"),
+                "authentication_mode": (cluster.get("accessConfig") or {}).get(
+                    "authenticationMode"
+                ),
                 "secrets_encrypted": bool(cluster.get("encryptionConfig")),
                 "logging_enabled": [
-                    t for lg in (cluster.get("logging") or {}).get("clusterLogging", []) if lg.get("enabled") for t in lg.get("types", [])
+                    t
+                    for lg in (cluster.get("logging") or {}).get("clusterLogging", [])
+                    if lg.get("enabled")
+                    for t in lg.get("types", [])
                 ],
                 "access_entries": access_entries,
             },
@@ -472,7 +623,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
         # Nodegroups
         for ng_name in await self._eks_list(eks, "list_nodegroups", "nodegroups", clusterName=name):
             try:
-                ng = (await eks.describe_nodegroup(clusterName=name, nodegroupName=ng_name))["nodegroup"]
+                ng = (await eks.describe_nodegroup(clusterName=name, nodegroupName=ng_name))[
+                    "nodegroup"
+                ]
             except Exception as exc:
                 logger.debug("describe_nodegroup %s/%s failed: %s", name, ng_name, exc)
                 continue
@@ -503,22 +656,33 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                         "release_version": ng.get("releaseVersion"),
                         "scaling": ng.get("scalingConfig"),
                         "node_role": ng.get("nodeRole"),
-                        "auto_scaling_groups": [a.get("name") for a in res.get("autoScalingGroups", []) or []],
+                        "auto_scaling_groups": [
+                            a.get("name") for a in res.get("autoScalingGroups", []) or []
+                        ],
                     },
                     relations=ng_rel,
                 )
             )
 
         # Fargate profiles
-        for fp_name in await self._eks_list(eks, "list_fargate_profiles", "fargateProfileNames", clusterName=name):
+        for fp_name in await self._eks_list(
+            eks, "list_fargate_profiles", "fargateProfileNames", clusterName=name
+        ):
             try:
-                fp = (await eks.describe_fargate_profile(clusterName=name, fargateProfileName=fp_name))["fargateProfile"]
+                fp = (
+                    await eks.describe_fargate_profile(clusterName=name, fargateProfileName=fp_name)
+                )["fargateProfile"]
             except Exception as exc:
                 logger.debug("describe_fargate_profile failed: %s", exc)
                 continue
             fp_rel: list[dict | None] = [
                 rel(carn, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True),
-                rel(fp.get("podExecutionRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="pod execution role"),
+                rel(
+                    fp.get("podExecutionRoleArn"),
+                    EdgeType.ASSUMES_ROLE,
+                    "RUNS_ON",
+                    description="pod execution role",
+                ),
             ]
             for sn in fp.get("subnets", []) or []:
                 fp_rel.append(rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
@@ -558,13 +722,22 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                     },
                     relations=[
                         rel(carn, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True),
-                        rel(addon.get("serviceAccountRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="addon IRSA role"),
+                        rel(
+                            addon.get("serviceAccountRoleArn"),
+                            EdgeType.ASSUMES_ROLE,
+                            "RUNS_ON",
+                            description="addon IRSA role",
+                        ),
                     ],
                 )
             )
 
         # In-cluster workloads through the Kubernetes API
-        if self._kubernetes_enabled and cluster.get("endpoint") and cluster.get("status") == "ACTIVE":
+        if (
+            self._kubernetes_enabled
+            and cluster.get("endpoint")
+            and cluster.get("status") == "ACTIVE"
+        ):
             from cloudg.inventory.kubernetes import collect_eks_workloads
 
             try:
@@ -577,7 +750,9 @@ class ContainerCollectorsMixin(AWSServiceMixin):
                     self._kubernetes_timeout,
                 )
                 assets.extend(k8s_assets)
-                self.coverage.record(f"kubernetes:{name}", _status("SUCCESS"), asset_count=len(k8s_assets))
+                self.coverage.record(
+                    f"kubernetes:{name}", _status("SUCCESS"), asset_count=len(k8s_assets)
+                )
             except Exception as exc:
                 logger.warning("Kubernetes API mapping skipped for %s: %s", name, exc)
                 self.coverage.record(f"kubernetes:{name}", _status("FAILED"), error=str(exc))

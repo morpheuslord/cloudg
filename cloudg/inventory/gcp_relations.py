@@ -62,7 +62,9 @@ _COMPUTE_URL_RE = re.compile(
     r"^https?://(?:www|compute)\.googleapis\.com/compute/(?:v1|beta|alpha|staging_v1)/(.+)$"
 )
 _STORAGE_URL_RE = re.compile(r"^https?://(?:www|storage)\.googleapis\.com/storage/v1/b/([^/?#]+)")
-_API_URL_RE = re.compile(r"^https?://([a-z0-9-]+)\.googleapis\.com/(?:[a-z0-9_]+/)?v\d[a-z0-9]*/(.+)$")
+_API_URL_RE = re.compile(
+    r"^https?://([a-z0-9-]+)\.googleapis\.com/(?:[a-z0-9_]+/)?v\d[a-z0-9]*/(.+)$"
+)
 _BARE_API_RE = re.compile(r"^([a-z0-9-]+)\.googleapis\.com/(.+)$")
 _KEY_VERSION_RE = re.compile(r"/cryptoKeyVersions/[^/]+$")
 _CRYPTO_KEY_RE = re.compile(
@@ -165,7 +167,9 @@ def full_name(ref: Any, service: str | None = None) -> str | None:
             out = f"//{svc}.googleapis.com/{rest}"
     elif s.startswith("projects/_/buckets/"):
         out = f"//storage.googleapis.com/{s.split('/')[3]}"
-    elif s.startswith(("projects/", "organizations/", "folders/", "locations/", "apps/", "accessPolicies/")):
+    elif s.startswith(
+        ("projects/", "organizations/", "folders/", "locations/", "apps/", "accessPolicies/")
+    ):
         svc = service or _guess_service(s)
         out = f"//{svc}.googleapis.com/{s}" if svc else None
     if not out:
@@ -173,7 +177,7 @@ def full_name(ref: Any, service: str | None = None) -> str | None:
     out = out.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     out = _KEY_VERSION_RE.sub("", out)
     if out.startswith("//sqladmin.googleapis.com/"):
-        out = "//cloudsql.googleapis.com/" + out[len("//sqladmin.googleapis.com/"):]
+        out = "//cloudsql.googleapis.com/" + out[len("//sqladmin.googleapis.com/") :]
     if out.startswith("//container.googleapis.com/"):
         out = out.replace("/zones/", "/locations/")
     return out
@@ -219,7 +223,7 @@ def sa_email(ref: Any) -> str | None:
         return None
     s = ref.strip()
     if s.startswith("serviceAccount:"):
-        s = s[len("serviceAccount:"):]
+        s = s[len("serviceAccount:") :]
     if "/serviceAccounts/" in s:
         s = s.rsplit("/serviceAccounts/", 1)[1]
     if "@" not in s or "[" in s:
@@ -249,7 +253,9 @@ def image_repository(image: Any) -> str | None:
     m = _AR_IMAGE_RE.match(image)
     if m:
         loc, proj, repo = m.groups()
-        return f"//artifactregistry.googleapis.com/projects/{proj}/locations/{loc}/repositories/{repo}"
+        return (
+            f"//artifactregistry.googleapis.com/projects/{proj}/locations/{loc}/repositories/{repo}"
+        )
     m = _GCR_IMAGE_RE.match(image)
     if m:
         prefix, proj = m.groups()
@@ -348,11 +354,15 @@ def scrub(data: Any) -> Any:
                     out[k] = {ek: REDACTED for ek in item}
                 elif k == "env" and isinstance(item, list):
                     out[k] = [
-                        {ek: ev for ek, ev in e.items() if ek != "value"} if isinstance(e, dict) else e
+                        {ek: ev for ek, ev in e.items() if ek != "value"}
+                        if isinstance(e, dict)
+                        else e
                         for e in item
                     ]
-                elif k in ("metadata", "commonInstanceMetadata") and isinstance(item, dict) and isinstance(
-                    item.get("items"), list
+                elif (
+                    k in ("metadata", "commonInstanceMetadata")
+                    and isinstance(item, dict)
+                    and isinstance(item.get("items"), list)
                 ):
                     out[k] = {
                         **{mk: mv for mk, mv in item.items() if mk != "items"},
@@ -427,7 +437,9 @@ class Extracted:
         if r and r not in self.relations:
             self.relations.append(r)
 
-    def sa(self, ref: Any, ctx: GCPContext, description: str | None = None, **props: Any) -> str | None:
+    def sa(
+        self, ref: Any, ctx: GCPContext, description: str | None = None, **props: Any
+    ) -> str | None:
         """Declare that the asset runs as a service account."""
         if ref == "default":
             ref = ctx.default_sa()
@@ -442,7 +454,13 @@ class Extracted:
             if isinstance(v, str) and v and v not in self.aliases:
                 self.aliases.append(v)
 
-    def expose(self, reason: str, protocol: str | None = None, ports: Iterable[str] = (), kind: str = "INTERNET_EXPOSED") -> None:
+    def expose(
+        self,
+        reason: str,
+        protocol: str | None = None,
+        ports: Iterable[str] = (),
+        kind: str = "INTERNET_EXPOSED",
+    ) -> None:
         """Mark the asset reachable from the internet (0.0.0.0/0)."""
         entry = {"via": reason, "kind": kind}
         if protocol:
@@ -483,7 +501,9 @@ def extract(ctx: GCPContext) -> Extracted:
     if keys:
         out.metadata["kms_keys"] = keys
         for key in keys:
-            out.add(key, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS", description=f"encrypted with {key}")
+            out.add(
+                key, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS", description=f"encrypted with {key}"
+            )
     return out
 
 
@@ -526,7 +546,9 @@ def _project(ctx: GCPContext, out: Extracted) -> None:
         out.metadata["project_id"] = pid
     out.alias(f"//cloudresourcemanager.googleapis.com/projects/{number}")
     out.metadata["project_number"] = number
-    out.metadata["display_name"] = d.get("displayName") or (d.get("name") if not str(d.get("name", "")).startswith("projects/") else None)
+    out.metadata["display_name"] = d.get("displayName") or (
+        d.get("name") if not str(d.get("name", "")).startswith("projects/") else None
+    )
     out.metadata["lifecycle_state"] = d.get("lifecycleState") or d.get("state")
     parent = _crm_parent(d.get("parent")) or _ancestor_parent(ctx)
     out.add(parent, EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT", reverse=True)
@@ -535,7 +557,9 @@ def _project(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("cloudresourcemanager.googleapis.com/Folder")
 def _folder(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    rel_name = d.get("name") if str(d.get("name", "")).startswith("folders/") else relative_name(ctx.name)
+    rel_name = (
+        d.get("name") if str(d.get("name", "")).startswith("folders/") else relative_name(ctx.name)
+    )
     out.alias(rel_name)
     out.metadata["display_name"] = d.get("displayName")
     out.metadata["lifecycle_state"] = d.get("lifecycleState") or d.get("state")
@@ -547,7 +571,9 @@ def _folder(ctx: GCPContext, out: Extracted) -> None:
 def _organization(ctx: GCPContext, out: Extracted) -> None:
     out.alias(relative_name(ctx.name))
     out.metadata["display_name"] = ctx.data.get("displayName")
-    out.metadata["directory_customer_id_present"] = bool(dig(ctx.data, "owner", "directoryCustomerId"))
+    out.metadata["directory_customer_id_present"] = bool(
+        dig(ctx.data, "owner", "directoryCustomerId")
+    )
     out.metadata["lifecycle_state"] = ctx.data.get("lifecycleState") or ctx.data.get("state")
 
 
@@ -555,7 +581,9 @@ def _organization(ctx: GCPContext, out: Extracted) -> None:
 def _org_policy_v2(ctx: GCPContext, out: Extracted) -> None:
     rel_name = relative_name(ctx.name)
     attached = rel_name.split("/policies/", 1)[0]
-    out.add(full_name(attached), EdgeType.GOVERNS, "SCP_RESTRICTS", description="organization policy")
+    out.add(
+        full_name(attached), EdgeType.GOVERNS, "SCP_RESTRICTS", description="organization policy"
+    )
     spec = ctx.data.get("spec") or {}
     rules = []
     for r in _list(spec.get("rules")):
@@ -601,22 +629,30 @@ def perimeter_metadata(p: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[st
     dry_run = bool(g(p, "use_explicit_dry_run_spec", "useExplicitDryRunSpec"))
     ptype = g(p, "perimeter_type", "perimeterType")
     if isinstance(ptype, (int, float)):
-        ptype = {0: "PERIMETER_TYPE_REGULAR", 1: "PERIMETER_TYPE_BRIDGE"}.get(int(ptype), str(ptype))
+        ptype = {0: "PERIMETER_TYPE_REGULAR", 1: "PERIMETER_TYPE_BRIDGE"}.get(
+            int(ptype), str(ptype)
+        )
     vpc = g(status, "vpc_accessible_services", "vpcAccessibleServices") or {}
     md = {
         "title": g(p, "title", "title"),
         "perimeter_type": ptype or "PERIMETER_TYPE_REGULAR",
         "restricted_services": list(g(status, "restricted_services", "restrictedServices") or []),
         "access_levels": list(g(status, "access_levels", "accessLevels") or []),
-        "vpc_accessible_services_restricted": bool(g(vpc, "enable_restriction", "enableRestriction")),
+        "vpc_accessible_services_restricted": bool(
+            g(vpc, "enable_restriction", "enableRestriction")
+        ),
         "vpc_allowed_services": list(g(vpc, "allowed_services", "allowedServices") or []),
         "ingress_policy_count": len(g(status, "ingress_policies", "ingressPolicies") or []),
         "egress_policy_count": len(g(status, "egress_policies", "egressPolicies") or []),
         "uses_dry_run_spec": dry_run,
-        "dry_run_restricted_services": list(g(spec, "restricted_services", "restrictedServices") or []),
+        "dry_run_restricted_services": list(
+            g(spec, "restricted_services", "restrictedServices") or []
+        ),
     }
     governed = [(r, False) for r in g(status, "resources", "resources") or []]
-    governed += [(r, True) for r in g(spec, "resources", "resources") or [] if (r, False) not in governed]
+    governed += [
+        (r, True) for r in g(spec, "resources", "resources") or [] if (r, False) not in governed
+    ]
     return md, governed
 
 
@@ -643,7 +679,9 @@ def _instance(ctx: GCPContext, out: Extracted) -> None:
     emails = []
     for sa in _list(d.get("serviceAccounts")):
         if isinstance(sa, dict):
-            email = out.sa(sa.get("email"), ctx, "instance service account", scopes=sa.get("scopes"))
+            email = out.sa(
+                sa.get("email"), ctx, "instance service account", scopes=sa.get("scopes")
+            )
             if email:
                 emails.append(email)
     public_ips, private_ips, networks = [], [], []
@@ -682,7 +720,9 @@ def _instance(ctx: GCPContext, out: Extracted) -> None:
         can_ip_forward=bool(d.get("canIpForward")),
         deletion_protection=bool(d.get("deletionProtection")),
         shielded_vm=dig(d, "shieldedInstanceConfig", default={}),
-        confidential_compute=bool(dig(d, "confidentialInstanceConfig", "enableConfidentialCompute")),
+        confidential_compute=bool(
+            dig(d, "confidentialInstanceConfig", "enableConfidentialCompute")
+        ),
         metadata_keys=[i.get("key") for i in md_items if isinstance(i, dict)],
     )
     for ip in public_ips:
@@ -693,7 +733,11 @@ def _instance(ctx: GCPContext, out: Extracted) -> None:
 def _disk(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     for user in _list(d.get("users")):
-        out.add(full_name(user, "compute"), EdgeType.ATTACHED_TO, description="disk attached to instance")
+        out.add(
+            full_name(user, "compute"),
+            EdgeType.ATTACHED_TO,
+            description="disk attached to instance",
+        )
     out.add(full_name(d.get("sourceImage"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     out.add(full_name(d.get("sourceSnapshot"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     out.metadata.update(size_gb=_num(d.get("sizeGb")), disk_type=_short(d.get("type")))
@@ -701,7 +745,12 @@ def _disk(ctx: GCPContext, out: Extracted) -> None:
 
 @_extractor("compute.googleapis.com/Snapshot")
 def _snapshot(ctx: GCPContext, out: Extracted) -> None:
-    out.add(full_name(ctx.data.get("sourceDisk"), "compute"), EdgeType.REFERENCES, "BACKUP_TO", reverse=True)
+    out.add(
+        full_name(ctx.data.get("sourceDisk"), "compute"),
+        EdgeType.REFERENCES,
+        "BACKUP_TO",
+        reverse=True,
+    )
 
 
 @_extractor("compute.googleapis.com/Image")
@@ -714,10 +763,17 @@ def _image(ctx: GCPContext, out: Extracted) -> None:
 
 @_extractor("compute.googleapis.com/MachineImage")
 def _machine_image(ctx: GCPContext, out: Extracted) -> None:
-    out.add(full_name(ctx.data.get("sourceInstance"), "compute"), EdgeType.REFERENCES, "BACKUP_TO", reverse=True)
+    out.add(
+        full_name(ctx.data.get("sourceInstance"), "compute"),
+        EdgeType.REFERENCES,
+        "BACKUP_TO",
+        reverse=True,
+    )
 
 
-@_extractor("compute.googleapis.com/InstanceTemplate", "compute.googleapis.com/RegionInstanceTemplate")
+@_extractor(
+    "compute.googleapis.com/InstanceTemplate", "compute.googleapis.com/RegionInstanceTemplate"
+)
 def _instance_template(ctx: GCPContext, out: Extracted) -> None:
     props = ctx.data.get("properties") or {}
     for sa in _list(props.get("serviceAccounts")):
@@ -725,29 +781,54 @@ def _instance_template(ctx: GCPContext, out: Extracted) -> None:
             out.sa(sa.get("email"), ctx, "template service account")
     for nic in _list(props.get("networkInterfaces")):
         if isinstance(nic, dict):
-            out.add(full_name(nic.get("subnetwork") or nic.get("network"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
+            out.add(
+                full_name(nic.get("subnetwork") or nic.get("network"), "compute"),
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+            )
     for disk in _list(props.get("disks")):
         if isinstance(disk, dict):
-            out.add(full_name(dig(disk, "initializeParams", "sourceImage"), "compute"), EdgeType.USES_IMAGE, "RUNS_ON")
+            out.add(
+                full_name(dig(disk, "initializeParams", "sourceImage"), "compute"),
+                EdgeType.USES_IMAGE,
+                "RUNS_ON",
+            )
     out.metadata.update(
         network_tags=list(dig(props, "tags", "items", default=[]) or []),
         machine_type=props.get("machineType"),
     )
 
 
-@_extractor("compute.googleapis.com/InstanceGroupManager", "compute.googleapis.com/RegionInstanceGroupManager")
+@_extractor(
+    "compute.googleapis.com/InstanceGroupManager",
+    "compute.googleapis.com/RegionInstanceGroupManager",
+)
 def _igm(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    templates = [d.get("instanceTemplate")] + [v.get("instanceTemplate") for v in _list(d.get("versions")) if isinstance(v, dict)]
+    templates = [d.get("instanceTemplate")] + [
+        v.get("instanceTemplate") for v in _list(d.get("versions")) if isinstance(v, dict)
+    ]
     for t in templates:
-        out.add(full_name(t, "compute"), EdgeType.REFERENCES, "DEPENDS_ON", description="instance template")
+        out.add(
+            full_name(t, "compute"),
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+            description="instance template",
+        )
     out.add(full_name(d.get("instanceGroup"), "compute"), EdgeType.MANAGES, "SCALES_WITH")
     for pool in _list(d.get("targetPools")):
-        out.add(full_name(pool, "compute"), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", reverse=True)
+        out.add(
+            full_name(pool, "compute"),
+            EdgeType.LOAD_BALANCER_TARGET,
+            "LB_TARGETS_INSTANCE",
+            reverse=True,
+        )
     for hc in _list(d.get("autoHealingPolicies")):
         if isinstance(hc, dict):
             out.add(full_name(hc.get("healthCheck"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
-    out.metadata.update(target_size=_num(d.get("targetSize")), base_instance_name=d.get("baseInstanceName"))
+    out.metadata.update(
+        target_size=_num(d.get("targetSize")), base_instance_name=d.get("baseInstanceName")
+    )
 
 
 @_extractor("compute.googleapis.com/Autoscaler", "compute.googleapis.com/RegionAutoscaler")
@@ -758,7 +839,12 @@ def _autoscaler(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("compute.googleapis.com/InstanceGroup", "compute.googleapis.com/RegionInstanceGroup")
 def _instance_group(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("subnetwork") or d.get("network"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+    out.add(
+        full_name(d.get("subnetwork") or d.get("network"), "compute"),
+        EdgeType.CONTAINS,
+        "SUBNET_CONTAINS_INSTANCE",
+        reverse=True,
+    )
     out.metadata.update(size=_num(d.get("size")), named_ports=d.get("namedPorts") or [])
 
 
@@ -791,11 +877,18 @@ def _network(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("compute.googleapis.com/Subnetwork")
 def _subnetwork(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("network"), "compute"), EdgeType.CONTAINS, "VPC_CONTAINS_SUBNET", reverse=True)
+    out.add(
+        full_name(d.get("network"), "compute"),
+        EdgeType.CONTAINS,
+        "VPC_CONTAINS_SUBNET",
+        reverse=True,
+    )
     out.metadata.update(
         network=full_name(d.get("network"), "compute"),
         ip_cidr_range=d.get("ipCidrRange"),
-        secondary_ranges=[r.get("ipCidrRange") for r in _list(d.get("secondaryIpRanges")) if isinstance(r, dict)],
+        secondary_ranges=[
+            r.get("ipCidrRange") for r in _list(d.get("secondaryIpRanges")) if isinstance(r, dict)
+        ],
         private_ip_google_access=d.get("privateIpGoogleAccess"),
         flow_logs_enabled=bool(dig(d, "logConfig", "enable") or d.get("enableFlowLogs")),
         purpose=d.get("purpose"),
@@ -806,7 +899,12 @@ def _fw_entries(entries: Any) -> list[dict[str, Any]]:
     out = []
     for e in _list(entries):
         if isinstance(e, dict):
-            out.append({"protocol": e.get("IPProtocol") or e.get("ipProtocol") or "all", "ports": list(e.get("ports") or [])})
+            out.append(
+                {
+                    "protocol": e.get("IPProtocol") or e.get("ipProtocol") or "all",
+                    "ports": list(e.get("ports") or []),
+                }
+            )
     return out
 
 
@@ -879,7 +977,11 @@ def _firewall_policy(ctx: GCPContext, out: Extracted) -> None:
     for assoc in _list(d.get("associations")):
         if isinstance(assoc, dict):
             target = assoc.get("attachmentTarget")
-            out.add(full_name(target, "compute") or full_name(target), EdgeType.GOVERNS, "COMPLIANCE_GOVERNS")
+            out.add(
+                full_name(target, "compute") or full_name(target),
+                EdgeType.GOVERNS,
+                "COMPLIANCE_GOVERNS",
+            )
     out.metadata.update(
         ingress_rules=[r for r in rules if r.get("direction") == "INGRESS"],
         egress_rules=[r for r in rules if r.get("direction") == "EGRESS"],
@@ -890,7 +992,9 @@ def _firewall_policy(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("compute.googleapis.com/Route")
 def _route(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("network"), "compute"), EdgeType.ATTACHED_TO, description="route of network")
+    out.add(
+        full_name(d.get("network"), "compute"), EdgeType.ATTACHED_TO, description="route of network"
+    )
     hops = {
         "instance": d.get("nextHopInstance"),
         "vpn_tunnel": d.get("nextHopVpnTunnel"),
@@ -898,7 +1002,13 @@ def _route(ctx: GCPContext, out: Extracted) -> None:
         "peering": None,
     }
     for kind, hop in hops.items():
-        out.add(full_name(hop, "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED", description=f"next hop {kind}", destination=d.get("destRange"))
+        out.add(
+            full_name(hop, "compute"),
+            EdgeType.ROUTE,
+            "TRANSIT_ROUTED",
+            description=f"next hop {kind}",
+            destination=d.get("destRange"),
+        )
     gw = d.get("nextHopGateway") or ""
     out.metadata.update(
         dest_range=d.get("destRange"),
@@ -913,7 +1023,11 @@ def _route(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("compute.googleapis.com/Router")
 def _router(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("network"), "compute"), EdgeType.ATTACHED_TO, description="Cloud Router of network")
+    out.add(
+        full_name(d.get("network"), "compute"),
+        EdgeType.ATTACHED_TO,
+        description="Cloud Router of network",
+    )
     nats = []
     for nat in _list(d.get("nats")):
         if not isinstance(nat, dict):
@@ -928,13 +1042,25 @@ def _router(ctx: GCPContext, out: Extracted) -> None:
         )
         for sn in _list(nat.get("subnetworks")):
             if isinstance(sn, dict):
-                out.add(full_name(sn.get("name"), "compute"), EdgeType.ROUTE, "NAT_TRANSLATED", reverse=True, description="egress via Cloud NAT")
+                out.add(
+                    full_name(sn.get("name"), "compute"),
+                    EdgeType.ROUTE,
+                    "NAT_TRANSLATED",
+                    reverse=True,
+                    description="egress via Cloud NAT",
+                )
         for ip in _list(nat.get("natIps")):
             out.add(full_name(ip, "compute"), EdgeType.ATTACHED_TO, reverse=True)
     for iface in _list(d.get("interfaces")):
         if isinstance(iface, dict):
-            out.add(full_name(iface.get("linkedVpnTunnel"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
-            out.add(full_name(iface.get("linkedInterconnectAttachment"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
+            out.add(
+                full_name(iface.get("linkedVpnTunnel"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED"
+            )
+            out.add(
+                full_name(iface.get("linkedInterconnectAttachment"), "compute"),
+                EdgeType.ROUTE,
+                "TRANSIT_ROUTED",
+            )
     out.metadata.update(
         nat=nats,
         nat_enabled=bool(nats),
@@ -949,17 +1075,23 @@ def _vpn_gateway(ctx: GCPContext, out: Extracted) -> None:
     out.add(full_name(d.get("network"), "compute"), EdgeType.ATTACHED_TO)
     for t in _list(d.get("tunnels")):
         out.add(full_name(t, "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
-    out.metadata["interface_ips"] = [i.get("ipAddress") for i in _list(d.get("vpnInterfaces")) if isinstance(i, dict)]
+    out.metadata["interface_ips"] = [
+        i.get("ipAddress") for i in _list(d.get("vpnInterfaces")) if isinstance(i, dict)
+    ]
 
 
 @_extractor("compute.googleapis.com/VpnTunnel")
 def _vpn_tunnel(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("vpnGateway") or d.get("targetVpnGateway"), "compute"), EdgeType.ATTACHED_TO)
+    out.add(
+        full_name(d.get("vpnGateway") or d.get("targetVpnGateway"), "compute"), EdgeType.ATTACHED_TO
+    )
     out.add(full_name(d.get("peerExternalGateway"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
     out.add(full_name(d.get("peerGcpGateway"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
     out.add(full_name(d.get("router"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
-    out.metadata.update(peer_ip=d.get("peerIp"), ike_version=_num(d.get("ikeVersion")), status=d.get("status"))
+    out.metadata.update(
+        peer_ip=d.get("peerIp"), ike_version=_num(d.get("ikeVersion")), status=d.get("status")
+    )
 
 
 @_extractor("compute.googleapis.com/InterconnectAttachment")
@@ -973,13 +1105,19 @@ def _interconnect_attachment(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("compute.googleapis.com/ServiceAttachment")
 def _service_attachment(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("targetService") or d.get("producerForwardingRule"), "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
+    out.add(
+        full_name(d.get("targetService") or d.get("producerForwardingRule"), "compute"),
+        EdgeType.ROUTE,
+        "SERVES_TRAFFIC_TO",
+    )
     for sn in _list(d.get("natSubnets")):
         out.add(full_name(sn, "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     out.metadata.update(
         connection_preference=d.get("connectionPreference"),
         consumer_accept_lists=[
-            a.get("projectIdOrNum") or a.get("networkUrl") for a in _list(d.get("consumerAcceptLists")) if isinstance(a, dict)
+            a.get("projectIdOrNum") or a.get("networkUrl")
+            for a in _list(d.get("consumerAcceptLists"))
+            if isinstance(a, dict)
         ],
         connected_endpoint_count=len(_list(d.get("connectedEndpoints"))),
     )
@@ -992,11 +1130,18 @@ def _address(ctx: GCPContext, out: Extracted) -> None:
     for user in _list(d.get("users")):
         out.add(full_name(user, "compute"), EdgeType.ATTACHED_TO, description="address in use")
     if not external:
-        out.add(full_name(d.get("subnetwork") or d.get("network"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+        out.add(
+            full_name(d.get("subnetwork") or d.get("network"), "compute"),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
     if external and d.get("address"):
         out.alias(d["address"])
         out.metadata["public_ip"] = d["address"]
-    out.metadata.update(address=d.get("address"), address_type=d.get("addressType"), purpose=d.get("purpose"))
+    out.metadata.update(
+        address=d.get("address"), address_type=d.get("addressType"), purpose=d.get("purpose")
+    )
 
 
 @_extractor("compute.googleapis.com/Project")
@@ -1007,11 +1152,17 @@ def _compute_project(ctx: GCPContext, out: Extracted) -> None:
         xpn_project_status=d.get("xpnProjectStatus"),
         default_service_account=d.get("defaultServiceAccount"),
         common_metadata_keys=[
-            i.get("key") for i in dig(d, "commonInstanceMetadata", "items", default=[]) if isinstance(i, dict)
+            i.get("key")
+            for i in dig(d, "commonInstanceMetadata", "items", default=[])
+            if isinstance(i, dict)
         ],
     )
     if ctx.project_id:
-        out.add(f"//cloudresourcemanager.googleapis.com/projects/{ctx.project_id}", EdgeType.REFERENCES, "DEPENDS_ON")
+        out.add(
+            f"//cloudresourcemanager.googleapis.com/projects/{ctx.project_id}",
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1024,7 +1175,12 @@ _EXTERNAL_SCHEMES = {"EXTERNAL", "EXTERNAL_MANAGED"}
 @_extractor("compute.googleapis.com/ForwardingRule", "compute.googleapis.com/GlobalForwardingRule")
 def _forwarding_rule(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("target"), "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO", description="forwarding rule target")
+    out.add(
+        full_name(d.get("target"), "compute"),
+        EdgeType.ROUTE,
+        "SERVES_TRAFFIC_TO",
+        description="forwarding rule target",
+    )
     out.add(full_name(d.get("backendService"), "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
     scheme = d.get("loadBalancingScheme") or ""
     ip = d.get("IPAddress") or d.get("ipAddress")
@@ -1036,7 +1192,12 @@ def _forwarding_rule(ctx: GCPContext, out: Extracted) -> None:
         out.add(ip, EdgeType.ATTACHED_TO, reverse=True, description="static external address")
         out.alias(ip)
     if scheme not in _EXTERNAL_SCHEMES:
-        out.add(full_name(d.get("subnetwork") or d.get("network"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+        out.add(
+            full_name(d.get("subnetwork") or d.get("network"), "compute"),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
     psc = bool(d.get("pscConnectionId")) or "serviceAttachments" in str(d.get("target") or "")
     if scheme in _EXTERNAL_SCHEMES and not psc:
         out.expose(f"external load balancer ({scheme})", protocol=protocol, ports=ports)
@@ -1065,8 +1226,18 @@ def _target_proxy(ctx: GCPContext, out: Extracted) -> None:
     out.add(full_name(d.get("urlMap"), "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
     out.add(full_name(d.get("service"), "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
     for cert in _list(d.get("sslCertificates")):
-        out.add(full_name(cert, "compute") or full_name(cert, "certificatemanager"), EdgeType.REFERENCES, "CERTIFICATE_SECURES", reverse=True)
-    out.add(full_name(d.get("certificateMap"), "certificatemanager"), EdgeType.REFERENCES, "CERTIFICATE_SECURES", reverse=True)
+        out.add(
+            full_name(cert, "compute") or full_name(cert, "certificatemanager"),
+            EdgeType.REFERENCES,
+            "CERTIFICATE_SECURES",
+            reverse=True,
+        )
+    out.add(
+        full_name(d.get("certificateMap"), "certificatemanager"),
+        EdgeType.REFERENCES,
+        "CERTIFICATE_SECURES",
+        reverse=True,
+    )
     out.add(full_name(d.get("sslPolicy"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     out.metadata["quic_override"] = d.get("quicOverride")
 
@@ -1075,7 +1246,11 @@ def _target_proxy(ctx: GCPContext, out: Extracted) -> None:
 def _url_map(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     services = [d.get("defaultService")]
-    services += [w.get("backendService") for w in _list(dig(d, "defaultRouteAction", "weightedBackendServices")) if isinstance(w, dict)]
+    services += [
+        w.get("backendService")
+        for w in _list(dig(d, "defaultRouteAction", "weightedBackendServices"))
+        if isinstance(w, dict)
+    ]
     for pm in _list(d.get("pathMatchers")):
         if not isinstance(pm, dict):
             continue
@@ -1087,11 +1262,20 @@ def _url_map(ctx: GCPContext, out: Extracted) -> None:
             if isinstance(rr, dict):
                 services.append(rr.get("service"))
                 services += [
-                    w.get("backendService") for w in _list(dig(rr, "routeAction", "weightedBackendServices")) if isinstance(w, dict)
+                    w.get("backendService")
+                    for w in _list(dig(rr, "routeAction", "weightedBackendServices"))
+                    if isinstance(w, dict)
                 ]
     for svc in services:
         out.add(full_name(svc, "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
-    out.metadata["hosts"] = sorted({h for hr in _list(d.get("hostRules")) if isinstance(hr, dict) for h in hr.get("hosts") or []})[:50]
+    out.metadata["hosts"] = sorted(
+        {
+            h
+            for hr in _list(d.get("hostRules"))
+            if isinstance(hr, dict)
+            for h in hr.get("hosts") or []
+        }
+    )[:50]
 
 
 @_extractor("compute.googleapis.com/BackendService", "compute.googleapis.com/RegionBackendService")
@@ -1099,11 +1283,22 @@ def _backend_service(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     for b in _list(d.get("backends")):
         if isinstance(b, dict):
-            out.add(full_name(b.get("group"), "compute"), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", balancing_mode=b.get("balancingMode"))
+            out.add(
+                full_name(b.get("group"), "compute"),
+                EdgeType.LOAD_BALANCER_TARGET,
+                "LB_TARGETS_INSTANCE",
+                balancing_mode=b.get("balancingMode"),
+            )
     for hc in _list(d.get("healthChecks")):
         out.add(full_name(hc, "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     for key in ("securityPolicy", "edgeSecurityPolicy"):
-        out.add(full_name(d.get(key), "compute"), EdgeType.PROTECTS, "PROTECTED_BY_WAF", reverse=True, description="Cloud Armor policy")
+        out.add(
+            full_name(d.get(key), "compute"),
+            EdgeType.PROTECTS,
+            "PROTECTED_BY_WAF",
+            reverse=True,
+            description="Cloud Armor policy",
+        )
     out.add(full_name(d.get("network"), "compute"), EdgeType.REFERENCES, "DEPENDS_ON")
     out.metadata.update(
         load_balancing_scheme=d.get("loadBalancingScheme"),
@@ -1119,8 +1314,17 @@ def _backend_service(ctx: GCPContext, out: Extracted) -> None:
 def _backend_bucket(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     if d.get("bucketName"):
-        out.add(f"//storage.googleapis.com/{d['bucketName']}", EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO")
-    out.add(full_name(d.get("edgeSecurityPolicy"), "compute"), EdgeType.PROTECTS, "PROTECTED_BY_WAF", reverse=True)
+        out.add(
+            f"//storage.googleapis.com/{d['bucketName']}",
+            EdgeType.LOAD_BALANCER_TARGET,
+            "SERVES_TRAFFIC_TO",
+        )
+    out.add(
+        full_name(d.get("edgeSecurityPolicy"), "compute"),
+        EdgeType.PROTECTS,
+        "PROTECTED_BY_WAF",
+        reverse=True,
+    )
     out.metadata["cdn_enabled"] = bool(d.get("enableCdn"))
 
 
@@ -1136,7 +1340,11 @@ def _target_pool(ctx: GCPContext, out: Extracted) -> None:
 
 @_extractor("compute.googleapis.com/TargetInstance")
 def _target_instance(ctx: GCPContext, out: Extracted) -> None:
-    out.add(full_name(ctx.data.get("instance"), "compute"), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE")
+    out.add(
+        full_name(ctx.data.get("instance"), "compute"),
+        EdgeType.LOAD_BALANCER_TARGET,
+        "LB_TARGETS_INSTANCE",
+    )
 
 
 @_extractor(
@@ -1149,17 +1357,34 @@ def _neg(ctx: GCPContext, out: Extracted) -> None:
     pid, region = ctx.project_id, ctx.region
     run_svc = dig(d, "cloudRun", "service")
     if run_svc and pid and region:
-        out.add(f"//run.googleapis.com/projects/{pid}/locations/{region}/services/{run_svc}", EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO")
+        out.add(
+            f"//run.googleapis.com/projects/{pid}/locations/{region}/services/{run_svc}",
+            EdgeType.LOAD_BALANCER_TARGET,
+            "SERVES_TRAFFIC_TO",
+        )
     fn = dig(d, "cloudFunction", "function")
     if fn and pid and region:
-        out.add(f"//cloudfunctions.googleapis.com/projects/{pid}/locations/{region}/functions/{fn}", EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO")
+        out.add(
+            f"//cloudfunctions.googleapis.com/projects/{pid}/locations/{region}/functions/{fn}",
+            EdgeType.LOAD_BALANCER_TARGET,
+            "SERVES_TRAFFIC_TO",
+        )
     ae = dig(d, "appEngine", "service")
     if ae and pid:
-        out.add(f"//appengine.googleapis.com/apps/{pid}/services/{ae}", EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO")
+        out.add(
+            f"//appengine.googleapis.com/apps/{pid}/services/{ae}",
+            EdgeType.LOAD_BALANCER_TARGET,
+            "SERVES_TRAFFIC_TO",
+        )
     psc = d.get("pscTargetService")
     if isinstance(psc, str) and "/" in psc:
         out.add(full_name(psc, "compute"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO")
-    out.add(full_name(d.get("subnetwork") or d.get("network"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+    out.add(
+        full_name(d.get("subnetwork") or d.get("network"), "compute"),
+        EdgeType.CONTAINS,
+        "SUBNET_CONTAINS_INSTANCE",
+        reverse=True,
+    )
     out.metadata["network_endpoint_type"] = d.get("networkEndpointType")
 
 
@@ -1169,7 +1394,9 @@ def _security_policy(ctx: GCPContext, out: Extracted) -> None:
     out.metadata.update(
         policy_type=d.get("type"),
         rule_count=len(_list(d.get("rules"))),
-        adaptive_protection=bool(dig(d, "adaptiveProtectionConfig", "layer7DdosDefenseConfig", "enable")),
+        adaptive_protection=bool(
+            dig(d, "adaptiveProtectionConfig", "layer7DdosDefenseConfig", "enable")
+        ),
     )
 
 
@@ -1178,7 +1405,9 @@ def _ssl_cert(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     out.metadata.update(
         certificate_type=d.get("type"),
-        domains=list(dig(d, "managed", "domains", default=[]) or d.get("subjectAlternativeNames") or []),
+        domains=list(
+            dig(d, "managed", "domains", default=[]) or d.get("subjectAlternativeNames") or []
+        ),
         expire_time=d.get("expireTime"),
     )
 
@@ -1194,15 +1423,23 @@ def _gke_cluster(ctx: GCPContext, out: Extracted) -> None:
     nc = d.get("networkConfig") or {}
     pid = ctx.project_id
     net = full_name(nc.get("network"), "compute") or network_ref(d.get("network"), pid)
-    sub = full_name(nc.get("subnetwork"), "compute") or subnet_ref(d.get("subnetwork"), pid, ctx.region)
+    sub = full_name(nc.get("subnetwork"), "compute") or subnet_ref(
+        d.get("subnetwork"), pid, ctx.region
+    )
     out.add(sub or net, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
     out.sa(dig(d, "nodeConfig", "serviceAccount"), ctx, "node service account")
-    out.sa(dig(d, "autoscaling", "autoprovisioningNodePoolDefaults", "serviceAccount"), ctx, "autoprovisioned node service account")
+    out.sa(
+        dig(d, "autoscaling", "autoprovisioningNodePoolDefaults", "serviceAccount"),
+        ctx,
+        "autoprovisioned node service account",
+    )
     pcc = d.get("privateClusterConfig") or {}
     man = d.get("masterAuthorizedNetworksConfig") or {}
     ip_ep = dig(d, "controlPlaneEndpointsConfig", "ipEndpointsConfig", default={}) or {}
     if ip_ep:
-        public_endpoint = bool(ip_ep.get("enablePublicEndpoint", not pcc.get("enablePrivateEndpoint")))
+        public_endpoint = bool(
+            ip_ep.get("enablePublicEndpoint", not pcc.get("enablePrivateEndpoint"))
+        )
         man = ip_ep.get("authorizedNetworksConfig") or man
     else:
         public_endpoint = not pcc.get("enablePrivateEndpoint")
@@ -1226,7 +1463,8 @@ def _gke_cluster(ctx: GCPContext, out: Extracted) -> None:
         release_channel=dig(d, "releaseChannel", "channel"),
         legacy_abac=bool(dig(d, "legacyAbac", "enabled")),
         network_policy=bool(dig(d, "networkPolicy", "enabled")),
-        binary_authorization=dig(d, "binaryAuthorization", "evaluationMode") or dig(d, "binaryAuthorization", "enabled"),
+        binary_authorization=dig(d, "binaryAuthorization", "evaluationMode")
+        or dig(d, "binaryAuthorization", "enabled"),
         shielded_nodes=bool(dig(d, "shieldedNodes", "enabled")),
     )
 
@@ -1283,7 +1521,9 @@ def _k8s_workload(ctx: GCPContext, out: Extracted) -> None:
         kubernetes_service_account=pod.get("serviceAccountName"),
         host_network=bool(pod.get("hostNetwork")),
         privileged=any(
-            dig(c, "securityContext", "privileged") for c in _list(pod.get("containers")) if isinstance(c, dict)
+            dig(c, "securityContext", "privileged")
+            for c in _list(pod.get("containers"))
+            if isinstance(c, dict)
         ),
     )
 
@@ -1297,7 +1537,11 @@ def _k8s_service(ctx: GCPContext, out: Extracted) -> None:
         for k in ("networking.gke.io/load-balancer-type", "cloud.google.com/load-balancer-type")
     )
     stype = spec.get("type")
-    ips = [i.get("ip") for i in _list(dig(ctx.data, "status", "loadBalancer", "ingress")) if isinstance(i, dict)]
+    ips = [
+        i.get("ip")
+        for i in _list(dig(ctx.data, "status", "loadBalancer", "ingress"))
+        if isinstance(i, dict)
+    ]
     if stype == "LoadBalancer" and not internal:
         ranges = spec.get("loadBalancerSourceRanges") or []
         if not ranges or any(r in INTERNET_CIDRS for r in ranges):
@@ -1306,17 +1550,27 @@ def _k8s_service(ctx: GCPContext, out: Extracted) -> None:
     for ip in ips:
         if ip and not internal:
             out.alias(ip)
-    out.metadata.update(service_type=stype, namespace=dig(ctx.data, "metadata", "namespace"), load_balancer_ips=ips)
+    out.metadata.update(
+        service_type=stype, namespace=dig(ctx.data, "metadata", "namespace"), load_balancer_ips=ips
+    )
 
 
 @_extractor("networking.k8s.io/Ingress", "extensions.k8s.io/Ingress")
 def _k8s_ingress(ctx: GCPContext, out: Extracted) -> None:
     ann = dig(ctx.data, "metadata", "annotations", default={}) or {}
-    klass = ann.get("kubernetes.io/ingress.class") or dig(ctx.data, "spec", "ingressClassName") or "gce"
-    hosts = [r.get("host") for r in _list(dig(ctx.data, "spec", "rules")) if isinstance(r, dict) and r.get("host")]
+    klass = (
+        ann.get("kubernetes.io/ingress.class") or dig(ctx.data, "spec", "ingressClassName") or "gce"
+    )
+    hosts = [
+        r.get("host")
+        for r in _list(dig(ctx.data, "spec", "rules"))
+        if isinstance(r, dict) and r.get("host")
+    ]
     if klass in ("gce", "gce-multi-cluster"):
         out.expose(f"Kubernetes ingress ({klass})", protocol="tcp", ports=["80", "443"])
-    out.metadata.update(ingress_class=klass, hosts=hosts, namespace=dig(ctx.data, "metadata", "namespace"))
+    out.metadata.update(
+        ingress_class=klass, hosts=hosts, namespace=dig(ctx.data, "metadata", "namespace")
+    )
 
 
 @_extractor("k8s.io/ServiceAccount")
@@ -1325,7 +1579,12 @@ def _k8s_sa(ctx: GCPContext, out: Extracted) -> None:
     ns, name = meta.get("namespace"), meta.get("name")
     gsa = (meta.get("annotations") or {}).get("iam.gke.io/gcp-service-account")
     if gsa:
-        out.add(sa_ref(gsa), EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE", description="GKE workload identity")
+        out.add(
+            sa_ref(gsa),
+            EdgeType.ASSUMES_ROLE,
+            "ROLE_ASSUMES_ROLE",
+            description="GKE workload identity",
+        )
     if ctx.project_id and ns and name:
         out.alias(f"{K8S_GKE_PREFIX}{ctx.project_id}/{ns}/{name}")
     out.metadata.update(namespace=ns, gcp_service_account=gsa)
@@ -1373,7 +1632,9 @@ def _connector_target(value: Any, project: str | None, location: str | None) -> 
     if "/" in value:
         return full_name(value, "vpcaccess")
     if project and location:
-        return f"//vpcaccess.googleapis.com/projects/{project}/locations/{location}/connectors/{value}"
+        return (
+            f"//vpcaccess.googleapis.com/projects/{project}/locations/{location}/connectors/{value}"
+        )
     return None
 
 
@@ -1388,9 +1649,17 @@ def _cloud_run(ctx: GCPContext, out: Extracted) -> None:
     tmpl = dig(d, "spec", "template", default={}) or {}
     if ctx.asset_type == "run.googleapis.com/Job":
         tmpl = dig(tmpl, "spec", "template", default={}) or tmpl
-    ann = {**(meta.get("annotations") or {}), **(dig(tmpl, "metadata", "annotations", default={}) or {})}
+    ann = {
+        **(meta.get("annotations") or {}),
+        **(dig(tmpl, "metadata", "annotations", default={}) or {}),
+    }
     spec = tmpl.get("spec") or {}
-    out.sa(spec.get("serviceAccountName") or ("default" if ctx.asset_type == "run.googleapis.com/Service" else None), ctx, "Cloud Run service identity")
+    out.sa(
+        spec.get("serviceAccountName")
+        or ("default" if ctx.asset_type == "run.googleapis.com/Service" else None),
+        ctx,
+        "Cloud Run service identity",
+    )
     secret_alias: dict[str, str] = {}
     for item in str(ann.get("run.googleapis.com/secrets", "")).split(","):
         if ":" in item:
@@ -1406,29 +1675,60 @@ def _cloud_run(ctx: GCPContext, out: Extracted) -> None:
         for env in _list(c.get("env")):
             ref = dig(env, "valueFrom", "secretKeyRef", "name") if isinstance(env, dict) else None
             if ref:
-                out.add(_secret_target(secret_alias.get(ref, ref), pid), EdgeType.REFERENCES, "READS_FROM")
+                out.add(
+                    _secret_target(secret_alias.get(ref, ref), pid),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                )
     for vol in _list(spec.get("volumes")):
         ref = dig(vol, "secret", "secretName") if isinstance(vol, dict) else None
         if ref:
-            out.add(_secret_target(secret_alias.get(ref, ref), pid), EdgeType.REFERENCES, "READS_FROM")
+            out.add(
+                _secret_target(secret_alias.get(ref, ref), pid), EdgeType.REFERENCES, "READS_FROM"
+            )
     connector = ann.get("run.googleapis.com/vpc-access-connector")
-    out.add(_connector_target(connector, pid, loc), EdgeType.ROUTE, "TRANSIT_ROUTED", description="egress via VPC connector")
+    out.add(
+        _connector_target(connector, pid, loc),
+        EdgeType.ROUTE,
+        "TRANSIT_ROUTED",
+        description="egress via VPC connector",
+    )
     for conn in str(ann.get("run.googleapis.com/cloudsql-instances", "")).split(","):
         if conn.strip():
-            out.add(_cloudsql_target(conn), EdgeType.REFERENCES, "DEPENDS_ON", description="Cloud SQL connection")
+            out.add(
+                _cloudsql_target(conn),
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+                description="Cloud SQL connection",
+            )
     nis = ann.get("run.googleapis.com/network-interfaces")
     if nis:
         try:
             for ni in json.loads(nis):
-                out.add(subnet_ref(ni.get("subnetwork"), pid, loc) or network_ref(ni.get("network"), pid), EdgeType.ROUTE, "TRANSIT_ROUTED", description="direct VPC egress")
+                out.add(
+                    subnet_ref(ni.get("subnetwork"), pid, loc)
+                    or network_ref(ni.get("network"), pid),
+                    EdgeType.ROUTE,
+                    "TRANSIT_ROUTED",
+                    description="direct VPC egress",
+                )
         except (ValueError, AttributeError, TypeError):
             pass
-    ingress = ann.get("run.googleapis.com/ingress") or ann.get("run.googleapis.com/ingress-status") or "all"
+    ingress = (
+        ann.get("run.googleapis.com/ingress")
+        or ann.get("run.googleapis.com/ingress-status")
+        or "all"
+    )
     url = dig(d, "status", "url") or dig(d, "status", "address", "url")
     if ctx.asset_type == "run.googleapis.com/Service" and ingress == "all":
         out.expose("Cloud Run ingress 'all'", protocol="tcp", ports=["443"])
     out.alias(url, url_alias(url))
-    out.metadata.update(ingress=ingress, url=url_alias(url), images=images, vpc_egress=ann.get("run.googleapis.com/vpc-access-egress"))
+    out.metadata.update(
+        ingress=ingress,
+        url=url_alias(url),
+        images=images,
+        vpc_egress=ann.get("run.googleapis.com/vpc-access-egress"),
+    )
 
 
 def _cloud_run_v2(ctx: GCPContext, out: Extracted) -> None:
@@ -1437,7 +1737,12 @@ def _cloud_run_v2(ctx: GCPContext, out: Extracted) -> None:
     tmpl = d.get("template") or {}
     if ctx.asset_type == "run.googleapis.com/Job":
         tmpl = dig(tmpl, "template", default={}) or tmpl
-    out.sa(tmpl.get("serviceAccount") or ("default" if ctx.asset_type == "run.googleapis.com/Service" else None), ctx, "Cloud Run service identity")
+    out.sa(
+        tmpl.get("serviceAccount")
+        or ("default" if ctx.asset_type == "run.googleapis.com/Service" else None),
+        ctx,
+        "Cloud Run service identity",
+    )
     images = []
     for c in _list(tmpl.get("containers")):
         if not isinstance(c, dict):
@@ -1446,18 +1751,26 @@ def _cloud_run_v2(ctx: GCPContext, out: Extracted) -> None:
             images.append(c["image"])
             out.add(image_repository(c["image"]), EdgeType.USES_IMAGE, "RUNS_ON")
         for env in _list(c.get("env")):
-            ref = dig(env, "valueSource", "secretKeyRef", "secret") if isinstance(env, dict) else None
+            ref = (
+                dig(env, "valueSource", "secretKeyRef", "secret") if isinstance(env, dict) else None
+            )
             out.add(_secret_target(ref, pid), EdgeType.REFERENCES, "READS_FROM")
     for vol in _list(tmpl.get("volumes")):
         if isinstance(vol, dict):
-            out.add(_secret_target(dig(vol, "secret", "secret"), pid), EdgeType.REFERENCES, "READS_FROM")
+            out.add(
+                _secret_target(dig(vol, "secret", "secret"), pid), EdgeType.REFERENCES, "READS_FROM"
+            )
             for inst in _list(dig(vol, "cloudSqlInstance", "instances")):
                 out.add(_cloudsql_target(inst), EdgeType.REFERENCES, "DEPENDS_ON")
     vpc = tmpl.get("vpcAccess") or {}
     out.add(_connector_target(vpc.get("connector"), pid, loc), EdgeType.ROUTE, "TRANSIT_ROUTED")
     for ni in _list(vpc.get("networkInterfaces")):
         if isinstance(ni, dict):
-            out.add(subnet_ref(ni.get("subnetwork"), pid, loc) or network_ref(ni.get("network"), pid), EdgeType.ROUTE, "TRANSIT_ROUTED")
+            out.add(
+                subnet_ref(ni.get("subnetwork"), pid, loc) or network_ref(ni.get("network"), pid),
+                EdgeType.ROUTE,
+                "TRANSIT_ROUTED",
+            )
     ingress = d.get("ingress") or "INGRESS_TRAFFIC_ALL"
     if ctx.asset_type == "run.googleapis.com/Service" and ingress == "INGRESS_TRAFFIC_ALL":
         out.expose("Cloud Run ingress 'all'", protocol="tcp", ports=["443"])
@@ -1472,18 +1785,45 @@ def _function_v2(ctx: GCPContext, out: Extracted) -> None:
     pid, loc = ctx.project_id, ctx.location
     sc = d.get("serviceConfig") or {}
     out.sa(sc.get("serviceAccountEmail") or "default", ctx, "function runtime identity")
-    out.add(full_name(sc.get("service"), "run"), EdgeType.MANAGES, "OWNED_BY", description="function runs on Cloud Run service")
+    out.add(
+        full_name(sc.get("service"), "run"),
+        EdgeType.MANAGES,
+        "OWNED_BY",
+        description="function runs on Cloud Run service",
+    )
     out.add(_connector_target(sc.get("vpcConnector"), pid, loc), EdgeType.ROUTE, "TRANSIT_ROUTED")
     for s in _list(sc.get("secretEnvironmentVariables")) + _list(sc.get("secretVolumes")):
         if isinstance(s, dict):
-            out.add(_secret_target(s.get("secret"), s.get("projectId") or pid), EdgeType.REFERENCES, "READS_FROM")
+            out.add(
+                _secret_target(s.get("secret"), s.get("projectId") or pid),
+                EdgeType.REFERENCES,
+                "READS_FROM",
+            )
     et = d.get("eventTrigger") or {}
-    out.add(full_name(et.get("pubsubTopic"), "pubsub"), EdgeType.INVOKES, "INVOKES", reverse=True, event_type=et.get("eventType"))
-    out.add(full_name(et.get("trigger"), "eventarc"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)
+    out.add(
+        full_name(et.get("pubsubTopic"), "pubsub"),
+        EdgeType.INVOKES,
+        "INVOKES",
+        reverse=True,
+        event_type=et.get("eventType"),
+    )
+    out.add(
+        full_name(et.get("trigger"), "eventarc"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True
+    )
     for f in _list(et.get("eventFilters")):
         if isinstance(f, dict) and f.get("attribute") == "bucket" and f.get("value"):
-            out.add(f"//storage.googleapis.com/{f['value']}", EdgeType.INVOKES, "INVOKES", reverse=True, event_type=et.get("eventType"))
-    out.add(full_name(dig(d, "buildConfig", "dockerRepository"), "artifactregistry"), EdgeType.USES_IMAGE, "RUNS_ON")
+            out.add(
+                f"//storage.googleapis.com/{f['value']}",
+                EdgeType.INVOKES,
+                "INVOKES",
+                reverse=True,
+                event_type=et.get("eventType"),
+            )
+    out.add(
+        full_name(dig(d, "buildConfig", "dockerRepository"), "artifactregistry"),
+        EdgeType.USES_IMAGE,
+        "RUNS_ON",
+    )
     ingress = sc.get("ingressSettings") or "ALLOW_ALL"
     if ingress == "ALLOW_ALL" and not et:
         out.expose("Cloud Functions ingress ALLOW_ALL", protocol="tcp", ports=["443"])
@@ -1500,23 +1840,43 @@ def _function_v2(ctx: GCPContext, out: Extracted) -> None:
 def _function_v1(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     pid, loc = ctx.project_id, ctx.location
-    out.sa(d.get("serviceAccountEmail") or (f"{pid}@appspot.gserviceaccount.com" if pid else None), ctx, "function runtime identity")
+    out.sa(
+        d.get("serviceAccountEmail") or (f"{pid}@appspot.gserviceaccount.com" if pid else None),
+        ctx,
+        "function runtime identity",
+    )
     out.add(_connector_target(d.get("vpcConnector"), pid, loc), EdgeType.ROUTE, "TRANSIT_ROUTED")
     for s in _list(d.get("secretEnvironmentVariables")) + _list(d.get("secretVolumes")):
         if isinstance(s, dict):
-            out.add(_secret_target(s.get("secret"), s.get("projectId") or pid), EdgeType.REFERENCES, "READS_FROM")
+            out.add(
+                _secret_target(s.get("secret"), s.get("projectId") or pid),
+                EdgeType.REFERENCES,
+                "READS_FROM",
+            )
     et = d.get("eventTrigger") or {}
     resource = et.get("resource")
     if isinstance(resource, str):
         svc = "pubsub" if "/topics/" in resource else None
-        out.add(full_name(resource, svc), EdgeType.INVOKES, "INVOKES", reverse=True, event_type=et.get("eventType"))
-    out.add(full_name(d.get("dockerRepository"), "artifactregistry"), EdgeType.USES_IMAGE, "RUNS_ON")
+        out.add(
+            full_name(resource, svc),
+            EdgeType.INVOKES,
+            "INVOKES",
+            reverse=True,
+            event_type=et.get("eventType"),
+        )
+    out.add(
+        full_name(d.get("dockerRepository"), "artifactregistry"), EdgeType.USES_IMAGE, "RUNS_ON"
+    )
     url = dig(d, "httpsTrigger", "url")
     ingress = d.get("ingressSettings") or "ALLOW_ALL"
     if url and ingress == "ALLOW_ALL":
-        out.expose("Cloud Functions HTTPS trigger, ingress ALLOW_ALL", protocol="tcp", ports=["443"])
+        out.expose(
+            "Cloud Functions HTTPS trigger, ingress ALLOW_ALL", protocol="tcp", ports=["443"]
+        )
     out.alias(url, url_alias(url))
-    out.metadata.update(ingress=ingress, runtime=d.get("runtime"), trigger_event_type=et.get("eventType"))
+    out.metadata.update(
+        ingress=ingress, runtime=d.get("runtime"), trigger_event_type=et.get("eventType")
+    )
 
 
 @_extractor("appengine.googleapis.com/Application")
@@ -1531,7 +1891,9 @@ def _app_engine(ctx: GCPContext, out: Extracted) -> None:
 
 @_extractor("appengine.googleapis.com/Service")
 def _app_engine_service(ctx: GCPContext, out: Extracted) -> None:
-    ingress = dig(ctx.data, "networkSettings", "ingressTrafficAllowed") or "INGRESS_TRAFFIC_ALLOWED_ALL"
+    ingress = (
+        dig(ctx.data, "networkSettings", "ingressTrafficAllowed") or "INGRESS_TRAFFIC_ALLOWED_ALL"
+    )
     if ingress in ("INGRESS_TRAFFIC_ALLOWED_ALL", "INGRESS_TRAFFIC_ALLOWED_UNSPECIFIED"):
         out.expose("App Engine service ingress all", protocol="tcp", ports=["443"])
     out.metadata["ingress"] = ingress
@@ -1546,8 +1908,15 @@ def _workflow(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("cloudtasks.googleapis.com/Queue")
 def _tasks_queue(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.sa(dig(d, "httpTarget", "oidcToken", "serviceAccountEmail") or dig(d, "httpTarget", "oauthToken", "serviceAccountEmail"), ctx, "task identity")
-    out.metadata.update(state=d.get("state"), target_host=url_alias(dig(d, "httpTarget", "uriOverride", "host")))
+    out.sa(
+        dig(d, "httpTarget", "oidcToken", "serviceAccountEmail")
+        or dig(d, "httpTarget", "oauthToken", "serviceAccountEmail"),
+        ctx,
+        "task identity",
+    )
+    out.metadata.update(
+        state=d.get("state"), target_host=url_alias(dig(d, "httpTarget", "uriOverride", "host"))
+    )
 
 
 @_extractor("apigateway.googleapis.com/Gateway")
@@ -1590,27 +1959,61 @@ def _bq_dataset_from_table(table: Any) -> str | None:
 @_extractor("pubsub.googleapis.com/Topic")
 def _topic(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(dig(d, "schemaSettings", "schema"), "pubsub"), EdgeType.REFERENCES, "DEPENDS_ON")
+    out.add(
+        full_name(dig(d, "schemaSettings", "schema"), "pubsub"), EdgeType.REFERENCES, "DEPENDS_ON"
+    )
     out.metadata["message_retention"] = d.get("messageRetentionDuration")
 
 
 @_extractor("pubsub.googleapis.com/Subscription")
 def _subscription(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(full_name(d.get("topic"), "pubsub"), EdgeType.INVOKES, "STREAMS_TO", reverse=True, description="topic delivers to subscription")
+    out.add(
+        full_name(d.get("topic"), "pubsub"),
+        EdgeType.INVOKES,
+        "STREAMS_TO",
+        reverse=True,
+        description="topic delivers to subscription",
+    )
     push = d.get("pushConfig") or {}
     endpoint = url_alias(push.get("pushEndpoint"))
     if endpoint:
         out.add(endpoint, EdgeType.INVOKES, "INVOKES", description="push delivery")
     out.sa(dig(push, "oidcToken", "serviceAccountEmail"), ctx, "push authentication identity")
-    out.add(full_name(dig(d, "deadLetterPolicy", "deadLetterTopic"), "pubsub"), EdgeType.INVOKES, "STREAMS_TO", description="dead-letter topic")
-    out.add(_bq_dataset_from_table(dig(d, "bigqueryConfig", "table")), EdgeType.INVOKES, "STREAMS_TO", description="BigQuery subscription")
+    out.add(
+        full_name(dig(d, "deadLetterPolicy", "deadLetterTopic"), "pubsub"),
+        EdgeType.INVOKES,
+        "STREAMS_TO",
+        description="dead-letter topic",
+    )
+    out.add(
+        _bq_dataset_from_table(dig(d, "bigqueryConfig", "table")),
+        EdgeType.INVOKES,
+        "STREAMS_TO",
+        description="BigQuery subscription",
+    )
     bucket = dig(d, "cloudStorageConfig", "bucket")
     if bucket:
-        out.add(f"//storage.googleapis.com/{bucket}", EdgeType.INVOKES, "STREAMS_TO", description="Cloud Storage subscription")
-    out.sa(dig(d, "bigqueryConfig", "serviceAccountEmail") or dig(d, "cloudStorageConfig", "serviceAccountEmail"), ctx, "export identity")
+        out.add(
+            f"//storage.googleapis.com/{bucket}",
+            EdgeType.INVOKES,
+            "STREAMS_TO",
+            description="Cloud Storage subscription",
+        )
+    out.sa(
+        dig(d, "bigqueryConfig", "serviceAccountEmail")
+        or dig(d, "cloudStorageConfig", "serviceAccountEmail"),
+        ctx,
+        "export identity",
+    )
     out.metadata.update(
-        delivery="push" if endpoint else "bigquery" if d.get("bigqueryConfig") else "cloud_storage" if bucket else "pull",
+        delivery="push"
+        if endpoint
+        else "bigquery"
+        if d.get("bigqueryConfig")
+        else "cloud_storage"
+        if bucket
+        else "pull",
         push_endpoint_host=endpoint,
         filter=d.get("filter"),
     )
@@ -1624,22 +2027,39 @@ def _eventarc(ctx: GCPContext, out: Extracted) -> None:
     run = dest.get("cloudRun") or {}
     if run.get("service") and pid:
         region = run.get("region") or ctx.location
-        out.add(f"//run.googleapis.com/projects/{pid}/locations/{region}/services/{run['service']}", EdgeType.INVOKES, "INVOKES")
+        out.add(
+            f"//run.googleapis.com/projects/{pid}/locations/{region}/services/{run['service']}",
+            EdgeType.INVOKES,
+            "INVOKES",
+        )
     out.add(full_name(dest.get("workflow"), "workflows"), EdgeType.INVOKES, "INVOKES")
     out.add(full_name(dest.get("cloudFunction"), "cloudfunctions"), EdgeType.INVOKES, "INVOKES")
     gke = dest.get("gke") or {}
     if gke.get("cluster") and pid:
-        out.add(f"//container.googleapis.com/projects/{pid}/locations/{gke.get('location')}/clusters/{gke['cluster']}", EdgeType.INVOKES, "INVOKES", namespace=gke.get("namespace"), service=gke.get("service"))
+        out.add(
+            f"//container.googleapis.com/projects/{pid}/locations/{gke.get('location')}/clusters/{gke['cluster']}",
+            EdgeType.INVOKES,
+            "INVOKES",
+            namespace=gke.get("namespace"),
+            service=gke.get("service"),
+        )
     out.sa(d.get("serviceAccount"), ctx, "trigger identity")
     pubsub = dig(d, "transport", "pubsub", default={}) or {}
-    out.add(full_name(pubsub.get("topic"), "pubsub"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)
+    out.add(
+        full_name(pubsub.get("topic"), "pubsub"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True
+    )
     out.add(full_name(pubsub.get("subscription"), "pubsub"), EdgeType.REFERENCES, "DEPENDS_ON")
     filters = {}
     for f in _list(d.get("eventFilters")):
         if isinstance(f, dict) and f.get("attribute"):
             filters[f["attribute"]] = f.get("value")
     if filters.get("bucket"):
-        out.add(f"//storage.googleapis.com/{filters['bucket']}", EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)
+        out.add(
+            f"//storage.googleapis.com/{filters['bucket']}",
+            EdgeType.INVOKES,
+            "TRIGGERED_BY",
+            reverse=True,
+        )
     out.metadata.update(
         event_filters=filters,
         channel=d.get("channel"),
@@ -1666,7 +2086,11 @@ def _log_sink(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("logging.googleapis.com/LogBucket")
 def _log_bucket(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.metadata.update(retention_days=_num(d.get("retentionDays")), locked=bool(d.get("locked")), analytics_enabled=bool(d.get("analyticsEnabled")))
+    out.metadata.update(
+        retention_days=_num(d.get("retentionDays")),
+        locked=bool(d.get("locked")),
+        analytics_enabled=bool(d.get("analyticsEnabled")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1678,16 +2102,33 @@ def _log_bucket(ctx: GCPContext, out: Extracted) -> None:
 def _cloud_sql(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     ipc = dig(d, "settings", "ipConfiguration", default={}) or {}
-    out.add(full_name(ipc.get("privateNetwork"), "compute"), EdgeType.ATTACHED_TO, description="private services access network")
+    out.add(
+        full_name(ipc.get("privateNetwork"), "compute"),
+        EdgeType.ATTACHED_TO,
+        description="private services access network",
+    )
     nets = [n.get("value") for n in _list(ipc.get("authorizedNetworks")) if isinstance(n, dict)]
     ipv4 = ipc.get("ipv4Enabled", True)
-    public_ips = [i.get("ipAddress") for i in _list(d.get("ipAddresses")) if isinstance(i, dict) and i.get("type") == "PRIMARY"]
+    public_ips = [
+        i.get("ipAddress")
+        for i in _list(d.get("ipAddresses"))
+        if isinstance(i, dict) and i.get("type") == "PRIMARY"
+    ]
     if ipv4 and any(n in INTERNET_CIDRS for n in nets):
-        out.expose("Cloud SQL authorized network 0.0.0.0/0", protocol="tcp", ports=[_SQL_PORTS.get(str(d.get("databaseVersion", "")).split("_")[0], "")])
+        out.expose(
+            "Cloud SQL authorized network 0.0.0.0/0",
+            protocol="tcp",
+            ports=[_SQL_PORTS.get(str(d.get("databaseVersion", "")).split("_")[0], "")],
+        )
     master = d.get("masterInstanceName")
     if isinstance(master, str) and master:
         pid = master.split(":", 1)[0] if ":" in master else ctx.project_id
-        out.add(f"//cloudsql.googleapis.com/projects/{pid}/instances/{master.rsplit(':', 1)[-1]}", EdgeType.REFERENCES, "REPLICATES_TO", reverse=True)
+        out.add(
+            f"//cloudsql.googleapis.com/projects/{pid}/instances/{master.rsplit(':', 1)[-1]}",
+            EdgeType.REFERENCES,
+            "REPLICATES_TO",
+            reverse=True,
+        )
     for ip in public_ips:
         out.alias(ip)
     out.metadata.update(
@@ -1727,21 +2168,37 @@ def _redis_cluster(ctx: GCPContext, out: Extracted) -> None:
 def _filestore(ctx: GCPContext, out: Extracted) -> None:
     for net in _list(ctx.data.get("networks")):
         if isinstance(net, dict):
-            out.add(network_ref(net.get("network"), ctx.project_id), EdgeType.ATTACHED_TO, connect_mode=net.get("connectMode"))
+            out.add(
+                network_ref(net.get("network"), ctx.project_id),
+                EdgeType.ATTACHED_TO,
+                connect_mode=net.get("connectMode"),
+            )
 
 
 @_extractor("alloydb.googleapis.com/Cluster")
 def _alloydb_cluster(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(network_ref(dig(d, "networkConfig", "network") or d.get("network"), ctx.project_id), EdgeType.ATTACHED_TO)
+    out.add(
+        network_ref(dig(d, "networkConfig", "network") or d.get("network"), ctx.project_id),
+        EdgeType.ATTACHED_TO,
+    )
 
 
 @_extractor("alloydb.googleapis.com/Instance")
 def _alloydb_instance(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(ctx.name.split("/instances/", 1)[0], EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True)
+    out.add(
+        ctx.name.split("/instances/", 1)[0],
+        EdgeType.CONTAINS,
+        "CLUSTER_CONTAINS_SERVICE",
+        reverse=True,
+    )
     nc = d.get("networkConfig") or {}
-    nets = [n.get("cidrRange") for n in _list(nc.get("authorizedExternalNetworks")) if isinstance(n, dict)]
+    nets = [
+        n.get("cidrRange")
+        for n in _list(nc.get("authorizedExternalNetworks"))
+        if isinstance(n, dict)
+    ]
     if nc.get("enablePublicIp") and (not nets or any(n in INTERNET_CIDRS for n in nets)):
         out.expose("AlloyDB public IP", protocol="tcp", ports=["5432"])
     out.metadata.update(public_ip_enabled=bool(nc.get("enablePublicIp")), authorized_networks=nets)
@@ -1758,9 +2215,17 @@ def _bq_dataset(ctx: GCPContext, out: Extracted) -> None:
             public.append({"member": member, "role": entry.get("role")})
         view = entry.get("view") or (entry.get("dataset") or {}).get("dataset")
         if isinstance(view, dict) and view.get("projectId") and view.get("datasetId"):
-            out.add(f"//bigquery.googleapis.com/projects/{view['projectId']}/datasets/{view['datasetId']}", EdgeType.GRANTS_ACCESS, "READS_FROM", reverse=True, description="authorized view/dataset")
+            out.add(
+                f"//bigquery.googleapis.com/projects/{view['projectId']}/datasets/{view['datasetId']}",
+                EdgeType.GRANTS_ACCESS,
+                "READS_FROM",
+                reverse=True,
+                description="authorized view/dataset",
+            )
     if public:
-        out.expose("BigQuery dataset access granted to " + ", ".join(sorted({p["member"] for p in public})))
+        out.expose(
+            "BigQuery dataset access granted to " + ", ".join(sorted({p["member"] for p in public}))
+        )
         out.metadata["public_access"] = public
     out.metadata["access_entry_count"] = len(_list(ctx.data.get("access")))
 
@@ -1771,14 +2236,26 @@ def _bucket(ctx: GCPContext, out: Extracted) -> None:
     iam_cfg = d.get("iamConfiguration") or {}
     log_bucket = dig(d, "logging", "logBucket")
     if log_bucket:
-        out.add(f"//storage.googleapis.com/{log_bucket}", EdgeType.LOGS_TO, "LOGS_TO", description="access logs")
+        out.add(
+            f"//storage.googleapis.com/{log_bucket}",
+            EdgeType.LOGS_TO,
+            "LOGS_TO",
+            description="access logs",
+        )
     public_acl = sorted(
-        {a.get("entity") for a in _list(d.get("acl")) + _list(d.get("defaultObjectAcl")) if isinstance(a, dict) and a.get("entity") in PUBLIC_MEMBERS}
+        {
+            a.get("entity")
+            for a in _list(d.get("acl")) + _list(d.get("defaultObjectAcl"))
+            if isinstance(a, dict) and a.get("entity") in PUBLIC_MEMBERS
+        }
     )
     if public_acl:
         out.expose("bucket ACL grants " + ", ".join(public_acl))
     out.metadata.update(
-        uniform_bucket_level_access=bool(dig(iam_cfg, "uniformBucketLevelAccess", "enabled") or dig(iam_cfg, "bucketPolicyOnly", "enabled")),
+        uniform_bucket_level_access=bool(
+            dig(iam_cfg, "uniformBucketLevelAccess", "enabled")
+            or dig(iam_cfg, "bucketPolicyOnly", "enabled")
+        ),
         public_access_prevention=iam_cfg.get("publicAccessPrevention"),
         versioning=bool(dig(d, "versioning", "enabled")),
         retention_locked=bool(dig(d, "retentionPolicy", "isLocked")),
@@ -1792,7 +2269,12 @@ def _bucket(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("cloudkms.googleapis.com/CryptoKey")
 def _crypto_key(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(ctx.name.split("/cryptoKeys/", 1)[0], EdgeType.CONTAINS, reverse=True, description="key ring contains key")
+    out.add(
+        ctx.name.split("/cryptoKeys/", 1)[0],
+        EdgeType.CONTAINS,
+        reverse=True,
+        description="key ring contains key",
+    )
     out.metadata.update(
         purpose=d.get("purpose"),
         rotation_period=d.get("rotationPeriod"),
@@ -1806,14 +2288,26 @@ def _secret(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     for t in _list(d.get("topics")):
         if isinstance(t, dict):
-            out.add(full_name(t.get("name"), "pubsub"), EdgeType.INVOKES, "INVOKES", description="secret event notifications")
-    out.metadata.update(rotation=bool(d.get("rotation")), replication="user_managed" if dig(d, "replication", "userManaged") else "automatic")
+            out.add(
+                full_name(t.get("name"), "pubsub"),
+                EdgeType.INVOKES,
+                "INVOKES",
+                description="secret event notifications",
+            )
+    out.metadata.update(
+        rotation=bool(d.get("rotation")),
+        replication="user_managed" if dig(d, "replication", "userManaged") else "automatic",
+    )
 
 
 @_extractor("artifactregistry.googleapis.com/Repository")
 def _ar_repo(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.metadata.update(format=d.get("format"), mode=d.get("mode"), immutable_tags=bool(dig(d, "dockerConfig", "immutableTags")))
+    out.metadata.update(
+        format=d.get("format"),
+        mode=d.get("mode"),
+        immutable_tags=bool(dig(d, "dockerConfig", "immutableTags")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1829,16 +2323,26 @@ def _service_account(ctx: GCPContext, out: Extracted) -> None:
     if email:
         out.alias(email, sa_ref(email), f"{PRINCIPAL_PREFIX}{sa_ref(email)}")
         for p in {pid, "-"} - {None}:
-            out.alias(f"projects/{p}/serviceAccounts/{email}", f"//iam.googleapis.com/projects/{p}/serviceAccounts/{email}")
+            out.alias(
+                f"projects/{p}/serviceAccounts/{email}",
+                f"//iam.googleapis.com/projects/{p}/serviceAccounts/{email}",
+            )
         if d.get("uniqueId") and pid:
             out.alias(f"//iam.googleapis.com/projects/{pid}/serviceAccounts/{_num(d['uniqueId'])}")
-    out.metadata.update(email=email, disabled=bool(d.get("disabled")), unique_id=_num(d.get("uniqueId")), principal_type="serviceAccount")
+    out.metadata.update(
+        email=email,
+        disabled=bool(d.get("disabled")),
+        unique_id=_num(d.get("uniqueId")),
+        principal_type="serviceAccount",
+    )
 
 
 @_extractor("iam.googleapis.com/ServiceAccountKey")
 def _sa_key(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.add(ctx.name.split("/keys/", 1)[0], EdgeType.ATTACHED_TO, description="key of service account")
+    out.add(
+        ctx.name.split("/keys/", 1)[0], EdgeType.ATTACHED_TO, description="key of service account"
+    )
     out.metadata.update(
         key_type=d.get("keyType"),
         key_origin=d.get("keyOrigin"),
@@ -1848,7 +2352,9 @@ def _sa_key(ctx: GCPContext, out: Extracted) -> None:
     )
 
 
-@_extractor("iam.googleapis.com/WorkloadIdentityPoolProvider", "iam.googleapis.com/WorkforcePoolProvider")
+@_extractor(
+    "iam.googleapis.com/WorkloadIdentityPoolProvider", "iam.googleapis.com/WorkforcePoolProvider"
+)
 def _wif_provider(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     out.add(ctx.name.split("/providers/", 1)[0], EdgeType.CONTAINS, reverse=True)
@@ -1872,7 +2378,12 @@ def _custom_role(ctx: GCPContext, out: Extracted) -> None:
 @_extractor("apikeys.googleapis.com/Key")
 def _api_key(ctx: GCPContext, out: Extracted) -> None:
     restrictions = ctx.data.get("restrictions") or {}
-    out.metadata.update(restricted=bool(restrictions), api_targets=[t.get("service") for t in _list(restrictions.get("apiTargets")) if isinstance(t, dict)])
+    out.metadata.update(
+        restricted=bool(restrictions),
+        api_targets=[
+            t.get("service") for t in _list(restrictions.get("apiTargets")) if isinstance(t, dict)
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1888,13 +2399,25 @@ def _dns_zone(ctx: GCPContext, out: Extracted) -> None:
             out.add(full_name(n.get("networkUrl"), "compute"), EdgeType.ATTACHED_TO, "DNS_RESOLVED")
     for c in _list(dig(d, "privateVisibilityConfig", "gkeClusters")):
         if isinstance(c, dict):
-            out.add(full_name(c.get("gkeClusterName"), "container"), EdgeType.ATTACHED_TO, "DNS_RESOLVED")
-    out.add(full_name(dig(d, "peeringConfig", "targetNetwork", "networkUrl"), "compute"), EdgeType.ROUTE, "DNS_RESOLVED")
+            out.add(
+                full_name(c.get("gkeClusterName"), "container"),
+                EdgeType.ATTACHED_TO,
+                "DNS_RESOLVED",
+            )
+    out.add(
+        full_name(dig(d, "peeringConfig", "targetNetwork", "networkUrl"), "compute"),
+        EdgeType.ROUTE,
+        "DNS_RESOLVED",
+    )
     out.metadata.update(
         dns_name=d.get("dnsName"),
         visibility=d.get("visibility") or "public",
         dnssec=dig(d, "dnssecConfig", "state"),
-        forwarding_targets=[t.get("ipv4Address") for t in _list(dig(d, "forwardingConfig", "targetNameServers")) if isinstance(t, dict)],
+        forwarding_targets=[
+            t.get("ipv4Address")
+            for t in _list(dig(d, "forwardingConfig", "targetNameServers"))
+            if isinstance(t, dict)
+        ],
     )
 
 
@@ -1906,7 +2429,11 @@ def _dns_policy(ctx: GCPContext, out: Extracted) -> None:
             out.add(full_name(n.get("networkUrl"), "compute"), EdgeType.ATTACHED_TO, "DNS_RESOLVED")
     for c in _list(d.get("gkeClusters")):
         if isinstance(c, dict):
-            out.add(full_name(c.get("gkeClusterName"), "container"), EdgeType.ATTACHED_TO, "DNS_RESOLVED")
+            out.add(
+                full_name(c.get("gkeClusterName"), "container"),
+                EdgeType.ATTACHED_TO,
+                "DNS_RESOLVED",
+            )
     out.metadata["inbound_forwarding"] = d.get("enableInboundForwarding")
 
 
@@ -1917,28 +2444,44 @@ def _vpc_connector(ctx: GCPContext, out: Extracted) -> None:
     out.add(network_ref(d.get("network"), pid), EdgeType.ATTACHED_TO)
     sub = d.get("subnet") or {}
     if sub.get("name"):
-        out.add(subnet_ref(sub["name"], sub.get("projectId") or pid, ctx.region), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
-    out.metadata.update(ip_cidr_range=d.get("ipCidrRange"), network=network_ref(d.get("network"), pid))
+        out.add(
+            subnet_ref(sub["name"], sub.get("projectId") or pid, ctx.region),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
+    out.metadata.update(
+        ip_cidr_range=d.get("ipCidrRange"), network=network_ref(d.get("network"), pid)
+    )
 
 
 @_extractor("networkconnectivity.googleapis.com/Spoke")
 def _ncc_spoke(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     out.add(full_name(d.get("hub"), "networkconnectivity"), EdgeType.ATTACHED_TO)
-    out.add(full_name(dig(d, "linkedVpcNetwork", "uri"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
+    out.add(
+        full_name(dig(d, "linkedVpcNetwork", "uri"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED"
+    )
     for key in ("linkedVpnTunnels", "linkedInterconnectAttachments"):
         for uri in _list(dig(d, key, "uris")):
             out.add(full_name(uri, "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
     for inst in _list(dig(d, "linkedRouterApplianceInstances", "instances")):
         if isinstance(inst, dict):
-            out.add(full_name(inst.get("virtualMachine"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED")
+            out.add(
+                full_name(inst.get("virtualMachine"), "compute"), EdgeType.ROUTE, "TRANSIT_ROUTED"
+            )
 
 
 @_extractor("managedkafka.googleapis.com/Cluster")
 def _kafka(ctx: GCPContext, out: Extracted) -> None:
     for nc in _list(dig(ctx.data, "gcpConfig", "accessConfig", "networkConfigs")):
         if isinstance(nc, dict):
-            out.add(full_name(nc.get("subnet"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+            out.add(
+                full_name(nc.get("subnet"), "compute"),
+                EdgeType.CONTAINS,
+                "SUBNET_CONTAINS_INSTANCE",
+                reverse=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1951,7 +2494,12 @@ def _composer(ctx: GCPContext, out: Extracted) -> None:
     cfg = ctx.data.get("config") or {}
     nc = cfg.get("nodeConfig") or {}
     out.sa(nc.get("serviceAccount") or "default", ctx, "Composer worker identity")
-    out.add(full_name(nc.get("subnetwork"), "compute") or full_name(nc.get("network"), "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+    out.add(
+        full_name(nc.get("subnetwork"), "compute") or full_name(nc.get("network"), "compute"),
+        EdgeType.CONTAINS,
+        "SUBNET_CONTAINS_INSTANCE",
+        reverse=True,
+    )
     out.add(full_name(cfg.get("gkeCluster"), "container"), EdgeType.MANAGES, "OWNED_BY")
     prefix = cfg.get("dagGcsPrefix")
     out.add(full_name(prefix), EdgeType.REFERENCES, "READS_FROM", description="DAG bucket")
@@ -1967,11 +2515,19 @@ def _dataproc(ctx: GCPContext, out: Extracted) -> None:
     cfg = ctx.data.get("config") or {}
     gce = cfg.get("gceClusterConfig") or {}
     out.sa(gce.get("serviceAccount") or "default", ctx, "Dataproc VM identity")
-    out.add(full_name(gce.get("subnetworkUri"), "compute") or network_ref(gce.get("networkUri"), ctx.project_id), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+    out.add(
+        full_name(gce.get("subnetworkUri"), "compute")
+        or network_ref(gce.get("networkUri"), ctx.project_id),
+        EdgeType.CONTAINS,
+        "SUBNET_CONTAINS_INSTANCE",
+        reverse=True,
+    )
     for key in ("configBucket", "tempBucket"):
         if cfg.get(key):
             out.add(f"//storage.googleapis.com/{cfg[key]}", EdgeType.REFERENCES, "WRITES_TO")
-    out.metadata.update(internal_ip_only=gce.get("internalIpOnly"), network_tags=list(gce.get("tags") or []))
+    out.metadata.update(
+        internal_ip_only=gce.get("internalIpOnly"), network_tags=list(gce.get("tags") or [])
+    )
 
 
 @_extractor("dataflow.googleapis.com/Job")
@@ -1980,7 +2536,13 @@ def _dataflow(ctx: GCPContext, out: Extracted) -> None:
     out.sa(env.get("serviceAccountEmail") or "default", ctx, "Dataflow worker identity")
     for wp in _list(env.get("workerPools")):
         if isinstance(wp, dict):
-            out.add(subnet_ref(wp.get("subnetwork"), ctx.project_id, ctx.region) or network_ref(wp.get("network"), ctx.project_id), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+            out.add(
+                subnet_ref(wp.get("subnetwork"), ctx.project_id, ctx.region)
+                or network_ref(wp.get("network"), ctx.project_id),
+                EdgeType.CONTAINS,
+                "SUBNET_CONTAINS_INSTANCE",
+                reverse=True,
+            )
     out.add(full_name(env.get("tempStoragePrefix")), EdgeType.REFERENCES, "WRITES_TO")
     out.metadata.update(job_type=ctx.data.get("type"), current_state=ctx.data.get("currentState"))
 
@@ -1990,10 +2552,17 @@ def _vertex_endpoint(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
     for dm in _list(d.get("deployedModels")):
         if isinstance(dm, dict):
-            out.add(full_name(dm.get("model"), "aiplatform"), EdgeType.REFERENCES, "DEPENDS_ON", description="deployed model")
+            out.add(
+                full_name(dm.get("model"), "aiplatform"),
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+                description="deployed model",
+            )
             out.sa(dm.get("serviceAccount"), ctx, "model serving identity")
     out.add(full_name(d.get("network"), "compute"), EdgeType.ATTACHED_TO)
-    if not d.get("network") and not dig(d, "privateServiceConnectConfig", "enablePrivateServiceConnect"):
+    if not d.get("network") and not dig(
+        d, "privateServiceConnectConfig", "enablePrivateServiceConnect"
+    ):
         out.metadata["public_endpoint"] = True
 
 
@@ -2014,20 +2583,43 @@ def _workbench(ctx: GCPContext, out: Extracted) -> None:
         if isinstance(sa, dict):
             out.sa(sa.get("email"), ctx, "notebook identity")
     nets = [(d.get("subnet"), d.get("network")), (vm.get("subnet"), vm.get("network"))]
-    nets += [(n.get("subnet"), n.get("network")) for n in _list(gce.get("networkInterfaces")) if isinstance(n, dict)]
+    nets += [
+        (n.get("subnet"), n.get("network"))
+        for n in _list(gce.get("networkInterfaces"))
+        if isinstance(n, dict)
+    ]
     for sub, net in nets:
-        out.add(full_name(sub, "compute") or full_name(net, "compute"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
-    out.metadata["public_ip_disabled"] = bool(d.get("noPublicIp") or gce.get("disablePublicIp") or vm.get("internalIpOnly"))
+        out.add(
+            full_name(sub, "compute") or full_name(net, "compute"),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
+    out.metadata["public_ip_disabled"] = bool(
+        d.get("noPublicIp") or gce.get("disablePublicIp") or vm.get("internalIpOnly")
+    )
 
 
 @_extractor("cloudbuild.googleapis.com/BuildTrigger")
 def _build_trigger(ctx: GCPContext, out: Extracted) -> None:
     d = ctx.data
-    out.sa(d.get("serviceAccount") or (f"{ctx.project_number}@cloudbuild.gserviceaccount.com" if ctx.project_number else None), ctx, "build identity")
-    out.add(full_name(dig(d, "pubsubConfig", "topic"), "pubsub"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)
+    out.sa(
+        d.get("serviceAccount")
+        or (f"{ctx.project_number}@cloudbuild.gserviceaccount.com" if ctx.project_number else None),
+        ctx,
+        "build identity",
+    )
+    out.add(
+        full_name(dig(d, "pubsubConfig", "topic"), "pubsub"),
+        EdgeType.INVOKES,
+        "TRIGGERED_BY",
+        reverse=True,
+    )
     gh = d.get("github") or {}
     out.metadata.update(
-        repository=f"{gh.get('owner')}/{gh.get('name')}" if gh.get("name") else dig(d, "sourceToBuild", "uri") or dig(d, "repositoryEventConfig", "repository"),
+        repository=f"{gh.get('owner')}/{gh.get('name')}"
+        if gh.get("name")
+        else dig(d, "sourceToBuild", "uri") or dig(d, "repositoryEventConfig", "repository"),
         filename=d.get("filename"),
         disabled=bool(d.get("disabled")),
     )
@@ -2038,7 +2630,12 @@ def _deploy_pipeline(ctx: GCPContext, out: Extracted) -> None:
     base = ctx.name.split("/deliveryPipelines/", 1)[0]
     for stage in _list(dig(ctx.data, "serialPipeline", "stages")):
         if isinstance(stage, dict) and stage.get("targetId"):
-            out.add(f"{base}/targets/{stage['targetId']}", EdgeType.MANAGES, "DEPENDS_ON", description="pipeline stage")
+            out.add(
+                f"{base}/targets/{stage['targetId']}",
+                EdgeType.MANAGES,
+                "DEPENDS_ON",
+                description="pipeline stage",
+            )
 
 
 @_extractor("clouddeploy.googleapis.com/Target")
@@ -2048,7 +2645,9 @@ def _deploy_target(ctx: GCPContext, out: Extracted) -> None:
     for ec in _list(d.get("executionConfigs")):
         if isinstance(ec, dict):
             out.sa(ec.get("serviceAccount"), ctx, "deploy execution identity")
-    out.metadata.update(require_approval=bool(d.get("requireApproval")), run_location=dig(d, "run", "location"))
+    out.metadata.update(
+        require_approval=bool(d.get("requireApproval")), run_location=dig(d, "run", "location")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2064,7 +2663,9 @@ def principal_kind(member: str) -> tuple[AssetType, str] | None:
         return AssetType.K8S_SERVICE_ACCOUNT, "kubernetesServiceAccount"
     prefix = member.split(":", 1)[0]
     if member.startswith(("principal://", "principalSet://")):
-        return AssetType.IDENTITY_PROVIDER, "principalSet" if member.startswith("principalSet://") else "principal"
+        return AssetType.IDENTITY_PROVIDER, "principalSet" if member.startswith(
+            "principalSet://"
+        ) else "principal"
     return {
         "user": (AssetType.IDENTITY_USER, "user"),
         "group": (AssetType.IDENTITY_GROUP, "group"),
@@ -2133,7 +2734,7 @@ def principal_asset(member: str, discovered_via: str = "iam_policy") -> CloudAss
     ksa = ksa_identifier(member)
     if ksa:
         arn = ksa
-        md["workload_pool_project"] = ksa[len(K8S_GKE_PREFIX):].split("/", 1)[0]
+        md["workload_pool_project"] = ksa[len(K8S_GKE_PREFIX) :].split("/", 1)[0]
     elif ptype == "serviceAccount":
         email = sa_email(member)
         if email:
@@ -2145,7 +2746,12 @@ def principal_asset(member: str, discovered_via: str = "iam_policy") -> CloudAss
     rels = []
     if pool:
         md["identity_pool"] = f"//iam.googleapis.com/{pool.group(1)}"
-        r = rel(md["identity_pool"], EdgeType.REFERENCES, "DEPENDS_ON", description="federated identity pool")
+        r = rel(
+            md["identity_pool"],
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+            description="federated identity pool",
+        )
         if r:
             rels.append(r)
     if rels:
@@ -2186,13 +2792,19 @@ def mark_exposed(asset: CloudAsset, reason: str, **detail: Any) -> None:
     reasons = asset.metadata.setdefault("exposure_reasons", [])
     if reason not in reasons:
         reasons.append(reason)
-    entry = {"via": reason, "kind": detail.pop("kind", None) or "INTERNET_EXPOSED", **{k: v for k, v in detail.items() if v}}
+    entry = {
+        "via": reason,
+        "kind": detail.pop("kind", None) or "INTERNET_EXPOSED",
+        **{k: v for k, v in detail.items() if v},
+    }
     ingress = asset.metadata.setdefault("internet_ingress", [])
     if entry not in ingress:
         ingress.append(entry)
 
 
-def apply_iam_policies(assets: list[CloudAsset], policies: Iterable[dict[str, Any]]) -> list[CloudAsset]:
+def apply_iam_policies(
+    assets: list[CloudAsset], policies: Iterable[dict[str, Any]]
+) -> list[CloudAsset]:
     """Turn IAM policy search results into typed relations.
 
     Each binding member becomes the source of a relation on its principal
@@ -2239,7 +2851,11 @@ def apply_iam_policies(assets: list[CloudAsset], policies: Iterable[dict[str, An
         if not isinstance(resource, str) or not resource:
             continue
         target = idx.get(resource)
-        is_sa_resource = "/serviceAccounts/" in resource and resource.startswith("//iam.googleapis.com/") and "/keys/" not in resource
+        is_sa_resource = (
+            "/serviceAccounts/" in resource
+            and resource.startswith("//iam.googleapis.com/")
+            and "/keys/" not in resource
+        )
         for binding in (pol.get("policy") or {}).get("bindings") or []:
             role = binding.get("role") or ""
             cond = (binding.get("condition") or {}).get("title")
@@ -2257,8 +2873,14 @@ def apply_iam_policies(assets: list[CloudAsset], policies: Iterable[dict[str, An
                 if principal is None or principal is target:
                     continue
                 principals[principal.id] = principal
-                edge = EdgeType.ASSUMES_ROLE if is_sa_resource and role in IMPERSONATION_ROLES else EdgeType.GRANTS_ACCESS
-                info = grants.setdefault((principal.id, resource, edge.value), {"roles": [], "conditions": []})
+                edge = (
+                    EdgeType.ASSUMES_ROLE
+                    if is_sa_resource and role in IMPERSONATION_ROLES
+                    else EdgeType.GRANTS_ACCESS
+                )
+                info = grants.setdefault(
+                    (principal.id, resource, edge.value), {"roles": [], "conditions": []}
+                )
                 if role not in info["roles"]:
                     info["roles"].append(role)
                 if cond and cond not in info["conditions"]:
@@ -2267,8 +2889,14 @@ def apply_iam_policies(assets: list[CloudAsset], policies: Iterable[dict[str, An
     for (pid, resource, edge_value), info in grants.items():
         principal = principals[pid]
         edge = EdgeType(edge_value)
-        relationship = "ROLE_ASSUMES_ROLE" if edge == EdgeType.ASSUMES_ROLE else "POLICY_ALLOWS_ACTION"
-        desc = f"{principal.name} can act as this service account" if edge == EdgeType.ASSUMES_ROLE else f"{principal.name} has {', '.join(info['roles'])}"
+        relationship = (
+            "ROLE_ASSUMES_ROLE" if edge == EdgeType.ASSUMES_ROLE else "POLICY_ALLOWS_ACTION"
+        )
+        desc = (
+            f"{principal.name} can act as this service account"
+            if edge == EdgeType.ASSUMES_ROLE
+            else f"{principal.name} has {', '.join(info['roles'])}"
+        )
         _append_relation(
             principal,
             rel(

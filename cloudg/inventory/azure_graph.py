@@ -89,7 +89,11 @@ def asset_type_from_arm(resource_type: str | None, kind: str | None = None) -> A
     if not resource_type:
         return AssetType.OTHER
     rtype = resource_type.lower()
-    if rtype in ("microsoft.web/sites", "microsoft.web/sites/slots") and kind and "functionapp" in kind.lower():
+    if (
+        rtype in ("microsoft.web/sites", "microsoft.web/sites/slots")
+        and kind
+        and "functionapp" in kind.lower()
+    ):
         return AssetType.CLOUD_FUNCTION
     return _ARM_TYPE_MAP.get(rtype, AssetType.OTHER)
 
@@ -101,7 +105,9 @@ def asset_type_from_arm(resource_type: str | None, kind: str | None = None) -> A
 _RG_RE = re.compile(r"^(/subscriptions/[^/]+/resourceGroups/[^/]+)", re.IGNORECASE)
 _SUB_RE = re.compile(r"^/subscriptions/([^/]+)", re.IGNORECASE)
 _MG_RE = re.compile(r"^/providers/Microsoft\.Management/managementGroups/([^/]+)", re.IGNORECASE)
-_GUID_TAIL_RE = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/?$")
+_GUID_TAIL_RE = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/?$"
+)
 
 
 def principal_ref(principal_id: Any) -> str | None:
@@ -160,7 +166,7 @@ def parent_resource_id(resource_id: str | None) -> str | None:
     parts, idx = _segments(resource_id.rstrip("/"))
     if idx < 0:
         return None
-    tail = parts[idx + 2:]  # after the namespace: type/name pairs
+    tail = parts[idx + 2 :]  # after the namespace: type/name pairs
     if len(tail) >= 4 and len(tail) % 2 == 0:
         return "/".join(parts[: len(parts) - 2])
     if len(tail) == 2:
@@ -573,12 +579,30 @@ def _network_rule_grants(d: _Draft, acls: Any) -> None:
         return
     for vr in _list(_get(acls, "virtualNetworkRules")):
         subnet = _rid(vr) or _get(vr, "virtualNetworkResourceId")
-        d.add(rel(subnet, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                  description="virtual network rule", network_rule=True))
+        d.add(
+            rel(
+                subnet,
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="virtual network rule",
+                network_rule=True,
+            )
+        )
     for rr in _list(_get(acls, "resourceAccessRules")):
-        d.add(rel(_get(rr, "resourceId"), EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                  description="resource instance rule", network_rule=True))
-    ip_rules = [_get(r, "value") or _get(r, "ipAddressOrRange") for r in _list(_get(acls, "ipRules"))]
+        d.add(
+            rel(
+                _get(rr, "resourceId"),
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="resource instance rule",
+                network_rule=True,
+            )
+        )
+    ip_rules = [
+        _get(r, "value") or _get(r, "ipAddressOrRange") for r in _list(_get(acls, "ipRules"))
+    ]
     if any(ip_rules):
         d.md["ip_rules"] = [r for r in ip_rules if r]
 
@@ -608,7 +632,14 @@ def _common_identity(d: _Draft, b: "AzureAssetBuilder") -> None:
         b.register_principal(principal, d)
     if isinstance(user_assigned, dict):
         for uami_id in user_assigned:
-            d.add(rel(uami_id, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="user-assigned managed identity"))
+            d.add(
+                rel(
+                    uami_id,
+                    EdgeType.ASSUMES_ROLE,
+                    "RUNS_ON",
+                    description="user-assigned managed identity",
+                )
+            )
 
 
 def _common_managed_by(d: _Draft, b: "AzureAssetBuilder") -> None:
@@ -625,10 +656,20 @@ def _common_managed_by(d: _Draft, b: "AzureAssetBuilder") -> None:
 def _common_parent(d: _Draft, b: "AzureAssetBuilder") -> None:
     if d.type in ("microsoft.resources/subscriptions",):
         return
-    if d.type in ("microsoft.resources/subscriptions/resourcegroups", "microsoft.resources/resourcegroups"):
+    if d.type in (
+        "microsoft.resources/subscriptions/resourcegroups",
+        "microsoft.resources/resourcegroups",
+    ):
         sub = subscription_of(d.id)
         if sub:
-            d.add(rel(subscription_ref(sub), EdgeType.CONTAINS, "ACCOUNT_CONTAINS_REGION", reverse=True))
+            d.add(
+                rel(
+                    subscription_ref(sub),
+                    EdgeType.CONTAINS,
+                    "ACCOUNT_CONTAINS_REGION",
+                    reverse=True,
+                )
+            )
         return
     parent = parent_resource_id(d.id)
     if parent:
@@ -648,8 +689,16 @@ def _common_private_endpoint_connections(d: _Draft, b: "AzureAssetBuilder") -> N
     for conn in _list(_get(d.props, "privateEndpointConnections")):
         pe = _rid(_get(_props(conn), "privateEndpoint"))
         state = _path(_props(conn), "privateLinkServiceConnectionState", "status")
-        d.add(rel(pe, EdgeType.REFERENCES, "DEPENDS_ON", reverse=True,
-                  description="private endpoint connection", status=state))
+        d.add(
+            rel(
+                pe,
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+                reverse=True,
+                description="private endpoint connection",
+                status=state,
+            )
+        )
 
 
 def _common_diagnostics(d: _Draft, b: "AzureAssetBuilder") -> None:
@@ -672,9 +721,18 @@ _COMMON: list[Extractor] = [
 
 def _nsg_rule(rule: dict[str, Any], default: bool) -> dict[str, Any]:
     p = _props(rule)
-    sources = [s for s in [_get(p, "sourceAddressPrefix")] + _list(_get(p, "sourceAddressPrefixes")) if s]
-    dests = [s for s in [_get(p, "destinationAddressPrefix")] + _list(_get(p, "destinationAddressPrefixes")) if s]
-    ports = [s for s in [_get(p, "destinationPortRange")] + _list(_get(p, "destinationPortRanges")) if s]
+    sources = [
+        s for s in [_get(p, "sourceAddressPrefix")] + _list(_get(p, "sourceAddressPrefixes")) if s
+    ]
+    dests = [
+        s
+        for s in [_get(p, "destinationAddressPrefix")]
+        + _list(_get(p, "destinationAddressPrefixes"))
+        if s
+    ]
+    ports = [
+        s for s in [_get(p, "destinationPortRange")] + _list(_get(p, "destinationPortRanges")) if s
+    ]
     src_ports = [s for s in [_get(p, "sourcePortRange")] + _list(_get(p, "sourcePortRanges")) if s]
     return {
         "name": _get(rule, "name"),
@@ -687,7 +745,9 @@ def _nsg_rule(rule: dict[str, Any], default: bool) -> dict[str, Any]:
         "source_application_security_groups": _rids(_get(p, "sourceApplicationSecurityGroups")),
         "destination_address_prefix": _get(p, "destinationAddressPrefix"),
         "destination_address_prefixes": dests,
-        "destination_application_security_groups": _rids(_get(p, "destinationApplicationSecurityGroups")),
+        "destination_application_security_groups": _rids(
+            _get(p, "destinationApplicationSecurityGroups")
+        ),
         "destination_port_range": _get(p, "destinationPortRange"),
         "destination_port_ranges": ports,
         "source_port_ranges": src_ports,
@@ -738,18 +798,27 @@ def _x_vnet(d: _Draft, b: "AzureAssetBuilder") -> None:
     for peering in _list(_get(d.props, "virtualNetworkPeerings")):
         p = _props(peering)
         remote = _rid(_get(p, "remoteVirtualNetwork"))
-        d.add(rel(remote, EdgeType.PEERING, "VPC_PEERED", description=f"peering {_get(peering, 'name')}",
-                  peering_state=_get(p, "peeringState"),
-                  allow_forwarded_traffic=_get(p, "allowForwardedTraffic"),
-                  allow_gateway_transit=_get(p, "allowGatewayTransit"),
-                  use_remote_gateways=_get(p, "useRemoteGateways")))
+        d.add(
+            rel(
+                remote,
+                EdgeType.PEERING,
+                "VPC_PEERED",
+                description=f"peering {_get(peering, 'name')}",
+                peering_state=_get(p, "peeringState"),
+                allow_forwarded_traffic=_get(p, "allowForwardedTraffic"),
+                allow_gateway_transit=_get(p, "allowGatewayTransit"),
+                use_remote_gateways=_get(p, "useRemoteGateways"),
+            )
+        )
     # subnets become their own assets; keep the VNet bag small
     d.props = {k: v for k, v in d.props.items() if k != "subnets"}
 
 
 @extractor("microsoft.network/virtualnetworks/subnets")
 def _x_subnet(d: _Draft, b: "AzureAssetBuilder") -> None:
-    prefixes = [p for p in [_get(d.props, "addressPrefix")] + _list(_get(d.props, "addressPrefixes")) if p]
+    prefixes = [
+        p for p in [_get(d.props, "addressPrefix")] + _list(_get(d.props, "addressPrefixes")) if p
+    ]
     d.md["address_prefix"] = prefixes[0] if prefixes else None
     d.md["address_prefixes"] = list(dict.fromkeys(prefixes))
     vnet = d.md.get("vnet_id") or parent_resource_id(d.id)
@@ -761,14 +830,22 @@ def _x_subnet(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.md["nat_gateway"] = nat
     d.add(rel(rt, EdgeType.ATTACHED_TO, reverse=True, description="route table association"))
     d.add(rel(nat, EdgeType.ATTACHED_TO, "NAT_TRANSLATED", reverse=True, description="NAT gateway"))
-    d.md["service_endpoints"] = [_get(se, "service") for se in _list(_get(d.props, "serviceEndpoints")) if _get(se, "service")]
+    d.md["service_endpoints"] = [
+        _get(se, "service")
+        for se in _list(_get(d.props, "serviceEndpoints"))
+        if _get(se, "service")
+    ]
     d.md["delegations"] = [
-        _get(_props(dl), "serviceName") for dl in _list(_get(d.props, "delegations")) if _get(_props(dl), "serviceName")
+        _get(_props(dl), "serviceName")
+        for dl in _list(_get(d.props, "delegations"))
+        if _get(_props(dl), "serviceName")
     ]
     d.md["private_endpoint_ids"] = _rids(_get(d.props, "privateEndpoints"))
     d.md["private_endpoint_network_policies"] = _get(d.props, "privateEndpointNetworkPolicies")
     # ipConfigurations lists every NIC in the subnet; NICs link themselves
-    d.props = {k: v for k, v in d.props.items() if k not in ("ipConfigurations", "ipConfigurationProfiles")}
+    d.props = {
+        k: v for k, v in d.props.items() if k not in ("ipConfigurations", "ipConfigurationProfiles")
+    }
 
 
 @extractor("microsoft.network/networkinterfaces")
@@ -789,12 +866,28 @@ def _x_nic(d: _Draft, b: "AzureAssetBuilder") -> None:
         if pip:
             public_ips.append(pip)
             d.add(rel(pip, EdgeType.ATTACHED_TO, reverse=True, description="public IP"))
-        for pool in _rids(_get(p, "loadBalancerBackendAddressPools")) + _rids(_get(p, "loadBalancerInboundNatRules")):
-            d.add(rel(owner_resource_id(pool), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", reverse=True,
-                      backend_pool=pool))
+        for pool in _rids(_get(p, "loadBalancerBackendAddressPools")) + _rids(
+            _get(p, "loadBalancerInboundNatRules")
+        ):
+            d.add(
+                rel(
+                    owner_resource_id(pool),
+                    EdgeType.LOAD_BALANCER_TARGET,
+                    "LB_TARGETS_INSTANCE",
+                    reverse=True,
+                    backend_pool=pool,
+                )
+            )
         for pool in _rids(_get(p, "applicationGatewayBackendAddressPools")):
-            d.add(rel(owner_resource_id(pool), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", reverse=True,
-                      backend_pool=pool))
+            d.add(
+                rel(
+                    owner_resource_id(pool),
+                    EdgeType.LOAD_BALANCER_TARGET,
+                    "LB_TARGETS_INSTANCE",
+                    reverse=True,
+                    backend_pool=pool,
+                )
+            )
         for asg in _rids(_get(p, "applicationSecurityGroups")):
             if asg not in d.md.setdefault("security_groups", []):
                 d.md["security_groups"].append(asg)
@@ -839,7 +932,13 @@ def _x_pip(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.alias(fqdn.lower() if isinstance(fqdn, str) else None)
     ipc = _rid(_get(d.props, "ipConfiguration"))
     d.add(rel(owner_resource_id(ipc), EdgeType.ATTACHED_TO, description="public IP association"))
-    d.add(rel(_rid(_get(d.props, "natGateway")), EdgeType.ATTACHED_TO, description="NAT gateway public IP"))
+    d.add(
+        rel(
+            _rid(_get(d.props, "natGateway")),
+            EdgeType.ATTACHED_TO,
+            description="NAT gateway public IP",
+        )
+    )
 
 
 def _backend_targets(d: _Draft, pools: Any, waf: bool = False) -> None:
@@ -852,23 +951,50 @@ def _backend_targets(d: _Draft, pools: Any, waf: bool = False) -> None:
             owner = owner_resource_id(ipc)
             if owner and owner not in backend_nics:
                 backend_nics.append(owner)
-                d.add(rel(owner, EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", backend_pool=_get(pool, "name")))
+                d.add(
+                    rel(
+                        owner,
+                        EdgeType.LOAD_BALANCER_TARGET,
+                        "LB_TARGETS_INSTANCE",
+                        backend_pool=_get(pool, "name"),
+                    )
+                )
         for addr in _list(_get(p, "loadBalancerBackendAddresses")):
             ap = _props(addr)
             ipc = _rid(_get(ap, "networkInterfaceIPConfiguration"))
             if ipc:
-                d.add(rel(owner_resource_id(ipc), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE",
-                          backend_pool=_get(pool, "name")))
+                d.add(
+                    rel(
+                        owner_resource_id(ipc),
+                        EdgeType.LOAD_BALANCER_TARGET,
+                        "LB_TARGETS_INSTANCE",
+                        backend_pool=_get(pool, "name"),
+                    )
+                )
             ip = _get(ap, "ipAddress")
             if ip:
                 backend_ips.append(ip)
-                d.add(rel(ip, EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", backend_pool=_get(pool, "name")))
+                d.add(
+                    rel(
+                        ip,
+                        EdgeType.LOAD_BALANCER_TARGET,
+                        "LB_TARGETS_INSTANCE",
+                        backend_pool=_get(pool, "name"),
+                    )
+                )
         for addr in _list(_get(p, "backendAddresses")):  # application gateway
             target = _get(addr, "fqdn") or _get(addr, "ipAddress")
             if target:
                 backend_ips.append(target)
                 ref = target.lower() if _get(addr, "fqdn") else target
-                d.add(rel(ref, EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO", backend_pool=_get(pool, "name")))
+                d.add(
+                    rel(
+                        ref,
+                        EdgeType.LOAD_BALANCER_TARGET,
+                        "SERVES_TRAFFIC_TO",
+                        backend_pool=_get(pool, "name"),
+                    )
+                )
     d.md["backend_network_interfaces"] = backend_nics
     d.md["backend_addresses"] = backend_ips
 
@@ -906,24 +1032,46 @@ def _x_lb(d: _Draft, b: "AzureAssetBuilder") -> None:
 def _x_appgw(d: _Draft, b: "AzureAssetBuilder") -> None:
     _frontends(d, _get(d.props, "frontendIPConfigurations"))
     for gw in _list(_get(d.props, "gatewayIPConfigurations")):
-        d.add(rel(_rid(_get(_props(gw), "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+        d.add(
+            rel(
+                _rid(_get(_props(gw), "subnet")),
+                EdgeType.CONTAINS,
+                "SUBNET_CONTAINS_INSTANCE",
+                reverse=True,
+            )
+        )
     _backend_targets(d, _get(d.props, "backendAddressPools"))
     policy = _rid(_get(d.props, "firewallPolicy"))
-    d.add(rel(policy, EdgeType.PROTECTS, "PROTECTED_BY_WAF", reverse=True, description="WAF policy"))
+    d.add(
+        rel(policy, EdgeType.PROTECTS, "PROTECTED_BY_WAF", reverse=True, description="WAF policy")
+    )
     waf = _get(d.props, "webApplicationFirewallConfiguration")
     d.md["waf_enabled"] = bool(policy) or bool(_get(waf, "enabled"))
     for cert in _list(_get(d.props, "sslCertificates")):
         secret = _get(_props(cert), "keyVaultSecretId")
         host = host_of(secret)
-        d.add(rel(host, EdgeType.REFERENCES, "CERTIFICATE_SECURES", description="TLS certificate from Key Vault"))
+        d.add(
+            rel(
+                host,
+                EdgeType.REFERENCES,
+                "CERTIFICATE_SECURES",
+                description="TLS certificate from Key Vault",
+            )
+        )
 
 
 @extractor("microsoft.network/azurefirewalls")
 def _x_firewall(d: _Draft, b: "AzureAssetBuilder") -> None:
-    for cfg in _list(_get(d.props, "ipConfigurations")) + _list(_get(d.props, "managementIpConfiguration")):
+    for cfg in _list(_get(d.props, "ipConfigurations")) + _list(
+        _get(d.props, "managementIpConfiguration")
+    ):
         p = _props(cfg)
         d.alias(_rid(cfg))
-        d.add(rel(_rid(_get(p, "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+        d.add(
+            rel(
+                _rid(_get(p, "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True
+            )
+        )
         pip = _rid(_get(p, "publicIPAddress"))
         if pip:
             d.exposed = True
@@ -933,13 +1081,27 @@ def _x_firewall(d: _Draft, b: "AzureAssetBuilder") -> None:
             d.md["private_ip"] = _get(p, "privateIPAddress")
     hub_ip = _path(d.props, "hubIPAddresses", "privateIPAddress")
     d.alias(hub_ip)
-    d.add(rel(_rid(_get(d.props, "firewallPolicy")), EdgeType.REFERENCES, "DEPENDS_ON", description="firewall policy"))
+    d.add(
+        rel(
+            _rid(_get(d.props, "firewallPolicy")),
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+            description="firewall policy",
+        )
+    )
     d.add(rel(_rid(_get(d.props, "virtualHub")), EdgeType.CONTAINS, reverse=True))
 
 
 @extractor("microsoft.network/firewallpolicies")
 def _x_firewall_policy(d: _Draft, b: "AzureAssetBuilder") -> None:
-    d.add(rel(_rid(_get(d.props, "basePolicy")), EdgeType.REFERENCES, "DEPENDS_ON", description="base policy"))
+    d.add(
+        rel(
+            _rid(_get(d.props, "basePolicy")),
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+            description="base policy",
+        )
+    )
 
 
 @extractor("microsoft.network/routetables")
@@ -955,10 +1117,20 @@ def _x_route_table(d: _Draft, b: "AzureAssetBuilder") -> None:
         }
         routes.append(entry)
         if entry["next_hop_ip"]:
-            d.add(rel(entry["next_hop_ip"], EdgeType.ROUTE, "TRANSIT_ROUTED",
-                      description=f"route {entry['address_prefix']} via {entry['next_hop_ip']}",
-                      address_prefix=entry["address_prefix"], next_hop_type=entry["next_hop_type"]))
-        if _lower(entry["next_hop_type"]) == "internet" and entry["address_prefix"] in ("0.0.0.0/0", "::/0"):
+            d.add(
+                rel(
+                    entry["next_hop_ip"],
+                    EdgeType.ROUTE,
+                    "TRANSIT_ROUTED",
+                    description=f"route {entry['address_prefix']} via {entry['next_hop_ip']}",
+                    address_prefix=entry["address_prefix"],
+                    next_hop_type=entry["next_hop_type"],
+                )
+            )
+        if _lower(entry["next_hop_type"]) == "internet" and entry["address_prefix"] in (
+            "0.0.0.0/0",
+            "::/0",
+        ):
             d.md["default_route_to_internet"] = True
     d.md["routes"] = routes
     d.md["subnet_ids"] = _rids(_get(d.props, "subnets"))
@@ -988,9 +1160,17 @@ def _x_private_endpoint(d: _Draft, b: "AzureAssetBuilder") -> None:
             groups = _list(_get(p, "groupIds"))
             if target:
                 targets.append({"target": target, "group_ids": groups})
-            d.add(rel(target, EdgeType.REFERENCES, "DEPENDS_ON", description="private link",
-                      group_ids=groups, manual=key.startswith("manual"),
-                      status=_path(p, "privateLinkServiceConnectionState", "status")))
+            d.add(
+                rel(
+                    target,
+                    EdgeType.REFERENCES,
+                    "DEPENDS_ON",
+                    description="private link",
+                    group_ids=groups,
+                    manual=key.startswith("manual"),
+                    status=_path(p, "privateLinkServiceConnectionState", "status"),
+                )
+            )
     d.md["private_link_targets"] = targets
     fqdns = [_get(c, "fqdn") for c in _list(_get(d.props, "customDnsConfigs")) if _get(c, "fqdn")]
     d.md["fqdns"] = fqdns
@@ -999,9 +1179,23 @@ def _x_private_endpoint(d: _Draft, b: "AzureAssetBuilder") -> None:
 @extractor("microsoft.network/privatelinkservices")
 def _x_pls(d: _Draft, b: "AzureAssetBuilder") -> None:
     for fe in _rids(_get(d.props, "loadBalancerFrontendIpConfigurations")):
-        d.add(rel(owner_resource_id(fe), EdgeType.REFERENCES, "SERVES_TRAFFIC_TO", description="load balancer frontend"))
+        d.add(
+            rel(
+                owner_resource_id(fe),
+                EdgeType.REFERENCES,
+                "SERVES_TRAFFIC_TO",
+                description="load balancer frontend",
+            )
+        )
     for cfg in _list(_get(d.props, "ipConfigurations")):
-        d.add(rel(_rid(_get(_props(cfg), "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+        d.add(
+            rel(
+                _rid(_get(_props(cfg), "subnet")),
+                EdgeType.CONTAINS,
+                "SUBNET_CONTAINS_INSTANCE",
+                reverse=True,
+            )
+        )
 
 
 @extractor("microsoft.network/virtualnetworkgateways", "microsoft.network/bastionhosts")
@@ -1009,7 +1203,11 @@ def _x_vnet_gateway(d: _Draft, b: "AzureAssetBuilder") -> None:
     for cfg in _list(_get(d.props, "ipConfigurations")):
         p = _props(cfg)
         d.alias(_rid(cfg))
-        d.add(rel(_rid(_get(p, "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+        d.add(
+            rel(
+                _rid(_get(p, "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True
+            )
+        )
         pip = _rid(_get(p, "publicIPAddress"))
         if pip:
             d.exposed = True
@@ -1026,15 +1224,33 @@ def _x_connection(d: _Draft, b: "AzureAssetBuilder") -> None:
 
 @extractor("microsoft.network/privatednszones/virtualnetworklinks")
 def _x_dns_link(d: _Draft, b: "AzureAssetBuilder") -> None:
-    d.add(rel(_rid(_get(d.props, "virtualNetwork")), EdgeType.REFERENCES, "DNS_RESOLVED",
-              registration_enabled=_get(d.props, "registrationEnabled")))
+    d.add(
+        rel(
+            _rid(_get(d.props, "virtualNetwork")),
+            EdgeType.REFERENCES,
+            "DNS_RESOLVED",
+            registration_enabled=_get(d.props, "registrationEnabled"),
+        )
+    )
 
 
 @extractor("microsoft.network/networkwatchers/flowlogs")
 def _x_flow_log(d: _Draft, b: "AzureAssetBuilder") -> None:
-    d.add(rel(_get(d.props, "targetResourceId"), EdgeType.MONITORS, "MONITORED_BY", description="flow logging"))
+    d.add(
+        rel(
+            _get(d.props, "targetResourceId"),
+            EdgeType.MONITORS,
+            "MONITORED_BY",
+            description="flow logging",
+        )
+    )
     d.add(rel(_get(d.props, "storageId"), EdgeType.LOGS_TO, "LOGS_TO"))
-    ws = _path(d.props, "flowAnalyticsConfiguration", "networkWatcherFlowAnalyticsConfiguration", "workspaceResourceId")
+    ws = _path(
+        d.props,
+        "flowAnalyticsConfiguration",
+        "networkWatcherFlowAnalyticsConfiguration",
+        "workspaceResourceId",
+    )
     d.add(rel(ws, EdgeType.LOGS_TO, "LOGS_TO", description="traffic analytics"))
 
 
@@ -1049,26 +1265,55 @@ def _x_front_door_classic(d: _Draft, b: "AzureAssetBuilder") -> None:
     for pool in _list(_get(d.props, "backendPools")):
         for backend in _list(_get(_props(pool), "backends")):
             addr = _get(backend, "address")
-            d.add(rel(addr.lower() if isinstance(addr, str) else None, EdgeType.LOAD_BALANCER_TARGET,
-                      "SERVES_TRAFFIC_TO", backend_pool=_get(pool, "name")))
-            d.add(rel(_get(backend, "privateLinkResourceId"), EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO"))
+            d.add(
+                rel(
+                    addr.lower() if isinstance(addr, str) else None,
+                    EdgeType.LOAD_BALANCER_TARGET,
+                    "SERVES_TRAFFIC_TO",
+                    backend_pool=_get(pool, "name"),
+                )
+            )
+            d.add(
+                rel(
+                    _get(backend, "privateLinkResourceId"),
+                    EdgeType.LOAD_BALANCER_TARGET,
+                    "SERVES_TRAFFIC_TO",
+                )
+            )
 
 
-@extractor("microsoft.cdn/profiles/afdendpoints", "microsoft.cdn/profiles/endpoints", "microsoft.cdn/profiles/customdomains")
+@extractor(
+    "microsoft.cdn/profiles/afdendpoints",
+    "microsoft.cdn/profiles/endpoints",
+    "microsoft.cdn/profiles/customdomains",
+)
 def _x_cdn_endpoint(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.exposed = True
     host = _get(d.props, "hostName")
     d.alias(host.lower() if isinstance(host, str) else None)
     for origin in _list(_get(d.props, "origins")):  # classic CDN endpoint
         oh = _get(_props(origin), "hostName")
-        d.add(rel(oh.lower() if isinstance(oh, str) else None, EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO"))
+        d.add(
+            rel(
+                oh.lower() if isinstance(oh, str) else None,
+                EdgeType.LOAD_BALANCER_TARGET,
+                "SERVES_TRAFFIC_TO",
+            )
+        )
 
 
 @extractor("microsoft.cdn/profiles/origingroups/origins")
 def _x_afd_origin(d: _Draft, b: "AzureAssetBuilder") -> None:
     host = _get(d.props, "hostName")
     target = _rid(_get(d.props, "azureOrigin")) or (host.lower() if isinstance(host, str) else None)
-    d.add(rel(target, EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO", description="Front Door origin"))
+    d.add(
+        rel(
+            target,
+            EdgeType.LOAD_BALANCER_TARGET,
+            "SERVES_TRAFFIC_TO",
+            description="Front Door origin",
+        )
+    )
 
 
 @extractor("microsoft.cdn/profiles/securitypolicies")
@@ -1080,7 +1325,12 @@ def _x_afd_security_policy(d: _Draft, b: "AzureAssetBuilder") -> None:
         for domain in _rids(_get(assoc, "domains")):
             d.add(rel(domain, EdgeType.PROTECTS, "PROTECTED_BY_WAF"))
             if waf:
-                b.defer(waf, rel(domain, EdgeType.PROTECTS, "PROTECTED_BY_WAF", description="Front Door WAF"))
+                b.defer(
+                    waf,
+                    rel(
+                        domain, EdgeType.PROTECTS, "PROTECTED_BY_WAF", description="Front Door WAF"
+                    ),
+                )
 
 
 # ── compute ──
@@ -1108,7 +1358,14 @@ def _x_vm(d: _Draft, b: "AzureAssetBuilder") -> None:
     image = _rid(_get(storage, "imageReference"))
     d.add(rel(image, EdgeType.USES_IMAGE, "RUNS_ON", description="VM image"))
     d.add(rel(_rid(_get(d.props, "availabilitySet")), EdgeType.CONTAINS, reverse=True))
-    d.add(rel(_rid(_get(d.props, "virtualMachineScaleSet")), EdgeType.CONTAINS, "SCALES_WITH", reverse=True))
+    d.add(
+        rel(
+            _rid(_get(d.props, "virtualMachineScaleSet")),
+            EdgeType.CONTAINS,
+            "SCALES_WITH",
+            reverse=True,
+        )
+    )
     d.add(rel(_rid(_get(d.props, "proximityPlacementGroup")), EdgeType.REFERENCES, "DEPENDS_ON"))
 
 
@@ -1120,14 +1377,32 @@ def _x_vmss(d: _Draft, b: "AzureAssetBuilder") -> None:
         d.add(rel(_rid(_get(np, "networkSecurityGroup")), EdgeType.ATTACHED_TO, "PROTECTED_BY_SG"))
         for ipc in _list(_get(np, "ipConfigurations")):
             p = _props(ipc)
-            d.add(rel(_rid(_get(p, "subnet")), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+            d.add(
+                rel(
+                    _rid(_get(p, "subnet")),
+                    EdgeType.CONTAINS,
+                    "SUBNET_CONTAINS_INSTANCE",
+                    reverse=True,
+                )
+            )
             for pool in _rids(_get(p, "loadBalancerBackendAddressPools")) + _rids(
                 _get(p, "applicationGatewayBackendAddressPools")
             ):
-                d.add(rel(owner_resource_id(pool), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", reverse=True))
+                d.add(
+                    rel(
+                        owner_resource_id(pool),
+                        EdgeType.LOAD_BALANCER_TARGET,
+                        "LB_TARGETS_INSTANCE",
+                        reverse=True,
+                    )
+                )
             for asg in _rids(_get(p, "applicationSecurityGroups")):
                 d.add(rel(asg, EdgeType.ATTACHED_TO, "PROTECTED_BY_SG"))
-    d.add(rel(_rid(_path(profile, "storageProfile", "imageReference")), EdgeType.USES_IMAGE, "RUNS_ON"))
+    d.add(
+        rel(
+            _rid(_path(profile, "storageProfile", "imageReference")), EdgeType.USES_IMAGE, "RUNS_ON"
+        )
+    )
     sku = d.row.get("sku")
     d.md["capacity"] = _get(sku, "capacity") if isinstance(sku, dict) else None
 
@@ -1147,8 +1422,14 @@ def _x_disk(d: _Draft, b: "AzureAssetBuilder") -> None:
     )
     d.md.setdefault("attached_instance_id", d.row.get("managedBy"))
     d.add(rel(des, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS", description="disk encryption set"))
-    d.add(rel(_path(d.props, "creationData", "sourceResourceId"), EdgeType.REFERENCES, "DEPENDS_ON",
-              description="created from"))
+    d.add(
+        rel(
+            _path(d.props, "creationData", "sourceResourceId"),
+            EdgeType.REFERENCES,
+            "DEPENDS_ON",
+            description="created from",
+        )
+    )
 
 
 @extractor("microsoft.compute/diskencryptionsets")
@@ -1170,7 +1451,11 @@ def _x_aks(d: _Draft, b: "AzureAssetBuilder") -> None:
     kubelet = _path(p, "identityProfile", "kubeletidentity") or {}
     kubelet_id = _get(kubelet, "resourceId")
     kubelet_oid = _get(kubelet, "objectId")
-    d.md["kubelet_identity"] = {"resource_id": kubelet_id, "object_id": kubelet_oid, "client_id": _get(kubelet, "clientId")}
+    d.md["kubelet_identity"] = {
+        "resource_id": kubelet_id,
+        "object_id": kubelet_oid,
+        "client_id": _get(kubelet, "clientId"),
+    }
     d.add(rel(kubelet_id, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="kubelet identity"))
     if kubelet_oid:
         b.register_kubelet(kubelet_oid, d)
@@ -1185,18 +1470,33 @@ def _x_aks(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.add(rel(defender_ws, EdgeType.LOGS_TO, "LOGS_TO", description="Defender for Containers"))
     agic = _get(_get(addons, "ingressApplicationGateway") or {}, "config") or {}
     appgw = _get(agic, "effectiveApplicationGatewayId") or _get(agic, "applicationGatewayId")
-    d.add(rel(appgw, EdgeType.REFERENCES, "SERVES_TRAFFIC_TO", reverse=True, description="AGIC ingress"))
+    d.add(
+        rel(
+            appgw,
+            EdgeType.REFERENCES,
+            "SERVES_TRAFFIC_TO",
+            reverse=True,
+            description="AGIC ingress",
+        )
+    )
     node_rg = _get(p, "nodeResourceGroup")
     if node_rg:
         d.md["node_resource_group"] = node_rg
-        d.add(rel(f"/subscriptions/{d.account_id}/resourceGroups/{node_rg}", EdgeType.MANAGES, "OWNED_BY",
-                  description="node resource group"))
+        d.add(
+            rel(
+                f"/subscriptions/{d.account_id}/resourceGroups/{node_rg}",
+                EdgeType.MANAGES,
+                "OWNED_BY",
+                description="node resource group",
+            )
+        )
     api = _get(p, "apiServerAccessProfile") or {}
     private = bool(_get(api, "enablePrivateCluster"))
     authorized = _list(_get(api, "authorizedIPRanges"))
     d.md.update(
         {
-            "kubernetes_version": _get(p, "kubernetesVersion") or _get(p, "currentKubernetesVersion"),
+            "kubernetes_version": _get(p, "kubernetesVersion")
+            or _get(p, "currentKubernetesVersion"),
             "fqdn": _get(p, "fqdn"),
             "private_fqdn": _get(p, "privateFQDN"),
             "private_cluster": private,
@@ -1251,8 +1551,24 @@ def _x_agent_pool(d: _Draft, b: "AzureAssetBuilder") -> None:
             "cluster_id": parent_resource_id(d.id),
         }
     )
-    d.add(rel(subnet, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True, description="node subnet"))
-    d.add(rel(pod_subnet, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True, description="pod subnet"))
+    d.add(
+        rel(
+            subnet,
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+            description="node subnet",
+        )
+    )
+    d.add(
+        rel(
+            pod_subnet,
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+            description="pod subnet",
+        )
+    )
     if _get(p, "enableNodePublicIP"):
         d.exposed = True
 
@@ -1275,7 +1591,9 @@ def _image_relations(d: _Draft, images: Iterable[Any]) -> None:
         host = registry_host(image)
         if host and host not in seen:
             seen.append(host)
-            d.add(rel(host, EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {image}", image=image))
+            d.add(
+                rel(host, EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {image}", image=image)
+            )
     if seen or images:
         d.md["images"] = [i for i in images if i]
 
@@ -1284,9 +1602,18 @@ def _image_relations(d: _Draft, images: Iterable[Any]) -> None:
 def _x_site(d: _Draft, b: "AzureAssetBuilder") -> None:
     p = d.props
     kind = _lower(d.row.get("kind"))
-    d.md["role"] = "function" if "functionapp" in kind else ("workflow" if "workflowapp" in kind else "web")
-    d.add(rel(_get(p, "serverFarmId"), EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True,
-              description="App Service plan"))
+    d.md["role"] = (
+        "function" if "functionapp" in kind else ("workflow" if "workflowapp" in kind else "web")
+    )
+    d.add(
+        rel(
+            _get(p, "serverFarmId"),
+            EdgeType.CONTAINS,
+            "CLUSTER_CONTAINS_SERVICE",
+            reverse=True,
+            description="App Service plan",
+        )
+    )
     subnet = _get(p, "virtualNetworkSubnetId")
     d.md["vnet_integration_subnet"] = subnet
     d.add(rel(subnet, EdgeType.ATTACHED_TO, description="VNet integration"))
@@ -1301,8 +1628,19 @@ def _x_site(d: _Draft, b: "AzureAssetBuilder") -> None:
     _image_relations(d, list(dict.fromkeys(images)))
     kv_identity = _get(p, "keyVaultReferenceIdentity")
     if isinstance(kv_identity, str) and kv_identity.lower().startswith("/subscriptions/"):
-        d.add(rel(kv_identity, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="Key Vault reference identity"))
-    hosts = [_get(p, "defaultHostName")] + _list(_get(p, "enabledHostNames")) + _list(_get(p, "hostNames"))
+        d.add(
+            rel(
+                kv_identity,
+                EdgeType.ASSUMES_ROLE,
+                "RUNS_ON",
+                description="Key Vault reference identity",
+            )
+        )
+    hosts = (
+        [_get(p, "defaultHostName")]
+        + _list(_get(p, "enabledHostNames"))
+        + _list(_get(p, "hostNames"))
+    )
     for host in hosts:
         d.alias(host.lower() if isinstance(host, str) else None)
     d.md["default_host_name"] = _get(p, "defaultHostName")
@@ -1321,7 +1659,8 @@ def _x_plan(d: _Draft, b: "AzureAssetBuilder") -> None:
         {
             "role": "plan",
             "tier": _get(sku, "tier") if isinstance(sku, dict) else None,
-            "workers": _get(d.props, "numberOfWorkers") or (_get(sku, "capacity") if isinstance(sku, dict) else None),
+            "workers": _get(d.props, "numberOfWorkers")
+            or (_get(sku, "capacity") if isinstance(sku, dict) else None),
             "site_count": _get(d.props, "numberOfSites"),
         }
     )
@@ -1339,18 +1678,38 @@ def _x_ase(d: _Draft, b: "AzureAssetBuilder") -> None:
 def _x_container_app(d: _Draft, b: "AzureAssetBuilder") -> None:
     p = d.props
     env = _get(p, "managedEnvironmentId") or _get(p, "environmentId")
-    d.add(rel(env, EdgeType.CONTAINS, "CLUSTER_CONTAINS_SERVICE", reverse=True, description="Container Apps environment"))
+    d.add(
+        rel(
+            env,
+            EdgeType.CONTAINS,
+            "CLUSTER_CONTAINS_SERVICE",
+            reverse=True,
+            description="Container Apps environment",
+        )
+    )
     template = _get(p, "template") or {}
-    images = [_get(c, "image") for c in _list(_get(template, "containers")) + _list(_get(template, "initContainers"))]
+    images = [
+        _get(c, "image")
+        for c in _list(_get(template, "containers")) + _list(_get(template, "initContainers"))
+    ]
     _image_relations(d, [i for i in images if i])
     config = _get(p, "configuration") or {}
     for reg in _list(_get(config, "registries")):
         server = _get(reg, "server")
         if isinstance(server, str):
-            d.add(rel(server.lower(), EdgeType.USES_IMAGE, "RUNS_ON", description="configured registry"))
+            d.add(
+                rel(
+                    server.lower(),
+                    EdgeType.USES_IMAGE,
+                    "RUNS_ON",
+                    description="configured registry",
+                )
+            )
         ident = _get(reg, "identity")
         if isinstance(ident, str) and ident.lower().startswith("/subscriptions/"):
-            d.add(rel(ident, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="registry pull identity"))
+            d.add(
+                rel(ident, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="registry pull identity")
+            )
     ingress = _get(config, "ingress") or {}
     fqdn = _get(ingress, "fqdn") or _get(p, "latestRevisionFqdn")
     d.alias(fqdn.lower() if isinstance(fqdn, str) else None)
@@ -1362,7 +1721,14 @@ def _x_container_app(d: _Draft, b: "AzureAssetBuilder") -> None:
 @extractor("microsoft.app/managedenvironments")
 def _x_container_env(d: _Draft, b: "AzureAssetBuilder") -> None:
     vnet = _get(d.props, "vnetConfiguration") or {}
-    d.add(rel(_get(vnet, "infrastructureSubnetId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+    d.add(
+        rel(
+            _get(vnet, "infrastructureSubnetId"),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
+    )
     d.md["internal"] = _get(vnet, "internal")
     customer = _path(d.props, "appLogsConfiguration", "logAnalyticsConfiguration", "customerId")
     if customer:
@@ -1379,7 +1745,14 @@ def _x_aci(d: _Draft, b: "AzureAssetBuilder") -> None:
     for cred in _list(_get(d.props, "imageRegistryCredentials")):
         server = _get(cred, "server")
         if isinstance(server, str):
-            d.add(rel(server.lower(), EdgeType.USES_IMAGE, "RUNS_ON", description="configured registry"))
+            d.add(
+                rel(
+                    server.lower(),
+                    EdgeType.USES_IMAGE,
+                    "RUNS_ON",
+                    description="configured registry",
+                )
+            )
     for sn in _rids(_get(d.props, "subnetIds")):
         d.add(rel(sn, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
     ip = _get(d.props, "ipAddress") or {}
@@ -1408,8 +1781,18 @@ def _x_apim(d: _Draft, b: "AzureAssetBuilder") -> None:
     for hc in _list(_get(p, "hostnameConfigurations")):
         d.alias(host_of(_get(hc, "hostName")))
         kv = host_of(_get(hc, "keyVaultId"))
-        d.add(rel(kv, EdgeType.REFERENCES, "CERTIFICATE_SECURES", description="custom domain certificate"))
-    if _lower(vnet_type) != "internal" and _lower(_get(p, "publicNetworkAccess") or "enabled") != "disabled":
+        d.add(
+            rel(
+                kv,
+                EdgeType.REFERENCES,
+                "CERTIFICATE_SECURES",
+                description="custom domain certificate",
+            )
+        )
+    if (
+        _lower(vnet_type) != "internal"
+        and _lower(_get(p, "publicNetworkAccess") or "enabled") != "disabled"
+    ):
         d.exposed = True
 
 
@@ -1438,10 +1821,18 @@ def _x_key_vault(d: _Draft, b: "AzureAssetBuilder") -> None:
         principal = principal_ref(oid)
         if principal:
             b.note_principal(oid, None)
-            d.add(rel(principal, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                      description="Key Vault access policy",
-                      keys=_get(perms, "keys"), secrets=_get(perms, "secrets"),
-                      certificates=_get(perms, "certificates")))
+            d.add(
+                rel(
+                    principal,
+                    EdgeType.GRANTS_ACCESS,
+                    "POLICY_ALLOWS_ACTION",
+                    reverse=True,
+                    description="Key Vault access policy",
+                    keys=_get(perms, "keys"),
+                    secrets=_get(perms, "secrets"),
+                    certificates=_get(perms, "certificates"),
+                )
+            )
     d.md["access_policies"] = policies
     _network_rule_grants(d, _get(p, "networkAcls"))
     _set_exposure(d, default_public=True)
@@ -1487,7 +1878,9 @@ def _x_sql_server(d: _Draft, b: "AzureAssetBuilder") -> None:
         {
             "role": "server",
             "server_name": d.name,
-            "resource_group": resource_group_of(d.id).rsplit("/", 1)[-1] if resource_group_of(d.id) else None,
+            "resource_group": resource_group_of(d.id).rsplit("/", 1)[-1]
+            if resource_group_of(d.id)
+            else None,
             "fqdn": fqdn,
             "version": _get(p, "version"),
             "minimal_tls_version": _get(p, "minimalTlsVersion"),
@@ -1497,8 +1890,17 @@ def _x_sql_server(d: _Draft, b: "AzureAssetBuilder") -> None:
     sid = _get(admins, "sid")
     if sid:
         b.note_principal(sid, _get(admins, "principalType"))
-        d.add(rel(principal_ref(sid), EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                  description="Entra administrator", role="SQL Entra admin", privileged=True))
+        d.add(
+            rel(
+                principal_ref(sid),
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="Entra administrator",
+                role="SQL Entra admin",
+                privileged=True,
+            )
+        )
     _keyvault_key_ref(d, _get(p, "keyId"))
     # firewall / vnet rules (present on the SDK fallback path)
     fw = _list(_get(p, "firewallRules"))
@@ -1514,8 +1916,16 @@ def _x_sql_server(d: _Draft, b: "AzureAssetBuilder") -> None:
         d.md["firewall_rules"] = internet_rules
     for vr in _list(_get(p, "virtualNetworkRules")):
         subnet = _get(_props(vr), "virtualNetworkSubnetId")
-        d.add(rel(subnet, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                  description="virtual network rule", network_rule=True))
+        d.add(
+            rel(
+                subnet,
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="virtual network rule",
+                network_rule=True,
+            )
+        )
     pna = _get(p, "publicNetworkAccess")
     d.md["public_network_access"] = pna
     if internet_rules:
@@ -1535,12 +1945,16 @@ def _x_sql_db(d: _Draft, b: "AzureAssetBuilder") -> None:
             "role": "database",
             "server_name": server.rsplit("/", 1)[-1] if server else None,
             "server_id": server,
-            "resource_group": resource_group_of(d.id).rsplit("/", 1)[-1] if resource_group_of(d.id) else None,
+            "resource_group": resource_group_of(d.id).rsplit("/", 1)[-1]
+            if resource_group_of(d.id)
+            else None,
             "status": _get(p, "status"),
             "edition": _get(sku, "tier") if isinstance(sku, dict) else None,
         }
     )
-    d.add(rel(_get(p, "elasticPoolId"), EdgeType.CONTAINS, reverse=True, description="elastic pool"))
+    d.add(
+        rel(_get(p, "elasticPoolId"), EdgeType.CONTAINS, reverse=True, description="elastic pool")
+    )
 
 
 @extractor(
@@ -1555,7 +1969,14 @@ def _x_oss_db(d: _Draft, b: "AzureAssetBuilder") -> None:
     fqdn = _get(p, "fullyQualifiedDomainName")
     d.alias(fqdn.lower() if isinstance(fqdn, str) else None)
     net = _get(p, "network") or {}
-    d.add(rel(_get(net, "delegatedSubnetResourceId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+    d.add(
+        rel(
+            _get(net, "delegatedSubnetResourceId"),
+            EdgeType.CONTAINS,
+            "SUBNET_CONTAINS_INSTANCE",
+            reverse=True,
+        )
+    )
     d.add(rel(_get(net, "privateDnsZoneArmResourceId"), EdgeType.REFERENCES, "DNS_RESOLVED"))
     pna = _get(net, "publicNetworkAccess") or _get(p, "publicNetworkAccess")
     d.md["public_network_access"] = pna
@@ -1569,7 +1990,15 @@ def _x_cosmos(d: _Draft, b: "AzureAssetBuilder") -> None:
     p = d.props
     d.alias(host_of(_get(p, "documentEndpoint")))
     for vr in _list(_get(p, "virtualNetworkRules")):
-        d.add(rel(_rid(vr), EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True, network_rule=True))
+        d.add(
+            rel(
+                _rid(vr),
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                network_rule=True,
+            )
+        )
     _keyvault_key_ref(d, _get(p, "keyVaultKeyUri"))
     ip_rules = [_get(r, "ipAddressOrRange") for r in _list(_get(p, "ipRules"))]
     d.md["ip_rules"] = [r for r in ip_rules if r]
@@ -1577,7 +2006,11 @@ def _x_cosmos(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.md["local_auth_disabled"] = _get(p, "disableLocalAuth")
     pna = _get(p, "publicNetworkAccess")
     d.md["public_network_access"] = pna
-    if _lower(pna or "enabled") == "enabled" and not _get(p, "isVirtualNetworkFilterEnabled") and not d.md["ip_rules"]:
+    if (
+        _lower(pna or "enabled") == "enabled"
+        and not _get(p, "isVirtualNetworkFilterEnabled")
+        and not d.md["ip_rules"]
+    ):
         d.exposed = True
 
 
@@ -1599,8 +2032,11 @@ def _x_paas_endpoint(d: _Draft, b: "AzureAssetBuilder") -> None:
     p = d.props
     for key in ("serviceBusEndpoint", "endpoint", "hostName", "discoveryUrl"):
         d.alias(host_of(_get(p, key)))
-    _keyvault_key_ref(d, _path(p, "encryption", "keyVaultProperties", "keyVaultUri") or _path(
-        p, "encryption", "keyVaultProperties", "keyIdentifier"))
+    _keyvault_key_ref(
+        d,
+        _path(p, "encryption", "keyVaultProperties", "keyVaultUri")
+        or _path(p, "encryption", "keyVaultProperties", "keyIdentifier"),
+    )
     _network_rule_grants(d, _get(p, "networkAcls") or _get(p, "networkRuleSet"))
     d.add(rel(_get(p, "subnetId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
     for key in ("keyVault", "storageAccount", "applicationInsights", "containerRegistry"):
@@ -1609,14 +2045,27 @@ def _x_paas_endpoint(d: _Draft, b: "AzureAssetBuilder") -> None:
             d.add(rel(target, EdgeType.REFERENCES, "DEPENDS_ON", description=key))
     managed_rg = _get(p, "managedResourceGroupName")
     if managed_rg:
-        d.add(rel(f"/subscriptions/{d.account_id}/resourceGroups/{managed_rg}", EdgeType.MANAGES, "OWNED_BY"))
+        d.add(
+            rel(
+                f"/subscriptions/{d.account_id}/resourceGroups/{managed_rg}",
+                EdgeType.MANAGES,
+                "OWNED_BY",
+            )
+        )
     _set_exposure(d)
 
 
 @extractor("microsoft.databricks/workspaces")
 def _x_databricks(d: _Draft, b: "AzureAssetBuilder") -> None:
     p = d.props
-    d.add(rel(_get(p, "managedResourceGroupId"), EdgeType.MANAGES, "OWNED_BY", description="managed resource group"))
+    d.add(
+        rel(
+            _get(p, "managedResourceGroupId"),
+            EdgeType.MANAGES,
+            "OWNED_BY",
+            description="managed resource group",
+        )
+    )
     params = _get(p, "parameters") or {}
     vnet = _get(_get(params, "customVirtualNetworkId") or {}, "value")
     d.add(rel(vnet, EdgeType.ATTACHED_TO, description="VNet injection"))
@@ -1650,15 +2099,23 @@ def _x_system_topic(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.add(rel(source, EdgeType.INVOKES, "TRIGGERED_BY", reverse=True, description="event source"))
 
 
-@extractor("microsoft.eventgrid/systemtopics/eventsubscriptions", "microsoft.eventgrid/topics/eventsubscriptions")
+@extractor(
+    "microsoft.eventgrid/systemtopics/eventsubscriptions",
+    "microsoft.eventgrid/topics/eventsubscriptions",
+)
 def _x_event_subscription(d: _Draft, b: "AzureAssetBuilder") -> None:
     dest = _get(d.props, "destination") or {}
-    target = _path(dest, "properties", "resourceId") or host_of(_path(dest, "properties", "endpointUrl"))
+    target = _path(dest, "properties", "resourceId") or host_of(
+        _path(dest, "properties", "endpointUrl")
+    )
     d.md["endpoint_type"] = _get(dest, "endpointType")
     d.add(rel(target, EdgeType.INVOKES, "INVOKES", description="event delivery"))
     parent = parent_resource_id(d.id)
     if parent and target:
-        b.defer(parent, rel(target, EdgeType.INVOKES, "INVOKES", description=f"event subscription {d.name}"))
+        b.defer(
+            parent,
+            rel(target, EdgeType.INVOKES, "INVOKES", description=f"event subscription {d.name}"),
+        )
 
 
 @extractor("microsoft.insights/components")
@@ -1770,9 +2227,8 @@ class AzureAssetBuilder:
             "resource_type": row.get("type"),
             "kind": kind,
             "sku": _get(sku, "name") if isinstance(sku, dict) else sku,
-            "resource_group": row.get("resourceGroup") or (
-                resource_group_of(rid).rsplit("/", 1)[-1] if resource_group_of(rid) else None
-            ),
+            "resource_group": row.get("resourceGroup")
+            or (resource_group_of(rid).rsplit("/", 1)[-1] if resource_group_of(rid) else None),
             "collected_via": discovered_via or self.discovered_via,
         }
         if discovered_via == "arm-sweep" or (not has_props and not synthetic):
@@ -1798,7 +2254,10 @@ class AzureAssetBuilder:
             rtype = _lower((row or {}).get("type"))
             if rtype == "microsoft.resources/subscriptions":
                 self._subscription_row = row
-            elif rtype in ("microsoft.resources/subscriptions/resourcegroups", "microsoft.resources/resourcegroups"):
+            elif rtype in (
+                "microsoft.resources/subscriptions/resourcegroups",
+                "microsoft.resources/resourcegroups",
+            ):
                 row = dict(row)
                 row["type"] = "microsoft.resources/subscriptions/resourcegroups"
                 self.add_row(row, discovered_via=self.discovered_via)
@@ -1832,8 +2291,14 @@ class AzureAssetBuilder:
                 "aliases": [f"azure-security:{service}:{self.subscription_id}"],
             }
             if enabled:
-                md["relations"] = [rel(sub_ref, EdgeType.MONITORS, "MONITORED_BY",
-                                       description=f"Defender for Cloud plan {plan}")]
+                md["relations"] = [
+                    rel(
+                        sub_ref,
+                        EdgeType.MONITORS,
+                        "MONITORED_BY",
+                        description=f"Defender for Cloud plan {plan}",
+                    )
+                ]
             else:
                 md["status"] = "not enabled"
             self._extra.append(
@@ -1852,7 +2317,9 @@ class AzureAssetBuilder:
 
     def _role_assignments(self) -> None:
         placeholders: dict[str, CloudAsset] = {}
-        registries = [d for d in self._drafts.values() if d.type == "microsoft.containerregistry/registries"]
+        registries = [
+            d for d in self._drafts.values() if d.type == "microsoft.containerregistry/registries"
+        ]
         for ra in self._role_rows:
             props = ra.get("properties") or {}
             pid = ra.get("principalId") or _get(props, "principalId")
@@ -1865,7 +2332,9 @@ class AzureAssetBuilder:
             guid = (ra.get("roleGuid") or (m.group(1) if m else "")).lower()
             role_name = ra.get("roleName") or BUILTIN_ROLES.get(guid) or guid or "unknown role"
             rl = role_name.lower()
-            privileged = rl in PRIVILEGED_ROLES or rl.endswith("administrator") or rl.endswith("data owner")
+            privileged = (
+                rl in PRIVILEGED_ROLES or rl.endswith("administrator") or rl.endswith("data owner")
+            )
             relation = rel(
                 scope,
                 EdgeType.GRANTS_ACCESS,
@@ -1890,13 +2359,25 @@ class AzureAssetBuilder:
             # AKS kubelet identity with AcrPull -> the cluster pulls from the registry
             if guid == ACR_PULL_ROLE_ID and pid.lower() in self._kubelets and scope:
                 sl = scope.lower()
-                targets = [r.id for r in registries if r.id.lower() == sl or r.id.lower().startswith(sl + "/")]
+                targets = [
+                    r.id
+                    for r in registries
+                    if r.id.lower() == sl or r.id.lower().startswith(sl + "/")
+                ]
                 if not targets and "/providers/microsoft.containerregistry/registries/" in sl:
                     targets = [scope]
                 for aks_id in self._kubelets[pid.lower()]:
                     for reg in targets:
-                        self.defer(aks_id, rel(reg, EdgeType.USES_IMAGE, "RUNS_ON",
-                                               description="kubelet identity has AcrPull", via="AcrPull"))
+                        self.defer(
+                            aks_id,
+                            rel(
+                                reg,
+                                EdgeType.USES_IMAGE,
+                                "RUNS_ON",
+                                description="kubelet identity has AcrPull",
+                                via="AcrPull",
+                            ),
+                        )
         self._extra.extend(placeholders.values())
         # principals referenced elsewhere (Key Vault policies, SQL admins) without an owner
         for key, ptype in self._principal_types.items():
@@ -1932,7 +2413,11 @@ class AzureAssetBuilder:
         row = self._subscription_row or {}
         props = row.get("properties") or {}
         sub = self.subscription_id
-        display = row.get("name") if row.get("name") and row.get("name") != sub else _get(props, "displayName")
+        display = (
+            row.get("name")
+            if row.get("name") and row.get("name") != sub
+            else _get(props, "displayName")
+        )
         return CloudAsset(
             arn=subscription_ref(sub),
             name=display or f"subscription {sub}",
@@ -1967,7 +2452,12 @@ class AzureAssetBuilder:
             rels: list[dict[str, Any]] = []
             seen: set[tuple[Any, ...]] = set()
             for r in d.relations:
-                k = (str(r.get("target")).lower(), r.get("edge"), r.get("reverse", False), r.get("relationship"))
+                k = (
+                    str(r.get("target")).lower(),
+                    r.get("edge"),
+                    r.get("reverse", False),
+                    r.get("relationship"),
+                )
                 if k not in seen:
                     seen.add(k)
                     rels.append(r)
@@ -2025,17 +2515,23 @@ def collect_subscription_graph(
     builder.add_rows(resource_rows)
     builder.include_subscription()
     try:
-        builder.add_containers(run_query(client, containers_query(subscription_id), subscriptions=subs))
+        builder.add_containers(
+            run_query(client, containers_query(subscription_id), subscriptions=subs)
+        )
     except Exception as exc:
         errors["resource_graph_containers"] = str(exc)
     if role_assignments:
         try:
-            builder.add_role_assignments(run_query(client, role_assignments_query(subscription_id), subscriptions=subs))
+            builder.add_role_assignments(
+                run_query(client, role_assignments_query(subscription_id), subscriptions=subs)
+            )
         except Exception as exc:
             errors["resource_graph_role_assignments"] = str(exc)
     if defender:
         try:
-            builder.add_defender_pricings(run_query(client, defender_query(subscription_id), subscriptions=subs))
+            builder.add_defender_pricings(
+                run_query(client, defender_query(subscription_id), subscriptions=subs)
+            )
         except Exception as exc:
             errors["resource_graph_defender"] = str(exc)
     return builder

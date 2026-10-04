@@ -47,6 +47,7 @@ def _bool_policy(p: dict[str, Any]) -> dict[str, Any]:
         out["enforced"] = bool(bp.get("enforced"))
     lp = p.get("list_policy") or p.get("listPolicy")
     if isinstance(lp, dict):
+
         def g(snake: str, camel: str) -> Any:
             return lp.get(snake, lp.get(camel))
 
@@ -64,7 +65,9 @@ def _bool_policy(p: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in out.items() if v not in (None, [], "")}
 
 
-def org_policy_assets(results: list[dict[str, Any]], number_to_id: dict[str, str]) -> list[CloudAsset]:
+def org_policy_assets(
+    results: list[dict[str, Any]], number_to_id: dict[str, str]
+) -> list[CloudAsset]:
     """ORG_POLICY assets from ``ContentType.ORG_POLICY`` listing results."""
     assets: list[CloudAsset] = []
     for res in results:
@@ -84,7 +87,14 @@ def org_policy_assets(results: list[dict[str, Any]], number_to_id: dict[str, str
                 "constraint": constraint,
                 "attached_to": attached,
                 **_bool_policy(p),
-                "relations": [rel(attached, EdgeType.GOVERNS, "SCP_RESTRICTS", description=f"{constraint} on {rel_attached}")],
+                "relations": [
+                    rel(
+                        attached,
+                        EdgeType.GOVERNS,
+                        "SCP_RESTRICTS",
+                        description=f"{constraint} on {rel_attached}",
+                    )
+                ],
             }
             assets.append(
                 CloudAsset(
@@ -110,7 +120,13 @@ def perimeter_assets(results: list[dict[str, Any]]) -> list[CloudAsset]:
         name = res.get("name") or full_name(perimeter.get("name"), "accesscontextmanager") or ""
         md, governed = perimeter_metadata(perimeter)
         relations = [
-            rel(ref, EdgeType.GOVERNS, "COMPLIANCE_GOVERNS", description="VPC Service Controls perimeter", dry_run=dry or None)
+            rel(
+                ref,
+                EdgeType.GOVERNS,
+                "COMPLIANCE_GOVERNS",
+                description="VPC Service Controls perimeter",
+                dry_run=dry or None,
+            )
             for ref, dry in governed
         ]
         md.update(
@@ -210,7 +226,9 @@ def discover_gcp_hierarchy(
         assets.extend(p for p in policies if p.arn not in known)
         cov.record(
             "gcp_org_policies",
-            ServiceStatus.SUCCESS if error is None else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
+            ServiceStatus.SUCCESS
+            if error is None
+            else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
             asset_count=len(policies),
             error=str(error) if error else None,
             duration_ms=int((time.time() - start) * 1000),
@@ -223,7 +241,9 @@ def discover_gcp_hierarchy(
         assets.extend(perimeters)
         cov.record(
             "gcp_vpc_service_controls",
-            ServiceStatus.SUCCESS if error is None else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
+            ServiceStatus.SUCCESS
+            if error is None
+            else (ServiceStatus.PARTIAL if results else ServiceStatus.FAILED),
             asset_count=len(perimeters),
             error=str(error) if error else None,
             duration_ms=int((time.time() - start) * 1000),
@@ -237,4 +257,6 @@ async def discover_gcp_hierarchy_async(
     credentials: Any, organization_id: str, client: Any = None, **kwargs: Any
 ) -> list[CloudAsset]:
     """Async wrapper running :func:`discover_gcp_hierarchy` in a worker thread."""
-    return await asyncio.to_thread(discover_gcp_hierarchy, credentials, organization_id, client, **kwargs)
+    return await asyncio.to_thread(
+        discover_gcp_hierarchy, credentials, organization_id, client, **kwargs
+    )

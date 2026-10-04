@@ -194,7 +194,9 @@ def identifier_refs(env: dict[str, Any] | None) -> list[str]:
     return refs
 
 
-def resource_policy_relations(policy: Any, account_id: str | None) -> tuple[list[dict | None], bool]:
+def resource_policy_relations(
+    policy: Any, account_id: str | None
+) -> tuple[list[dict | None], bool]:
     """Invoker / grant relations from a resource policy, plus a 'public' flag.
 
     Service principals with a SourceArn condition become INVOKES edges from
@@ -211,8 +213,14 @@ def resource_policy_relations(policy: Any, account_id: str | None) -> tuple[list
             if sources:
                 for src in sources:
                     relations.append(
-                        rel(src.rstrip("*").rstrip("/").rstrip(":"), EdgeType.INVOKES, "TRIGGERED_BY", reverse=True,
-                            description=f"{svc} may invoke", service=svc)
+                        rel(
+                            src.rstrip("*").rstrip("/").rstrip(":"),
+                            EdgeType.INVOKES,
+                            "TRIGGERED_BY",
+                            reverse=True,
+                            description=f"{svc} may invoke",
+                            service=svc,
+                        )
                     )
         for p in principals.get("AWS", []):
             if p == "*":
@@ -221,9 +229,14 @@ def resource_policy_relations(policy: Any, account_id: str | None) -> tuple[list
                 continue
             ref = principal_ref(p)
             relations.append(
-                rel(ref, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
+                rel(
+                    ref,
+                    EdgeType.GRANTS_ACCESS,
+                    "POLICY_ALLOWS_ACTION",
+                    reverse=True,
                     description="resource policy grant",
-                    cross_account=bool(account_id and f":{account_id}:" not in ref))
+                    cross_account=bool(account_id and f":{account_id}:" not in ref),
+                )
             )
     return relations, public
 

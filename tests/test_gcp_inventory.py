@@ -36,11 +36,22 @@ APP_SA = "app@proj-a.iam.gserviceaccount.com"
 KEY = "//cloudkms.googleapis.com/projects/proj-a/locations/us/keyRings/r/cryptoKeys/k"
 
 
-def res(name: str, asset_type: str, data: dict[str, Any], location: str = "", ancestors=None, parent: str = "") -> dict:
+def res(
+    name: str,
+    asset_type: str,
+    data: dict[str, Any],
+    location: str = "",
+    ancestors=None,
+    parent: str = "",
+) -> dict:
     return {
         "name": name,
         "asset_type": asset_type,
-        "resource": {"data": data, "location": location, "parent": parent or f"{CRM}projects/{NUMBER}"},
+        "resource": {
+            "data": data,
+            "location": location,
+            "parent": parent or f"{CRM}projects/{NUMBER}",
+        },
         "ancestors": list(ANC if ancestors is None else ancestors),
     }
 
@@ -121,7 +132,9 @@ def by_arn(assets: list[CloudAsset], arn: str) -> CloudAsset:
     return matches[0]
 
 
-def has_edge(edges, src: CloudAsset, dst: CloudAsset, edge_type: EdgeType, relationship: str | None = None) -> bool:
+def has_edge(
+    edges, src: CloudAsset, dst: CloudAsset, edge_type: EdgeType, relationship: str | None = None
+) -> bool:
     return any(
         e.source_id == src.id
         and e.target_id == dst.id
@@ -138,11 +151,21 @@ def has_edge(edges, src: CloudAsset, dst: CloudAsset, edge_type: EdgeType, relat
 PROJECT_ASSET = res(
     f"{CRM}projects/{NUMBER}",
     "cloudresourcemanager.googleapis.com/Project",
-    {"projectNumber": NUMBER, "projectId": PROJECT, "lifecycleState": "ACTIVE", "parent": {"type": "folder", "id": "555"}},
+    {
+        "projectNumber": NUMBER,
+        "projectId": PROJECT,
+        "lifecycleState": "ACTIVE",
+        "parent": {"type": "folder", "id": "555"},
+    },
     location="global",
     parent=f"{CRM}folders/555",
 )
-NETWORK = res(C + "global/networks/vpc1", "compute.googleapis.com/Network", {"name": "vpc1", "selfLink": SL + "global/networks/vpc1"}, "global")
+NETWORK = res(
+    C + "global/networks/vpc1",
+    "compute.googleapis.com/Network",
+    {"name": "vpc1", "selfLink": SL + "global/networks/vpc1"},
+    "global",
+)
 SUBNET = res(
     C + "regions/us-central1/subnetworks/sn1",
     "compute.googleapis.com/Subnetwork",
@@ -152,13 +175,22 @@ SUBNET = res(
 SERVICE_ACCOUNT = res(
     "//iam.googleapis.com/projects/proj-a/serviceAccounts/1234567890",
     "iam.googleapis.com/ServiceAccount",
-    {"email": APP_SA, "uniqueId": "1234567890", "projectId": PROJECT, "name": f"projects/proj-a/serviceAccounts/{APP_SA}"},
+    {
+        "email": APP_SA,
+        "uniqueId": "1234567890",
+        "projectId": PROJECT,
+        "name": f"projects/proj-a/serviceAccounts/{APP_SA}",
+    },
     "global",
 )
 DEFAULT_SA = res(
     "//iam.googleapis.com/projects/proj-a/serviceAccounts/42",
     "iam.googleapis.com/ServiceAccount",
-    {"email": f"{NUMBER}-compute@developer.gserviceaccount.com", "uniqueId": "42", "projectId": PROJECT},
+    {
+        "email": f"{NUMBER}-compute@developer.gserviceaccount.com",
+        "uniqueId": "42",
+        "projectId": PROJECT,
+    },
     "global",
 )
 KMS_KEY = res(KEY, "cloudkms.googleapis.com/CryptoKey", {"purpose": "ENCRYPT_DECRYPT"}, "us")
@@ -168,7 +200,9 @@ DISK = res(
     {
         "name": "vm1",
         "users": [SL + "zones/us-central1-a/instances/vm1"],
-        "diskEncryptionKey": {"kmsKeyName": "projects/proj-a/locations/us/keyRings/r/cryptoKeys/k/cryptoKeyVersions/3"},
+        "diskEncryptionKey": {
+            "kmsKeyName": "projects/proj-a/locations/us/keyRings/r/cryptoKeys/k/cryptoKeyVersions/3"
+        },
     },
     "us-central1-a",
 )
@@ -178,7 +212,9 @@ VM_WEB = res(
     {
         "name": "vm1",
         "status": "RUNNING",
-        "serviceAccounts": [{"email": APP_SA, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}],
+        "serviceAccounts": [
+            {"email": APP_SA, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}
+        ],
         "networkInterfaces": [
             {
                 "network": SL + "global/networks/vpc1",
@@ -200,7 +236,12 @@ VM_DB = res(
     {
         "name": "vm2",
         "status": "RUNNING",
-        "networkInterfaces": [{"network": SL + "global/networks/vpc1", "subnetwork": SL + "regions/us-central1/subnetworks/sn1"}],
+        "networkInterfaces": [
+            {
+                "network": SL + "global/networks/vpc1",
+                "subnetwork": SL + "regions/us-central1/subnetworks/sn1",
+            }
+        ],
         "tags": {"items": ["db"]},
     },
     "us-central1-a",
@@ -251,7 +292,12 @@ AR_REPO = res(
     {"format": "DOCKER"},
     "us-central1",
 )
-SECRET = res("//secretmanager.googleapis.com/projects/111/secrets/db-pass", "secretmanager.googleapis.com/Secret", {"replication": {"automatic": {}}}, "global")
+SECRET = res(
+    "//secretmanager.googleapis.com/projects/111/secrets/db-pass",
+    "secretmanager.googleapis.com/Secret",
+    {"replication": {"automatic": {}}},
+    "global",
+)
 CONNECTOR = res(
     "//vpcaccess.googleapis.com/projects/proj-a/locations/us-central1/connectors/conn1",
     "vpcaccess.googleapis.com/Connector",
@@ -278,7 +324,12 @@ RUN_SVC = res(
                         {
                             "image": "us-central1-docker.pkg.dev/proj-a/repo1/api@sha256:abc",
                             "env": [
-                                {"name": "DB_PASS", "valueFrom": {"secretKeyRef": {"name": "db-pass", "key": "latest"}}},
+                                {
+                                    "name": "DB_PASS",
+                                    "valueFrom": {
+                                        "secretKeyRef": {"name": "db-pass", "key": "latest"}
+                                    },
+                                },
                                 {"name": "PLAIN", "value": "hunter2"},
                             ],
                         }
@@ -305,7 +356,12 @@ CLOUD_SQL = res(
     },
     "us-central1",
 )
-TOPIC = res("//pubsub.googleapis.com/projects/proj-a/topics/t1", "pubsub.googleapis.com/Topic", {"name": "projects/proj-a/topics/t1"}, "global")
+TOPIC = res(
+    "//pubsub.googleapis.com/projects/proj-a/topics/t1",
+    "pubsub.googleapis.com/Topic",
+    {"name": "projects/proj-a/topics/t1"},
+    "global",
+)
 SUBSCRIPTION = res(
     "//pubsub.googleapis.com/projects/proj-a/subscriptions/s1",
     "pubsub.googleapis.com/Subscription",
@@ -319,9 +375,24 @@ SUBSCRIPTION = res(
     },
     "global",
 )
-BUCKET_PUBLIC = res("//storage.googleapis.com/static-bkt", "storage.googleapis.com/Bucket", {"name": "static-bkt"}, "us")
-BUCKET_LOGS = res("//storage.googleapis.com/audit-logs", "storage.googleapis.com/Bucket", {"name": "audit-logs"}, "us")
-DATASET = res("//bigquery.googleapis.com/projects/proj-a/datasets/logs_ds", "bigquery.googleapis.com/Dataset", {"access": []}, "US")
+BUCKET_PUBLIC = res(
+    "//storage.googleapis.com/static-bkt",
+    "storage.googleapis.com/Bucket",
+    {"name": "static-bkt"},
+    "us",
+)
+BUCKET_LOGS = res(
+    "//storage.googleapis.com/audit-logs",
+    "storage.googleapis.com/Bucket",
+    {"name": "audit-logs"},
+    "us",
+)
+DATASET = res(
+    "//bigquery.googleapis.com/projects/proj-a/datasets/logs_ds",
+    "bigquery.googleapis.com/Dataset",
+    {"access": []},
+    "US",
+)
 SINK_GCS = res(
     "//logging.googleapis.com/projects/proj-a/sinks/audit",
     "logging.googleapis.com/LogSink",
@@ -384,13 +455,32 @@ NEG = res(
     {"networkEndpointType": "SERVERLESS", "cloudRun": {"service": "api"}},
     "us-central1",
 )
-BACKEND_BUCKET = res(C + "global/backendBuckets/bb1", "compute.googleapis.com/BackendBucket", {"bucketName": "static-bkt"}, "global")
-ARMOR = res(C + "global/securityPolicies/armor1", "compute.googleapis.com/SecurityPolicy", {"rules": [{}]}, "global")
-CERT = res(C + "global/sslCertificates/cert1", "compute.googleapis.com/SslCertificate", {"type": "MANAGED"}, "global")
+BACKEND_BUCKET = res(
+    C + "global/backendBuckets/bb1",
+    "compute.googleapis.com/BackendBucket",
+    {"bucketName": "static-bkt"},
+    "global",
+)
+ARMOR = res(
+    C + "global/securityPolicies/armor1",
+    "compute.googleapis.com/SecurityPolicy",
+    {"rules": [{}]},
+    "global",
+)
+CERT = res(
+    C + "global/sslCertificates/cert1",
+    "compute.googleapis.com/SslCertificate",
+    {"type": "MANAGED"},
+    "global",
+)
 ADDRESS = res(
     C + "global/addresses/addr1",
     "compute.googleapis.com/GlobalAddress",
-    {"address": "34.9.9.9", "addressType": "EXTERNAL", "users": [SL + "global/forwardingRules/fr1"]},
+    {
+        "address": "34.9.9.9",
+        "addressType": "EXTERNAL",
+        "users": [SL + "global/forwardingRules/fr1"],
+    },
     "global",
 )
 # GKE
@@ -408,7 +498,10 @@ GKE = res(
         "privateClusterConfig": {"enablePrivateNodes": True},
         "masterAuthorizedNetworksConfig": {"enabled": False},
         "workloadIdentityConfig": {"workloadPool": "proj-a.svc.id.goog"},
-        "databaseEncryption": {"state": "ENCRYPTED", "keyName": "projects/proj-a/locations/us/keyRings/r/cryptoKeys/k"},
+        "databaseEncryption": {
+            "state": "ENCRYPTED",
+            "keyName": "projects/proj-a/locations/us/keyRings/r/cryptoKeys/k",
+        },
         "masterAuth": {"clientKey": "PRIVATE"},
     },
     "us-central1",
@@ -431,7 +524,12 @@ IGM = res(
     },
     "us-central1-a",
 )
-IG = res(C + "zones/us-central1-a/instanceGroups/gke-gke1-np1-grp", "compute.googleapis.com/InstanceGroup", {"size": 3}, "us-central1-a")
+IG = res(
+    C + "zones/us-central1-a/instanceGroups/gke-gke1-np1-grp",
+    "compute.googleapis.com/InstanceGroup",
+    {"size": 3},
+    "us-central1-a",
+)
 POD = res(
     "//container.googleapis.com/projects/proj-a/locations/us-central1/clusters/gke1/k8s/namespaces/ns1/pods/p1",
     "k8s.io/Pod",
@@ -440,10 +538,44 @@ POD = res(
 )
 
 ALL_RESOURCES = [
-    PROJECT_ASSET, NETWORK, SUBNET, SERVICE_ACCOUNT, DEFAULT_SA, KMS_KEY, DISK, VM_WEB, VM_DB,
-    FW_WEB, FW_DB, FW_DISABLED, AR_REPO, SECRET, CONNECTOR, RUN_SVC, CLOUD_SQL, TOPIC,
-    SUBSCRIPTION, BUCKET_PUBLIC, BUCKET_LOGS, DATASET, SINK_GCS, SINK_BQ, FR, PROXY, URL_MAP,
-    BACKEND, NEG, BACKEND_BUCKET, ARMOR, CERT, ADDRESS, GKE, NODE_POOL, IGM, IG, POD,
+    PROJECT_ASSET,
+    NETWORK,
+    SUBNET,
+    SERVICE_ACCOUNT,
+    DEFAULT_SA,
+    KMS_KEY,
+    DISK,
+    VM_WEB,
+    VM_DB,
+    FW_WEB,
+    FW_DB,
+    FW_DISABLED,
+    AR_REPO,
+    SECRET,
+    CONNECTOR,
+    RUN_SVC,
+    CLOUD_SQL,
+    TOPIC,
+    SUBSCRIPTION,
+    BUCKET_PUBLIC,
+    BUCKET_LOGS,
+    DATASET,
+    SINK_GCS,
+    SINK_BQ,
+    FR,
+    PROXY,
+    URL_MAP,
+    BACKEND,
+    NEG,
+    BACKEND_BUCKET,
+    ARMOR,
+    CERT,
+    ADDRESS,
+    GKE,
+    NODE_POOL,
+    IGM,
+    IG,
+    POD,
 ]
 
 SA_RESOURCE = f"//iam.googleapis.com/projects/proj-a/serviceAccounts/{APP_SA}"
@@ -463,7 +595,11 @@ IAM_POLICIES = [
                         "deleted:user:old@example.com?uid=1",
                     ],
                 },
-                {"role": "roles/viewer", "members": ["user:alice@example.com"], "condition": {"title": "business hours"}},
+                {
+                    "role": "roles/viewer",
+                    "members": ["user:alice@example.com"],
+                    "condition": {"title": "business hours"},
+                },
             ]
         },
     },
@@ -475,8 +611,14 @@ IAM_POLICIES = [
         "resource": SA_RESOURCE,
         "policy": {
             "bindings": [
-                {"role": "roles/iam.workloadIdentityUser", "members": ["serviceAccount:proj-a.svc.id.goog[ns1/ksa1]"]},
-                {"role": "roles/iam.serviceAccountTokenCreator", "members": ["user:alice@example.com"]},
+                {
+                    "role": "roles/iam.workloadIdentityUser",
+                    "members": ["serviceAccount:proj-a.svc.id.goog[ns1/ksa1]"],
+                },
+                {
+                    "role": "roles/iam.serviceAccountTokenCreator",
+                    "members": ["user:alice@example.com"],
+                },
             ]
         },
     },
@@ -501,7 +643,13 @@ def mapped():
     client = FakeAssetClient(resources=ALL_RESOURCES, iam=IAM_POLICIES)
     collector = GCPDeepInventoryCollector(PROJECT, credentials=None, client=client)
     assets, edges, linker = _collect(collector)
-    return {"assets": assets, "edges": edges, "linker": linker, "client": client, "collector": collector}
+    return {
+        "assets": assets,
+        "edges": edges,
+        "linker": linker,
+        "client": client,
+        "collector": collector,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +702,9 @@ class TestEnumeration:
             for n in range(3)
         ]
         cov = CollectionCoverage(provider="gcp")
-        client = FakeAssetClient(search=search, list_error=gexc.PermissionDenied("listResource denied"))
+        client = FakeAssetClient(
+            search=search, list_error=gexc.PermissionDenied("listResource denied")
+        )
         assets = run(GCPCollector(PROJECT, client=client, coverage=cov).collect())
         instances = [a for a in assets if a.asset_type == AssetType.GCE_INSTANCE]
         assert len(instances) == 3  # the first state no longer aborts the loop
@@ -578,11 +728,15 @@ class TestEnumeration:
 
         cov = CollectionCoverage(provider="gcp")
         client = FakeAssetClient(
-            resources=[NETWORK, SUBNET, VM_DB], list_error=gexc.InternalServerError("boom"), list_error_after=2
+            resources=[NETWORK, SUBNET, VM_DB],
+            list_error=gexc.InternalServerError("boom"),
+            list_error_after=2,
         )
         assets = run(GCPCollector(PROJECT, client=client, coverage=cov).collect())
         assert any(a.arn == SUBNET["name"] for a in assets)
-        assert {s.service: s.status for s in cov.services}["gcp_list_assets"] == ServiceStatus.PARTIAL
+        assert {s.service: s.status for s in cov.services}[
+            "gcp_list_assets"
+        ] == ServiceStatus.PARTIAL
 
     def test_type_map(self):
         assert "cloudscheduler.googleapis.com/Job" not in _DEEP_GCP_TYPE_MAP
@@ -617,7 +771,10 @@ class TestIAM:
         alice = by_arn(assets, "gcp-principal:user:alice@example.com")
         assert alice.asset_type == AssetType.IDENTITY_USER
         assert alice.name == "user:alice@example.com"
-        assert by_arn(assets, "gcp-principal:group:devs@example.com").asset_type == AssetType.IDENTITY_GROUP
+        assert (
+            by_arn(assets, "gcp-principal:group:devs@example.com").asset_type
+            == AssetType.IDENTITY_GROUP
+        )
         domain = by_arn(assets, "gcp-principal:domain:example.com")
         assert domain.asset_type == AssetType.IDENTITY_GROUP
         assert domain.metadata["principal_type"] == "domain"
@@ -639,7 +796,9 @@ class TestIAM:
         assets, edges = mapped["assets"], mapped["edges"]
         bucket = by_arn(assets, BUCKET_PUBLIC["name"])
         assert bucket.is_internet_exposed
-        assert bucket.metadata["public_access"] == [{"member": "allUsers", "role": "roles/storage.objectViewer"}]
+        assert bucket.metadata["public_access"] == [
+            {"member": "allUsers", "role": "roles/storage.objectViewer"}
+        ]
         assert any(e.source_id == "0.0.0.0/0" and e.target_id == bucket.id for e in edges)
         assert not any(a.name in ("allUsers", "allAuthenticatedUsers") for a in assets)
 
@@ -661,7 +820,9 @@ class TestIAM:
             metadata={"aliases": ["serviceAccount:x@b.iam.gserviceaccount.com"]},
         )
         placeholder = principal_asset("serviceAccount:x@b.iam.gserviceaccount.com")
-        placeholder.metadata["relations"] = [{"target": "//storage.googleapis.com/b1", "edge": "GRANTS_ACCESS"}]
+        placeholder.metadata["relations"] = [
+            {"target": "//storage.googleapis.com/b1", "edge": "GRANTS_ACCESS"}
+        ]
         assets, _ = merge_gcp_principals([sa, placeholder])
         assert assets == [sa]
         assert sa.metadata["relations"][0]["target"] == "//storage.googleapis.com/b1"
@@ -678,7 +839,9 @@ class TestCompute:
         net = by_arn(assets, NETWORK["name"])
         web, db, disabled = (by_arn(assets, f["name"]) for f in (FW_WEB, FW_DB, FW_DISABLED))
         vm1, vm2 = by_arn(assets, VM_WEB["name"]), by_arn(assets, VM_DB["name"])
-        assert web.metadata["ingress_rules"][0]["protocols"] == [{"protocol": "tcp", "ports": ["443"]}]
+        assert web.metadata["ingress_rules"][0]["protocols"] == [
+            {"protocol": "tcp", "ports": ["443"]}
+        ]
         assert web.metadata["allows_internet_ingress"] is True
         assert disabled.metadata["allows_internet_ingress"] is False
         assert has_edge(edges, web, net, EdgeType.ATTACHED_TO)
@@ -711,7 +874,8 @@ class TestCompute:
     def test_load_balancer_chain(self, mapped):
         assets, edges = mapped["assets"], mapped["edges"]
         fr, proxy, um, bs, neg, bb, armor, cert, addr = (
-            by_arn(assets, r["name"]) for r in (FR, PROXY, URL_MAP, BACKEND, NEG, BACKEND_BUCKET, ARMOR, CERT, ADDRESS)
+            by_arn(assets, r["name"])
+            for r in (FR, PROXY, URL_MAP, BACKEND, NEG, BACKEND_BUCKET, ARMOR, CERT, ADDRESS)
         )
         run_svc = by_arn(assets, RUN_SVC["name"])
         bucket = by_arn(assets, BUCKET_PUBLIC["name"])
@@ -761,13 +925,17 @@ class TestServerless:
         net = by_arn(assets, NETWORK["name"])
         assert run_svc.asset_type == AssetType.CONTAINER_SERVICE
         assert has_edge(edges, run_svc, repo, EdgeType.USES_IMAGE)
-        assert has_edge(edges, run_svc, secret, EdgeType.REFERENCES, "READS_FROM")  # number <-> id alias
+        assert has_edge(
+            edges, run_svc, secret, EdgeType.REFERENCES, "READS_FROM"
+        )  # number <-> id alias
         assert has_edge(edges, run_svc, conn, EdgeType.ROUTE)
         assert has_edge(edges, run_svc, sql, EdgeType.REFERENCES)
         assert has_edge(edges, conn, net, EdgeType.ATTACHED_TO)
         assert run_svc.is_internet_exposed
         # runtime SA not collected -> non-external placeholder
-        run_sa = by_arn(assets, "gcp-principal:serviceAccount:run-sa@proj-a.iam.gserviceaccount.com")
+        run_sa = by_arn(
+            assets, "gcp-principal:serviceAccount:run-sa@proj-a.iam.gserviceaccount.com"
+        )
         assert run_sa.asset_type == AssetType.SERVICE_PRINCIPAL
         assert has_edge(edges, run_svc, run_sa, EdgeType.ASSUMES_ROLE, "RUNS_ON")
         assert sql.is_internet_exposed and has_edge(edges, sql, net, EdgeType.ATTACHED_TO)
@@ -786,7 +954,9 @@ class TestServerless:
         assets, edges = mapped["assets"], mapped["edges"]
         sink, sink_bq = by_arn(assets, SINK_GCS["name"]), by_arn(assets, SINK_BQ["name"])
         assert sink.asset_type == AssetType.LOG_SINK
-        assert has_edge(edges, sink, by_arn(assets, BUCKET_LOGS["name"]), EdgeType.LOGS_TO, "LOGS_TO")
+        assert has_edge(
+            edges, sink, by_arn(assets, BUCKET_LOGS["name"]), EdgeType.LOGS_TO, "LOGS_TO"
+        )
         assert has_edge(edges, sink_bq, by_arn(assets, DATASET["name"]), EdgeType.LOGS_TO)
 
 
@@ -798,12 +968,26 @@ ORG_ANC_B = ["projects/222", "organizations/999"]
 PROJECT_B = res(
     f"{CRM}projects/222",
     "cloudresourcemanager.googleapis.com/Project",
-    {"projectNumber": "222", "projectId": "proj-b", "parent": {"type": "organization", "id": "999"}},
+    {
+        "projectNumber": "222",
+        "projectId": "proj-b",
+        "parent": {"type": "organization", "id": "999"},
+    },
     ancestors=ORG_ANC_B,
     parent=f"{CRM}organizations/999",
 )
-SECRET_B = res("//secretmanager.googleapis.com/projects/222/secrets/s", "secretmanager.googleapis.com/Secret", {}, ancestors=ORG_ANC_B)
-TOPIC_B = res("//pubsub.googleapis.com/projects/proj-b/topics/t", "pubsub.googleapis.com/Topic", {}, ancestors=ORG_ANC_B)
+SECRET_B = res(
+    "//secretmanager.googleapis.com/projects/222/secrets/s",
+    "secretmanager.googleapis.com/Secret",
+    {},
+    ancestors=ORG_ANC_B,
+)
+TOPIC_B = res(
+    "//pubsub.googleapis.com/projects/proj-b/topics/t",
+    "pubsub.googleapis.com/Topic",
+    {},
+    ancestors=ORG_ANC_B,
+)
 FOLDER = res(
     f"{CRM}folders/555",
     "cloudresourcemanager.googleapis.com/Folder",
@@ -834,8 +1018,12 @@ ORGPOLICY_V2 = res(
 
 class TestOrganization:
     def test_org_scope_account_mapping(self):
-        client = FakeAssetClient(resources=[ORG, FOLDER, PROJECT_ASSET, PROJECT_B, SECRET_B, TOPIC_B, ORG_SINK, TOPIC])
-        collector = GCPDeepInventoryCollector(None, client=client, organization_id="organizations/999", include_iam=False)
+        client = FakeAssetClient(
+            resources=[ORG, FOLDER, PROJECT_ASSET, PROJECT_B, SECRET_B, TOPIC_B, ORG_SINK, TOPIC]
+        )
+        collector = GCPDeepInventoryCollector(
+            None, client=client, organization_id="organizations/999", include_iam=False
+        )
         assets = run(collector.collect())
         assert client.requests[0][1]["parent"] == "organizations/999"
         assert by_arn(assets, SECRET_B["name"]).account_id == "proj-b"
@@ -845,10 +1033,15 @@ class TestOrganization:
         project_b = by_arn(assets, f"{CRM}projects/222")
         assert project_b.account_id == "proj-b"
         assert {"projects/222", "222", "projects/proj-b"} <= set(project_b.metadata["aliases"])
-        assert "//secretmanager.googleapis.com/projects/proj-b/secrets/s" in by_arn(assets, SECRET_B["name"]).metadata["aliases"]
+        assert (
+            "//secretmanager.googleapis.com/projects/proj-b/secrets/s"
+            in by_arn(assets, SECRET_B["name"]).metadata["aliases"]
+        )
 
     def test_org_scope_project_filter(self):
-        client = FakeAssetClient(resources=[ORG, PROJECT_ASSET, PROJECT_B, SECRET_B, TOPIC_B, ORG_SINK, TOPIC])
+        client = FakeAssetClient(
+            resources=[ORG, PROJECT_ASSET, PROJECT_B, SECRET_B, TOPIC_B, ORG_SINK, TOPIC]
+        )
         collector = GCPDeepInventoryCollector(
             None, client=client, organization_id="999", project_filter=[PROJECT], include_iam=False
         )
@@ -874,7 +1067,12 @@ class TestOrganization:
         org_policy = {
             "name": f"{CRM}projects/{NUMBER}",
             "asset_type": "cloudresourcemanager.googleapis.com/Project",
-            "org_policy": [{"constraint": "constraints/iam.disableServiceAccountKeyCreation", "boolean_policy": {"enforced": True}}],
+            "org_policy": [
+                {
+                    "constraint": "constraints/iam.disableServiceAccountKeyCreation",
+                    "boolean_policy": {"enforced": True},
+                }
+            ],
         }
         client = FakeAssetClient(
             resources=[ORG, FOLDER, PROJECT_ASSET, PROJECT_B, ORGPOLICY_V2, TOPIC],
@@ -886,13 +1084,19 @@ class TestOrganization:
         assert not any(a.arn == TOPIC["name"] for a in assets)
         edges = RelationshipLinker(assets).link()
         org, folder = by_arn(assets, f"{CRM}organizations/999"), by_arn(assets, f"{CRM}folders/555")
-        proj_a, proj_b = by_arn(assets, f"{CRM}projects/{NUMBER}"), by_arn(assets, f"{CRM}projects/222")
+        proj_a, proj_b = (
+            by_arn(assets, f"{CRM}projects/{NUMBER}"),
+            by_arn(assets, f"{CRM}projects/222"),
+        )
         assert org.asset_type == AssetType.ORGANIZATION and folder.asset_type == AssetType.ORG_UNIT
         assert proj_a.asset_type == AssetType.CLOUD_ACCOUNT and proj_a.account_id == PROJECT
         assert has_edge(edges, org, folder, EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT")
         assert has_edge(edges, folder, proj_a, EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT")
         assert has_edge(edges, org, proj_b, EdgeType.CONTAINS)
-        pol = by_arn(assets, "//orgpolicy.googleapis.com/projects/111/policies/iam.disableServiceAccountKeyCreation")
+        pol = by_arn(
+            assets,
+            "//orgpolicy.googleapis.com/projects/111/policies/iam.disableServiceAccountKeyCreation",
+        )
         assert pol.asset_type == AssetType.ORG_POLICY and pol.metadata["enforced"] is True
         assert has_edge(edges, pol, proj_a, EdgeType.GOVERNS)
         v2 = by_arn(assets, ORGPOLICY_V2["name"])
@@ -901,7 +1105,11 @@ class TestOrganization:
         assert p1.asset_type == AssetType.GUARDRAIL
         assert p1.metadata["restricted_services"] == ["storage.googleapis.com"]
         assert has_edge(edges, p1, proj_a, EdgeType.GOVERNS, "COMPLIANCE_GOVERNS")
-        assert {s.service for s in cov.services} == {"gcp_hierarchy", "gcp_org_policies", "gcp_vpc_service_controls"}
+        assert {s.service for s in cov.services} == {
+            "gcp_hierarchy",
+            "gcp_org_policies",
+            "gcp_vpc_service_controls",
+        }
 
 
 class TestMultiCollector:
@@ -922,7 +1130,9 @@ class TestMultiCollector:
     def test_org_scope_single_listing(self, monkeypatch):
         from cloudg.config import CloudGConfig
 
-        config = CloudGConfig(providers=["gcp"], gcp={"organization_id": "999", "regions": ["us-central1"]})
+        config = CloudGConfig(
+            providers=["gcp"], gcp={"organization_id": "999", "regions": ["us-central1"]}
+        )
         client = FakeAssetClient(resources=[ORG, PROJECT_ASSET, PROJECT_B, TOPIC, TOPIC_B])
         assets, _edges, coverage = self._run(monkeypatch, config, client)
         parents = [r["parent"] for k, r in client.requests if k == "list_assets"]
@@ -930,15 +1140,22 @@ class TestMultiCollector:
         assert len(coverage) == 1 and coverage[0].account_id == "organizations/999"
         full = [s for s in coverage[0].services if s.service == "gcp_full"][0]
         assert full.status == ServiceStatus.SUCCESS
-        assert {a.account_id for a in assets if a.arn in (TOPIC["name"], TOPIC_B["name"])} == {PROJECT, "proj-b"}
+        assert {a.account_id for a in assets if a.arn in (TOPIC["name"], TOPIC_B["name"])} == {
+            PROJECT,
+            "proj-b",
+        }
 
     def test_failure_is_visible(self, monkeypatch):
         from google.api_core import exceptions as gexc
 
         from cloudg.config import CloudGConfig
 
-        config = CloudGConfig(providers=["gcp"], gcp={"project_ids": [PROJECT], "regions": ["us-central1"]})
-        client = FakeAssetClient(list_error=gexc.PermissionDenied("no"), search_error=gexc.PermissionDenied("no"))
+        config = CloudGConfig(
+            providers=["gcp"], gcp={"project_ids": [PROJECT], "regions": ["us-central1"]}
+        )
+        client = FakeAssetClient(
+            list_error=gexc.PermissionDenied("no"), search_error=gexc.PermissionDenied("no")
+        )
         assets, _edges, coverage = self._run(monkeypatch, config, client)
         assert assets == []
         full = [s for s in coverage[0].services if s.service == "gcp_full"][0]
@@ -955,14 +1172,38 @@ class TestNormalisation:
         "ref,service,expected",
         [
             (SL + "zones/z/instances/i", None, C + "zones/z/instances/i"),
-            ("https://compute.googleapis.com/compute/beta/projects/p/global/networks/n", None, "//compute.googleapis.com/projects/p/global/networks/n"),
-            ("projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/7", None, "//cloudkms.googleapis.com/projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-            ("https://container.googleapis.com/v1/projects/p/zones/z/clusters/c", None, "//container.googleapis.com/projects/p/locations/z/clusters/c"),
-            ("https://sqladmin.googleapis.com/sql/v1beta4/projects/p/instances/db", None, "//cloudsql.googleapis.com/projects/p/instances/db"),
+            (
+                "https://compute.googleapis.com/compute/beta/projects/p/global/networks/n",
+                None,
+                "//compute.googleapis.com/projects/p/global/networks/n",
+            ),
+            (
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/7",
+                None,
+                "//cloudkms.googleapis.com/projects/p/locations/l/keyRings/r/cryptoKeys/k",
+            ),
+            (
+                "https://container.googleapis.com/v1/projects/p/zones/z/clusters/c",
+                None,
+                "//container.googleapis.com/projects/p/locations/z/clusters/c",
+            ),
+            (
+                "https://sqladmin.googleapis.com/sql/v1beta4/projects/p/instances/db",
+                None,
+                "//cloudsql.googleapis.com/projects/p/instances/db",
+            ),
             ("storage.googleapis.com/b1", None, "//storage.googleapis.com/b1"),
-            ("pubsub.googleapis.com/projects/p/topics/t", None, "//pubsub.googleapis.com/projects/p/topics/t"),
+            (
+                "pubsub.googleapis.com/projects/p/topics/t",
+                None,
+                "//pubsub.googleapis.com/projects/p/topics/t",
+            ),
             ("gs://b1/dags", None, "//storage.googleapis.com/b1"),
-            ("projects/p/locations/l/clusters/c", "container", "//container.googleapis.com/projects/p/locations/l/clusters/c"),
+            (
+                "projects/p/locations/l/clusters/c",
+                "container",
+                "//container.googleapis.com/projects/p/locations/l/clusters/c",
+            ),
             ("not a reference", None, None),
         ],
     )

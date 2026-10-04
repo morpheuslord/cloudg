@@ -87,7 +87,7 @@ def _host(url: Any) -> str | None:
     """Hostname of a URL (never user-info, path or query)."""
     if not isinstance(url, str) or not url:
         return None
-    candidate = url[len("jdbc:"):] if url.startswith("jdbc:") else url
+    candidate = url[len("jdbc:") :] if url.startswith("jdbc:") else url
     if "://" not in candidate:
         candidate = f"//{candidate}"
     try:
@@ -196,8 +196,14 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     continue
                 seen.add(ref)
                 relations.append(
-                    rel(ref, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                        description=description, actions=as_list(st.get("Action"))[:20])
+                    rel(
+                        ref,
+                        EdgeType.GRANTS_ACCESS,
+                        "POLICY_ALLOWS_ACTION",
+                        reverse=True,
+                        description=description,
+                        actions=as_list(st.get("Action"))[:20],
+                    )
                 )
         return relations, public
 
@@ -228,7 +234,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
     async def _collect_msk(self) -> list[CloudAsset]:
         async with self._client("kafka") as kafka:
-            clusters = [c async for c in self._paginate(kafka, "list_clusters_v2", "ClusterInfoList")]
+            clusters = [
+                c async for c in self._paginate(kafka, "list_clusters_v2", "ClusterInfoList")
+            ]
 
             async def detail(c: dict) -> CloudAsset:
                 arn = c["ClusterArn"]
@@ -246,35 +254,60 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     nodes = prov.get("BrokerNodeGroupInfo") or {}
                     relations += self._subnet_rels(nodes.get("ClientSubnets"))
                     sgs += nodes.get("SecurityGroups") or []
-                    public = ((nodes.get("ConnectivityInfo") or {}).get("PublicAccess") or {}).get("Type")
+                    public = ((nodes.get("ConnectivityInfo") or {}).get("PublicAccess") or {}).get(
+                        "Type"
+                    )
                     exposed = bool(public) and public != "DISABLED"
                     kms = ((prov.get("EncryptionInfo") or {}).get("EncryptionAtRest") or {}).get(
                         "DataVolumeKMSKeyId"
                     )
                     relations.append(rel(_kms_ref(kms), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"))
                     logs = (prov.get("LoggingInfo") or {}).get("BrokerLogs") or {}
-                    cw, fh, s3 = logs.get("CloudWatchLogs") or {}, logs.get("Firehose") or {}, logs.get("S3") or {}
+                    cw, fh, s3 = (
+                        logs.get("CloudWatchLogs") or {},
+                        logs.get("Firehose") or {},
+                        logs.get("S3") or {},
+                    )
                     if cw.get("Enabled"):
-                        relations.append(rel(self._log_group_ref(cw.get("LogGroup")), EdgeType.LOGS_TO, "LOGS_TO"))
+                        relations.append(
+                            rel(
+                                self._log_group_ref(cw.get("LogGroup")), EdgeType.LOGS_TO, "LOGS_TO"
+                            )
+                        )
                     if fh.get("Enabled") and fh.get("DeliveryStream"):
-                        relations.append(rel(self._arn("firehose", f"deliverystream/{fh['DeliveryStream']}"),
-                                             EdgeType.LOGS_TO, "LOGS_TO"))
+                        relations.append(
+                            rel(
+                                self._arn("firehose", f"deliverystream/{fh['DeliveryStream']}"),
+                                EdgeType.LOGS_TO,
+                                "LOGS_TO",
+                            )
+                        )
                     if s3.get("Enabled") and s3.get("Bucket"):
-                        relations.append(rel(f"arn:aws:s3:::{s3['Bucket']}", EdgeType.LOGS_TO, "LOGS_TO"))
+                        relations.append(
+                            rel(f"arn:aws:s3:::{s3['Bucket']}", EdgeType.LOGS_TO, "LOGS_TO")
+                        )
                     auth = prov.get("ClientAuthentication") or {}
                     sasl = auth.get("Sasl") or {}
-                    md.update({
-                        "instance_type": nodes.get("InstanceType"),
-                        "broker_nodes": prov.get("NumberOfBrokerNodes"),
-                        "public_access": public or "DISABLED",
-                        "kms_key_id": _kms_ref(kms),
-                        "encryption_in_transit": ((prov.get("EncryptionInfo") or {}).get("EncryptionInTransit") or {}).get("ClientBroker"),
-                        "auth_iam": bool((sasl.get("Iam") or {}).get("Enabled")),
-                        "auth_scram": bool((sasl.get("Scram") or {}).get("Enabled")),
-                        "auth_tls": bool((auth.get("Tls") or {}).get("Enabled")),
-                        "unauthenticated_access": bool((auth.get("Unauthenticated") or {}).get("Enabled")),
-                        "configuration_arn": (prov.get("CurrentBrokerSoftwareInfo") or {}).get("ConfigurationArn"),
-                    })
+                    md.update(
+                        {
+                            "instance_type": nodes.get("InstanceType"),
+                            "broker_nodes": prov.get("NumberOfBrokerNodes"),
+                            "public_access": public or "DISABLED",
+                            "kms_key_id": _kms_ref(kms),
+                            "encryption_in_transit": (
+                                (prov.get("EncryptionInfo") or {}).get("EncryptionInTransit") or {}
+                            ).get("ClientBroker"),
+                            "auth_iam": bool((sasl.get("Iam") or {}).get("Enabled")),
+                            "auth_scram": bool((sasl.get("Scram") or {}).get("Enabled")),
+                            "auth_tls": bool((auth.get("Tls") or {}).get("Enabled")),
+                            "unauthenticated_access": bool(
+                                (auth.get("Unauthenticated") or {}).get("Enabled")
+                            ),
+                            "configuration_arn": (prov.get("CurrentBrokerSoftwareInfo") or {}).get(
+                                "ConfigurationArn"
+                            ),
+                        }
+                    )
                 for vc in (c.get("Serverless") or {}).get("VpcConfigs") or []:
                     relations += self._subnet_rels(vc.get("SubnetIds"))
                     sgs += vc.get("SecurityGroupIds") or []
@@ -320,12 +353,25 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 for kind, key in (("General", "GeneralLogGroup"), ("Audit", "AuditLogGroup")):
                     if logs.get(kind):
                         group = logs.get(key) or f"/aws/amazonmq/broker/{broker_id}/{kind.lower()}"
-                        relations.append(rel(self._log_group_ref(group), EdgeType.LOGS_TO, "LOGS_TO", log_type=kind))
+                        relations.append(
+                            rel(
+                                self._log_group_ref(group),
+                                EdgeType.LOGS_TO,
+                                "LOGS_TO",
+                                log_type=kind,
+                            )
+                        )
                 replica = b.get("DataReplicationMetadata") or {}
                 counterpart = (replica.get("DataReplicationCounterpart") or {}).get("BrokerId")
                 if counterpart:
-                    relations.append(rel(counterpart, EdgeType.REFERENCES, "REPLICATES_TO",
-                                         reverse=replica.get("DataReplicationRole") != "PRIMARY"))
+                    relations.append(
+                        rel(
+                            counterpart,
+                            EdgeType.REFERENCES,
+                            "REPLICATES_TO",
+                            reverse=replica.get("DataReplicationRole") != "PRIMARY",
+                        )
+                    )
                 hosts = []
                 for inst in b.get("BrokerInstances") or []:
                     hosts += [_host(e) for e in inst.get("Endpoints") or []]
@@ -368,12 +414,15 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
     async def _collect_sagemaker(self) -> list[CloudAsset]:
         async with self._client("sagemaker") as sm:
-            return await self._gather_parts("sagemaker", {
-                "domains": lambda: self._sagemaker_domains(sm),
-                "notebooks": lambda: self._sagemaker_notebooks(sm),
-                "endpoints": lambda: self._sagemaker_endpoints(sm),
-                "models": lambda: self._sagemaker_models(sm),
-            })
+            return await self._gather_parts(
+                "sagemaker",
+                {
+                    "domains": lambda: self._sagemaker_domains(sm),
+                    "notebooks": lambda: self._sagemaker_notebooks(sm),
+                    "endpoints": lambda: self._sagemaker_endpoints(sm),
+                    "models": lambda: self._sagemaker_models(sm),
+                },
+            )
 
     async def _sagemaker_domains(self, sm: Any) -> list[CloudAsset]:
         domains = [d async for d in self._paginate(sm, "list_domains", "Domains")]
@@ -387,11 +436,25 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             sharing = settings.get("SharingSettings") or {}
             relations: list[dict[str, Any] | None] = self._subnet_rels(d.get("SubnetIds"))
             relations += [
-                rel(settings.get("ExecutionRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="default execution role"),
+                rel(
+                    settings.get("ExecutionRole"),
+                    EdgeType.ASSUMES_ROLE,
+                    "RUNS_ON",
+                    description="default execution role",
+                ),
                 rel(_kms_ref(d.get("KmsKeyId")), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                rel(d.get("HomeEfsFileSystemId"), EdgeType.REFERENCES, "WRITES_TO", description="home directories"),
-                rel(_bucket_arn(sharing.get("S3OutputPath")), EdgeType.REFERENCES, "WRITES_TO",
-                    description="notebook sharing output"),
+                rel(
+                    d.get("HomeEfsFileSystemId"),
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="home directories",
+                ),
+                rel(
+                    _bucket_arn(sharing.get("S3OutputPath")),
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="notebook sharing output",
+                ),
             ]
             public = d.get("AppNetworkAccessType") == "PublicInternetOnly"
             return self._asset(
@@ -419,10 +482,14 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         return [a for a in results if a]
 
     async def _sagemaker_notebooks(self, sm: Any) -> list[CloudAsset]:
-        notebooks = [n async for n in self._paginate(sm, "list_notebook_instances", "NotebookInstances")]
+        notebooks = [
+            n async for n in self._paginate(sm, "list_notebook_instances", "NotebookInstances")
+        ]
 
         async def detail(summary: dict) -> CloudAsset:
-            n = await sm.describe_notebook_instance(NotebookInstanceName=summary["NotebookInstanceName"])
+            n = await sm.describe_notebook_instance(
+                NotebookInstanceName=summary["NotebookInstanceName"]
+            )
             kms = _kms_ref(n.get("KmsKeyId"))
             relations: list[dict[str, Any] | None] = self._subnet_rels(n.get("SubnetId"))
             relations += [
@@ -472,27 +539,54 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
         async def detail(summary: dict) -> CloudAsset:
             e = await sm.describe_endpoint(EndpointName=summary["EndpointName"])
-            cfg = await endpoint_config(e.get("EndpointConfigName", "")) if e.get("EndpointConfigName") else {}
-            variants = (cfg.get("ProductionVariants") or []) + (cfg.get("ShadowProductionVariants") or [])
+            cfg = (
+                await endpoint_config(e.get("EndpointConfigName", ""))
+                if e.get("EndpointConfigName")
+                else {}
+            )
+            variants = (cfg.get("ProductionVariants") or []) + (
+                cfg.get("ShadowProductionVariants") or []
+            )
             relations: list[dict[str, Any] | None] = [
                 # SageMaker lower-cases resource names in ARNs; a bare name
                 # could collide with the endpoint's own name.
-                rel(self._arn("sagemaker", f"model/{v['ModelName'].lower()}") if v.get("ModelName") else None,
-                    EdgeType.REFERENCES, "DEPENDS_ON", description="serves model", variant=v.get("VariantName"))
+                rel(
+                    self._arn("sagemaker", f"model/{v['ModelName'].lower()}")
+                    if v.get("ModelName")
+                    else None,
+                    EdgeType.REFERENCES,
+                    "DEPENDS_ON",
+                    description="serves model",
+                    variant=v.get("VariantName"),
+                )
                 for v in variants
             ]
             kms = _kms_ref(cfg.get("KmsKeyId"))
             capture = cfg.get("DataCaptureConfig") or {}
-            output = ((cfg.get("AsyncInferenceConfig") or {}).get("OutputConfig") or {})
+            output = (cfg.get("AsyncInferenceConfig") or {}).get("OutputConfig") or {}
             relations += [
                 rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
                 rel(cfg.get("ExecutionRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
-                rel(_bucket_arn(capture.get("DestinationS3Uri")) if capture.get("EnableCapture") else None,
-                    EdgeType.REFERENCES, "WRITES_TO", description="data capture"),
-                rel(_bucket_arn(output.get("S3OutputPath")), EdgeType.REFERENCES, "WRITES_TO",
-                    description="async inference output"),
-                rel(_bucket_arn(output.get("S3FailurePath")), EdgeType.REFERENCES, "WRITES_TO",
-                    description="async inference failures"),
+                rel(
+                    _bucket_arn(capture.get("DestinationS3Uri"))
+                    if capture.get("EnableCapture")
+                    else None,
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="data capture",
+                ),
+                rel(
+                    _bucket_arn(output.get("S3OutputPath")),
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="async inference output",
+                ),
+                rel(
+                    _bucket_arn(output.get("S3FailurePath")),
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="async inference failures",
+                ),
             ]
             vpc = cfg.get("VpcConfig") or {}
             relations += self._subnet_rels(vpc.get("Subnets"))
@@ -505,7 +599,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     "status": e.get("EndpointStatus"),
                     "endpoint_config": e.get("EndpointConfigName"),
                     "models": [v.get("ModelName") for v in variants if v.get("ModelName")],
-                    "instance_types": sorted({v["InstanceType"] for v in variants if v.get("InstanceType")}),
+                    "instance_types": sorted(
+                        {v["InstanceType"] for v in variants if v.get("InstanceType")}
+                    ),
                     "serverless": any(v.get("ServerlessConfig") for v in variants),
                     "data_capture": bool(capture.get("EnableCapture")),
                     "kms_key_id": kms,
@@ -523,7 +619,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
         async def detail(summary: dict) -> CloudAsset:
             m = await sm.describe_model(ModelName=summary["ModelName"])
-            containers = ([m["PrimaryContainer"]] if m.get("PrimaryContainer") else []) + (m.get("Containers") or [])
+            containers = ([m["PrimaryContainer"]] if m.get("PrimaryContainer") else []) + (
+                m.get("Containers") or []
+            )
             relations: list[dict[str, Any] | None] = [
                 rel(m.get("ExecutionRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
             ]
@@ -534,11 +632,19 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     relations.append(rel(c["Image"], EdgeType.USES_IMAGE, "RUNS_ON"))
                 source = ((c.get("ModelDataSource") or {}).get("S3DataSource") or {}).get("S3Uri")
                 for uri in (c.get("ModelDataUrl"), source):
-                    relations.append(rel(_bucket_arn(uri), EdgeType.REFERENCES, "READS_FROM",
-                                         description="model artifacts"))
+                    relations.append(
+                        rel(
+                            _bucket_arn(uri),
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            description="model artifacts",
+                        )
+                    )
                 relations.append(rel(c.get("ModelPackageName"), EdgeType.REFERENCES, "DEPENDS_ON"))
-                relations += [rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="container environment")
-                              for r in identifier_refs(c.get("Environment"))]
+                relations += [
+                    rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="container environment")
+                    for r in identifier_refs(c.get("Environment"))
+                ]
             vpc = m.get("VpcConfig") or {}
             relations += self._subnet_rels(vpc.get("Subnets"))
             arn = m.get("ModelArn") or summary.get("ModelArn", "")
@@ -565,13 +671,19 @@ class DataMLCollectorsMixin(AWSServiceMixin):
     # ------------------------------------------------------------------
 
     async def _collect_bedrock(self) -> list[CloudAsset]:
-        async with self._client("bedrock-agent") as agent_client, self._client("bedrock") as bedrock:
-            return await self._gather_parts("bedrock", {
-                "agents": lambda: self._bedrock_agents(agent_client),
-                "knowledge_bases": lambda: self._bedrock_knowledge_bases(agent_client),
-                "guardrails": lambda: self._bedrock_guardrails(bedrock),
-                "invocation_logging": lambda: self._bedrock_invocation_logging(bedrock),
-            })
+        async with (
+            self._client("bedrock-agent") as agent_client,
+            self._client("bedrock") as bedrock,
+        ):
+            return await self._gather_parts(
+                "bedrock",
+                {
+                    "agents": lambda: self._bedrock_agents(agent_client),
+                    "knowledge_bases": lambda: self._bedrock_knowledge_bases(agent_client),
+                    "guardrails": lambda: self._bedrock_guardrails(bedrock),
+                    "invocation_logging": lambda: self._bedrock_invocation_logging(bedrock),
+                },
+            )
 
     async def _bedrock_agents(self, ba: Any) -> list[CloudAsset]:
         summaries = [s async for s in self._paginate(ba, "list_agents", "agentSummaries")]
@@ -579,11 +691,18 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         async def action_groups(agent_id: str) -> list[dict]:
             out: list[dict] = []
             try:
-                async for ag in self._paginate(ba, "list_agent_action_groups", "actionGroupSummaries",
-                                               agentId=agent_id, agentVersion=_AGENT_VERSION):
+                async for ag in self._paginate(
+                    ba,
+                    "list_agent_action_groups",
+                    "actionGroupSummaries",
+                    agentId=agent_id,
+                    agentVersion=_AGENT_VERSION,
+                ):
                     try:
                         resp = await ba.get_agent_action_group(
-                            agentId=agent_id, agentVersion=_AGENT_VERSION, actionGroupId=ag["actionGroupId"]
+                            agentId=agent_id,
+                            agentVersion=_AGENT_VERSION,
+                            actionGroupId=ag["actionGroupId"],
                         )
                         out.append(resp.get("agentActionGroup") or {})
                     except Exception as exc:
@@ -594,9 +713,16 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
         async def knowledge_bases(agent_id: str) -> list[dict]:
             try:
-                return [kb async for kb in self._paginate(
-                    ba, "list_agent_knowledge_bases", "agentKnowledgeBaseSummaries",
-                    agentId=agent_id, agentVersion=_AGENT_VERSION)]
+                return [
+                    kb
+                    async for kb in self._paginate(
+                        ba,
+                        "list_agent_knowledge_bases",
+                        "agentKnowledgeBaseSummaries",
+                        agentId=agent_id,
+                        agentVersion=_AGENT_VERSION,
+                    )
+                ]
             except Exception as exc:
                 logger.debug("Agent knowledge base listing failed for %s: %s", agent_id, exc)
                 return []
@@ -605,27 +731,53 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             agent_id = summary["agentId"]
             a = (await ba.get_agent(agentId=agent_id)).get("agent") or {}
             kms = _kms_ref(a.get("customerEncryptionKeyArn"))
-            guardrail = a.get("guardrailConfiguration") or summary.get("guardrailConfiguration") or {}
+            guardrail = (
+                a.get("guardrailConfiguration") or summary.get("guardrailConfiguration") or {}
+            )
             relations: list[dict[str, Any] | None] = [
                 rel(a.get("agentResourceRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                 rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                rel(guardrail.get("guardrailIdentifier"), EdgeType.PROTECTS, reverse=True,
-                    description="Bedrock guardrail", version=guardrail.get("guardrailVersion")),
+                rel(
+                    guardrail.get("guardrailIdentifier"),
+                    EdgeType.PROTECTS,
+                    reverse=True,
+                    description="Bedrock guardrail",
+                    version=guardrail.get("guardrailVersion"),
+                ),
             ]
             groups = await action_groups(agent_id)
             for g in groups:
                 executor = g.get("actionGroupExecutor") or {}
-                relations.append(rel(executor.get("lambda"), EdgeType.INVOKES, "INVOKES",
-                                     description="action group executor", action_group=g.get("actionGroupName")))
+                relations.append(
+                    rel(
+                        executor.get("lambda"),
+                        EdgeType.INVOKES,
+                        "INVOKES",
+                        description="action group executor",
+                        action_group=g.get("actionGroupName"),
+                    )
+                )
                 schema_s3 = (g.get("apiSchema") or {}).get("s3") or {}
                 if schema_s3.get("s3BucketName"):
-                    relations.append(rel(f"arn:aws:s3:::{schema_s3['s3BucketName']}", EdgeType.REFERENCES,
-                                         "READS_FROM", description="action group API schema"))
+                    relations.append(
+                        rel(
+                            f"arn:aws:s3:::{schema_s3['s3BucketName']}",
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            description="action group API schema",
+                        )
+                    )
             kbs = await knowledge_bases(agent_id)
             relations += [
-                rel(self._arn("bedrock", f"knowledge-base/{kb['knowledgeBaseId']}"), EdgeType.REFERENCES,
-                    "READS_FROM", description="agent knowledge base", state=kb.get("knowledgeBaseState"))
-                for kb in kbs if kb.get("knowledgeBaseId")
+                rel(
+                    self._arn("bedrock", f"knowledge-base/{kb['knowledgeBaseId']}"),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="agent knowledge base",
+                    state=kb.get("knowledgeBaseState"),
+                )
+                for kb in kbs
+                if kb.get("knowledgeBaseId")
             ]
             return self._asset(
                 arn=a.get("agentArn") or self._arn("bedrock", f"agent/{agent_id}"),
@@ -642,7 +794,8 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     "guardrail": guardrail.get("guardrailIdentifier"),
                     "action_groups": [g.get("actionGroupName") for g in groups],
                     "action_group_lambdas": [
-                        (g.get("actionGroupExecutor") or {}).get("lambda") for g in groups
+                        (g.get("actionGroupExecutor") or {}).get("lambda")
+                        for g in groups
                         if (g.get("actionGroupExecutor") or {}).get("lambda")
                     ],
                     "knowledge_bases": [kb.get("knowledgeBaseId") for kb in kbs],
@@ -655,14 +808,20 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         return [a for a in results if a]
 
     async def _bedrock_knowledge_bases(self, ba: Any) -> list[CloudAsset]:
-        summaries = [s async for s in self._paginate(ba, "list_knowledge_bases", "knowledgeBaseSummaries")]
+        summaries = [
+            s async for s in self._paginate(ba, "list_knowledge_bases", "knowledgeBaseSummaries")
+        ]
 
         async def data_sources(kb_id: str) -> list[dict]:
             out: list[dict] = []
             try:
-                async for ds in self._paginate(ba, "list_data_sources", "dataSourceSummaries", knowledgeBaseId=kb_id):
+                async for ds in self._paginate(
+                    ba, "list_data_sources", "dataSourceSummaries", knowledgeBaseId=kb_id
+                ):
                     try:
-                        resp = await ba.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])
+                        resp = await ba.get_data_source(
+                            knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"]
+                        )
                         out.append(resp.get("dataSource") or {})
                     except Exception as exc:
                         logger.debug("Data source lookup failed: %s", exc)
@@ -677,7 +836,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             storage = kb.get("storageConfiguration") or {}
             config = kb.get("knowledgeBaseConfiguration") or {}
             vector = config.get("vectorKnowledgeBaseConfiguration") or {}
-            relations: list[dict[str, Any] | None] = [rel(kb.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")]
+            relations: list[dict[str, Any] | None] = [
+                rel(kb.get("roleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")
+            ]
             store_targets = {
                 "opensearchServerlessConfiguration": "collectionArn",
                 "opensearchManagedClusterConfiguration": "domainArn",
@@ -688,40 +849,93 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             endpoints: list[str] = []
             for key, field in store_targets.items():
                 block = storage.get(key) or {}
-                relations.append(rel(block.get(field), EdgeType.REFERENCES, "READS_FROM",
-                                     description="vector store", store_type=storage.get("type")))
+                relations.append(
+                    rel(
+                        block.get(field),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="vector store",
+                        store_type=storage.get("type"),
+                    )
+                )
             for block in storage.values():
                 if not isinstance(block, dict):
                     continue
-                relations.append(rel(block.get("credentialsSecretArn"), EdgeType.REFERENCES, "READS_FROM",
-                                     description="vector store credentials"))
+                relations.append(
+                    rel(
+                        block.get("credentialsSecretArn"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="vector store credentials",
+                    )
+                )
                 for field in ("connectionString", "endpoint", "domainEndpoint"):
                     host = _host(block.get(field))
                     if host:
                         endpoints.append(host)
-            relations.append(rel((config.get("kendraKnowledgeBaseConfiguration") or {}).get("kendraIndexArn"),
-                                 EdgeType.REFERENCES, "READS_FROM", description="Kendra index"))
-            for loc in (vector.get("supplementalDataStorageConfiguration") or {}).get("storageLocations") or []:
-                relations.append(rel(_bucket_arn((loc.get("s3Location") or {}).get("uri")), EdgeType.REFERENCES,
-                                     "WRITES_TO", description="supplemental data storage"))
+            relations.append(
+                rel(
+                    (config.get("kendraKnowledgeBaseConfiguration") or {}).get("kendraIndexArn"),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="Kendra index",
+                )
+            )
+            for loc in (vector.get("supplementalDataStorageConfiguration") or {}).get(
+                "storageLocations"
+            ) or []:
+                relations.append(
+                    rel(
+                        _bucket_arn((loc.get("s3Location") or {}).get("uri")),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="supplemental data storage",
+                    )
+                )
             sources = await data_sources(kb_id)
             source_meta = []
             for ds in sources:
                 cfg = ds.get("dataSourceConfiguration") or {}
                 s3cfg = cfg.get("s3Configuration") or {}
-                relations.append(rel(s3cfg.get("bucketArn"), EdgeType.REFERENCES, "READS_FROM",
-                                     description="knowledge base data source", data_source=ds.get("name")))
-                relations.append(rel(_kms_ref((ds.get("serverSideEncryptionConfiguration") or {}).get("kmsKeyArn")),
-                                     EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"))
+                relations.append(
+                    rel(
+                        s3cfg.get("bucketArn"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="knowledge base data source",
+                        data_source=ds.get("name"),
+                    )
+                )
+                relations.append(
+                    rel(
+                        _kms_ref(
+                            (ds.get("serverSideEncryptionConfiguration") or {}).get("kmsKeyArn")
+                        ),
+                        EdgeType.REFERENCES,
+                        "ENCRYPTED_BY_KMS",
+                    )
+                )
                 hosts = []
                 for block in cfg.values():
                     if isinstance(block, dict):
                         src = block.get("sourceConfiguration") or {}
-                        relations.append(rel(src.get("credentialsSecretArn"), EdgeType.REFERENCES, "READS_FROM",
-                                             description="data source credentials"))
+                        relations.append(
+                            rel(
+                                src.get("credentialsSecretArn"),
+                                EdgeType.REFERENCES,
+                                "READS_FROM",
+                                description="data source credentials",
+                            )
+                        )
                         hosts.append(_host(src.get("hostUrl")))
-                source_meta.append({"name": ds.get("name"), "type": cfg.get("type"), "status": ds.get("status"),
-                                    "hosts": [h for h in hosts if h]})
+                source_meta.append(
+                    {
+                        "name": ds.get("name"),
+                        "type": cfg.get("type"),
+                        "status": ds.get("status"),
+                        "hosts": [h for h in hosts if h],
+                    }
+                )
             return self._asset(
                 arn=kb.get("knowledgeBaseArn") or self._arn("bedrock", f"knowledge-base/{kb_id}"),
                 name=kb.get("name") or summary.get("name") or kb_id,
@@ -768,7 +982,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     "word_policy": bool(full.get("wordPolicy")),
                     "sensitive_information_policy": bool(full.get("sensitiveInformationPolicy")),
                     "contextual_grounding_policy": bool(full.get("contextualGroundingPolicy")),
-                    "cross_region_profile": (g.get("crossRegionDetails") or {}).get("guardrailProfileArn"),
+                    "cross_region_profile": (g.get("crossRegionDetails") or {}).get(
+                        "guardrailProfileArn"
+                    ),
                 },
                 relations=[rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")],
                 aliases=[g.get("id")],
@@ -780,7 +996,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
     async def _bedrock_invocation_logging(self, bedrock: Any) -> list[CloudAsset]:
         """Model invocation logging is a region-wide setting, so it becomes
         one LOG_SINK asset per region (only when configured)."""
-        cfg = (await bedrock.get_model_invocation_logging_configuration()).get("loggingConfig") or {}
+        cfg = (await bedrock.get_model_invocation_logging_configuration()).get(
+            "loggingConfig"
+        ) or {}
         if not cfg:
             return []
         cw = cfg.get("cloudWatchConfig") or {}
@@ -829,20 +1047,26 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     detail = (await getter(type=policy_type, name=p["name"])).get(detail_key) or {}
                     out.append({"name": p["name"], "policy": _document(detail.get("policy"))})
                 except Exception as exc:
-                    logger.debug("AOSS %s policy %s lookup failed: %s", policy_type, p.get("name"), exc)
+                    logger.debug(
+                        "AOSS %s policy %s lookup failed: %s", policy_type, p.get("name"), exc
+                    )
         except Exception as exc:
             logger.debug("AOSS %s policy listing failed: %s", policy_type, exc)
         return out
 
     async def _collect_opensearch_serverless(self) -> list[CloudAsset]:
         async with self._client("opensearchserverless") as aoss:
-            summaries = [c async for c in self._pages(aoss.list_collections, "collectionSummaries",
-                                                     token_in="nextToken")]
+            summaries = [
+                c
+                async for c in self._pages(
+                    aoss.list_collections, "collectionSummaries", token_in="nextToken"
+                )
+            ]
             details: dict[str, dict] = {c["id"]: c for c in summaries if c.get("id")}
             ids = list(details)
             for i in range(0, len(ids), 100):
                 try:
-                    resp = await aoss.batch_get_collection(ids=ids[i:i + 100])
+                    resp = await aoss.batch_get_collection(ids=ids[i : i + 100])
                     for d in resp.get("collectionDetails", []) or []:
                         details[d["id"]] = {**details.get(d["id"], {}), **d}
                 except Exception as exc:
@@ -865,8 +1089,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     if not isinstance(block, dict):
                         continue
                     for rule in as_list(block.get("Rules")):
-                        if not isinstance(rule, dict) or not _aoss_match(rule.get("Resource"), name,
-                                                                        ("collection", "dashboard")):
+                        if not isinstance(rule, dict) or not _aoss_match(
+                            rule.get("Resource"), name, ("collection", "dashboard")
+                        ):
                             continue
                         network_policies.append(p["name"])
                         if block.get("AllowFromPublic"):
@@ -878,8 +1103,10 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 doc = p["policy"]
                 if not isinstance(doc, dict):
                     continue
-                if any(isinstance(r, dict) and _aoss_match(r.get("Resource"), name, ("collection",))
-                       for r in as_list(doc.get("Rules"))):
+                if any(
+                    isinstance(r, dict) and _aoss_match(r.get("Resource"), name, ("collection",))
+                    for r in as_list(doc.get("Rules"))
+                ):
                     aws_owned = bool(doc.get("AWSOwnedKey"))
                     kms = kms or _kms_ref(doc.get("KmsARN"))
                     break
@@ -891,17 +1118,26 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         continue
                     perms: set[str] = set()
                     for rule in as_list(block.get("Rules")):
-                        if isinstance(rule, dict) and _aoss_match(rule.get("Resource"), name,
-                                                                  ("collection", "index")):
+                        if isinstance(rule, dict) and _aoss_match(
+                            rule.get("Resource"), name, ("collection", "index")
+                        ):
                             perms.update(str(x) for x in as_list(rule.get("Permission")))
                     if not perms:
                         continue
                     for principal in as_list(block.get("Principal")):
-                        if isinstance(principal, str) and (principal.startswith("arn:") or principal.isdigit()):
+                        if isinstance(principal, str) and (
+                            principal.startswith("arn:") or principal.isdigit()
+                        ):
                             grants.setdefault(principal_ref(principal), set()).update(perms)
             relations += [
-                rel(principal, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                    description="data access policy", permissions=sorted(perms)[:20])
+                rel(
+                    principal,
+                    EdgeType.GRANTS_ACCESS,
+                    "POLICY_ALLOWS_ACTION",
+                    reverse=True,
+                    description="data access policy",
+                    permissions=sorted(perms)[:20],
+                )
                 for principal, perms in grants.items()
             ]
             endpoint = c.get("collectionEndpoint")
@@ -965,16 +1201,25 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             roles = [r.rstrip(")") for r in arns_in(ns.get("iamRoles")) if ":role/" in r]
             relations: list[dict[str, Any] | None] = [
                 rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                rel(ns.get("adminPasswordSecretArn"), EdgeType.REFERENCES, "READS_FROM",
-                    description="managed admin credentials"),
-                rel(_kms_ref(ns.get("adminPasswordSecretKmsKeyId")), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
+                rel(
+                    ns.get("adminPasswordSecretArn"),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="managed admin credentials",
+                ),
+                rel(
+                    _kms_ref(ns.get("adminPasswordSecretKmsKeyId")),
+                    EdgeType.REFERENCES,
+                    "ENCRYPTED_BY_KMS",
+                ),
             ]
             relations += [rel(r, EdgeType.ASSUMES_ROLE, "RUNS_ON") for r in roles]
             if ns.get("defaultIamRoleArn") not in roles:
                 relations.append(rel(ns.get("defaultIamRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"))
             assets.append(
                 self._asset(
-                    arn=ns.get("namespaceArn") or self._arn("redshift-serverless", f"namespace/{ns.get('namespaceId')}"),
+                    arn=ns.get("namespaceArn")
+                    or self._arn("redshift-serverless", f"namespace/{ns.get('namespaceId')}"),
                     name=ns.get("namespaceName") or ns.get("namespaceId", ""),
                     asset_type=AssetType.DATA_WAREHOUSE,
                     metadata={
@@ -993,20 +1238,39 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             )
         return assets
 
-    async def _redshift_workgroups(self, rs: Any, ns_arns: dict[str, str | None]) -> list[CloudAsset]:
+    async def _redshift_workgroups(
+        self, rs: Any, ns_arns: dict[str, str | None]
+    ) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async for wg in self._paginate(rs, "list_workgroups", "workgroups"):
             endpoint = wg.get("endpoint") or {}
-            vpces = [v.get("vpcEndpointId") for v in endpoint.get("vpcEndpoints") or [] if v.get("vpcEndpointId")]
+            vpces = [
+                v.get("vpcEndpointId")
+                for v in endpoint.get("vpcEndpoints") or []
+                if v.get("vpcEndpointId")
+            ]
             relations: list[dict[str, Any] | None] = self._subnet_rels(wg.get("subnetIds"))
             ns = wg.get("namespaceName")
-            relations.append(rel(ns_arns.get(ns) or ns, EdgeType.REFERENCES, "DEPENDS_ON",
-                                 description="workgroup compute for namespace"))
-            relations.append(rel(wg.get("customDomainCertificateArn"), EdgeType.REFERENCES, "CERTIFICATE_SECURES",
-                                 reverse=True))
+            relations.append(
+                rel(
+                    ns_arns.get(ns) or ns,
+                    EdgeType.REFERENCES,
+                    "DEPENDS_ON",
+                    description="workgroup compute for namespace",
+                )
+            )
+            relations.append(
+                rel(
+                    wg.get("customDomainCertificateArn"),
+                    EdgeType.REFERENCES,
+                    "CERTIFICATE_SECURES",
+                    reverse=True,
+                )
+            )
             assets.append(
                 self._asset(
-                    arn=wg.get("workgroupArn") or self._arn("redshift-serverless", f"workgroup/{wg.get('workgroupId')}"),
+                    arn=wg.get("workgroupArn")
+                    or self._arn("redshift-serverless", f"workgroup/{wg.get('workgroupId')}"),
                     name=wg.get("workgroupName") or wg.get("workgroupId", ""),
                     asset_type=AssetType.DATA_WAREHOUSE,
                     metadata={
@@ -1025,7 +1289,11 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     },
                     relations=relations,
                     exposed=bool(wg.get("publiclyAccessible")),
-                    aliases=[wg.get("workgroupId"), endpoint.get("address"), wg.get("customDomainName")],
+                    aliases=[
+                        wg.get("workgroupId"),
+                        endpoint.get("address"),
+                        wg.get("customDomainName"),
+                    ],
                 )
             )
         return assets
@@ -1039,8 +1307,12 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
     async def _lf_permissions(self, lf: Any) -> list[dict]:
         out: list[dict] = []
-        async for p in self._pages(lf.list_permissions, "PrincipalResourcePermissions",
-                                   max_pages=_MAX_LF_PERMISSIONS // 100 + 1, MaxResults=100):
+        async for p in self._pages(
+            lf.list_permissions,
+            "PrincipalResourcePermissions",
+            max_pages=_MAX_LF_PERMISSIONS // 100 + 1,
+            MaxResults=100,
+        ):
             out.append(p)
             if len(out) >= _MAX_LF_PERMISSIONS:
                 break
@@ -1050,26 +1322,38 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         async with self._client("glue") as glue:
             security_keys: dict[str, list[str]] = {}
             try:
-                async for sc in self._paginate(glue, "get_security_configurations", "SecurityConfigurations"):
+                async for sc in self._paginate(
+                    glue, "get_security_configurations", "SecurityConfigurations"
+                ):
                     enc = sc.get("EncryptionConfiguration") or {}
                     keys = [s.get("KmsKeyArn") for s in enc.get("S3Encryption") or []]
-                    for block in ("CloudWatchEncryption", "JobBookmarksEncryption", "DataQualityEncryption"):
+                    for block in (
+                        "CloudWatchEncryption",
+                        "JobBookmarksEncryption",
+                        "DataQualityEncryption",
+                    ):
                         keys.append((enc.get(block) or {}).get("KmsKeyArn"))
                     security_keys[sc["Name"]] = sorted({k for k in keys if _kms_ref(k)})
             except Exception as exc:
                 logger.debug("Glue security configuration listing failed: %s", exc)
 
             def security_rels(name: Any) -> list[dict[str, Any] | None]:
-                return [rel(k, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS", security_configuration=name)
-                        for k in security_keys.get(name, []) if isinstance(name, str)]
+                return [
+                    rel(k, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS", security_configuration=name)
+                    for k in security_keys.get(name, [])
+                    if isinstance(name, str)
+                ]
 
-            return await self._gather_parts("glue", {
-                "catalog": lambda: self._glue_databases(glue),
-                "jobs": lambda: self._glue_jobs(glue, security_rels),
-                "crawlers": lambda: self._glue_crawlers(glue, security_rels),
-                "connections": lambda: self._glue_connections(glue),
-                "triggers": lambda: self._glue_triggers(glue),
-            })
+            return await self._gather_parts(
+                "glue",
+                {
+                    "catalog": lambda: self._glue_databases(glue),
+                    "jobs": lambda: self._glue_jobs(glue, security_rels),
+                    "crawlers": lambda: self._glue_crawlers(glue, security_rels),
+                    "connections": lambda: self._glue_connections(glue),
+                    "triggers": lambda: self._glue_triggers(glue),
+                },
+            )
 
     async def _glue_databases(self, glue: Any) -> list[CloudAsset]:
         databases = [d async for d in self._paginate(glue, "get_databases", "DatabaseList")]
@@ -1080,16 +1364,19 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             async with self._client("lakeformation") as lf:
                 for p in await self._lf_permissions(lf):
                     res = p.get("Resource") or {}
-                    db = ((res.get("Database") or {}).get("Name")
-                          or (res.get("Table") or {}).get("DatabaseName")
-                          or (res.get("TableWithColumns") or {}).get("DatabaseName"))
+                    db = (
+                        (res.get("Database") or {}).get("Name")
+                        or (res.get("Table") or {}).get("DatabaseName")
+                        or (res.get("TableWithColumns") or {}).get("DatabaseName")
+                    )
                     principal = (p.get("Principal") or {}).get("DataLakePrincipalIdentifier")
                     if not db or not isinstance(principal, str):
                         continue
                     if not (principal.startswith("arn:") or principal.isdigit()):
                         continue
                     grants.setdefault(db, {}).setdefault(principal_ref(principal), set()).update(
-                        p.get("Permissions") or [])
+                        p.get("Permissions") or []
+                    )
         except Exception as exc:
             logger.debug("Lake Formation permission listing failed: %s", exc)
 
@@ -1112,16 +1399,32 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             target = d.get("TargetDatabase") or {}
             relations: list[dict[str, Any] | None] = [
                 rel(catalog_arn, EdgeType.CONTAINS, reverse=True),
-                rel(_bucket_arn(d.get("LocationUri")), EdgeType.REFERENCES, "DEPENDS_ON", description="database location"),
+                rel(
+                    _bucket_arn(d.get("LocationUri")),
+                    EdgeType.REFERENCES,
+                    "DEPENDS_ON",
+                    description="database location",
+                ),
             ]
             if target.get("DatabaseName"):
-                relations.append(rel(
-                    f"arn:aws:glue:{target.get('Region') or self._region}:{target.get('CatalogId') or self._account_id}"
-                    f":database/{target['DatabaseName']}",
-                    EdgeType.REFERENCES, "DEPENDS_ON", description="resource link"))
+                relations.append(
+                    rel(
+                        f"arn:aws:glue:{target.get('Region') or self._region}:{target.get('CatalogId') or self._account_id}"
+                        f":database/{target['DatabaseName']}",
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="resource link",
+                    )
+                )
             relations += [
-                rel(principal, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                    description="Lake Formation grant", permissions=sorted(perms))
+                rel(
+                    principal,
+                    EdgeType.GRANTS_ACCESS,
+                    "POLICY_ALLOWS_ACTION",
+                    reverse=True,
+                    description="Lake Formation grant",
+                    permissions=sorted(perms),
+                )
                 for principal, perms in grants.get(name, {}).items()
             ]
             assets.append(
@@ -1138,7 +1441,8 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "resource_link": bool(target),
                         "federated": (d.get("FederatedDatabase") or {}).get("ConnectionName"),
                         "iam_allowed_principals_default": any(
-                            (p.get("Principal") or {}).get("DataLakePrincipalIdentifier") == "IAM_ALLOWED_PRINCIPALS"
+                            (p.get("Principal") or {}).get("DataLakePrincipalIdentifier")
+                            == "IAM_ALLOWED_PRINCIPALS"
                             for p in d.get("CreateTableDefaultPermissions") or []
                         ),
                     },
@@ -1149,8 +1453,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         kms: str | None = None
         encryption: dict = {}
         try:
-            encryption = ((await glue.get_data_catalog_encryption_settings()).get("DataCatalogEncryptionSettings")
-                          or {})
+            encryption = (await glue.get_data_catalog_encryption_settings()).get(
+                "DataCatalogEncryptionSettings"
+            ) or {}
             kms = _kms_ref((encryption.get("EncryptionAtRest") or {}).get("SseAwsKmsKeyId"))
         except Exception as exc:
             logger.debug("Glue catalog encryption lookup failed: %s", exc)
@@ -1165,12 +1470,16 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     "service": "glue",
                     "kind": "catalog",
                     "database_count": len(databases),
-                    "encryption_mode": (encryption.get("EncryptionAtRest") or {}).get("CatalogEncryptionMode"),
+                    "encryption_mode": (encryption.get("EncryptionAtRest") or {}).get(
+                        "CatalogEncryptionMode"
+                    ),
                     "kms_key_id": kms,
                     "connection_password_encryption": pw.get("ReturnConnectionPasswordEncrypted"),
                 },
-                relations=[rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                           rel(pw_kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")],
+                relations=[
+                    rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
+                    rel(pw_kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
+                ],
             )
         )
         return assets
@@ -1183,21 +1492,40 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             args = j.get("DefaultArguments") or {}
             relations: list[dict[str, Any] | None] = [
                 rel(self._role_ref(j.get("Role")), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
-                rel(_bucket_arn(command.get("ScriptLocation")), EdgeType.REFERENCES, "READS_FROM",
-                    description="job script"),
+                rel(
+                    _bucket_arn(command.get("ScriptLocation")),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="job script",
+                ),
             ]
-            relations += [rel(self._glue_arn("connection", c), EdgeType.REFERENCES, "DEPENDS_ON")
-                          for c in (j.get("Connections") or {}).get("Connections") or []]
+            relations += [
+                rel(self._glue_arn("connection", c), EdgeType.REFERENCES, "DEPENDS_ON")
+                for c in (j.get("Connections") or {}).get("Connections") or []
+            ]
             relations += security_rels(j.get("SecurityConfiguration"))
             for key in _GLUE_ARG_READS:
                 for part in str(args.get(key, "")).split(","):
-                    relations.append(rel(_bucket_arn(part.strip()), EdgeType.REFERENCES, "READS_FROM", argument=key))
+                    relations.append(
+                        rel(
+                            _bucket_arn(part.strip()),
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            argument=key,
+                        )
+                    )
             for key in _GLUE_ARG_WRITES:
-                relations.append(rel(_bucket_arn(args.get(key)), EdgeType.REFERENCES, "WRITES_TO", argument=key))
+                relations.append(
+                    rel(_bucket_arn(args.get(key)), EdgeType.REFERENCES, "WRITES_TO", argument=key)
+                )
             for key in _GLUE_ARG_LOGS:
-                relations.append(rel(_bucket_arn(args.get(key)), EdgeType.LOGS_TO, "LOGS_TO", argument=key))
-            relations += [rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="job argument")
-                          for r in identifier_refs(args)]
+                relations.append(
+                    rel(_bucket_arn(args.get(key)), EdgeType.LOGS_TO, "LOGS_TO", argument=key)
+                )
+            relations += [
+                rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="job argument")
+                for r in identifier_refs(args)
+            ]
             source = j.get("SourceControlDetails") or {}
             assets.append(
                 self._asset(
@@ -1214,50 +1542,109 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "workers": j.get("NumberOfWorkers"),
                         "security_configuration": j.get("SecurityConfiguration"),
                         "connections": (j.get("Connections") or {}).get("Connections") or [],
-                        "source_control": {"provider": source.get("Provider"), "repository": source.get("Repository")}
-                        if source else None,
+                        "source_control": {
+                            "provider": source.get("Provider"),
+                            "repository": source.get("Repository"),
+                        }
+                        if source
+                        else None,
                     },
                     relations=relations,
                 )
             )
         return assets
 
-    async def _glue_crawlers(self, glue: Any, security_rels: Callable[[Any], list]) -> list[CloudAsset]:
+    async def _glue_crawlers(
+        self, glue: Any, security_rels: Callable[[Any], list]
+    ) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async for c in self._paginate(glue, "get_crawlers", "Crawlers"):
             name = c["Name"]
             targets = c.get("Targets") or {}
             relations: list[dict[str, Any] | None] = [
                 rel(self._role_ref(c.get("Role")), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
-                rel(self._glue_arn("database", c["DatabaseName"]) if c.get("DatabaseName") else None,
-                    EdgeType.REFERENCES, "WRITES_TO", description="crawler output database"),
+                rel(
+                    self._glue_arn("database", c["DatabaseName"])
+                    if c.get("DatabaseName")
+                    else None,
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="crawler output database",
+                ),
             ]
             relations += security_rels(c.get("CrawlerSecurityConfiguration"))
             connections: set[str] = set()
             for t in targets.get("S3Targets") or []:
-                relations.append(rel(_bucket_arn(t.get("Path")), EdgeType.REFERENCES, "READS_FROM", source_type="s3"))
-                relations.append(rel(t.get("EventQueueArn"), EdgeType.REFERENCES, "READS_FROM", source_type="events"))
+                relations.append(
+                    rel(
+                        _bucket_arn(t.get("Path")),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        source_type="s3",
+                    )
+                )
+                relations.append(
+                    rel(
+                        t.get("EventQueueArn"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        source_type="events",
+                    )
+                )
                 connections.add(t.get("ConnectionName") or "")
             for key in ("JdbcTargets", "MongoDBTargets"):
                 for t in targets.get(key) or []:
                     connections.add(t.get("ConnectionName") or "")
             for t in targets.get("DynamoDBTargets") or []:
                 if t.get("Path"):
-                    table = t["Path"] if t["Path"].startswith("arn:") else self._arn("dynamodb", f"table/{t['Path']}")
-                    relations.append(rel(table, EdgeType.REFERENCES, "READS_FROM", source_type="dynamodb"))
+                    table = (
+                        t["Path"]
+                        if t["Path"].startswith("arn:")
+                        else self._arn("dynamodb", f"table/{t['Path']}")
+                    )
+                    relations.append(
+                        rel(table, EdgeType.REFERENCES, "READS_FROM", source_type="dynamodb")
+                    )
             for t in targets.get("CatalogTargets") or []:
                 if t.get("DatabaseName"):
-                    relations.append(rel(self._glue_arn("database", t["DatabaseName"]), EdgeType.REFERENCES,
-                                         "READS_FROM", source_type="catalog"))
-                relations.append(rel(t.get("EventQueueArn"), EdgeType.REFERENCES, "READS_FROM", source_type="events"))
+                    relations.append(
+                        rel(
+                            self._glue_arn("database", t["DatabaseName"]),
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            source_type="catalog",
+                        )
+                    )
+                relations.append(
+                    rel(
+                        t.get("EventQueueArn"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        source_type="events",
+                    )
+                )
                 connections.add(t.get("ConnectionName") or "")
-            for key, field in (("DeltaTargets", "DeltaTables"), ("IcebergTargets", "Paths"), ("HudiTargets", "Paths")):
+            for key, field in (
+                ("DeltaTargets", "DeltaTables"),
+                ("IcebergTargets", "Paths"),
+                ("HudiTargets", "Paths"),
+            ):
                 for t in targets.get(key) or []:
-                    relations += [rel(_bucket_arn(p), EdgeType.REFERENCES, "READS_FROM", source_type=key)
-                                  for p in t.get(field) or []]
+                    relations += [
+                        rel(_bucket_arn(p), EdgeType.REFERENCES, "READS_FROM", source_type=key)
+                        for p in t.get(field) or []
+                    ]
                     connections.add(t.get("ConnectionName") or "")
-            relations += [rel(self._glue_arn("connection", n), EdgeType.REFERENCES, "READS_FROM", source_type="connection")
-                          for n in sorted(connections) if n]
+            relations += [
+                rel(
+                    self._glue_arn("connection", n),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    source_type="connection",
+                )
+                for n in sorted(connections)
+                if n
+            ]
             assets.append(
                 self._asset(
                     arn=self._glue_arn("crawler", name),
@@ -1271,8 +1658,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "schedule": (c.get("Schedule") or {}).get("ScheduleExpression"),
                         "target_types": sorted(k for k, v in targets.items() if v),
                         "security_configuration": c.get("CrawlerSecurityConfiguration"),
-                        "lake_formation_credentials": (c.get("LakeFormationConfiguration") or {}).get(
-                            "UseLakeFormationCredentials"),
+                        "lake_formation_credentials": (
+                            c.get("LakeFormationConfiguration") or {}
+                        ).get("UseLakeFormationCredentials"),
                     },
                     relations=relations,
                 )
@@ -1297,12 +1685,24 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     hosts.append(host)
             relations: list[dict[str, Any] | None] = self._subnet_rels(physical.get("SubnetId"))
             relations += [
-                rel(auth.get("SecretArn"), EdgeType.REFERENCES, "READS_FROM", description="connection credentials"),
-                rel(props.get("SECRET_ID"), EdgeType.REFERENCES, "READS_FROM", description="connection credentials"),
+                rel(
+                    auth.get("SecretArn"),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="connection credentials",
+                ),
+                rel(
+                    props.get("SECRET_ID"),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="connection credentials",
+                ),
                 rel(_kms_ref(auth.get("KmsKeyArn")), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
             ]
-            relations += [rel(h, EdgeType.REFERENCES, "READS_FROM", description="connection endpoint")
-                          for h in sorted(set(hosts))]
+            relations += [
+                rel(h, EdgeType.REFERENCES, "READS_FROM", description="connection endpoint")
+                for h in sorted(set(hosts))
+            ]
             assets.append(
                 self._asset(
                     arn=self._glue_arn("connection", name),
@@ -1331,16 +1731,38 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             relations: list[dict[str, Any] | None] = []
             for action in t.get("Actions") or []:
                 if action.get("JobName"):
-                    relations.append(rel(self._glue_arn("job", action["JobName"]), EdgeType.INVOKES, "INVOKES"))
+                    relations.append(
+                        rel(self._glue_arn("job", action["JobName"]), EdgeType.INVOKES, "INVOKES")
+                    )
                 if action.get("CrawlerName"):
-                    relations.append(rel(self._glue_arn("crawler", action["CrawlerName"]), EdgeType.INVOKES, "INVOKES"))
+                    relations.append(
+                        rel(
+                            self._glue_arn("crawler", action["CrawlerName"]),
+                            EdgeType.INVOKES,
+                            "INVOKES",
+                        )
+                    )
             for cond in (t.get("Predicate") or {}).get("Conditions") or []:
                 if cond.get("JobName"):
-                    relations.append(rel(self._glue_arn("job", cond["JobName"]), EdgeType.INVOKES, "TRIGGERED_BY",
-                                         reverse=True, state=cond.get("State")))
+                    relations.append(
+                        rel(
+                            self._glue_arn("job", cond["JobName"]),
+                            EdgeType.INVOKES,
+                            "TRIGGERED_BY",
+                            reverse=True,
+                            state=cond.get("State"),
+                        )
+                    )
                 if cond.get("CrawlerName"):
-                    relations.append(rel(self._glue_arn("crawler", cond["CrawlerName"]), EdgeType.INVOKES,
-                                         "TRIGGERED_BY", reverse=True, state=cond.get("CrawlState")))
+                    relations.append(
+                        rel(
+                            self._glue_arn("crawler", cond["CrawlerName"]),
+                            EdgeType.INVOKES,
+                            "TRIGGERED_BY",
+                            reverse=True,
+                            state=cond.get("CrawlState"),
+                        )
+                    )
             assets.append(
                 self._asset(
                     arn=self._glue_arn("trigger", name),
@@ -1379,22 +1801,54 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
         def principals(entries: Any) -> list[str]:
             ids = [(e or {}).get("DataLakePrincipalIdentifier") for e in as_list(entries)]
-            return [principal_ref(i) for i in ids if isinstance(i, str) and (i.startswith("arn:") or i.isdigit())]
+            return [
+                principal_ref(i)
+                for i in ids
+                if isinstance(i, str) and (i.startswith("arn:") or i.isdigit())
+            ]
 
         admins = principals(settings.get("DataLakeAdmins"))
         readonly = principals(settings.get("ReadOnlyAdmins"))
-        relations += [rel(p, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                          description="data lake administrator") for p in admins]
-        relations += [rel(p, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                          description="read-only data lake administrator") for p in readonly]
+        relations += [
+            rel(
+                p,
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="data lake administrator",
+            )
+            for p in admins
+        ]
+        relations += [
+            rel(
+                p,
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="read-only data lake administrator",
+            )
+            for p in readonly
+        ]
         locations = []
         for r in resources:
             arn = r.get("ResourceArn")
             locations.append(arn)
-            relations.append(rel(_bucket_arn(arn) or arn, EdgeType.GOVERNS, "COMPLIANCE_GOVERNS",
-                                 description="registered data location"))
-            relations.append(rel(r.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                                 description="location registration role"))
+            relations.append(
+                rel(
+                    _bucket_arn(arn) or arn,
+                    EdgeType.GOVERNS,
+                    "COMPLIANCE_GOVERNS",
+                    description="registered data location",
+                )
+            )
+            relations.append(
+                rel(
+                    r.get("RoleArn"),
+                    EdgeType.ASSUMES_ROLE,
+                    "RUNS_ON",
+                    description="location registration role",
+                )
+            )
         grants: dict[str, set[str]] = {}
         location_grants: list[dict[str, Any]] = []
         for p in permissions:
@@ -1402,18 +1856,33 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             if not (res.get("Catalog") is not None or res.get("DataLocation")):
                 continue
             principal = (p.get("Principal") or {}).get("DataLakePrincipalIdentifier")
-            if not isinstance(principal, str) or not (principal.startswith("arn:") or principal.isdigit()):
+            if not isinstance(principal, str) or not (
+                principal.startswith("arn:") or principal.isdigit()
+            ):
                 continue
             grants.setdefault(principal_ref(principal), set()).update(p.get("Permissions") or [])
             if res.get("DataLocation"):
-                location_grants.append({"principal": principal,
-                                        "location": res["DataLocation"].get("ResourceArn"),
-                                        "permissions": p.get("Permissions") or []})
-        relations += [rel(pr, EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                          description="Lake Formation catalog / location grant", permissions=sorted(perms))
-                      for pr, perms in grants.items()]
+                location_grants.append(
+                    {
+                        "principal": principal,
+                        "location": res["DataLocation"].get("ResourceArn"),
+                        "permissions": p.get("Permissions") or [],
+                    }
+                )
+        relations += [
+            rel(
+                pr,
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="Lake Formation catalog / location grant",
+                permissions=sorted(perms),
+            )
+            for pr, perms in grants.items()
+        ]
         defaults = (settings.get("CreateDatabaseDefaultPermissions") or []) + (
-            settings.get("CreateTableDefaultPermissions") or [])
+            settings.get("CreateTableDefaultPermissions") or []
+        )
         return [
             self._asset(
                 arn=f"cloudg:aws:lakeformation:{self._region}:{self._account_id}:data-lake",
@@ -1426,7 +1895,8 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     "read_only_admins": readonly,
                     "registered_locations": locations,
                     "iam_allowed_principals_default": any(
-                        (d.get("Principal") or {}).get("DataLakePrincipalIdentifier") == "IAM_ALLOWED_PRINCIPALS"
+                        (d.get("Principal") or {}).get("DataLakePrincipalIdentifier")
+                        == "IAM_ALLOWED_PRINCIPALS"
                         for d in defaults
                     ),
                     "trusted_resource_owners": settings.get("TrustedResourceOwners") or [],
@@ -1445,24 +1915,47 @@ class DataMLCollectorsMixin(AWSServiceMixin):
 
     async def _collect_emr(self) -> list[CloudAsset]:
         async with self._client("emr") as emr:
-            clusters = [c async for c in self._paginate(emr, "list_clusters", "Clusters",
-                                                        ClusterStates=_EMR_ACTIVE_STATES)]
+            clusters = [
+                c
+                async for c in self._paginate(
+                    emr, "list_clusters", "Clusters", ClusterStates=_EMR_ACTIVE_STATES
+                )
+            ]
 
             async def detail(summary: dict) -> CloudAsset:
                 c = (await emr.describe_cluster(ClusterId=summary["Id"])).get("Cluster") or {}
                 ec2 = c.get("Ec2InstanceAttributes") or {}
-                subnets = ec2.get("RequestedEc2SubnetIds") or ([ec2["Ec2SubnetId"]] if ec2.get("Ec2SubnetId") else [])
-                sgs = [ec2.get("EmrManagedMasterSecurityGroup"), ec2.get("EmrManagedSlaveSecurityGroup"),
-                       ec2.get("ServiceAccessSecurityGroup"), *(ec2.get("AdditionalMasterSecurityGroups") or []),
-                       *(ec2.get("AdditionalSlaveSecurityGroups") or [])]
+                subnets = ec2.get("RequestedEc2SubnetIds") or (
+                    [ec2["Ec2SubnetId"]] if ec2.get("Ec2SubnetId") else []
+                )
+                sgs = [
+                    ec2.get("EmrManagedMasterSecurityGroup"),
+                    ec2.get("EmrManagedSlaveSecurityGroup"),
+                    ec2.get("ServiceAccessSecurityGroup"),
+                    *(ec2.get("AdditionalMasterSecurityGroups") or []),
+                    *(ec2.get("AdditionalSlaveSecurityGroups") or []),
+                ]
                 kms = _kms_ref(c.get("LogEncryptionKmsKeyId"))
                 relations: list[dict[str, Any] | None] = self._subnet_rels(subnets)
                 relations += [
-                    rel(self._role_ref(c.get("ServiceRole")), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="service role"),
-                    rel(self._role_ref(c.get("AutoScalingRole")), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                        description="auto scaling role"),
-                    rel(self._profile_ref(ec2.get("IamInstanceProfile")), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                        description="EC2 instance profile"),
+                    rel(
+                        self._role_ref(c.get("ServiceRole")),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="service role",
+                    ),
+                    rel(
+                        self._role_ref(c.get("AutoScalingRole")),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="auto scaling role",
+                    ),
+                    rel(
+                        self._profile_ref(ec2.get("IamInstanceProfile")),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="EC2 instance profile",
+                    ),
                     rel(_bucket_arn(c.get("LogUri")), EdgeType.LOGS_TO, "LOGS_TO"),
                     rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
                     rel(c.get("OutpostArn"), EdgeType.REFERENCES, "RUNS_ON"),
@@ -1470,8 +1963,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 master_dns = c.get("MasterPublicDnsName") or ""
                 public = master_dns.startswith("ec2-")
                 return self._asset(
-                    arn=c.get("ClusterArn") or summary.get("ClusterArn") or self._arn(
-                        "elasticmapreduce", f"cluster/{summary['Id']}"),
+                    arn=c.get("ClusterArn")
+                    or summary.get("ClusterArn")
+                    or self._arn("elasticmapreduce", f"cluster/{summary['Id']}"),
                     name=c.get("Name") or summary.get("Name") or summary["Id"],
                     asset_type=AssetType.BIG_DATA_CLUSTER,
                     tags=c.get("Tags"),
@@ -1503,7 +1997,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             apps = [a async for a in self._paginate(emrs, "list_applications", "applications")]
 
             async def detail(summary: dict) -> CloudAsset:
-                a = (await emrs.get_application(applicationId=summary["id"])).get("application") or {}
+                a = (await emrs.get_application(applicationId=summary["id"])).get(
+                    "application"
+                ) or {}
                 net = a.get("networkConfiguration") or {}
                 mon = a.get("monitoringConfiguration") or {}
                 s3mon = mon.get("s3MonitoringConfiguration") or {}
@@ -1513,14 +2009,25 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 relations += [
                     rel(image, EdgeType.USES_IMAGE, "RUNS_ON"),
                     rel(_bucket_arn(s3mon.get("logUri")), EdgeType.LOGS_TO, "LOGS_TO"),
-                    rel(self._log_group_ref(cw.get("logGroupName")) if cw.get("enabled") else None,
-                        EdgeType.LOGS_TO, "LOGS_TO"),
+                    rel(
+                        self._log_group_ref(cw.get("logGroupName")) if cw.get("enabled") else None,
+                        EdgeType.LOGS_TO,
+                        "LOGS_TO",
+                    ),
                 ]
-                for key in {_kms_ref(s3mon.get("encryptionKeyArn")), _kms_ref(cw.get("encryptionKeyArn"))}:
+                for key in {
+                    _kms_ref(s3mon.get("encryptionKeyArn")),
+                    _kms_ref(cw.get("encryptionKeyArn")),
+                }:
                     relations.append(rel(key, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"))
                 for spec in (a.get("workerTypeSpecifications") or {}).values():
-                    relations.append(rel((spec.get("imageConfiguration") or {}).get("imageUri"),
-                                         EdgeType.USES_IMAGE, "RUNS_ON"))
+                    relations.append(
+                        rel(
+                            (spec.get("imageConfiguration") or {}).get("imageUri"),
+                            EdgeType.USES_IMAGE,
+                            "RUNS_ON",
+                        )
+                    )
                 return self._asset(
                     arn=a.get("arn") or summary.get("arn", ""),
                     name=a.get("name") or summary.get("name") or summary["id"],
@@ -1554,15 +2061,26 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 result = cfg.get("ResultConfiguration") or {}
                 enc = result.get("EncryptionConfiguration") or {}
                 managed = cfg.get("ManagedQueryResultsConfiguration") or {}
-                keys = {_kms_ref(enc.get("KmsKey")),
-                        _kms_ref(((managed.get("EncryptionConfiguration") or {}).get("KmsKey"))),
-                        _kms_ref((cfg.get("CustomerContentEncryptionConfiguration") or {}).get("KmsKey"))}
+                keys = {
+                    _kms_ref(enc.get("KmsKey")),
+                    _kms_ref(((managed.get("EncryptionConfiguration") or {}).get("KmsKey"))),
+                    _kms_ref(
+                        (cfg.get("CustomerContentEncryptionConfiguration") or {}).get("KmsKey")
+                    ),
+                }
                 relations: list[dict[str, Any] | None] = [
-                    rel(_bucket_arn(result.get("OutputLocation")), EdgeType.REFERENCES, "WRITES_TO",
-                        description="query results"),
+                    rel(
+                        _bucket_arn(result.get("OutputLocation")),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="query results",
+                    ),
                     rel(cfg.get("ExecutionRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                 ]
-                relations += [rel(k, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS") for k in sorted(k for k in keys if k)]
+                relations += [
+                    rel(k, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                    for k in sorted(k for k in keys if k)
+                ]
                 return self._asset(
                     arn=self._arn("athena", f"workgroup/{name}"),
                     name=name,
@@ -1576,8 +2094,12 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "enforce_workgroup_configuration": cfg.get("EnforceWorkGroupConfiguration"),
                         "managed_query_results": managed.get("Enabled"),
                         "bytes_scanned_cutoff": cfg.get("BytesScannedCutoffPerQuery"),
-                        "engine_version": (cfg.get("EngineVersion") or {}).get("EffectiveEngineVersion"),
-                        "identity_center": (cfg.get("IdentityCenterConfiguration") or {}).get("EnableIdentityCenter"),
+                        "engine_version": (cfg.get("EngineVersion") or {}).get(
+                            "EffectiveEngineVersion"
+                        ),
+                        "identity_center": (cfg.get("IdentityCenterConfiguration") or {}).get(
+                            "EnableIdentityCenter"
+                        ),
                     },
                     relations=relations,
                 )
@@ -1596,7 +2118,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         head = path.strip("/").split("/", 1)[0]
         if domain == "EFS" or head.startswith("fs-"):
             return [rel(head, EdgeType.REFERENCES, "READS_FROM", description=description)]
-        return [rel(f"arn:aws:s3:::{head}", EdgeType.REFERENCES, "READS_FROM", description=description)]
+        return [
+            rel(f"arn:aws:s3:::{head}", EdgeType.REFERENCES, "READS_FROM", description=description)
+        ]
 
     async def _collect_transfer_family(self) -> list[CloudAsset]:
         async with self._client("transfer") as transfer:
@@ -1606,7 +2130,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 out: list[CloudAsset] = []
                 try:
                     names = []
-                    async for u in self._paginate(transfer, "list_users", "Users", ServerId=server_id):
+                    async for u in self._paginate(
+                        transfer, "list_users", "Users", ServerId=server_id
+                    ):
                         names.append(u)
                         if len(names) >= _MAX_TRANSFER_USERS:
                             break
@@ -1617,8 +2143,11 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 async def user_detail(summary: dict) -> CloudAsset:
                     u = summary
                     try:
-                        u = (await transfer.describe_user(ServerId=server_id, UserName=summary["UserName"])).get(
-                            "User") or summary
+                        u = (
+                            await transfer.describe_user(
+                                ServerId=server_id, UserName=summary["UserName"]
+                            )
+                        ).get("User") or summary
                     except Exception as exc:
                         logger.debug("Transfer user lookup failed: %s", exc)
                     relations: list[dict[str, Any] | None] = [
@@ -1627,10 +2156,13 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     ]
                     relations += self._home_rels(domain, u.get("HomeDirectory"), "home directory")
                     for m in u.get("HomeDirectoryMappings") or []:
-                        relations += self._home_rels(domain, m.get("Target"), "home directory mapping")
+                        relations += self._home_rels(
+                            domain, m.get("Target"), "home directory mapping"
+                        )
                     return self._asset(
-                        arn=u.get("Arn") or summary.get("Arn") or self._arn(
-                            "transfer", f"user/{server_id}/{summary['UserName']}"),
+                        arn=u.get("Arn")
+                        or summary.get("Arn")
+                        or self._arn("transfer", f"user/{server_id}/{summary['UserName']}"),
                         name=f"{server_id}/{summary['UserName']}",
                         asset_type=AssetType.IDENTITY_USER,
                         tags=u.get("Tags"),
@@ -1640,7 +2172,8 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                             "user_name": summary["UserName"],
                             "home_directory": u.get("HomeDirectory"),
                             "home_directory_type": u.get("HomeDirectoryType"),
-                            "ssh_key_count": len(u.get("SshPublicKeys") or []) or summary.get("SshPublicKeyCount"),
+                            "ssh_key_count": len(u.get("SshPublicKeys") or [])
+                            or summary.get("SshPublicKeyCount"),
                             "has_session_policy": bool(u.get("Policy")),
                         },
                         relations=relations,
@@ -1655,35 +2188,78 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 ep = s.get("EndpointDetails") or {}
                 idp = s.get("IdentityProviderDetails") or {}
                 endpoint_type = s.get("EndpointType")
-                exposed = endpoint_type == "PUBLIC" or (endpoint_type == "VPC" and bool(ep.get("AddressAllocationIds")))
+                exposed = endpoint_type == "PUBLIC" or (
+                    endpoint_type == "VPC" and bool(ep.get("AddressAllocationIds"))
+                )
                 relations: list[dict[str, Any] | None] = self._subnet_rels(ep.get("SubnetIds"))
                 relations += [
                     rel(ep.get("VpcEndpointId"), EdgeType.ATTACHED_TO),
-                    rel(s.get("LoggingRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="logging role"),
-                    rel(idp.get("Function"), EdgeType.INVOKES, "INVOKES", description="custom identity provider"),
-                    rel(idp.get("InvocationRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                        description="identity provider invocation role"),
-                    rel(s.get("Certificate"), EdgeType.REFERENCES, "CERTIFICATE_SECURES", reverse=True),
+                    rel(
+                        s.get("LoggingRole"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="logging role",
+                    ),
+                    rel(
+                        idp.get("Function"),
+                        EdgeType.INVOKES,
+                        "INVOKES",
+                        description="custom identity provider",
+                    ),
+                    rel(
+                        idp.get("InvocationRole"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="identity provider invocation role",
+                    ),
+                    rel(
+                        s.get("Certificate"),
+                        EdgeType.REFERENCES,
+                        "CERTIFICATE_SECURES",
+                        reverse=True,
+                    ),
                 ]
-                relations += [rel(a, EdgeType.ATTACHED_TO, reverse=True) for a in ep.get("AddressAllocationIds") or []]
+                relations += [
+                    rel(a, EdgeType.ATTACHED_TO, reverse=True)
+                    for a in ep.get("AddressAllocationIds") or []
+                ]
                 api_host = _host(idp.get("Url"))
                 if api_host and ".execute-api." in api_host:
-                    relations.append(rel(api_host.split(".", 1)[0], EdgeType.INVOKES, "INVOKES",
-                                         description="API Gateway identity provider"))
-                relations += [rel(self._log_group_ref(d), EdgeType.LOGS_TO, "LOGS_TO")
-                              for d in s.get("StructuredLogDestinations") or []]
+                    relations.append(
+                        rel(
+                            api_host.split(".", 1)[0],
+                            EdgeType.INVOKES,
+                            "INVOKES",
+                            description="API Gateway identity provider",
+                        )
+                    )
+                relations += [
+                    rel(self._log_group_ref(d), EdgeType.LOGS_TO, "LOGS_TO")
+                    for d in s.get("StructuredLogDestinations") or []
+                ]
                 workflows = s.get("WorkflowDetails") or {}
                 wf_ids: list[str] = []
                 for key in ("OnUpload", "OnPartialUpload"):
                     for wf in workflows.get(key) or []:
                         wf_ids.append(wf.get("WorkflowId"))
-                        relations.append(rel(wf.get("ExecutionRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                                             description=f"{key} workflow role"))
-                arn = s.get("Arn") or summary.get("Arn") or self._arn("transfer", f"server/{server_id}")
+                        relations.append(
+                            rel(
+                                wf.get("ExecutionRole"),
+                                EdgeType.ASSUMES_ROLE,
+                                "RUNS_ON",
+                                description=f"{key} workflow role",
+                            )
+                        )
+                arn = (
+                    s.get("Arn")
+                    or summary.get("Arn")
+                    or self._arn("transfer", f"server/{server_id}")
+                )
                 tags = s.get("Tags")
                 server = self._asset(
                     arn=arn,
-                    name=next((t.get("Value") for t in tags or [] if t.get("Key") == "Name"), None) or server_id,
+                    name=next((t.get("Value") for t in tags or [] if t.get("Key") == "Name"), None)
+                    or server_id,
                     asset_type=AssetType.DATA_TRANSFER,
                     tags=tags,
                     metadata={
@@ -1704,7 +2280,10 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     },
                     relations=relations,
                     exposed=exposed,
-                    aliases=[server_id, f"{server_id}.server.transfer.{self._region}.amazonaws.com"],
+                    aliases=[
+                        server_id,
+                        f"{server_id}.server.transfer.{self._region}.amazonaws.com",
+                    ],
                 )
                 return [server, *await users(server_id, s.get("Domain"), arn)]
 
@@ -1716,7 +2295,13 @@ class DataMLCollectorsMixin(AWSServiceMixin):
         bucket = _bucket_arn(uri)
         if bucket:
             return bucket
-        if isinstance(uri, str) and uri.split("://", 1)[0] in ("efs", "fsxw", "fsxl", "fsxz", "fsxn"):
+        if isinstance(uri, str) and uri.split("://", 1)[0] in (
+            "efs",
+            "fsxw",
+            "fsxl",
+            "fsxz",
+            "fsxn",
+        ):
             m = _FS_ID_RE.search(uri)
             return m.group(1) if m else None
         return None
@@ -1731,22 +2316,42 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 uri = loc.get("LocationUri") or ""
                 scheme = uri.split("://", 1)[0] if "://" in uri else None
                 relations: list[dict[str, Any] | None] = [
-                    rel(self._location_target(uri), EdgeType.REFERENCES, "DEPENDS_ON", description="location storage"),
+                    rel(
+                        self._location_target(uri),
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="location storage",
+                    ),
                 ]
                 if scheme == "s3":
                     try:
                         s3 = await ds.describe_location_s3(LocationArn=arn)
-                        relations.append(rel((s3.get("S3Config") or {}).get("BucketAccessRoleArn"),
-                                             EdgeType.ASSUMES_ROLE, "RUNS_ON", description="bucket access role"))
+                        relations.append(
+                            rel(
+                                (s3.get("S3Config") or {}).get("BucketAccessRoleArn"),
+                                EdgeType.ASSUMES_ROLE,
+                                "RUNS_ON",
+                                description="bucket access role",
+                            )
+                        )
                     except Exception as exc:
                         logger.debug("DataSync S3 location lookup failed: %s", exc)
-                host = None if scheme in ("s3", "efs") or (scheme or "").startswith("fsx") else _host(uri)
+                host = (
+                    None
+                    if scheme in ("s3", "efs") or (scheme or "").startswith("fsx")
+                    else _host(uri)
+                )
                 return self._asset(
                     arn=arn,
                     name=uri or arn,
                     asset_type=AssetType.DATA_TRANSFER,
-                    metadata={"service": "datasync", "kind": "location", "location_uri": uri,
-                              "location_type": scheme, "host": host},
+                    metadata={
+                        "service": "datasync",
+                        "kind": "location",
+                        "location_uri": uri,
+                        "location_type": scheme,
+                        "host": host,
+                    },
                     relations=relations,
                 )
 
@@ -1758,19 +2363,43 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 relations: list[dict[str, Any] | None] = [
                     rel(src, EdgeType.REFERENCES, "READS_FROM", description="source location"),
                     rel(dst, EdgeType.REFERENCES, "WRITES_TO", description="destination location"),
-                    rel(self._location_target(uris.get(src)), EdgeType.REFERENCES, "READS_FROM",
-                        description="source storage"),
-                    rel(self._location_target(uris.get(dst)), EdgeType.REFERENCES, "WRITES_TO",
-                        description="destination storage"),
-                    rel(self._log_group_ref(t.get("CloudWatchLogGroupArn")), EdgeType.LOGS_TO, "LOGS_TO"),
+                    rel(
+                        self._location_target(uris.get(src)),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="source storage",
+                    ),
+                    rel(
+                        self._location_target(uris.get(dst)),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="destination storage",
+                    ),
+                    rel(
+                        self._log_group_ref(t.get("CloudWatchLogGroupArn")),
+                        EdgeType.LOGS_TO,
+                        "LOGS_TO",
+                    ),
                 ]
-                report = ((t.get("TaskReportConfig") or {}).get("Destination") or {}).get("S3") or {}
-                relations.append(rel(report.get("S3BucketArn"), EdgeType.REFERENCES, "WRITES_TO",
-                                     description="task report"))
-                relations.append(rel(report.get("BucketAccessRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"))
+                report = ((t.get("TaskReportConfig") or {}).get("Destination") or {}).get(
+                    "S3"
+                ) or {}
+                relations.append(
+                    rel(
+                        report.get("S3BucketArn"),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="task report",
+                    )
+                )
+                relations.append(
+                    rel(report.get("BucketAccessRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")
+                )
                 return self._asset(
                     arn=summary["TaskArn"],
-                    name=t.get("Name") or summary.get("Name") or summary["TaskArn"].rsplit("/", 1)[-1],
+                    name=t.get("Name")
+                    or summary.get("Name")
+                    or summary["TaskArn"].rsplit("/", 1)[-1],
                     asset_type=AssetType.DATA_TRANSFER,
                     metadata={
                         "service": "datasync",
@@ -1798,9 +2427,15 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             try:
                 async with self._client("ec2") as ec2:
                     for i in range(0, len(enis), 200):
-                        async for eni in self._paginate(ec2, "describe_network_interfaces", "NetworkInterfaces",
-                                                        NetworkInterfaceIds=enis[i:i + 200]):
-                            eni_sgs[eni["NetworkInterfaceId"]] = [g["GroupId"] for g in eni.get("Groups") or []]
+                        async for eni in self._paginate(
+                            ec2,
+                            "describe_network_interfaces",
+                            "NetworkInterfaces",
+                            NetworkInterfaceIds=enis[i : i + 200],
+                        ):
+                            eni_sgs[eni["NetworkInterfaceId"]] = [
+                                g["GroupId"] for g in eni.get("Groups") or []
+                            ]
             except Exception as exc:
                 logger.debug("FSx ENI security group lookup failed: %s", exc)
 
@@ -1815,19 +2450,50 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             relations: list[dict[str, Any] | None] = self._subnet_rels(f.get("SubnetIds"))
             relations += [
                 rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                rel(_bucket_arn(repo.get("ImportPath")), EdgeType.REFERENCES, "READS_FROM", description="import path"),
-                rel(_bucket_arn(repo.get("ExportPath")), EdgeType.REFERENCES, "WRITES_TO", description="export path"),
-                rel((windows.get("AuditLogConfiguration") or {}).get("AuditLogDestination"), EdgeType.LOGS_TO, "LOGS_TO"),
-                rel((lustre.get("LogConfiguration") or {}).get("Destination"), EdgeType.LOGS_TO, "LOGS_TO"),
+                rel(
+                    _bucket_arn(repo.get("ImportPath")),
+                    EdgeType.REFERENCES,
+                    "READS_FROM",
+                    description="import path",
+                ),
+                rel(
+                    _bucket_arn(repo.get("ExportPath")),
+                    EdgeType.REFERENCES,
+                    "WRITES_TO",
+                    description="export path",
+                ),
+                rel(
+                    (windows.get("AuditLogConfiguration") or {}).get("AuditLogDestination"),
+                    EdgeType.LOGS_TO,
+                    "LOGS_TO",
+                ),
+                rel(
+                    (lustre.get("LogConfiguration") or {}).get("Destination"),
+                    EdgeType.LOGS_TO,
+                    "LOGS_TO",
+                ),
             ]
-            relations += [rel(e, EdgeType.ATTACHED_TO, reverse=True) for e in f.get("NetworkInterfaceIds") or []]
-            sgs = sorted({g for e in f.get("NetworkInterfaceIds") or [] for g in eni_sgs.get(e, [])})
+            relations += [
+                rel(e, EdgeType.ATTACHED_TO, reverse=True)
+                for e in f.get("NetworkInterfaceIds") or []
+            ]
+            sgs = sorted(
+                {g for e in f.get("NetworkInterfaceIds") or [] for g in eni_sgs.get(e, [])}
+            )
             self_managed = windows.get("SelfManagedActiveDirectoryConfiguration") or {}
-            aliases = [fs_id, f.get("DNSName"), *[a.get("Name") for a in windows.get("Aliases") or []]]
+            aliases = [
+                fs_id,
+                f.get("DNSName"),
+                *[a.get("Name") for a in windows.get("Aliases") or []],
+            ]
             assets.append(
                 self._asset(
                     arn=f.get("ResourceARN") or self._arn("fsx", f"file-system/{fs_id}"),
-                    name=next((t.get("Value") for t in f.get("Tags") or [] if t.get("Key") == "Name"), None) or fs_id,
+                    name=next(
+                        (t.get("Value") for t in f.get("Tags") or [] if t.get("Key") == "Name"),
+                        None,
+                    )
+                    or fs_id,
                     asset_type=AssetType.FILE_SYSTEM,
                     tags=f.get("Tags"),
                     metadata={
@@ -1842,7 +2508,8 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "security_groups": sgs,
                         "active_directory_id": windows.get("ActiveDirectoryId"),
                         "self_managed_ad_domain": self_managed.get("DomainName"),
-                        "deployment_type": windows.get("DeploymentType") or lustre.get("DeploymentType")
+                        "deployment_type": windows.get("DeploymentType")
+                        or lustre.get("DeploymentType")
                         or ontap.get("DeploymentType"),
                     },
                     relations=relations,
@@ -1863,12 +2530,23 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 name = p["DBProxyName"]
                 relations: list[dict[str, Any] | None] = self._subnet_rels(p.get("VpcSubnetIds"))
                 relations.append(rel(p.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"))
-                relations += [rel(a.get("SecretArn"), EdgeType.REFERENCES, "READS_FROM",
-                                  description="proxy authentication secret") for a in p.get("Auth") or []]
+                relations += [
+                    rel(
+                        a.get("SecretArn"),
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="proxy authentication secret",
+                    )
+                    for a in p.get("Auth") or []
+                ]
                 targets: list[dict] = []
                 try:
-                    targets = [t async for t in self._paginate(rds, "describe_db_proxy_targets", "Targets",
-                                                               DBProxyName=name)]
+                    targets = [
+                        t
+                        async for t in self._paginate(
+                            rds, "describe_db_proxy_targets", "Targets", DBProxyName=name
+                        )
+                    ]
                 except Exception as exc:
                     logger.debug("Proxy target lookup failed for %s: %s", name, exc)
                 for t in targets:
@@ -1878,8 +2556,15 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                     elif not ref and t.get("RdsResourceId"):
                         ref = self._arn("rds", f"db:{t['RdsResourceId']}")
                     ref = ref or t.get("Endpoint")
-                    relations.append(rel(ref, EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO",
-                                         target_type=t.get("Type"), role=t.get("Role")))
+                    relations.append(
+                        rel(
+                            ref,
+                            EdgeType.LOAD_BALANCER_TARGET,
+                            "SERVES_TRAFFIC_TO",
+                            target_type=t.get("Type"),
+                            role=t.get("Role"),
+                        )
+                    )
                 return self._asset(
                     arn=p.get("DBProxyArn") or self._arn("rds", f"db-proxy:{name}"),
                     name=name,
@@ -1892,8 +2577,12 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                         "security_groups": p.get("VpcSecurityGroupIds") or [],
                         "endpoint": p.get("Endpoint"),
                         "require_tls": p.get("RequireTLS"),
-                        "iam_auth": sorted({a.get("IAMAuth") for a in p.get("Auth") or [] if a.get("IAMAuth")}),
-                        "targets": [t.get("RdsResourceId") or t.get("TrackedClusterId") for t in targets],
+                        "iam_auth": sorted(
+                            {a.get("IAMAuth") for a in p.get("Auth") or [] if a.get("IAMAuth")}
+                        ),
+                        "targets": [
+                            t.get("RdsResourceId") or t.get("TrackedClusterId") for t in targets
+                        ],
                     },
                     relations=relations,
                     aliases=[p.get("Endpoint")],
@@ -1911,14 +2600,22 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 for m in members:
                     arn = m.get("DBClusterArn")
                     relations.append(rel(arn, EdgeType.CONTAINS, writer=m.get("IsWriter")))
-                    relations.append(rel(arn, EdgeType.REFERENCES, "REPLICATES_TO", reverse=bool(m.get("IsWriter")),
-                                         description="global database replication",
-                                         sync_status=m.get("SynchronizationStatus")))
+                    relations.append(
+                        rel(
+                            arn,
+                            EdgeType.REFERENCES,
+                            "REPLICATES_TO",
+                            reverse=bool(m.get("IsWriter")),
+                            description="global database replication",
+                            sync_status=m.get("SynchronizationStatus"),
+                        )
+                    )
                 writer = next((m.get("DBClusterArn") for m in members if m.get("IsWriter")), None)
                 gid = g.get("GlobalClusterIdentifier", "")
                 assets.append(
                     self._asset(
-                        arn=g.get("GlobalClusterArn") or f"arn:aws:rds::{self._account_id}:global-cluster:{gid}",
+                        arn=g.get("GlobalClusterArn")
+                        or f"arn:aws:rds::{self._account_id}:global-cluster:{gid}",
                         name=gid,
                         asset_type=AssetType.AURORA_CLUSTER,
                         region="global",
@@ -1954,10 +2651,16 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                 group = subnet_groups.get(c.get("SubnetGroupName") or "", {})
                 kms = _kms_ref(c.get("KmsKeyId"))
                 relations: list[dict[str, Any] | None] = self._subnet_rels(
-                    [s.get("Identifier") for s in group.get("Subnets") or []])
+                    [s.get("Identifier") for s in group.get("Subnets") or []]
+                )
                 relations += [
                     rel(kms, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                    rel(c.get("SnsTopicArn"), EdgeType.REFERENCES, "WRITES_TO", description="event notifications"),
+                    rel(
+                        c.get("SnsTopicArn"),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="event notifications",
+                    ),
                 ]
                 endpoint = (c.get("ClusterEndpoint") or {}).get("Address")
                 assets.append(
@@ -1977,7 +2680,9 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                             "kms_key_id": kms,
                             "vpc_id": group.get("VpcId"),
                             "subnet_group": c.get("SubnetGroupName"),
-                            "security_groups": [g.get("SecurityGroupId") for g in c.get("SecurityGroups") or []],
+                            "security_groups": [
+                                g.get("SecurityGroupId") for g in c.get("SecurityGroups") or []
+                            ],
                             "endpoint": endpoint,
                         },
                         relations=relations,
@@ -1998,11 +2703,16 @@ class DataMLCollectorsMixin(AWSServiceMixin):
             async for c in self._paginate(dax, "describe_clusters", "Clusters"):
                 group = subnet_groups.get(c.get("SubnetGroup") or "", {})
                 relations: list[dict[str, Any] | None] = self._subnet_rels(
-                    [s.get("SubnetIdentifier") for s in group.get("Subnets") or []])
+                    [s.get("SubnetIdentifier") for s in group.get("Subnets") or []]
+                )
                 relations += [
                     rel(c.get("IamRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
-                    rel((c.get("NotificationConfiguration") or {}).get("TopicArn"), EdgeType.REFERENCES, "WRITES_TO",
-                        description="event notifications"),
+                    rel(
+                        (c.get("NotificationConfiguration") or {}).get("TopicArn"),
+                        EdgeType.REFERENCES,
+                        "WRITES_TO",
+                        description="event notifications",
+                    ),
                 ]
                 endpoint = (c.get("ClusterDiscoveryEndpoint") or {}).get("Address")
                 assets.append(
@@ -2019,7 +2729,10 @@ class DataMLCollectorsMixin(AWSServiceMixin):
                             "endpoint_encryption": c.get("ClusterEndpointEncryptionType"),
                             "vpc_id": group.get("VpcId"),
                             "subnet_group": c.get("SubnetGroup"),
-                            "security_groups": [g.get("SecurityGroupIdentifier") for g in c.get("SecurityGroups") or []],
+                            "security_groups": [
+                                g.get("SecurityGroupIdentifier")
+                                for g in c.get("SecurityGroups") or []
+                            ],
                             "endpoint": endpoint,
                         },
                         relations=relations,

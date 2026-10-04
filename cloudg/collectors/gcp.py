@@ -191,7 +191,9 @@ class GCPCollector(BaseCollector):
             self._scope = f"projects/{project_id}"
         self._project_scope = self._scope.startswith("projects/")
         self._project_filter = {str(p) for p in project_filter or []}
-        self._skip_types = set(DEFAULT_SKIP_ASSET_TYPES if skip_asset_types is None else skip_asset_types)
+        self._skip_types = set(
+            DEFAULT_SKIP_ASSET_TYPES if skip_asset_types is None else skip_asset_types
+        )
         self._page_size = max(1, min(int(page_size), 1000))
         self._include_iam = include_iam
         self._client = client
@@ -219,7 +221,14 @@ class GCPCollector(BaseCollector):
                 return parts[i + 1]
         return "global"
 
-    def _record(self, service: str, status: ServiceStatus, count: int = 0, error: str | None = None, start: float | None = None) -> None:
+    def _record(
+        self,
+        service: str,
+        status: ServiceStatus,
+        count: int = 0,
+        error: str | None = None,
+        start: float | None = None,
+    ) -> None:
         duration = int((time.time() - start) * 1000) if start else None
         self.coverage.record(service, status, asset_count=count, error=error, duration_ms=duration)
 
@@ -241,7 +250,9 @@ class GCPCollector(BaseCollector):
             kwargs["retry"] = retry
         return kwargs
 
-    def _iterate(self, method: Any, request: dict[str, Any]) -> tuple[list[dict[str, Any]], Exception | None]:
+    def _iterate(
+        self, method: Any, request: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], Exception | None]:
         """Drain a paged CAI call in the calling (worker) thread."""
         items: list[dict[str, Any]] = []
         try:
@@ -324,18 +335,33 @@ class GCPCollector(BaseCollector):
             self._record("gcp_list_assets", ServiceStatus.SUCCESS, len(raw), start=start)
             return [self._record_from_asset(r) for r in raw]
         if raw:
-            logger.error("GCP ListAssets for %s stopped after %d assets: %s", self._scope, len(raw), error)
+            logger.error(
+                "GCP ListAssets for %s stopped after %d assets: %s", self._scope, len(raw), error
+            )
             self._record(
-                "gcp_list_assets", ServiceStatus.PARTIAL, len(raw), f"listing truncated: {error}", start=start
+                "gcp_list_assets",
+                ServiceStatus.PARTIAL,
+                len(raw),
+                f"listing truncated: {error}",
+                start=start,
             )
             return [self._record_from_asset(r) for r in raw]
 
-        logger.warning("GCP ListAssets failed for %s (%s); falling back to SearchAllResources", self._scope, error)
+        logger.warning(
+            "GCP ListAssets failed for %s (%s); falling back to SearchAllResources",
+            self._scope,
+            error,
+        )
         search_start = time.time()
         found, search_error = await asyncio.to_thread(self._search_resources)
         if search_error is not None and not found:
             self._record("gcp_list_assets", ServiceStatus.FAILED, error=str(error), start=start)
-            self._record("gcp_search_resources", ServiceStatus.FAILED, error=str(search_error), start=search_start)
+            self._record(
+                "gcp_search_resources",
+                ServiceStatus.FAILED,
+                error=str(search_error),
+                start=search_start,
+            )
             raise RuntimeError(
                 f"GCP asset enumeration failed for {self._scope}: ListAssets: {error}; "
                 f"SearchAllResources: {search_error}"
@@ -427,7 +453,11 @@ class GCPCollector(BaseCollector):
         for key in ("displayName", "display_name"):
             if isinstance(data.get(key), str) and data[key]:
                 return data[key]
-        meta_name = (data.get("metadata") or {}).get("name") if isinstance(data.get("metadata"), dict) else None
+        meta_name = (
+            (data.get("metadata") or {}).get("name")
+            if isinstance(data.get("metadata"), dict)
+            else None
+        )
         if isinstance(meta_name, str) and meta_name:
             return meta_name
         name = data.get("name")
@@ -446,11 +476,17 @@ class GCPCollector(BaseCollector):
         seg = m.group(1)
         other = self._number_to_id.get(seg) if seg.isdigit() else self._id_to_number.get(seg)
         if other:
-            out.append(name[: m.start(1)] + other + name[m.end(1):])
+            out.append(name[: m.start(1)] + other + name[m.end(1) :])
         return out
 
     def _build_asset(self, rec: dict[str, Any]) -> CloudAsset | None:
-        from cloudg.inventory.gcp_relations import GCPContext, extract, full_name, mark_exposed, scrub
+        from cloudg.inventory.gcp_relations import (
+            GCPContext,
+            extract,
+            full_name,
+            mark_exposed,
+            scrub,
+        )
 
         pid, number = self._project_of(rec)
         if not self._keep(rec, pid, number):
@@ -460,7 +496,12 @@ class GCPCollector(BaseCollector):
         data = scrub(rec.get("data") or {})
         summary = rec.get("summary") or {}
         ancestors = rec.get("ancestors") or []
-        location = rec.get("location") or data.get("region") or data.get("zone") or self._extract_location(name)
+        location = (
+            rec.get("location")
+            or data.get("region")
+            or data.get("zone")
+            or self._extract_location(name)
+        )
         if isinstance(location, str) and "/" in location:
             location = location.rsplit("/", 1)[-1]
 
@@ -496,10 +537,16 @@ class GCPCollector(BaseCollector):
             "project_id": pid,
             "project_number": number,
             "folders": [a for a in ancestors if isinstance(a, str) and a.startswith("folders/")],
-            "organization": next((a for a in ancestors if isinstance(a, str) and a.startswith("organizations/")), None),
+            "organization": next(
+                (a for a in ancestors if isinstance(a, str) and a.startswith("organizations/")),
+                None,
+            ),
             "location": location,
             "state": state,
-            "create_time": data.get("creationTimestamp") or data.get("createTime") or data.get("timeCreated") or summary.get("create_time"),
+            "create_time": data.get("creationTimestamp")
+            or data.get("createTime")
+            or data.get("timeCreated")
+            or summary.get("create_time"),
             "description": description,
             "parent_full_resource_name": rec.get("parent") or None,
             "parent_asset_type": summary.get("parent_asset_type"),
@@ -521,7 +568,10 @@ class GCPCollector(BaseCollector):
             metadata["summary_only"] = True
 
         account_id = pid
-        if atype in ("cloudresourcemanager.googleapis.com/Organization", "cloudresourcemanager.googleapis.com/Folder"):
+        if atype in (
+            "cloudresourcemanager.googleapis.com/Organization",
+            "cloudresourcemanager.googleapis.com/Folder",
+        ):
             account_id = None
         asset = CloudAsset(
             arn=name,
@@ -532,10 +582,21 @@ class GCPCollector(BaseCollector):
             account_id=account_id,
             tags={str(k): str(v) for k, v in (labels or {}).items()},
             metadata=metadata,
-            raw_data={"name": name, "asset_type": atype, "ancestors": list(ancestors), "data": data},
+            raw_data={
+                "name": name,
+                "asset_type": atype,
+                "ancestors": list(ancestors),
+                "data": data,
+            },
         )
         for entry in ex.exposure:
-            mark_exposed(asset, entry["via"], kind=entry.get("kind"), protocol=entry.get("protocol"), ports=entry.get("ports"))
+            mark_exposed(
+                asset,
+                entry["via"],
+                kind=entry.get("kind"),
+                protocol=entry.get("protocol"),
+                ports=entry.get("ports"),
+            )
         return asset
 
     def _build_assets(self, records: list[dict[str, Any]]) -> list[CloudAsset]:
@@ -572,7 +633,9 @@ class GCPCollector(BaseCollector):
 
         by_network: dict[str, list[CloudAsset]] = defaultdict(list)
         for a in assets:
-            if a.metadata.get("gcp_asset_type") == "compute.googleapis.com/Firewall" and a.metadata.get("network"):
+            if a.metadata.get(
+                "gcp_asset_type"
+            ) == "compute.googleapis.com/Firewall" and a.metadata.get("network"):
                 by_network[a.metadata["network"]].append(a)
 
         for inst in assets:
@@ -612,13 +675,19 @@ class GCPCollector(BaseCollector):
             if not inst.metadata.get("public_ips"):
                 continue
             denies = [
-                f for f in matched
-                if f.metadata.get("action") == "deny" and f.metadata.get("internet_source")
-                and any(p.get("protocol") == "all" for p in (f.metadata.get("ingress_rules") or [{}])[0].get("protocols", []))
+                f
+                for f in matched
+                if f.metadata.get("action") == "deny"
+                and f.metadata.get("internet_source")
+                and any(
+                    p.get("protocol") == "all"
+                    for p in (f.metadata.get("ingress_rules") or [{}])[0].get("protocols", [])
+                )
             ]
             best_deny = min((f.metadata.get("priority", 1000) for f in denies), default=None)
             open_rules = [
-                f for f in matched
+                f
+                for f in matched
                 if f.metadata.get("allows_internet_ingress")
                 and (best_deny is None or f.metadata.get("priority", 1000) < best_deny)
             ]
@@ -645,7 +714,11 @@ class GCPCollector(BaseCollector):
                 return []
         number = self._id_to_number.get(self._project_id)
         ident = number or self._project_id
-        aliases = [f"projects/{self._project_id}", f"{_RESOURCE_MANAGER}projects/{self._project_id}", self._project_id]
+        aliases = [
+            f"projects/{self._project_id}",
+            f"{_RESOURCE_MANAGER}projects/{self._project_id}",
+            self._project_id,
+        ]
         if number:
             aliases += [f"projects/{number}", number]
         return [
@@ -672,7 +745,10 @@ class GCPCollector(BaseCollector):
         return []
 
     def _finalize(self, assets: list[CloudAsset]) -> list[CloudAsset]:
-        from cloudg.inventory.gcp_relations import ensure_service_account_principals, merge_gcp_principals
+        from cloudg.inventory.gcp_relations import (
+            ensure_service_account_principals,
+            merge_gcp_principals,
+        )
 
         self._apply_firewalls(assets)
         assets = assets + self._ensure_project_asset(assets)
@@ -708,7 +784,11 @@ class GCPCollector(BaseCollector):
         for a in assets:
             for entry in a.metadata.get("internet_ingress") or []:
                 kind = entry.get("kind") or "INTERNET_EXPOSED"
-                edge_type = EdgeType.SECURITY_GROUP_RULE if kind == "SECURITY_GROUP_RULE" else EdgeType.INTERNET_EXPOSED
+                edge_type = (
+                    EdgeType.SECURITY_GROUP_RULE
+                    if kind == "SECURITY_GROUP_RULE"
+                    else EdgeType.INTERNET_EXPOSED
+                )
                 ports_raw = [str(p) for p in entry.get("ports") or []]
                 ports: list[int] = []
                 for p in ports_raw:

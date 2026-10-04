@@ -46,7 +46,9 @@ KV = f"{RG}/providers/Microsoft.KeyVault/vaults/kv-app"
 ST = f"{RG}/providers/Microsoft.Storage/storageAccounts/stapp"
 PE = f"{NET}/privateEndpoints/pe-stapp"
 AKS = f"{RG}/providers/Microsoft.ContainerService/managedClusters/aks-prod"
-UAMI_KUBELET = f"{MC_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-prod-agentpool"
+UAMI_KUBELET = (
+    f"{MC_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-prod-agentpool"
+)
 UAMI_APP = f"{RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-web"
 ACR = f"{RG}/providers/Microsoft.ContainerRegistry/registries/acrprod"
 LAW = f"{RG}/providers/Microsoft.OperationalInsights/workspaces/law-app"
@@ -101,21 +103,32 @@ def _resource_rows():
                     {
                         "id": SNET_PE,
                         "name": "snet-pe",
-                        "properties": {"addressPrefix": "10.1.2.0/24", "privateEndpoints": [{"id": PE}]},
+                        "properties": {
+                            "addressPrefix": "10.1.2.0/24",
+                            "privateEndpoints": [{"id": PE}],
+                        },
                     },
                     {
                         "id": SNET_WEB,
                         "name": "snet-web",
                         "properties": {
                             "addressPrefix": "10.1.3.0/24",
-                            "delegations": [{"name": "d", "properties": {"serviceName": "Microsoft.Web/serverFarms"}}],
+                            "delegations": [
+                                {
+                                    "name": "d",
+                                    "properties": {"serviceName": "Microsoft.Web/serverFarms"},
+                                }
+                            ],
                         },
                     },
                 ],
                 "virtualNetworkPeerings": [
                     {
                         "name": "to-hub",
-                        "properties": {"remoteVirtualNetwork": {"id": HUB_VNET}, "peeringState": "Connected"},
+                        "properties": {
+                            "remoteVirtualNetwork": {"id": HUB_VNET},
+                            "peeringState": "Connected",
+                        },
                     }
                 ],
             },
@@ -125,7 +138,13 @@ def _resource_rows():
             "microsoft.network/virtualnetworks",
             {
                 "addressSpace": {"addressPrefixes": ["10.0.0.0/16"]},
-                "subnets": [{"id": FW_SUBNET, "name": "AzureFirewallSubnet", "properties": {"addressPrefix": "10.0.0.0/26"}}],
+                "subnets": [
+                    {
+                        "id": FW_SUBNET,
+                        "name": "AzureFirewallSubnet",
+                        "properties": {"addressPrefix": "10.0.0.0/26"},
+                    }
+                ],
             },
         ),
         _row(
@@ -211,12 +230,18 @@ def _resource_rows():
         _row(
             PIP_FW,
             "microsoft.network/publicipaddresses",
-            {"ipAddress": "20.1.2.3", "ipConfiguration": {"id": f"{FW}/azureFirewallIpConfigurations/ipc"}},
+            {
+                "ipAddress": "20.1.2.3",
+                "ipConfiguration": {"id": f"{FW}/azureFirewallIpConfigurations/ipc"},
+            },
         ),
         _row(
             PIP_VM,
             "microsoft.network/publicipaddresses",
-            {"ipAddress": "20.1.2.4", "ipConfiguration": {"id": f"{NIC}/ipConfigurations/ipconfig1"}},
+            {
+                "ipAddress": "20.1.2.4",
+                "ipConfiguration": {"id": f"{NIC}/ipConfigurations/ipconfig1"},
+            },
         ),
         _row(
             NIC,
@@ -239,7 +264,9 @@ def _resource_rows():
                         "properties": {
                             "privateIPAddress": "10.1.0.6",
                             "subnet": {"id": SNET_AKS},
-                            "loadBalancerBackendAddressPools": [{"id": f"{LB}/backendAddressPools/pool"}],
+                            "loadBalancerBackendAddressPools": [
+                                {"id": f"{LB}/backendAddressPools/pool"}
+                            ],
                         },
                     },
                 ],
@@ -254,7 +281,10 @@ def _resource_rows():
                 "frontendIPConfigurations": [
                     {
                         "id": f"{LB}/frontendIPConfigurations/fe",
-                        "properties": {"privateIPAddress": "10.1.0.100", "subnet": {"id": SNET_AKS}},
+                        "properties": {
+                            "privateIPAddress": "10.1.0.100",
+                            "subnet": {"id": SNET_AKS},
+                        },
                     }
                 ],
                 "backendAddressPools": [
@@ -291,11 +321,25 @@ def _resource_rows():
         _row(
             DISK,
             "microsoft.compute/disks",
-            {"diskSizeGB": 64, "encryption": {"type": "EncryptionAtRestWithCustomerKey", "diskEncryptionSetId": DES}},
+            {
+                "diskSizeGB": 64,
+                "encryption": {
+                    "type": "EncryptionAtRestWithCustomerKey",
+                    "diskEncryptionSetId": DES,
+                },
+            },
             managedBy=VM,
         ),
-        _row(DES, "microsoft.compute/diskencryptionsets", {"activeKey": {"sourceVault": {"id": KV},
-                                                                          "keyUrl": "https://kv-app.vault.azure.net/keys/k/1"}}),
+        _row(
+            DES,
+            "microsoft.compute/diskencryptionsets",
+            {
+                "activeKey": {
+                    "sourceVault": {"id": KV},
+                    "keyUrl": "https://kv-app.vault.azure.net/keys/k/1",
+                }
+            },
+        ),
         _row(
             KV,
             "microsoft.keyvault/vaults",
@@ -306,7 +350,10 @@ def _resource_rows():
                     {"objectId": VM_PRINCIPAL, "permissions": {"secrets": ["get"]}},
                     {"objectId": UNKNOWN_OID, "permissions": {"keys": ["get", "wrapKey"]}},
                 ],
-                "networkAcls": {"defaultAction": "Allow", "virtualNetworkRules": [{"id": SNET_AKS}]},
+                "networkAcls": {
+                    "defaultAction": "Allow",
+                    "virtualNetworkRules": [{"id": SNET_AKS}],
+                },
                 "publicNetworkAccess": "Enabled",
             },
         ),
@@ -344,27 +391,57 @@ def _resource_rows():
                 "fqdn": "aks-prod-dns.hcp.eastus.azmk8s.io",
                 "nodeResourceGroup": "MC_rg-app_aks-prod_eastus",
                 "identityProfile": {
-                    "kubeletidentity": {"resourceId": UAMI_KUBELET, "objectId": KUBELET_OID, "clientId": "c1"}
+                    "kubeletidentity": {
+                        "resourceId": UAMI_KUBELET,
+                        "objectId": KUBELET_OID,
+                        "clientId": "c1",
+                    }
                 },
                 "agentPoolProfiles": [
-                    {"name": "system", "count": 3, "vmSize": "Standard_D4s_v5", "mode": "System",
-                     "vnetSubnetID": SNET_AKS}
+                    {
+                        "name": "system",
+                        "count": 3,
+                        "vmSize": "Standard_D4s_v5",
+                        "mode": "System",
+                        "vnetSubnetID": SNET_AKS,
+                    }
                 ],
-                "addonProfiles": {"omsagent": {"enabled": True, "config": {"logAnalyticsWorkspaceResourceID": LAW}}},
+                "addonProfiles": {
+                    "omsagent": {
+                        "enabled": True,
+                        "config": {"logAnalyticsWorkspaceResourceID": LAW},
+                    }
+                },
                 "apiServerAccessProfile": {"enablePrivateCluster": False},
             },
-            identity={"type": "SystemAssigned", "principalId": "ffffffff-0000-0000-0000-000000000006"},
+            identity={
+                "type": "SystemAssigned",
+                "principalId": "ffffffff-0000-0000-0000-000000000006",
+            },
         ),
         _row(
             UAMI_KUBELET,
             "microsoft.managedidentity/userassignedidentities",
             {"principalId": KUBELET_OID, "clientId": "c1"},
         ),
-        _row(UAMI_APP, "microsoft.managedidentity/userassignedidentities", {"principalId": WEB_UAMI_OID}),
-        _row(ACR, "microsoft.containerregistry/registries", {"loginServer": "acrprod.azurecr.io",
-                                                               "publicNetworkAccess": "Enabled"}),
+        _row(
+            UAMI_APP,
+            "microsoft.managedidentity/userassignedidentities",
+            {"principalId": WEB_UAMI_OID},
+        ),
+        _row(
+            ACR,
+            "microsoft.containerregistry/registries",
+            {"loginServer": "acrprod.azurecr.io", "publicNetworkAccess": "Enabled"},
+        ),
         _row(LAW, "microsoft.operationalinsights/workspaces", {"customerId": "law-customer-guid"}),
-        _row(PLAN, "microsoft.web/serverfarms", {"numberOfSites": 2}, kind="linux", sku={"name": "P1v3", "tier": "PremiumV3"}),
+        _row(
+            PLAN,
+            "microsoft.web/serverfarms",
+            {"numberOfSites": 2},
+            kind="linux",
+            sku={"name": "P1v3", "tier": "PremiumV3"},
+        ),
         _row(
             WEB,
             "microsoft.web/sites",
@@ -376,14 +453,19 @@ def _resource_rows():
                 "keyVaultReferenceIdentity": UAMI_APP,
             },
             kind="app,linux,container",
-            identity={"type": "UserAssigned", "userAssignedIdentities": {UAMI_APP: {"principalId": WEB_UAMI_OID}}},
+            identity={
+                "type": "UserAssigned",
+                "userAssignedIdentities": {UAMI_APP: {"principalId": WEB_UAMI_OID}},
+            },
         ),
         _row(
             FUNC,
             "microsoft.web/sites",
             {
                 "serverFarmId": PLAN,
-                "siteProperties": {"properties": [{"name": "LinuxFxVersion", "value": "Python|3.11"}]},
+                "siteProperties": {
+                    "properties": [{"name": "LinuxFxVersion", "value": "Python|3.11"}]
+                },
                 "defaultHostName": "func-app.azurewebsites.net",
             },
             kind="functionapp,linux",
@@ -393,10 +475,17 @@ def _resource_rows():
             "microsoft.network/applicationgateways",
             {
                 "gatewayIPConfigurations": [{"properties": {"subnet": {"id": SNET_WEB}}}],
-                "frontendIPConfigurations": [{"id": f"{APPGW}/frontendIPConfigurations/fe",
-                                              "properties": {"publicIPAddress": {"id": PIP_FW}}}],
+                "frontendIPConfigurations": [
+                    {
+                        "id": f"{APPGW}/frontendIPConfigurations/fe",
+                        "properties": {"publicIPAddress": {"id": PIP_FW}},
+                    }
+                ],
                 "backendAddressPools": [
-                    {"name": "web", "properties": {"backendAddresses": [{"fqdn": "web-app.azurewebsites.net"}]}}
+                    {
+                        "name": "web",
+                        "properties": {"backendAddresses": [{"fqdn": "web-app.azurewebsites.net"}]},
+                    }
                 ],
                 "firewallPolicy": {"id": WAF},
             },
@@ -407,14 +496,38 @@ def _resource_rows():
 
 def _container_rows():
     return [
-        {"id": f"/subscriptions/{SUB}", "name": "Production", "type": "microsoft.resources/subscriptions",
-         "subscriptionId": SUB, "properties": {"state": "Enabled"}},
-        {"id": RG, "name": "rg-app", "type": "microsoft.resources/subscriptions/resourcegroups",
-         "location": "eastus", "subscriptionId": SUB, "properties": {}},
-        {"id": HUB_RG, "name": "rg-hub", "type": "microsoft.resources/subscriptions/resourcegroups",
-         "location": "eastus", "subscriptionId": SUB, "properties": {}},
-        {"id": MC_RG, "name": "MC_rg-app_aks-prod_eastus", "type": "microsoft.resources/subscriptions/resourcegroups",
-         "location": "eastus", "subscriptionId": SUB, "managedBy": AKS, "properties": {}},
+        {
+            "id": f"/subscriptions/{SUB}",
+            "name": "Production",
+            "type": "microsoft.resources/subscriptions",
+            "subscriptionId": SUB,
+            "properties": {"state": "Enabled"},
+        },
+        {
+            "id": RG,
+            "name": "rg-app",
+            "type": "microsoft.resources/subscriptions/resourcegroups",
+            "location": "eastus",
+            "subscriptionId": SUB,
+            "properties": {},
+        },
+        {
+            "id": HUB_RG,
+            "name": "rg-hub",
+            "type": "microsoft.resources/subscriptions/resourcegroups",
+            "location": "eastus",
+            "subscriptionId": SUB,
+            "properties": {},
+        },
+        {
+            "id": MC_RG,
+            "name": "MC_rg-app_aks-prod_eastus",
+            "type": "microsoft.resources/subscriptions/resourcegroups",
+            "location": "eastus",
+            "subscriptionId": SUB,
+            "managedBy": AKS,
+            "properties": {},
+        },
     ]
 
 
@@ -446,10 +559,16 @@ def _role_rows():
 
 def _pricing_rows():
     return [
-        {"id": f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/VirtualMachines",
-         "name": "VirtualMachines", "properties": {"pricingTier": "Standard", "subPlan": "P2"}},
-        {"id": f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/StorageAccounts",
-         "name": "StorageAccounts", "properties": {"pricingTier": "Free"}},
+        {
+            "id": f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/VirtualMachines",
+            "name": "VirtualMachines",
+            "properties": {"pricingTier": "Standard", "subPlan": "P2"},
+        },
+        {
+            "id": f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/StorageAccounts",
+            "name": "StorageAccounts",
+            "properties": {"pricingTier": "Free"},
+        },
     ]
 
 
@@ -467,7 +586,7 @@ class FakeGraph:
         table = query.split("|", 1)[0].strip()
         rows = self.tables.get(table, [])
         start = int(request.options.skip_token or 0)
-        page = rows[start: start + self.page_size]
+        page = rows[start : start + self.page_size]
         nxt = start + self.page_size
         return SimpleNamespace(data=page, skip_token=str(nxt) if nxt < len(rows) else None)
 
@@ -503,14 +622,20 @@ class _Graph:
     def has(self, src, dst, edge_type, relationship=None):
         s, t = self.a(src).id, self.a(dst).id
         return any(
-            e.source_id == s and e.target_id == t and e.edge_type == edge_type
+            e.source_id == s
+            and e.target_id == t
+            and e.edge_type == edge_type
             and (relationship is None or e.relationship == relationship)
             for e in self.edges
         )
 
     def edge(self, src, dst, edge_type):
         s, t = self.a(src).id, self.a(dst).id
-        return next(e for e in self.edges if e.source_id == s and e.target_id == t and e.edge_type == edge_type)
+        return next(
+            e
+            for e in self.edges
+            if e.source_id == s and e.target_id == t and e.edge_type == edge_type
+        )
 
 
 @pytest.fixture(scope="module")
@@ -522,8 +647,13 @@ def graph_inventory():
     linker = RelationshipLinker(assets)
     linker.seed_existing(collector_edges)
     edges = collector_edges + linker.link()
-    return SimpleNamespace(collector=collector, fake=fake, graph=_Graph(assets + linker.external_assets, edges),
-                           assets=assets, linker=linker)
+    return SimpleNamespace(
+        collector=collector,
+        fake=fake,
+        graph=_Graph(assets + linker.external_assets, edges),
+        assets=assets,
+        linker=linker,
+    )
 
 
 # ── classification and id helpers ──
@@ -531,11 +661,17 @@ def graph_inventory():
 
 class TestHelpers:
     def test_function_app_kind(self):
-        assert asset_type_from_arm("Microsoft.Web/sites", "functionapp,linux") == AssetType.CLOUD_FUNCTION
+        assert (
+            asset_type_from_arm("Microsoft.Web/sites", "functionapp,linux")
+            == AssetType.CLOUD_FUNCTION
+        )
         assert asset_type_from_arm("Microsoft.Web/sites", "app,linux") == AssetType.APP_SERVICE
         assert asset_type_from_arm("Microsoft.Web/serverFarms") == AssetType.APP_SERVICE
         assert asset_type_from_arm("Microsoft.Security/automations") == AssetType.EVENT_RULE
-        assert asset_type_from_arm("Microsoft.Resources/subscriptions/resourceGroups") == AssetType.RESOURCE_GROUP
+        assert (
+            asset_type_from_arm("Microsoft.Resources/subscriptions/resourceGroups")
+            == AssetType.RESOURCE_GROUP
+        )
 
     def test_parent_and_owner_ids(self):
         assert parent_resource_id(SNET_AKS) == VNET
@@ -543,7 +679,10 @@ class TestHelpers:
         ext = f"{VM}/providers/Microsoft.Insights/diagnosticSettings/d1"
         assert parent_resource_id(ext) == VM
         assert owner_resource_id(f"{NIC}/ipConfigurations/ipconfig1") == NIC
-        assert owner_resource_id(f"{VMSS}/virtualMachines/0/networkInterfaces/n/ipConfigurations/i") == VMSS
+        assert (
+            owner_resource_id(f"{VMSS}/virtualMachines/0/networkInterfaces/n/ipConfigurations/i")
+            == VMSS
+        )
 
     def test_run_query_paginates_and_retries(self):
         class Throttle(Exception):
@@ -572,7 +711,12 @@ class TestResourceGraphInventory:
     def test_mode_and_queries(self, graph_inventory):
         assert graph_inventory.collector.collection_mode == "resource-graph"
         tables = {r.query.split("|", 1)[0].strip() for r in graph_inventory.fake.requests}
-        assert tables == {"resources", "resourcecontainers", "authorizationresources", "securityresources"}
+        assert tables == {
+            "resources",
+            "resourcecontainers",
+            "authorizationresources",
+            "securityresources",
+        }
         assert all(r.subscriptions == [SUB] for r in graph_inventory.fake.requests)
         assert graph_inventory.collector.service_errors == {}
 
@@ -668,7 +812,9 @@ class TestResourceGraphInventory:
         user = g.a(f"entra:principal/{USER_OID}")
         assert user.asset_type == AssetType.IDENTITY_USER
         assert USER_OID in user.name
-        edge = g.edge(f"entra:principal/{USER_OID}", f"/subscriptions/{SUB}", EdgeType.GRANTS_ACCESS)
+        edge = g.edge(
+            f"entra:principal/{USER_OID}", f"/subscriptions/{SUB}", EdgeType.GRANTS_ACCESS
+        )
         assert edge.properties["role"] == "Owner" and edge.properties["privileged"] is True
         # principals owned by collected resources get no placeholder
         assert f"entra:principal/{KUBELET_OID}" not in g.by_arn
@@ -677,7 +823,10 @@ class TestResourceGraphInventory:
         g = graph_inventory.graph
         vms = g.a(f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/VirtualMachines")
         assert vms.asset_type == AssetType.THREAT_DETECTOR
-        assert vms.metadata["security_service"] == "defender-virtualmachines" and vms.metadata["enabled"]
+        assert (
+            vms.metadata["security_service"] == "defender-virtualmachines"
+            and vms.metadata["enabled"]
+        )
         assert g.has(vms.arn, f"/subscriptions/{SUB}", EdgeType.MONITORS)
         storage = g.a(f"/subscriptions/{SUB}/providers/Microsoft.Security/pricings/StorageAccounts")
         assert storage.metadata["enabled"] is False
@@ -690,9 +839,16 @@ class TestResourceGraphInventory:
         g = graph_inventory.graph
         nsg = g.a(NSG)
         rules = {r["name"]: r for r in nsg.metadata["ingress_rules"]}
-        assert rules["allow-partners"]["source_address_prefixes"] == ["203.0.113.0/24", "198.51.100.0/24"]
+        assert rules["allow-partners"]["source_address_prefixes"] == [
+            "203.0.113.0/24",
+            "198.51.100.0/24",
+        ]
         assert rules["AllowVnetInBound"]["default"] is True
-        sg_edges = [e for e in g.edges if e.edge_type == EdgeType.SECURITY_GROUP_RULE and e.target_id == nsg.id]
+        sg_edges = [
+            e
+            for e in g.edges
+            if e.edge_type == EdgeType.SECURITY_GROUP_RULE and e.target_id == nsg.id
+        ]
         sources = {e.source_id for e in sg_edges}
         assert {"203.0.113.0/24", "198.51.100.0/24", "VirtualNetwork", g.a(ASG).id} <= sources
         assert all(e.source_id for e in sg_edges)
@@ -711,11 +867,23 @@ class TestNsgNoneRegression:
             provider=CloudProvider.AZURE,
             metadata={
                 "ingress_rules": [
-                    {"name": "r", "access": "Allow", "direction": "Inbound", "protocol": "Tcp",
-                     "source_address_prefix": None, "destination_port_range": None},
-                    {"name": "plural", "access": "Allow", "direction": "Inbound", "protocol": None,
-                     "source_address_prefix": None, "source_address_prefixes": ["10.0.0.0/8"],
-                     "destination_port_ranges": ["80", "443"]},
+                    {
+                        "name": "r",
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "protocol": "Tcp",
+                        "source_address_prefix": None,
+                        "destination_port_range": None,
+                    },
+                    {
+                        "name": "plural",
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "protocol": None,
+                        "source_address_prefix": None,
+                        "source_address_prefixes": ["10.0.0.0/8"],
+                        "destination_port_ranges": ["80", "443"],
+                    },
                 ]
             },
         )
@@ -743,9 +911,16 @@ def _fake_sdk_clients(fail_storage=False):
             "location": "eastus",
             "properties": {
                 "addressSpace": {"addressPrefixes": ["10.1.0.0/16"]},
-                "subnets": [{"id": SNET_AKS, "name": "snet-aks",
-                             "properties": {"addressPrefixes": ["10.1.0.0/24", "10.1.1.0/24"],
-                                            "networkSecurityGroup": {"id": NSG}}}],
+                "subnets": [
+                    {
+                        "id": SNET_AKS,
+                        "name": "snet-aks",
+                        "properties": {
+                            "addressPrefixes": ["10.1.0.0/24", "10.1.1.0/24"],
+                            "networkSecurityGroup": {"id": NSG},
+                        },
+                    }
+                ],
             },
         }
     )
@@ -757,10 +932,17 @@ def _fake_sdk_clients(fail_storage=False):
             "location": "eastus",
             "properties": {
                 "securityRules": [
-                    {"name": "plural", "properties": {"access": "Allow", "direction": "Inbound", "protocol": "Tcp",
-                                                      "priority": 100,
-                                                      "sourceAddressPrefixes": ["203.0.113.0/24"],
-                                                      "destinationPortRanges": ["443"]}}
+                    {
+                        "name": "plural",
+                        "properties": {
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "protocol": "Tcp",
+                            "priority": 100,
+                            "sourceAddressPrefixes": ["203.0.113.0/24"],
+                            "destinationPortRanges": ["443"],
+                        },
+                    }
                 ]
             },
         }
@@ -783,28 +965,68 @@ def _fake_sdk_clients(fail_storage=False):
         }
     )
     server_id = f"{RG}/providers/Microsoft.Sql/servers/sql-app"
-    server = sqlm.Server({"id": server_id, "name": "sql-app", "type": "Microsoft.Sql/servers", "location": "eastus",
-                          "properties": {"fullyQualifiedDomainName": "sql-app.database.windows.net",
-                                         "publicNetworkAccess": "Enabled"}})
+    server = sqlm.Server(
+        {
+            "id": server_id,
+            "name": "sql-app",
+            "type": "Microsoft.Sql/servers",
+            "location": "eastus",
+            "properties": {
+                "fullyQualifiedDomainName": "sql-app.database.windows.net",
+                "publicNetworkAccess": "Enabled",
+            },
+        }
+    )
     fw_rules = [
-        sqlm.FirewallRule({"id": f"{server_id}/firewallRules/azure", "name": "AllowAllWindowsAzureIps",
-                           "properties": {"startIpAddress": "0.0.0.0", "endIpAddress": "0.0.0.0"}}),
-        sqlm.FirewallRule({"id": f"{server_id}/firewallRules/office", "name": "office",
-                           "properties": {"startIpAddress": "198.51.100.1", "endIpAddress": "198.51.100.20"}}),
+        sqlm.FirewallRule(
+            {
+                "id": f"{server_id}/firewallRules/azure",
+                "name": "AllowAllWindowsAzureIps",
+                "properties": {"startIpAddress": "0.0.0.0", "endIpAddress": "0.0.0.0"},
+            }
+        ),
+        sqlm.FirewallRule(
+            {
+                "id": f"{server_id}/firewallRules/office",
+                "name": "office",
+                "properties": {"startIpAddress": "198.51.100.1", "endIpAddress": "198.51.100.20"},
+            }
+        ),
     ]
     dbs = [
-        sqlm.Database({"id": f"{server_id}/databases/master", "name": "master", "location": "eastus",
-                       "type": "Microsoft.Sql/servers/databases"}),
-        sqlm.Database({"id": f"{server_id}/databases/appdb", "name": "appdb", "location": "eastus",
-                       "type": "Microsoft.Sql/servers/databases", "sku": {"name": "S0", "tier": "Standard"},
-                       "properties": {"status": "Online"}}),
+        sqlm.Database(
+            {
+                "id": f"{server_id}/databases/master",
+                "name": "master",
+                "location": "eastus",
+                "type": "Microsoft.Sql/servers/databases",
+            }
+        ),
+        sqlm.Database(
+            {
+                "id": f"{server_id}/databases/appdb",
+                "name": "appdb",
+                "location": "eastus",
+                "type": "Microsoft.Sql/servers/databases",
+                "sku": {"name": "S0", "tier": "Standard"},
+                "properties": {"status": "Online"},
+            }
+        ),
     ]
     sweep = [
-        rm.GenericResourceExpanded({"id": KV, "name": "kv-app", "type": "Microsoft.KeyVault/vaults",
-                                    "location": "eastus"}),
-        rm.GenericResourceExpanded({"id": WEB, "name": "web-app", "type": "Microsoft.Web/sites",
-                                    "kind": "functionapp", "location": "eastus",
-                                    "identity": {"type": "SystemAssigned", "principalId": VM_PRINCIPAL}}),
+        rm.GenericResourceExpanded(
+            {"id": KV, "name": "kv-app", "type": "Microsoft.KeyVault/vaults", "location": "eastus"}
+        ),
+        rm.GenericResourceExpanded(
+            {
+                "id": WEB,
+                "name": "web-app",
+                "type": "Microsoft.Web/sites",
+                "kind": "functionapp",
+                "location": "eastus",
+                "identity": {"type": "SystemAssigned", "principalId": VM_PRINCIPAL},
+            }
+        ),
     ]
     groups = [rm.ResourceGroup({"id": RG, "name": "rg-app", "location": "eastus"})]
 
@@ -833,7 +1055,9 @@ def _fake_sdk_clients(fail_storage=False):
             virtual_machine_scale_sets=SimpleNamespace(list_all=lister([])),
             disk_encryption_sets=SimpleNamespace(list=lister([])),
         ),
-        "storage": SimpleNamespace(storage_accounts=SimpleNamespace(list=boom if fail_storage else lister([]))),
+        "storage": SimpleNamespace(
+            storage_accounts=SimpleNamespace(list=boom if fail_storage else lister([]))
+        ),
         "sql": SimpleNamespace(
             servers=SimpleNamespace(list=lister([server])),
             firewall_rules=SimpleNamespace(list_by_server=lister(fw_rules)),
@@ -878,9 +1102,13 @@ class TestSdkFallback:
         server = g.a(f"{RG}/providers/Microsoft.Sql/servers/sql-app")
         db = g.a(f"{RG}/providers/Microsoft.Sql/servers/sql-app/databases/appdb")
         assert server.metadata["role"] == "server" and server.metadata["allow_azure_services"]
-        assert server.is_internet_exposed and server.metadata["firewall_rules"][0]["name"] == "office"
+        assert (
+            server.is_internet_exposed and server.metadata["firewall_rules"][0]["name"] == "office"
+        )
         assert db.metadata["role"] == "database" and db.metadata["edition"] == "Standard"
-        assert f"{RG}/providers/Microsoft.Sql/servers/sql-app/databases/master".lower() not in g.by_arn
+        assert (
+            f"{RG}/providers/Microsoft.Sql/servers/sql-app/databases/master".lower() not in g.by_arn
+        )
         assert g.has(server.arn, db.arn, EdgeType.CONTAINS)
         # sweep hit keeps kind and identity
         web = g.a(WEB)
@@ -905,7 +1133,9 @@ class TestSdkFallback:
             def resources(self, request):
                 raise RuntimeError("AuthorizationFailed")
 
-        collector = AzureDeepInventoryCollector(object(), SUB, graph_client_factory=lambda c: Broken())
+        collector = AzureDeepInventoryCollector(
+            object(), SUB, graph_client_factory=lambda c: Broken()
+        )
         collector._client = lambda kind: clients[kind]
         assets = _run(collector.collect())
         assert collector.collection_mode == "sdk"
@@ -933,8 +1163,15 @@ class TestMultiSubscription:
                 self.sub = subscription_id
 
             async def collect(self):
-                return [CloudAsset(arn=VNET, name="v", asset_type=AssetType.VNET, provider=CloudProvider.AZURE,
-                                   account_id=self.sub)]
+                return [
+                    CloudAsset(
+                        arn=VNET,
+                        name="v",
+                        asset_type=AssetType.VNET,
+                        provider=CloudProvider.AZURE,
+                        account_id=self.sub,
+                    )
+                ]
 
             async def collect_edges(self):
                 raise ValueError("source_id None")
@@ -966,8 +1203,12 @@ class TestMultiSubscription:
 
         monkeypatch.setattr(creds, "build_azure_credential", lambda cfg: object())
         monkeypatch.setattr(
-            azure_mod, "list_subscriptions",
-            lambda cred, include_disabled=False: [{"subscription_id": "s-a"}, {"subscription_id": "s-b"}],
+            azure_mod,
+            "list_subscriptions",
+            lambda cred, include_disabled=False: [
+                {"subscription_id": "s-a"},
+                {"subscription_id": "s-b"},
+            ],
         )
         multi = self._collector(Recorder)
         _run(multi._collect_azure_multi())
@@ -987,7 +1228,8 @@ def test_list_subscriptions_filters_enabled(monkeypatch):
         SimpleNamespace(subscription_id="s2", display_name="b", state="Disabled", tenant_id="t"),
     ]
     monkeypatch.setattr(
-        azure_mod, "subscription_client",
+        azure_mod,
+        "subscription_client",
         lambda cred: SimpleNamespace(subscriptions=SimpleNamespace(list=lambda: subs)),
     )
     assert [s["subscription_id"] for s in azure_mod.list_subscriptions(object())] == ["s1"]
@@ -1008,8 +1250,14 @@ def _mg(name, parent, display=None):
         "tenantId": TENANT,
         "properties": {
             "displayName": display or name,
-            "details": {"parent": {"id": f"/providers/Microsoft.Management/managementGroups/{parent}",
-                                   "name": parent} if parent else None},
+            "details": {
+                "parent": {
+                    "id": f"/providers/Microsoft.Management/managementGroups/{parent}",
+                    "name": parent,
+                }
+                if parent
+                else None
+            },
         },
     }
 
@@ -1031,7 +1279,9 @@ def _hierarchy_tables():
                 "properties": {
                     "state": "Enabled",
                     "managementGroupAncestorsChain": [
-                        {"name": "contoso-corp"}, {"name": "contoso-landingzones"}, {"name": "contoso"},
+                        {"name": "contoso-corp"},
+                        {"name": "contoso-landingzones"},
+                        {"name": "contoso"},
                         {"name": TENANT},
                     ],
                 },
@@ -1043,7 +1293,10 @@ def _hierarchy_tables():
                 "Microsoft.Authorization/policyAssignments/deny-public-ip",
                 "name": "deny-public-ip",
                 "type": "microsoft.authorization/policyassignments",
-                "identity": {"type": "SystemAssigned", "principalId": "12121212-0000-0000-0000-000000000000"},
+                "identity": {
+                    "type": "SystemAssigned",
+                    "principalId": "12121212-0000-0000-0000-000000000000",
+                },
                 "properties": {
                     "displayName": "Deny public IPs",
                     "scope": "/providers/microsoft.management/managementgroups/CONTOSO",
@@ -1092,10 +1345,20 @@ class TestHierarchy:
         assert policy_requests and policy_requests[0].management_groups == [TENANT]
 
         # add a resource group from the subscription collector so scopes resolve
-        rg = CloudAsset(arn=f"/subscriptions/{SUB}/resourceGroups/rg-hub", name="rg-hub",
-                        asset_type=AssetType.RESOURCE_GROUP, provider=CloudProvider.AZURE, account_id=SUB)
-        rg_app = CloudAsset(arn=RG, name="rg-app", asset_type=AssetType.RESOURCE_GROUP,
-                            provider=CloudProvider.AZURE, account_id=SUB)
+        rg = CloudAsset(
+            arn=f"/subscriptions/{SUB}/resourceGroups/rg-hub",
+            name="rg-hub",
+            asset_type=AssetType.RESOURCE_GROUP,
+            provider=CloudProvider.AZURE,
+            account_id=SUB,
+        )
+        rg_app = CloudAsset(
+            arn=RG,
+            name="rg-app",
+            asset_type=AssetType.RESOURCE_GROUP,
+            provider=CloudProvider.AZURE,
+            account_id=SUB,
+        )
         edges, linker = _link(assets + [rg, rg_app])
         g = _Graph(assets + [rg, rg_app], edges)
         mg = "/providers/Microsoft.Management/managementGroups/"
@@ -1109,7 +1372,9 @@ class TestHierarchy:
         sub = g.a(f"/subscriptions/{SUB}")
         assert sub.asset_type == AssetType.CLOUD_ACCOUNT and sub.metadata["state"] == "Enabled"
         assert sub.metadata["management_group_path"][-1] == "contoso-corp"
-        assert g.has(mg + "contoso-corp", f"/subscriptions/{SUB}", EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT")
+        assert g.has(
+            mg + "contoso-corp", f"/subscriptions/{SUB}", EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT"
+        )
         deny = next(a for a in assets if a.name == "Deny public IPs")
         assert deny.asset_type == AssetType.GUARDRAIL and deny.metadata["enforced"]
         assert g.has(deny.arn, mg + "contoso", EdgeType.GOVERNS, "COMPLIANCE_GOVERNS")
@@ -1125,7 +1390,9 @@ class TestHierarchy:
         from cloudg.inventory.mapper import deduplicate
 
         fake = FakeGraph(_hierarchy_tables())
-        hierarchy = discover_azure_hierarchy(object(), graph_client_factory=lambda c: fake, include_policies=False)
+        hierarchy = discover_azure_hierarchy(
+            object(), graph_client_factory=lambda c: fake, include_policies=False
+        )
         builder = AzureAssetBuilder(SUB)
         builder.include_subscription()
         collected = builder.build()

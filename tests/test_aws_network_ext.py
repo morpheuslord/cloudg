@@ -44,8 +44,10 @@ def aws_credentials(monkeypatch):
 
 def _edge(edges, src, dst, edge_type=None):
     return [
-        e for e in edges
-        if e.source_id == src.id and e.target_id == dst.id
+        e
+        for e in edges
+        if e.source_id == src.id
+        and e.target_id == dst.id
         and (edge_type is None or e.edge_type == edge_type)
     ]
 
@@ -59,8 +61,13 @@ def _lambda_zip() -> bytes:
 
 def _collector(session, services, **kwargs):
     return AWSDeepInventoryCollector(
-        session=session, region="us-east-1", account_id=ACCOUNT, kubernetes=False,
-        tagging_sweep=False, services=services, **kwargs,
+        session=session,
+        region="us-east-1",
+        account_id=ACCOUNT,
+        kubernetes=False,
+        tagging_sweep=False,
+        services=services,
+        **kwargs,
     )
 
 
@@ -114,6 +121,7 @@ class _FakeClient:
     def __getattr__(self, op: str):
         async def call(**kwargs: Any) -> dict:
             return self.respond(op, kwargs)
+
         return call
 
     async def __aenter__(self) -> "_FakeClient":
@@ -144,9 +152,27 @@ class TestHelpers:
         assert _bucket_from_domain("app-123.us-east-1.elb.amazonaws.com") is None
 
     def test_policy_is_public(self):
-        public = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "vpc-lattice-svcs:Invoke", "Resource": "*"}]}
-        scoped = {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*",
-                                 "Condition": {"StringEquals": {"aws:PrincipalOrgID": "o-1"}}}]}
+        public = {
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": "vpc-lattice-svcs:Invoke",
+                    "Resource": "*",
+                }
+            ]
+        }
+        scoped = {
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": "*",
+                    "Resource": "*",
+                    "Condition": {"StringEquals": {"aws:PrincipalOrgID": "o-1"}},
+                }
+            ]
+        }
         assert _policy_is_public(json.dumps(public))
         assert not _policy_is_public(scoped)
         assert not _policy_is_public(None)
@@ -157,8 +183,12 @@ class TestHelpers:
         assert len(out) == 2
 
     def test_tasks_registered_with_families(self):
-        collector = AWSDeepInventoryCollector(session=boto3.Session(region_name="us-east-1"), account_id=ACCOUNT,
-                                              kubernetes=False, tagging_sweep=False)
+        collector = AWSDeepInventoryCollector(
+            session=boto3.Session(region_name="us-east-1"),
+            account_id=ACCOUNT,
+            kubernetes=False,
+            tagging_sweep=False,
+        )
         tasks = collector._network_ext_tasks()
         assert tasks["vpn"][1:] == ("hybrid", False)
         assert tasks["global_accelerator"][1:] == ("network", True)
@@ -168,11 +198,21 @@ class TestHelpers:
         assert collector._collect_cloudfront.__func__.__module__.endswith("network_ext")
 
     def test_global_tasks_skipped_outside_primary_region(self):
-        collector = AWSDeepInventoryCollector(session=boto3.Session(region_name="us-east-1"), account_id=ACCOUNT,
-                                              kubernetes=False, tagging_sweep=False, is_primary_region=False)
+        collector = AWSDeepInventoryCollector(
+            session=boto3.Session(region_name="us-east-1"),
+            account_id=ACCOUNT,
+            kubernetes=False,
+            tagging_sweep=False,
+            is_primary_region=False,
+        )
         names = set(collector._service_tasks())
         assert {"vpn", "tgw_routing", "elb_rules"} <= names
-        assert not names & {"global_accelerator", "network_manager", "direct_connect_gateways", "cloudfront"}
+        assert not names & {
+            "global_accelerator",
+            "network_manager",
+            "direct_connect_gateways",
+            "cloudfront",
+        }
 
     def test_sections_raise_only_when_all_fail(self):
         collector = _collector(boto3.Session(region_name="us-east-1"), ["vpn"])
@@ -196,28 +236,52 @@ class TestHybridAndTransit:
     def _estate(self, session):
         ec2 = session.client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        subnet = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a")["Subnet"]["SubnetId"]
-        cgw = ec2.create_customer_gateway(Type="ipsec.1", PublicIp="203.0.113.10", BgpAsn=65000)["CustomerGateway"]["CustomerGatewayId"]
+        subnet = ec2.create_subnet(
+            VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a"
+        )["Subnet"]["SubnetId"]
+        cgw = ec2.create_customer_gateway(Type="ipsec.1", PublicIp="203.0.113.10", BgpAsn=65000)[
+            "CustomerGateway"
+        ]["CustomerGatewayId"]
         vgw = ec2.create_vpn_gateway(Type="ipsec.1")["VpnGateway"]["VpnGatewayId"]
         ec2.attach_vpn_gateway(VpcId=vpc, VpnGatewayId=vgw)
         vpn = ec2.create_vpn_connection(
-            Type="ipsec.1", CustomerGatewayId=cgw, VpnGatewayId=vgw, Options={"StaticRoutesOnly": True}
+            Type="ipsec.1",
+            CustomerGatewayId=cgw,
+            VpnGatewayId=vgw,
+            Options={"StaticRoutesOnly": True},
         )["VpnConnection"]["VpnConnectionId"]
-        eigw = ec2.create_egress_only_internet_gateway(VpcId=vpc)["EgressOnlyInternetGateway"]["EgressOnlyInternetGatewayId"]
+        eigw = ec2.create_egress_only_internet_gateway(VpcId=vpc)["EgressOnlyInternetGateway"][
+            "EgressOnlyInternetGatewayId"
+        ]
         pl = ec2.create_managed_prefix_list(
-            PrefixListName="corp", MaxEntries=5, AddressFamily="IPv4", Entries=[{"Cidr": "10.10.0.0/16"}]
+            PrefixListName="corp",
+            MaxEntries=5,
+            AddressFamily="IPv4",
+            Entries=[{"Cidr": "10.10.0.0/16"}],
         )["PrefixList"]["PrefixListId"]
         tgw = ec2.create_transit_gateway()["TransitGateway"]["TransitGatewayId"]
         att = ec2.create_transit_gateway_vpc_attachment(
             TransitGatewayId=tgw, VpcId=vpc, SubnetIds=[subnet]
         )["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
-        rtb = ec2.create_transit_gateway_route_table(TransitGatewayId=tgw)["TransitGatewayRouteTable"]["TransitGatewayRouteTableId"]
-        ec2.associate_transit_gateway_route_table(TransitGatewayAttachmentId=att, TransitGatewayRouteTableId=rtb)
-        ec2.enable_transit_gateway_route_table_propagation(TransitGatewayAttachmentId=att, TransitGatewayRouteTableId=rtb)
-        ec2.create_transit_gateway_route(DestinationCidrBlock="10.0.0.0/16", TransitGatewayRouteTableId=rtb,
-                                         TransitGatewayAttachmentId=att)
+        rtb = ec2.create_transit_gateway_route_table(TransitGatewayId=tgw)[
+            "TransitGatewayRouteTable"
+        ]["TransitGatewayRouteTableId"]
+        ec2.associate_transit_gateway_route_table(
+            TransitGatewayAttachmentId=att, TransitGatewayRouteTableId=rtb
+        )
+        ec2.enable_transit_gateway_route_table_propagation(
+            TransitGatewayAttachmentId=att, TransitGatewayRouteTableId=rtb
+        )
+        ec2.create_transit_gateway_route(
+            DestinationCidrBlock="10.0.0.0/16",
+            TransitGatewayRouteTableId=rtb,
+            TransitGatewayAttachmentId=att,
+        )
         peer = ec2.create_transit_gateway_peering_attachment(
-            TransitGatewayId=tgw, PeerTransitGatewayId="tgw-0123456789abcdef0", PeerAccountId=FOREIGN, PeerRegion="eu-west-1"
+            TransitGatewayId=tgw,
+            PeerTransitGatewayId="tgw-0123456789abcdef0",
+            PeerAccountId=FOREIGN,
+            PeerRegion="eu-west-1",
         )["TransitGatewayPeeringAttachment"]["TransitGatewayAttachmentId"]
         nlb = session.client("elbv2").create_load_balancer(
             Name="svc", Subnets=[subnet], Type="network", Scheme="internal"
@@ -225,7 +289,9 @@ class TestHybridAndTransit:
         svc = ec2.create_vpc_endpoint_service_configuration(
             NetworkLoadBalancerArns=[nlb], AcceptanceRequired=False
         )["ServiceConfiguration"]["ServiceId"]
-        ec2.modify_vpc_endpoint_service_permissions(ServiceId=svc, AddAllowedPrincipals=[f"arn:aws:iam::{FOREIGN}:root"])
+        ec2.modify_vpc_endpoint_service_permissions(
+            ServiceId=svc, AddAllowedPrincipals=[f"arn:aws:iam::{FOREIGN}:root"]
+        )
         return locals()
 
     def test_vpn_tgw_prefix_lists_and_endpoint_services(self, aws_credentials):
@@ -243,7 +309,10 @@ class TestHybridAndTransit:
         vpc = _one(assets, AssetType.VPC, lambda a: a.metadata.get("vpc_id") == ids["vpc"])
         vpn, cgw, vgw = by_alias[ids["vpn"]], by_alias[ids["cgw"]], by_alias[ids["vgw"]]
         assert vpn.asset_type == AssetType.VPN_CONNECTION
-        assert cgw.asset_type == AssetType.CUSTOMER_GATEWAY and cgw.metadata["ip_address"] == "203.0.113.10"
+        assert (
+            cgw.asset_type == AssetType.CUSTOMER_GATEWAY
+            and cgw.metadata["ip_address"] == "203.0.113.10"
+        )
         assert vpn.metadata["vpn_gateway_id"] == ids["vgw"]
         assert "CustomerGatewayConfiguration" not in json.dumps(vpn.model_dump(mode="json"))
         assert _edge(edges, vpn, cgw, EdgeType.ROUTE)
@@ -256,7 +325,11 @@ class TestHybridAndTransit:
 
         pl = by_alias[ids["pl"]]
         assert pl.asset_type == AssetType.PREFIX_LIST and pl.metadata["entry_count"] == 1
-        assert not [a for a in assets if a.asset_type == AssetType.PREFIX_LIST and a.metadata.get("owner_id") == "AWS"]
+        assert not [
+            a
+            for a in assets
+            if a.asset_type == AssetType.PREFIX_LIST and a.metadata.get("owner_id") == "AWS"
+        ]
 
         tgw = _one(assets, AssetType.TRANSIT_GATEWAY)
         rtb = by_alias[ids["rtb"]]
@@ -293,32 +366,50 @@ class TestApiGatewayDepth:
             Name="private", Subnets=[subnet], Type="network", Scheme="internal"
         )["LoadBalancers"][0]["LoadBalancerArn"]
         role = session.client("iam").create_role(
-            RoleName="auth", AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []})
+            RoleName="auth",
+            AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}),
         )["Role"]["Arn"]
         fn = session.client("lambda").create_function(
-            FunctionName="authz", Runtime="python3.12", Role=role, Handler="h.h", Code={"ZipFile": _lambda_zip()}
+            FunctionName="authz",
+            Runtime="python3.12",
+            Role=role,
+            Handler="h.h",
+            Code={"ZipFile": _lambda_zip()},
         )["FunctionArn"]
-        cert = session.client("acm").request_certificate(DomainName="api.example.com")["CertificateArn"]
+        cert = session.client("acm").request_certificate(DomainName="api.example.com")[
+            "CertificateArn"
+        ]
 
         rest = session.client("apigateway")
-        api = rest.create_rest_api(name="orders", endpointConfiguration={"types": ["REGIONAL"]})["id"]
+        api = rest.create_rest_api(name="orders", endpointConfiguration={"types": ["REGIONAL"]})[
+            "id"
+        ]
         rest.create_authorizer(
-            restApiId=api, name="token", type="TOKEN", identitySource="method.request.header.Authorization",
+            restApiId=api,
+            name="token",
+            type="TOKEN",
+            identitySource="method.request.header.Authorization",
             authorizerUri=f"arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/{fn}/invocations",
         )
         link = rest.create_vpc_link(name="to-nlb", targetArns=[nlb])["id"]
         domain = rest.create_domain_name(
-            domainName="api.example.com", regionalCertificateArn=cert, endpointConfiguration={"types": ["REGIONAL"]}
+            domainName="api.example.com",
+            regionalCertificateArn=cert,
+            endpointConfiguration={"types": ["REGIONAL"]},
         )
         root = rest.get_resources(restApiId=api)["items"][0]["id"]
         rest.put_method(restApiId=api, resourceId=root, httpMethod="GET", authorizationType="NONE")
         rest.put_integration(restApiId=api, resourceId=root, httpMethod="GET", type="MOCK")
         rest.create_deployment(restApiId=api, stageName="prod")
-        rest.create_base_path_mapping(domainName="api.example.com", restApiId=api, basePath="v1", stage="prod")
+        rest.create_base_path_mapping(
+            domainName="api.example.com", restApiId=api, basePath="v1", stage="prod"
+        )
 
         v2 = session.client("apigatewayv2")
         http_api = v2.create_api(Name="web", ProtocolType="HTTP")["ApiId"]
-        v2_link = v2.create_vpc_link(Name="v2", SubnetIds=[subnet], SecurityGroupIds=[sg])["VpcLinkId"]
+        v2_link = v2.create_vpc_link(Name="v2", SubnetIds=[subnet], SecurityGroupIds=[sg])[
+            "VpcLinkId"
+        ]
         v2.create_domain_name(
             DomainName="web.example.com",
             DomainNameConfigurations=[{"CertificateArn": cert, "EndpointType": "REGIONAL"}],
@@ -327,13 +418,29 @@ class TestApiGatewayDepth:
 
         r53 = session.client("route53")
         zone = r53.create_hosted_zone(Name="example.com", CallerReference="1")["HostedZone"]["Id"]
-        r53.change_resource_record_sets(HostedZoneId=zone, ChangeBatch={"Changes": [{
-            "Action": "CREATE",
-            "ResourceRecordSet": {"Name": "api.example.com", "Type": "A", "AliasTarget": {
-                "HostedZoneId": "Z1UJRXOUMOOFQ8", "DNSName": domain["regionalDomainName"], "EvaluateTargetHealth": False}},
-        }]})
+        r53.change_resource_record_sets(
+            HostedZoneId=zone,
+            ChangeBatch={
+                "Changes": [
+                    {
+                        "Action": "CREATE",
+                        "ResourceRecordSet": {
+                            "Name": "api.example.com",
+                            "Type": "A",
+                            "AliasTarget": {
+                                "HostedZoneId": "Z1UJRXOUMOOFQ8",
+                                "DNSName": domain["regionalDomainName"],
+                                "EvaluateTargetHealth": False,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
 
-        collector = _collector(session, ["serverless", "route53", "acm", "subnets", "security_groups", "elbv2"])
+        collector = _collector(
+            session, ["serverless", "route53", "acm", "subnets", "security_groups", "elbv2"]
+        )
         assets, edges, _ = _run(collector)
         for task in ("apigateway_authorizers", "apigateway_vpc_links", "apigateway_domains"):
             assert _status(collector, task) == ServiceStatus.SUCCESS, task
@@ -344,7 +451,12 @@ class TestApiGatewayDepth:
         function = by_arn[fn]
         certificate = by_arn[cert]
 
-        token = next(a for a in assets if a.metadata.get("resource_kind") == "apigateway_authorizer" and a.metadata["api_id"] == api)
+        token = next(
+            a
+            for a in assets
+            if a.metadata.get("resource_kind") == "apigateway_authorizer"
+            and a.metadata["api_id"] == api
+        )
         assert _edge(edges, rest_api, token, EdgeType.REFERENCES)
         assert _edge(edges, token, function, EdgeType.INVOKES)
         # HTTP API authorizers: moto lacks apigatewayv2 GetAuthorizers (see the fake-client test)
@@ -353,8 +465,16 @@ class TestApiGatewayDepth:
         assert rest_link.asset_type == AssetType.VPC_LINK
         assert _edge(edges, rest_link, by_arn[nlb], EdgeType.LOAD_BALANCER_TARGET)
         http_link = by_arn[f"arn:aws:apigateway:us-east-1::/vpclinks/{v2_link}"]
-        subnet_asset = next(a for a in assets if a.asset_type == AssetType.SUBNET and a.metadata.get("subnet_id") == subnet)
-        sg_asset = next(a for a in assets if a.asset_type == AssetType.SECURITY_GROUP and a.metadata.get("group_id") == sg)
+        subnet_asset = next(
+            a
+            for a in assets
+            if a.asset_type == AssetType.SUBNET and a.metadata.get("subnet_id") == subnet
+        )
+        sg_asset = next(
+            a
+            for a in assets
+            if a.asset_type == AssetType.SECURITY_GROUP and a.metadata.get("group_id") == sg
+        )
         assert _edge(edges, subnet_asset, http_link, EdgeType.CONTAINS)
         assert _edge(edges, http_link, sg_asset, EdgeType.ATTACHED_TO)
 
@@ -374,75 +494,161 @@ class TestEdgeAndResolver:
         session = boto3.Session(region_name="us-east-1")
         ec2 = session.client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        s1 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a")["Subnet"]["SubnetId"]
-        s2 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.2.0/24", AvailabilityZone="us-east-1b")["Subnet"]["SubnetId"]
+        s1 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a")[
+            "Subnet"
+        ]["SubnetId"]
+        s2 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.2.0/24", AvailabilityZone="us-east-1b")[
+            "Subnet"
+        ]["SubnetId"]
         sg = ec2.create_security_group(GroupName="dns", Description="d", VpcId=vpc)["GroupId"]
         s3 = session.client("s3")
         s3.create_bucket(Bucket="site-assets")
         s3.create_bucket(Bucket="cf-logs")
-        cert = session.client("acm").request_certificate(DomainName="www.example.com")["CertificateArn"]
+        cert = session.client("acm").request_certificate(DomainName="www.example.com")[
+            "CertificateArn"
+        ]
 
         elb = session.client("elbv2")
-        alb = elb.create_load_balancer(Name="web", Subnets=[s1, s2], SecurityGroups=[sg], Scheme="internet-facing")["LoadBalancers"][0]
-        tg = elb.create_target_group(Name="api", Protocol="HTTP", Port=80, VpcId=vpc)["TargetGroups"][0]["TargetGroupArn"]
-        tg2 = elb.create_target_group(Name="static", Protocol="HTTP", Port=80, VpcId=vpc)["TargetGroups"][0]["TargetGroupArn"]
+        alb = elb.create_load_balancer(
+            Name="web", Subnets=[s1, s2], SecurityGroups=[sg], Scheme="internet-facing"
+        )["LoadBalancers"][0]
+        tg = elb.create_target_group(Name="api", Protocol="HTTP", Port=80, VpcId=vpc)[
+            "TargetGroups"
+        ][0]["TargetGroupArn"]
+        tg2 = elb.create_target_group(Name="static", Protocol="HTTP", Port=80, VpcId=vpc)[
+            "TargetGroups"
+        ][0]["TargetGroupArn"]
         listener = elb.create_listener(
-            LoadBalancerArn=alb["LoadBalancerArn"], Protocol="HTTP", Port=80,
+            LoadBalancerArn=alb["LoadBalancerArn"],
+            Protocol="HTTP",
+            Port=80,
             DefaultActions=[{"Type": "forward", "TargetGroupArn": tg2}],
         )["Listeners"][0]["ListenerArn"]
         elb.create_rule(
-            ListenerArn=listener, Priority=10,
+            ListenerArn=listener,
+            Priority=10,
             Conditions=[{"Field": "path-pattern", "Values": ["/api/*"]}],
             Actions=[{"Type": "forward", "TargetGroupArn": tg}],
         )
 
         cf = session.client("cloudfront")
-        dist = cf.create_distribution(DistributionConfig={
-            "CallerReference": "1",
-            "Aliases": {"Quantity": 1, "Items": ["www.example.com"]},
-            "Origins": {"Quantity": 2, "Items": [
-                {"Id": "s3", "DomainName": "site-assets.s3.us-east-1.amazonaws.com",
-                 "S3OriginConfig": {"OriginAccessIdentity": ""}},
-                {"Id": "alb", "DomainName": alb["DNSName"],
-                 "CustomOriginConfig": {"HTTPPort": 80, "HTTPSPort": 443, "OriginProtocolPolicy": "https-only"},
-                 "CustomHeaders": {"Quantity": 1, "Items": [{"HeaderName": "X-Origin-Verify", "HeaderValue": "s3cr3t"}]}},
-            ]},
-            "DefaultCacheBehavior": {"TargetOriginId": "s3", "ViewerProtocolPolicy": "redirect-to-https",
-                                     "MinTTL": 0, "ForwardedValues": {"QueryString": False, "Cookies": {"Forward": "none"}}},
-            "Comment": "site",
-            "Enabled": True,
-            "Logging": {"Enabled": True, "IncludeCookies": False, "Bucket": "cf-logs.s3.amazonaws.com", "Prefix": "cf/"},
-            "ViewerCertificate": {"ACMCertificateArn": cert, "SSLSupportMethod": "sni-only",
-                                  "MinimumProtocolVersion": "TLSv1.2_2021"},
-            "WebACLId": "arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc",
-        })["Distribution"]
+        dist = cf.create_distribution(
+            DistributionConfig={
+                "CallerReference": "1",
+                "Aliases": {"Quantity": 1, "Items": ["www.example.com"]},
+                "Origins": {
+                    "Quantity": 2,
+                    "Items": [
+                        {
+                            "Id": "s3",
+                            "DomainName": "site-assets.s3.us-east-1.amazonaws.com",
+                            "S3OriginConfig": {"OriginAccessIdentity": ""},
+                        },
+                        {
+                            "Id": "alb",
+                            "DomainName": alb["DNSName"],
+                            "CustomOriginConfig": {
+                                "HTTPPort": 80,
+                                "HTTPSPort": 443,
+                                "OriginProtocolPolicy": "https-only",
+                            },
+                            "CustomHeaders": {
+                                "Quantity": 1,
+                                "Items": [
+                                    {"HeaderName": "X-Origin-Verify", "HeaderValue": "s3cr3t"}
+                                ],
+                            },
+                        },
+                    ],
+                },
+                "DefaultCacheBehavior": {
+                    "TargetOriginId": "s3",
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "MinTTL": 0,
+                    "ForwardedValues": {"QueryString": False, "Cookies": {"Forward": "none"}},
+                },
+                "Comment": "site",
+                "Enabled": True,
+                "Logging": {
+                    "Enabled": True,
+                    "IncludeCookies": False,
+                    "Bucket": "cf-logs.s3.amazonaws.com",
+                    "Prefix": "cf/",
+                },
+                "ViewerCertificate": {
+                    "ACMCertificateArn": cert,
+                    "SSLSupportMethod": "sni-only",
+                    "MinimumProtocolVersion": "TLSv1.2_2021",
+                },
+                "WebACLId": "arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc",
+            }
+        )["Distribution"]
 
         r53 = session.client("route53")
         zone = r53.create_hosted_zone(Name="example.com", CallerReference="z")["HostedZone"]["Id"]
-        r53.change_resource_record_sets(HostedZoneId=zone, ChangeBatch={"Changes": [{
-            "Action": "CREATE",
-            "ResourceRecordSet": {"Name": "www.example.com", "Type": "A", "AliasTarget": {
-                "HostedZoneId": "Z2FDTNDATAQYW2", "DNSName": dist["DomainName"], "EvaluateTargetHealth": False}},
-        }]})
+        r53.change_resource_record_sets(
+            HostedZoneId=zone,
+            ChangeBatch={
+                "Changes": [
+                    {
+                        "Action": "CREATE",
+                        "ResourceRecordSet": {
+                            "Name": "www.example.com",
+                            "Type": "A",
+                            "AliasTarget": {
+                                "HostedZoneId": "Z2FDTNDATAQYW2",
+                                "DNSName": dist["DomainName"],
+                                "EvaluateTargetHealth": False,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
 
         resolver = session.client("route53resolver")
         endpoint = resolver.create_resolver_endpoint(
-            CreatorRequestId="e", Name="outbound", SecurityGroupIds=[sg], Direction="OUTBOUND",
+            CreatorRequestId="e",
+            Name="outbound",
+            SecurityGroupIds=[sg],
+            Direction="OUTBOUND",
             IpAddresses=[{"SubnetId": s1}, {"SubnetId": s2}],
         )["ResolverEndpoint"]
         rule = resolver.create_resolver_rule(
-            CreatorRequestId="r", Name="corp", RuleType="FORWARD", DomainName="corp.example.",
-            TargetIps=[{"Ip": "192.168.0.2", "Port": 53}], ResolverEndpointId=endpoint["Id"],
+            CreatorRequestId="r",
+            Name="corp",
+            RuleType="FORWARD",
+            DomainName="corp.example.",
+            TargetIps=[{"Ip": "192.168.0.2", "Port": 53}],
+            ResolverEndpointId=endpoint["Id"],
         )["ResolverRule"]
         resolver.associate_resolver_rule(ResolverRuleId=rule["Id"], VPCId=vpc)
         logs = session.client("logs")
         logs.create_log_group(logGroupName="dns-queries")
         dest = f"arn:aws:logs:us-east-1:{ACCOUNT}:log-group:dns-queries"
-        qlc = resolver.create_resolver_query_log_config(Name="ql", DestinationArn=dest, CreatorRequestId="q")["ResolverQueryLogConfig"]
-        resolver.associate_resolver_query_log_config(ResolverQueryLogConfigId=qlc["Id"], ResourceId=vpc)
+        qlc = resolver.create_resolver_query_log_config(
+            Name="ql", DestinationArn=dest, CreatorRequestId="q"
+        )["ResolverQueryLogConfig"]
+        resolver.associate_resolver_query_log_config(
+            ResolverQueryLogConfigId=qlc["Id"], ResourceId=vpc
+        )
 
-        collector = _collector(session, ["cloudfront", "s3", "elbv2", "elb_rules", "route53", "route53_resolver",
-                                         "acm", "vpc", "subnets", "security_groups", "log_groups"])
+        collector = _collector(
+            session,
+            [
+                "cloudfront",
+                "s3",
+                "elbv2",
+                "elb_rules",
+                "route53",
+                "route53_resolver",
+                "acm",
+                "vpc",
+                "subnets",
+                "security_groups",
+                "log_groups",
+            ],
+        )
         assets, edges, _ = _run(collector)
         for task in ("cloudfront", "elb_rules", "route53_resolver"):
             assert _status(collector, task) == ServiceStatus.SUCCESS, task
@@ -456,7 +662,11 @@ class TestEdgeAndResolver:
         assert cf_asset.metadata["viewer_protocol_policy"] == "redirect-to-https"
         assert "www.example.com" in cf_asset.metadata["aliases"]
         assert "s3cr3t" not in json.dumps(cf_asset.model_dump(mode="json"))
-        bucket, logs_bucket, alb_asset = by_arn["arn:aws:s3:::site-assets"], by_arn["arn:aws:s3:::cf-logs"], by_arn[alb["LoadBalancerArn"]]
+        bucket, logs_bucket, alb_asset = (
+            by_arn["arn:aws:s3:::site-assets"],
+            by_arn["arn:aws:s3:::cf-logs"],
+            by_arn[alb["LoadBalancerArn"]],
+        )
         assert _edge(edges, cf_asset, bucket, EdgeType.ROUTE)
         assert _edge(edges, cf_asset, alb_asset, EdgeType.ROUTE)
         assert _edge(edges, cf_asset, logs_bucket, EdgeType.LOGS_TO)
@@ -476,7 +686,9 @@ class TestEdgeAndResolver:
         vpc_asset = _one(assets, AssetType.VPC, lambda a: a.metadata.get("vpc_id") == vpc)
         ep = by_arn[endpoint["Arn"]]
         assert ep.asset_type == AssetType.DNS_RESOLVER and ep.metadata["direction"] == "OUTBOUND"
-        sg_asset = _one(assets, AssetType.SECURITY_GROUP, lambda a: a.metadata.get("group_id") == sg)
+        sg_asset = _one(
+            assets, AssetType.SECURITY_GROUP, lambda a: a.metadata.get("group_id") == sg
+        )
         subnet_asset = _one(assets, AssetType.SUBNET, lambda a: a.metadata.get("subnet_id") == s1)
         assert _edge(edges, ep, sg_asset, EdgeType.ATTACHED_TO)
         assert _edge(edges, subnet_asset, ep, EdgeType.CONTAINS)
@@ -496,14 +708,33 @@ class TestLatticeAndNetworkManager:
         session = boto3.Session(region_name="us-east-1")
         ec2 = session.client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        inst = ec2.run_instances(ImageId="ami-12c6146b", MinCount=1, MaxCount=1)["Instances"][0]["InstanceId"]
+        inst = ec2.run_instances(ImageId="ami-12c6146b", MinCount=1, MaxCount=1)["Instances"][0][
+            "InstanceId"
+        ]
         vl = session.client("vpc-lattice")
         sn = vl.create_service_network(name="mesh", authType="AWS_IAM")
         svc = vl.create_service(name="orders", authType="AWS_IAM")
-        vl.create_service_network_vpc_association(serviceNetworkIdentifier=sn["id"], vpcIdentifier=vpc)
-        vl.create_service_network_service_association(serviceNetworkIdentifier=sn["id"], serviceIdentifier=svc["id"])
-        vl.put_auth_policy(resourceIdentifier=svc["arn"], policy=json.dumps({"Statement": [
-            {"Effect": "Allow", "Principal": "*", "Action": "vpc-lattice-svcs:Invoke", "Resource": "*"}]}))
+        vl.create_service_network_vpc_association(
+            serviceNetworkIdentifier=sn["id"], vpcIdentifier=vpc
+        )
+        vl.create_service_network_service_association(
+            serviceNetworkIdentifier=sn["id"], serviceIdentifier=svc["id"]
+        )
+        vl.put_auth_policy(
+            resourceIdentifier=svc["arn"],
+            policy=json.dumps(
+                {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "vpc-lattice-svcs:Invoke",
+                            "Resource": "*",
+                        }
+                    ]
+                }
+            ),
+        )
 
         collector = _collector(session, ["vpc_lattice", "vpc", "ec2"])
         assets, edges, _ = _run(collector)
@@ -521,7 +752,9 @@ class TestLatticeAndNetworkManager:
         session = boto3.Session(region_name="us-east-1")
         nm = session.client("networkmanager", region_name="us-west-2")
         gn = nm.create_global_network(Description="wan")["GlobalNetwork"]
-        core = nm.create_core_network(GlobalNetworkId=gn["GlobalNetworkId"], Description="core")["CoreNetwork"]
+        core = nm.create_core_network(GlobalNetworkId=gn["GlobalNetworkId"], Description="core")[
+            "CoreNetwork"
+        ]
         collector = _collector(session, ["network_manager"])
         assets, edges, _ = _run(collector)
         assert _status(collector, "network_manager") == ServiceStatus.SUCCESS
@@ -540,61 +773,185 @@ class TestFakeClientCollectors:
         session = boto3.Session(region_name="us-east-1")
         ec2 = session.client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        s1 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a")["Subnet"]["SubnetId"]
-        s2 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.2.0/24", AvailabilityZone="us-east-1b")["Subnet"]["SubnetId"]
+        s1 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24", AvailabilityZone="us-east-1a")[
+            "Subnet"
+        ]["SubnetId"]
+        s2 = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.2.0/24", AvailabilityZone="us-east-1b")[
+            "Subnet"
+        ]["SubnetId"]
         vgw = ec2.create_vpn_gateway(Type="ipsec.1")["VpnGateway"]["VpnGatewayId"]
         tgw = ec2.create_transit_gateway()["TransitGateway"]["TransitGatewayId"]
-        alb = session.client("elbv2").create_load_balancer(Name="edge", Subnets=[s1, s2])["LoadBalancers"][0]["LoadBalancerArn"]
+        alb = session.client("elbv2").create_load_balancer(Name="edge", Subnets=[s1, s2])[
+            "LoadBalancers"
+        ][0]["LoadBalancerArn"]
 
-        dxcon, dxlag, dxvif, dxgw = "dxcon-ffabc123", "dxlag-ffdef456", "dxvif-ffggg789", "5f3c7b2e-0000-4000-8000-000000000001"
-        dx = _FakeClient({
-            "describe_connections": {"connections": [{
-                "connectionId": dxcon, "connectionName": "dc1", "connectionState": "available", "region": "us-east-1",
-                "ownerAccount": ACCOUNT, "location": "EqDC2", "bandwidth": "10Gbps", "lagId": dxlag,
-                "macSecKeys": [{"ckn": "secret-ckn"}],
-            }]},
-            "describe_lags": {"lags": [{"lagId": dxlag, "lagName": "lag", "lagState": "available", "region": "us-east-1",
-                                        "ownerAccount": ACCOUNT, "connections": [{"connectionId": dxcon}]}]},
-            "describe_virtual_interfaces": {"virtualInterfaces": [{
-                "virtualInterfaceId": dxvif, "virtualInterfaceName": "private", "virtualInterfaceType": "private",
-                "virtualInterfaceState": "available", "connectionId": dxcon, "region": "us-east-1", "ownerAccount": ACCOUNT,
-                "directConnectGatewayId": dxgw, "authKey": "bgp-secret", "customerRouterConfig": "router-secret",
-                "bgpPeers": [{"asn": 65000, "authKey": "bgp-secret", "bgpPeerState": "available", "bgpStatus": "up"}],
-            }]},
-            "describe_direct_connect_gateways": {"directConnectGateways": [{
-                "directConnectGatewayId": dxgw, "directConnectGatewayName": "dxgw", "ownerAccount": ACCOUNT,
-                "directConnectGatewayState": "available", "amazonSideAsn": 64512,
-            }]},
-            "describe_direct_connect_gateway_associations": {"directConnectGatewayAssociations": [
-                {"directConnectGatewayId": dxgw, "associationState": "associated",
-                 "associatedGateway": {"id": vgw, "type": "virtualPrivateGateway", "ownerAccount": ACCOUNT, "region": "us-east-1"}},
-                {"directConnectGatewayId": dxgw, "associationState": "associated",
-                 "associatedGateway": {"id": tgw, "type": "transitGateway", "ownerAccount": ACCOUNT, "region": "us-east-1"}},
-                {"directConnectGatewayId": dxgw, "associationState": "associated",
-                 "associatedGateway": {"id": "vgw-0aaaabbbbccccdddd", "type": "virtualPrivateGateway",
-                                       "ownerAccount": FOREIGN, "region": "eu-west-1"}},
-            ]},
-            "describe_direct_connect_gateway_attachments": {"directConnectGatewayAttachments": [
-                {"directConnectGatewayId": dxgw, "virtualInterfaceId": dxvif, "virtualInterfaceRegion": "us-east-1",
-                 "virtualInterfaceOwnerAccount": ACCOUNT, "attachmentState": "attached"}]},
-        })
+        dxcon, dxlag, dxvif, dxgw = (
+            "dxcon-ffabc123",
+            "dxlag-ffdef456",
+            "dxvif-ffggg789",
+            "5f3c7b2e-0000-4000-8000-000000000001",
+        )
+        dx = _FakeClient(
+            {
+                "describe_connections": {
+                    "connections": [
+                        {
+                            "connectionId": dxcon,
+                            "connectionName": "dc1",
+                            "connectionState": "available",
+                            "region": "us-east-1",
+                            "ownerAccount": ACCOUNT,
+                            "location": "EqDC2",
+                            "bandwidth": "10Gbps",
+                            "lagId": dxlag,
+                            "macSecKeys": [{"ckn": "secret-ckn"}],
+                        }
+                    ]
+                },
+                "describe_lags": {
+                    "lags": [
+                        {
+                            "lagId": dxlag,
+                            "lagName": "lag",
+                            "lagState": "available",
+                            "region": "us-east-1",
+                            "ownerAccount": ACCOUNT,
+                            "connections": [{"connectionId": dxcon}],
+                        }
+                    ]
+                },
+                "describe_virtual_interfaces": {
+                    "virtualInterfaces": [
+                        {
+                            "virtualInterfaceId": dxvif,
+                            "virtualInterfaceName": "private",
+                            "virtualInterfaceType": "private",
+                            "virtualInterfaceState": "available",
+                            "connectionId": dxcon,
+                            "region": "us-east-1",
+                            "ownerAccount": ACCOUNT,
+                            "directConnectGatewayId": dxgw,
+                            "authKey": "bgp-secret",
+                            "customerRouterConfig": "router-secret",
+                            "bgpPeers": [
+                                {
+                                    "asn": 65000,
+                                    "authKey": "bgp-secret",
+                                    "bgpPeerState": "available",
+                                    "bgpStatus": "up",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "describe_direct_connect_gateways": {
+                    "directConnectGateways": [
+                        {
+                            "directConnectGatewayId": dxgw,
+                            "directConnectGatewayName": "dxgw",
+                            "ownerAccount": ACCOUNT,
+                            "directConnectGatewayState": "available",
+                            "amazonSideAsn": 64512,
+                        }
+                    ]
+                },
+                "describe_direct_connect_gateway_associations": {
+                    "directConnectGatewayAssociations": [
+                        {
+                            "directConnectGatewayId": dxgw,
+                            "associationState": "associated",
+                            "associatedGateway": {
+                                "id": vgw,
+                                "type": "virtualPrivateGateway",
+                                "ownerAccount": ACCOUNT,
+                                "region": "us-east-1",
+                            },
+                        },
+                        {
+                            "directConnectGatewayId": dxgw,
+                            "associationState": "associated",
+                            "associatedGateway": {
+                                "id": tgw,
+                                "type": "transitGateway",
+                                "ownerAccount": ACCOUNT,
+                                "region": "us-east-1",
+                            },
+                        },
+                        {
+                            "directConnectGatewayId": dxgw,
+                            "associationState": "associated",
+                            "associatedGateway": {
+                                "id": "vgw-0aaaabbbbccccdddd",
+                                "type": "virtualPrivateGateway",
+                                "ownerAccount": FOREIGN,
+                                "region": "eu-west-1",
+                            },
+                        },
+                    ]
+                },
+                "describe_direct_connect_gateway_attachments": {
+                    "directConnectGatewayAttachments": [
+                        {
+                            "directConnectGatewayId": dxgw,
+                            "virtualInterfaceId": dxvif,
+                            "virtualInterfaceRegion": "us-east-1",
+                            "virtualInterfaceOwnerAccount": ACCOUNT,
+                            "attachmentState": "attached",
+                        }
+                    ]
+                },
+            }
+        )
         accel_arn = f"arn:aws:globalaccelerator::{ACCOUNT}:accelerator/abcd"
         listener_arn = f"{accel_arn}/listener/0123"
-        ga = _FakeClient({
-            "list_accelerators": {"Accelerators": [{
-                "AcceleratorArn": accel_arn, "Name": "global", "Enabled": True, "Status": "DEPLOYED",
-                "DnsName": "a1234.awsglobalaccelerator.com", "IpSets": [{"IpAddresses": ["75.2.0.1", "99.83.0.1"]}],
-            }]},
-            "list_listeners": {"Listeners": [{"ListenerArn": listener_arn, "Protocol": "TCP",
-                                              "PortRanges": [{"FromPort": 443, "ToPort": 443}]}]},
-            "list_endpoint_groups": {"EndpointGroups": [{
-                "EndpointGroupArn": f"{listener_arn}/endpoint-group/1", "EndpointGroupRegion": "us-east-1",
-                "EndpointDescriptions": [{"EndpointId": alb, "Weight": 128, "HealthState": "HEALTHY"}],
-            }]},
-            "list_custom_routing_accelerators": RuntimeError("AccessDenied"),
-        })
-        collector = _collector(session, ["direct_connect", "direct_connect_gateways", "global_accelerator",
-                                         "vpn", "transit_gateways", "elbv2"])
+        ga = _FakeClient(
+            {
+                "list_accelerators": {
+                    "Accelerators": [
+                        {
+                            "AcceleratorArn": accel_arn,
+                            "Name": "global",
+                            "Enabled": True,
+                            "Status": "DEPLOYED",
+                            "DnsName": "a1234.awsglobalaccelerator.com",
+                            "IpSets": [{"IpAddresses": ["75.2.0.1", "99.83.0.1"]}],
+                        }
+                    ]
+                },
+                "list_listeners": {
+                    "Listeners": [
+                        {
+                            "ListenerArn": listener_arn,
+                            "Protocol": "TCP",
+                            "PortRanges": [{"FromPort": 443, "ToPort": 443}],
+                        }
+                    ]
+                },
+                "list_endpoint_groups": {
+                    "EndpointGroups": [
+                        {
+                            "EndpointGroupArn": f"{listener_arn}/endpoint-group/1",
+                            "EndpointGroupRegion": "us-east-1",
+                            "EndpointDescriptions": [
+                                {"EndpointId": alb, "Weight": 128, "HealthState": "HEALTHY"}
+                            ],
+                        }
+                    ]
+                },
+                "list_custom_routing_accelerators": RuntimeError("AccessDenied"),
+            }
+        )
+        collector = _collector(
+            session,
+            [
+                "direct_connect",
+                "direct_connect_gateways",
+                "global_accelerator",
+                "vpn",
+                "transit_gateways",
+                "elbv2",
+            ],
+        )
         _patch_clients(monkeypatch, collector, {"directconnect": dx, "globalaccelerator": ga})
         assets, edges, linker = _run(collector)
         for task in ("direct_connect", "direct_connect_gateways", "global_accelerator"):
@@ -604,8 +961,17 @@ class TestFakeClientCollectors:
         for secret in ("bgp-secret", "router-secret", "secret-ckn"):
             assert secret not in dumped
 
-        by_kind = {a.metadata.get("resource_kind"): a for a in assets if a.asset_type == AssetType.DIRECT_CONNECT}
-        con, lag, vif, gw = by_kind["dx_connection"], by_kind["dx_lag"], by_kind["dx_virtual_interface"], by_kind["dx_gateway"]
+        by_kind = {
+            a.metadata.get("resource_kind"): a
+            for a in assets
+            if a.asset_type == AssetType.DIRECT_CONNECT
+        }
+        con, lag, vif, gw = (
+            by_kind["dx_connection"],
+            by_kind["dx_lag"],
+            by_kind["dx_virtual_interface"],
+            by_kind["dx_gateway"],
+        )
         assert gw.region == "global"
         assert _edge(edges, lag, con, EdgeType.CONTAINS)
         assert _edge(edges, vif, con, EdgeType.ATTACHED_TO)
@@ -630,27 +996,61 @@ class TestFakeClientCollectors:
         ec2 = session.client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
         fw_group = "rslvr-frg-0123456789abcdef"
-        r53r = _FakeClient({
-            "list_resolver_endpoints": {"ResolverEndpoints": []},
-            "list_resolver_rules": {"ResolverRules": [
-                {"Id": "rslvr-autodefined-rr-internet-resolver", "RuleType": "RECURSIVE", "DomainName": "."},
-                {"Id": "rslvr-rr-shared", "Arn": f"arn:aws:route53resolver:us-east-1:{FOREIGN}:resolver-rule/rslvr-rr-shared",
-                 "RuleType": "FORWARD", "DomainName": "onprem.corp.", "OwnerId": FOREIGN, "ShareStatus": "SHARED_WITH_ME",
-                 "TargetIps": [{"Ip": "10.1.1.1", "Port": 53}]},
-            ]},
-            "list_resolver_rule_associations": {"ResolverRuleAssociations": [
-                {"ResolverRuleId": "rslvr-rr-shared", "VPCId": vpc, "Status": "COMPLETE"}]},
-            "list_firewall_rule_groups": {"FirewallRuleGroups": [
-                {"Id": fw_group, "Arn": f"arn:aws:route53resolver:us-east-1:{ACCOUNT}:firewall-rule-group/{fw_group}",
-                 "Name": "block-bad", "OwnerId": ACCOUNT}]},
-            "list_firewall_rule_group_associations": {"FirewallRuleGroupAssociations": [
-                {"FirewallRuleGroupId": fw_group, "VpcId": vpc, "Priority": 101, "Status": "COMPLETE"}]},
-            "list_resolver_query_log_configs": RuntimeError("AccessDenied"),
-        })
+        r53r = _FakeClient(
+            {
+                "list_resolver_endpoints": {"ResolverEndpoints": []},
+                "list_resolver_rules": {
+                    "ResolverRules": [
+                        {
+                            "Id": "rslvr-autodefined-rr-internet-resolver",
+                            "RuleType": "RECURSIVE",
+                            "DomainName": ".",
+                        },
+                        {
+                            "Id": "rslvr-rr-shared",
+                            "Arn": f"arn:aws:route53resolver:us-east-1:{FOREIGN}:resolver-rule/rslvr-rr-shared",
+                            "RuleType": "FORWARD",
+                            "DomainName": "onprem.corp.",
+                            "OwnerId": FOREIGN,
+                            "ShareStatus": "SHARED_WITH_ME",
+                            "TargetIps": [{"Ip": "10.1.1.1", "Port": 53}],
+                        },
+                    ]
+                },
+                "list_resolver_rule_associations": {
+                    "ResolverRuleAssociations": [
+                        {"ResolverRuleId": "rslvr-rr-shared", "VPCId": vpc, "Status": "COMPLETE"}
+                    ]
+                },
+                "list_firewall_rule_groups": {
+                    "FirewallRuleGroups": [
+                        {
+                            "Id": fw_group,
+                            "Arn": f"arn:aws:route53resolver:us-east-1:{ACCOUNT}:firewall-rule-group/{fw_group}",
+                            "Name": "block-bad",
+                            "OwnerId": ACCOUNT,
+                        }
+                    ]
+                },
+                "list_firewall_rule_group_associations": {
+                    "FirewallRuleGroupAssociations": [
+                        {
+                            "FirewallRuleGroupId": fw_group,
+                            "VpcId": vpc,
+                            "Priority": 101,
+                            "Status": "COMPLETE",
+                        }
+                    ]
+                },
+                "list_resolver_query_log_configs": RuntimeError("AccessDenied"),
+            }
+        )
         collector = _collector(session, ["route53_resolver", "vpc"])
         _patch_clients(monkeypatch, collector, {"route53resolver": r53r})
         assets, edges, _ = _run(collector)
-        assert _status(collector, "route53_resolver") == ServiceStatus.SUCCESS  # partial failure tolerated
+        assert (
+            _status(collector, "route53_resolver") == ServiceStatus.SUCCESS
+        )  # partial failure tolerated
         vpc_asset = _one(assets, AssetType.VPC, lambda a: a.metadata.get("vpc_id") == vpc)
         rules = [a for a in assets if a.metadata.get("resource_kind") == "resolver_rule"]
         assert len(rules) == 1 and rules[0].metadata["shared_from_other_account"]
@@ -663,16 +1063,40 @@ class TestFakeClientCollectors:
         session = boto3.Session(region_name="us-east-1")
         svc = "vpce-svc-0123456789abcdef0"
         own_ep, foreign_ep = "vpce-0aaaaaaaaaaaaaaa1", "vpce-0bbbbbbbbbbbbbbb2"
-        ec2 = _FakeClient({
-            "describe_vpc_endpoint_service_configurations": {"ServiceConfigurations": [{
-                "ServiceId": svc, "ServiceName": f"com.amazonaws.vpce.us-east-1.{svc}", "AcceptanceRequired": False,
-                "NetworkLoadBalancerArns": [], "PrivateDnsName": "svc.example.com"}]},
-            "describe_vpc_endpoint_connections": {"VpcEndpointConnections": [
-                {"ServiceId": svc, "VpcEndpointId": own_ep, "VpcEndpointOwner": ACCOUNT, "VpcEndpointState": "available"},
-                {"ServiceId": svc, "VpcEndpointId": foreign_ep, "VpcEndpointOwner": FOREIGN, "VpcEndpointState": "available"},
-            ]},
-            "describe_vpc_endpoint_service_permissions": {"AllowedPrincipals": [{"Principal": "*"}]},
-        })
+        ec2 = _FakeClient(
+            {
+                "describe_vpc_endpoint_service_configurations": {
+                    "ServiceConfigurations": [
+                        {
+                            "ServiceId": svc,
+                            "ServiceName": f"com.amazonaws.vpce.us-east-1.{svc}",
+                            "AcceptanceRequired": False,
+                            "NetworkLoadBalancerArns": [],
+                            "PrivateDnsName": "svc.example.com",
+                        }
+                    ]
+                },
+                "describe_vpc_endpoint_connections": {
+                    "VpcEndpointConnections": [
+                        {
+                            "ServiceId": svc,
+                            "VpcEndpointId": own_ep,
+                            "VpcEndpointOwner": ACCOUNT,
+                            "VpcEndpointState": "available",
+                        },
+                        {
+                            "ServiceId": svc,
+                            "VpcEndpointId": foreign_ep,
+                            "VpcEndpointOwner": FOREIGN,
+                            "VpcEndpointState": "available",
+                        },
+                    ]
+                },
+                "describe_vpc_endpoint_service_permissions": {
+                    "AllowedPrincipals": [{"Principal": "*"}]
+                },
+            }
+        )
         collector = _collector(session, ["endpoint_services"])
         _patch_clients(monkeypatch, collector, {"ec2": ec2})
         assets, edges, linker = _run(collector)
@@ -688,19 +1112,38 @@ class TestFakeClientCollectors:
         session = boto3.Session(region_name="us-east-1")
         fn = f"arn:aws:lambda:us-east-1:{ACCOUNT}:function:authz"
         rest = _FakeClient({"get_rest_apis": {"items": []}})
-        v2 = _FakeClient({
-            "get_apis": {"Items": [{"ApiId": "abcdefghij", "Name": "web", "ProtocolType": "HTTP"}]},
-            "get_authorizers": {"Items": [
-                {"AuthorizerId": "jwt1", "Name": "jwt", "AuthorizerType": "JWT",
-                 "JwtConfiguration": {"Issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Abc123", "Audience": ["c"]}},
-                {"AuthorizerId": "lam1", "Name": "lambda", "AuthorizerType": "REQUEST",
-                 "AuthorizerUri": f"arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/{fn}/invocations"},
-            ]},
-            "get_routes": {"Items": [
-                {"RouteKey": "GET /me", "AuthorizationType": "JWT", "AuthorizerId": "jwt1"},
-                {"RouteKey": "GET /public", "AuthorizationType": "NONE"},
-            ]},
-        })
+        v2 = _FakeClient(
+            {
+                "get_apis": {
+                    "Items": [{"ApiId": "abcdefghij", "Name": "web", "ProtocolType": "HTTP"}]
+                },
+                "get_authorizers": {
+                    "Items": [
+                        {
+                            "AuthorizerId": "jwt1",
+                            "Name": "jwt",
+                            "AuthorizerType": "JWT",
+                            "JwtConfiguration": {
+                                "Issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Abc123",
+                                "Audience": ["c"],
+                            },
+                        },
+                        {
+                            "AuthorizerId": "lam1",
+                            "Name": "lambda",
+                            "AuthorizerType": "REQUEST",
+                            "AuthorizerUri": f"arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/{fn}/invocations",
+                        },
+                    ]
+                },
+                "get_routes": {
+                    "Items": [
+                        {"RouteKey": "GET /me", "AuthorizationType": "JWT", "AuthorizerId": "jwt1"},
+                        {"RouteKey": "GET /public", "AuthorizationType": "NONE"},
+                    ]
+                },
+            }
+        )
         collector = _collector(session, ["apigateway_authorizers"])
         _patch_clients(monkeypatch, collector, {"apigateway": rest, "apigatewayv2": v2})
         assets = asyncio.run(collector.collect())
@@ -712,4 +1155,7 @@ class TestFakeClientCollectors:
         assert "us-east-1_Abc123" in targets  # user pool ID resolves via the pool ARN tail
         assert targets["arn:aws:apigateway:us-east-1::/apis/abcdefghij"]["reverse"]
         lam = auths["REQUEST"]
-        assert any(r["target"] == fn and r["edge"] == EdgeType.INVOKES.value for r in lam.metadata["relations"])
+        assert any(
+            r["target"] == fn and r["edge"] == EdgeType.INVOKES.value
+            for r in lam.metadata["relations"]
+        )

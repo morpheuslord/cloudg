@@ -82,8 +82,10 @@ def _rel(target, edge, relationship=None, reverse=False):
 
 def _edge(edges, src, dst, edge_type=None):
     return [
-        e for e in edges
-        if e.source_id == src.id and e.target_id == dst.id
+        e
+        for e in edges
+        if e.source_id == src.id
+        and e.target_id == dst.id
         and (edge_type is None or e.edge_type == edge_type)
     ]
 
@@ -112,12 +114,16 @@ class TestHelpers:
 
 class TestLinkerRelations:
     def test_declared_relation_and_reverse(self):
-        queue = _asset("jobs", AssetType.MESSAGE_QUEUE, arn="arn:aws:sqs:us-east-1:111111111111:jobs")
+        queue = _asset(
+            "jobs", AssetType.MESSAGE_QUEUE, arn="arn:aws:sqs:us-east-1:111111111111:jobs"
+        )
         fn = _asset(
             "worker",
             AssetType.LAMBDA_FUNCTION,
             arn="arn:aws:lambda:us-east-1:111111111111:function:worker",
-            metadata={"relations": [_rel(queue.arn, EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)]},
+            metadata={
+                "relations": [_rel(queue.arn, EdgeType.INVOKES, "TRIGGERED_BY", reverse=True)]
+            },
         )
         edges = RelationshipLinker([queue, fn]).link()
         hits = _edge(edges, queue, fn, EdgeType.INVOKES)
@@ -140,7 +146,9 @@ class TestLinkerRelations:
         assert _edge(RelationshipLinker([repo, td]).link(), td, repo, EdgeType.USES_IMAGE)
 
     def test_qualified_lambda_arn_resolves(self):
-        fn = _asset("fn", AssetType.LAMBDA_FUNCTION, arn="arn:aws:lambda:us-east-1:111111111111:function:fn")
+        fn = _asset(
+            "fn", AssetType.LAMBDA_FUNCTION, arn="arn:aws:lambda:us-east-1:111111111111:function:fn"
+        )
         rule = _asset(
             "r",
             AssetType.EVENT_RULE,
@@ -150,8 +158,18 @@ class TestLinkerRelations:
         assert _edge(RelationshipLinker([fn, rule]).link(), rule, fn, EdgeType.INVOKES)
 
     def test_ambiguous_names_resolve_within_account(self):
-        sg_a = _asset("default", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:111111111111:security-group/sg-0aaaaaaaaaaaaaaaa", account="111111111111")
-        sg_b = _asset("default", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:222222222222:security-group/sg-0bbbbbbbbbbbbbbbb", account="222222222222")
+        sg_a = _asset(
+            "default",
+            AssetType.SECURITY_GROUP,
+            arn="arn:aws:ec2:us-east-1:111111111111:security-group/sg-0aaaaaaaaaaaaaaaa",
+            account="111111111111",
+        )
+        sg_b = _asset(
+            "default",
+            AssetType.SECURITY_GROUP,
+            arn="arn:aws:ec2:us-east-1:222222222222:security-group/sg-0bbbbbbbbbbbbbbbb",
+            account="222222222222",
+        )
         stack = _asset(
             "stack",
             AssetType.IAC_STACK,
@@ -164,8 +182,18 @@ class TestLinkerRelations:
         assert not _edge(edges, stack, sg_a)
 
     def test_ambiguous_names_across_foreign_accounts_are_not_guessed(self):
-        sg_a = _asset("default", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:111111111111:security-group/sg-0aaaaaaaaaaaaaaaa", account="111111111111")
-        sg_b = _asset("default", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:222222222222:security-group/sg-0bbbbbbbbbbbbbbbb", account="222222222222")
+        sg_a = _asset(
+            "default",
+            AssetType.SECURITY_GROUP,
+            arn="arn:aws:ec2:us-east-1:111111111111:security-group/sg-0aaaaaaaaaaaaaaaa",
+            account="111111111111",
+        )
+        sg_b = _asset(
+            "default",
+            AssetType.SECURITY_GROUP,
+            arn="arn:aws:ec2:us-east-1:222222222222:security-group/sg-0bbbbbbbbbbbbbbbb",
+            account="222222222222",
+        )
         other = _asset(
             "x",
             AssetType.IAC_STACK,
@@ -184,7 +212,16 @@ class TestLinkerRelations:
             AssetType.IAM_ROLE,
             arn="arn:aws:iam::111111111111:role/deploy",
             region="global",
-            metadata={"relations": [_rel("arn:aws:iam::999999999999:root", EdgeType.IAM_TRUST, "CROSS_ACCOUNT_TRUST", reverse=True)]},
+            metadata={
+                "relations": [
+                    _rel(
+                        "arn:aws:iam::999999999999:root",
+                        EdgeType.IAM_TRUST,
+                        "CROSS_ACCOUNT_TRUST",
+                        reverse=True,
+                    )
+                ]
+            },
         )
         linker = RelationshipLinker([role])
         edges = linker.link()
@@ -195,8 +232,14 @@ class TestLinkerRelations:
         assert trust and trust[0].relationship == "CROSS_ACCOUNT_TRUST"
 
     def test_cross_account_trust_resolves_to_known_account(self):
-        account = _asset("prod", AssetType.CLOUD_ACCOUNT, arn="arn:aws:iam::999999999999:root",
-                         account="999999999999", region="global", metadata={"account_id": "999999999999"})
+        account = _asset(
+            "prod",
+            AssetType.CLOUD_ACCOUNT,
+            arn="arn:aws:iam::999999999999:root",
+            account="999999999999",
+            region="global",
+            metadata={"account_id": "999999999999"},
+        )
         role = _asset(
             "deploy",
             AssetType.IAM_ROLE,
@@ -214,7 +257,11 @@ class TestLinkerRelations:
             "fn",
             AssetType.LAMBDA_FUNCTION,
             arn="arn:aws:lambda:us-east-1:111111111111:function:fn",
-            metadata={"relations": [_rel("arn:aws:sqs:us-east-1:111111111111:deleted", EdgeType.REFERENCES)]},
+            metadata={
+                "relations": [
+                    _rel("arn:aws:sqs:us-east-1:111111111111:deleted", EdgeType.REFERENCES)
+                ]
+            },
         )
         linker = RelationshipLinker([fn])
         assert linker.link() == []
@@ -233,10 +280,27 @@ class TestLinkerRelations:
         assert len(edges) == 1 and edges[0].edge_type == EdgeType.INVOKES
 
     def test_dns_alias_resolves_load_balancer(self):
-        lb = _asset("alb", AssetType.LOAD_BALANCER, arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/alb/1",
-                    metadata={"dns_name": "alb-1.us-east-1.elb.amazonaws.com"})
-        rec = _asset("www.example.com", AssetType.DNS_RECORD, arn="arn:aws:route53:::hostedzone/Z/A/www.example.com", region="global",
-                     metadata={"relations": [_rel("dualstack.ALB-1.us-east-1.elb.amazonaws.com.", EdgeType.ROUTE, "DNS_RESOLVED")]})
+        lb = _asset(
+            "alb",
+            AssetType.LOAD_BALANCER,
+            arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/alb/1",
+            metadata={"dns_name": "alb-1.us-east-1.elb.amazonaws.com"},
+        )
+        rec = _asset(
+            "www.example.com",
+            AssetType.DNS_RECORD,
+            arn="arn:aws:route53:::hostedzone/Z/A/www.example.com",
+            region="global",
+            metadata={
+                "relations": [
+                    _rel(
+                        "dualstack.ALB-1.us-east-1.elb.amazonaws.com.",
+                        EdgeType.ROUTE,
+                        "DNS_RESOLVED",
+                    )
+                ]
+            },
+        )
         assert _edge(RelationshipLinker([lb, rec]).link(), rec, lb, EdgeType.ROUTE)
 
 
@@ -245,12 +309,24 @@ class TestLinkerRelations:
 
 class TestMapperHelpers:
     def test_deduplicate_merges_relations_and_remaps_edges(self):
-        sweep = _asset("t", AssetType.NOTIFICATION_TOPIC, arn="arn:aws:sns:us-east-1:1:t",
-                       metadata={"discovered_via": "tagging-api"})
-        rich = _asset("t", AssetType.NOTIFICATION_TOPIC, arn="arn:aws:sns:us-east-1:1:t",
-                      metadata={"relations": [{"target": "x", "edge": "INVOKES"}]})
-        dup = _asset("t", AssetType.NOTIFICATION_TOPIC, arn="arn:aws:sns:us-east-1:1:t",
-                     metadata={"relations": [{"target": "y", "edge": "INVOKES"}]})
+        sweep = _asset(
+            "t",
+            AssetType.NOTIFICATION_TOPIC,
+            arn="arn:aws:sns:us-east-1:1:t",
+            metadata={"discovered_via": "tagging-api"},
+        )
+        rich = _asset(
+            "t",
+            AssetType.NOTIFICATION_TOPIC,
+            arn="arn:aws:sns:us-east-1:1:t",
+            metadata={"relations": [{"target": "x", "edge": "INVOKES"}]},
+        )
+        dup = _asset(
+            "t",
+            AssetType.NOTIFICATION_TOPIC,
+            arn="arn:aws:sns:us-east-1:1:t",
+            metadata={"relations": [{"target": "y", "edge": "INVOKES"}]},
+        )
         other = _asset("o", AssetType.MESSAGE_QUEUE, arn="arn:aws:sqs:us-east-1:1:o")
         edges = [NetworkEdge(source_id=dup.id, target_id=other.id, edge_type=EdgeType.INVOKES)]
         assets, new_edges = deduplicate([sweep, rich, dup, other], edges)
@@ -262,7 +338,9 @@ class TestMapperHelpers:
 
     def test_account_hierarchy_contains_only_top_level(self):
         vpc = _asset("vpc", AssetType.VPC, arn="arn:aws:ec2:us-east-1:111111111111:vpc/vpc-1")
-        subnet = _asset("sn", AssetType.SUBNET, arn="arn:aws:ec2:us-east-1:111111111111:subnet/subnet-1")
+        subnet = _asset(
+            "sn", AssetType.SUBNET, arn="arn:aws:ec2:us-east-1:111111111111:subnet/subnet-1"
+        )
         edges = [NetworkEdge(source_id=vpc.id, target_id=subnet.id, edge_type=EdgeType.CONTAINS)]
         assets, edges = add_account_hierarchy([vpc, subnet], edges)
         account = next(a for a in assets if a.asset_type == AssetType.CLOUD_ACCOUNT)
@@ -283,18 +361,40 @@ class TestMapperHelpers:
 
 def _dependency_fixture():
     key = _asset("key", AssetType.KMS_KEY, arn="arn:aws:kms:us-east-1:111111111111:key/k")
-    role = _asset("role", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/r", region="global")
+    role = _asset(
+        "role", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/r", region="global"
+    )
     queue = _asset("queue", AssetType.MESSAGE_QUEUE, arn="arn:aws:sqs:us-east-1:111111111111:q")
-    fn = _asset("fn", AssetType.LAMBDA_FUNCTION, arn="arn:aws:lambda:us-east-1:111111111111:function:fn")
-    table = _asset("table", AssetType.DYNAMODB_TABLE, arn="arn:aws:dynamodb:us-east-1:111111111111:table/t")
-    alb = _asset("alb", AssetType.LOAD_BALANCER, arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/a/1")
+    fn = _asset(
+        "fn", AssetType.LAMBDA_FUNCTION, arn="arn:aws:lambda:us-east-1:111111111111:function:fn"
+    )
+    table = _asset(
+        "table", AssetType.DYNAMODB_TABLE, arn="arn:aws:dynamodb:us-east-1:111111111111:table/t"
+    )
+    alb = _asset(
+        "alb",
+        AssetType.LOAD_BALANCER,
+        arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/a/1",
+    )
     alb.is_internet_exposed = True
-    waf = _asset("waf", AssetType.WAF_WEB_ACL, arn="arn:aws:wafv2:us-east-1:111111111111:regional/webacl/w/1")
+    waf = _asset(
+        "waf", AssetType.WAF_WEB_ACL, arn="arn:aws:wafv2:us-east-1:111111111111:regional/webacl/w/1"
+    )
     edges = [
         NetworkEdge(source_id=fn.id, target_id=role.id, edge_type=EdgeType.ASSUMES_ROLE),
         NetworkEdge(source_id=queue.id, target_id=fn.id, edge_type=EdgeType.INVOKES),
-        NetworkEdge(source_id=queue.id, target_id=key.id, edge_type=EdgeType.REFERENCES, relationship="ENCRYPTED_BY_KMS"),
-        NetworkEdge(source_id=table.id, target_id=key.id, edge_type=EdgeType.REFERENCES, relationship="ENCRYPTED_BY_KMS"),
+        NetworkEdge(
+            source_id=queue.id,
+            target_id=key.id,
+            edge_type=EdgeType.REFERENCES,
+            relationship="ENCRYPTED_BY_KMS",
+        ),
+        NetworkEdge(
+            source_id=table.id,
+            target_id=key.id,
+            edge_type=EdgeType.REFERENCES,
+            relationship="ENCRYPTED_BY_KMS",
+        ),
         NetworkEdge(source_id=role.id, target_id=table.id, edge_type=EdgeType.GRANTS_ACCESS),
         NetworkEdge(source_id=waf.id, target_id=alb.id, edge_type=EdgeType.PROTECTS),
     ]
@@ -338,13 +438,27 @@ class TestDependencies:
 
     def test_security_coverage(self):
         assets, edges = _dependency_fixture()
-        detector = _asset("gd", AssetType.THREAT_DETECTOR, arn="cloudg:aws:guardduty:us-east-1:111111111111:not-enabled",
-                          metadata={"security_service": "guardduty", "enabled": False})
-        scanner = _asset("inspector", AssetType.VULNERABILITY_SCANNER, arn="arn:aws:inspector2:us-east-1:111111111111:scanner",
-                         metadata={"security_service": "inspector2", "enabled": True})
+        detector = _asset(
+            "gd",
+            AssetType.THREAT_DETECTOR,
+            arn="cloudg:aws:guardduty:us-east-1:111111111111:not-enabled",
+            metadata={"security_service": "guardduty", "enabled": False},
+        )
+        scanner = _asset(
+            "inspector",
+            AssetType.VULNERABILITY_SCANNER,
+            arn="arn:aws:inspector2:us-east-1:111111111111:scanner",
+            metadata={"security_service": "inspector2", "enabled": True},
+        )
         fn = next(a for a in assets if a.name == "fn")
-        edges = edges + [NetworkEdge(source_id=scanner.id, target_id=fn.id, edge_type=EdgeType.MONITORS)]
-        alb2 = _asset("alb2", AssetType.LOAD_BALANCER, arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/b/2")
+        edges = edges + [
+            NetworkEdge(source_id=scanner.id, target_id=fn.id, edge_type=EdgeType.MONITORS)
+        ]
+        alb2 = _asset(
+            "alb2",
+            AssetType.LOAD_BALANCER,
+            arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/app/b/2",
+        )
         alb2.is_internet_exposed = True
         cov = security_coverage(assets + [detector, scanner, alb2], edges)
         assert cov["gaps"] == ["111111111111/us-east-1: guardduty"]
@@ -352,11 +466,16 @@ class TestDependencies:
         assert [u["name"] for u in cov["internet_facing_without_waf"]] == ["alb2"]
 
     def test_cross_account_edges(self):
-        a = _asset("a", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/a", account="111111111111")
+        a = _asset(
+            "a", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/a", account="111111111111"
+        )
         b = _asset("b", AssetType.S3_BUCKET, arn="arn:aws:s3:::b", account="222222222222")
         edges = [NetworkEdge(source_id=a.id, target_id=b.id, edge_type=EdgeType.GRANTS_ACCESS)]
         out = cross_account_edges([a, b], edges)
-        assert out[0]["source_account"] == "111111111111" and out[0]["target_account"] == "222222222222"
+        assert (
+            out[0]["source_account"] == "111111111111"
+            and out[0]["target_account"] == "222222222222"
+        )
 
 
 # ── Kubernetes ──
@@ -378,8 +497,15 @@ class TestKubernetes:
         return {
             "/api/v1/namespaces": [{"metadata": {"name": "shop"}, "status": {"phase": "Active"}}],
             "/api/v1/serviceaccounts": [
-                {"metadata": {"name": "api", "namespace": "shop",
-                              "annotations": {"eks.amazonaws.com/role-arn": "arn:aws:iam::111111111111:role/api"}}}
+                {
+                    "metadata": {
+                        "name": "api",
+                        "namespace": "shop",
+                        "annotations": {
+                            "eks.amazonaws.com/role-arn": "arn:aws:iam::111111111111:role/api"
+                        },
+                    }
+                }
             ],
             "/apis/apps/v1/deployments": [
                 {
@@ -388,7 +514,10 @@ class TestKubernetes:
                         "replicas": 3,
                         "template": {
                             "metadata": {"labels": {"app": "api"}},
-                            "spec": {"serviceAccountName": "api", "containers": [{"name": "api", "image": image}]},
+                            "spec": {
+                                "serviceAccountName": "api",
+                                "containers": [{"name": "api", "image": image}],
+                            },
                         },
                     },
                 }
@@ -396,30 +525,62 @@ class TestKubernetes:
             "/api/v1/services": [
                 {
                     "metadata": {"name": "api", "namespace": "shop"},
-                    "spec": {"type": "LoadBalancer", "selector": {"app": "api"}, "ports": [{"port": 443}]},
-                    "status": {"loadBalancer": {"ingress": [{"hostname": "abc.elb.us-east-1.amazonaws.com"}]}},
+                    "spec": {
+                        "type": "LoadBalancer",
+                        "selector": {"app": "api"},
+                        "ports": [{"port": 443}],
+                    },
+                    "status": {
+                        "loadBalancer": {
+                            "ingress": [{"hostname": "abc.elb.us-east-1.amazonaws.com"}]
+                        }
+                    },
                 }
             ],
             "/apis/networking.k8s.io/v1/ingresses": [
                 {
                     "metadata": {"name": "web", "namespace": "shop"},
-                    "spec": {"rules": [{"host": "shop.example.com", "http": {"paths": [{"backend": {"service": {"name": "api"}}}]}}]},
+                    "spec": {
+                        "rules": [
+                            {
+                                "host": "shop.example.com",
+                                "http": {"paths": [{"backend": {"service": {"name": "api"}}}]},
+                            }
+                        ]
+                    },
                 }
             ],
         }
 
     def test_map_cluster_objects_links_everything(self):
-        k8s = map_cluster_objects(_FakeReader(self._objects()), self.CLUSTER, "us-east-1", "111111111111")
+        k8s = map_cluster_objects(
+            _FakeReader(self._objects()), self.CLUSTER, "us-east-1", "111111111111"
+        )
         types = {a.asset_type for a in k8s}
-        assert {AssetType.K8S_NAMESPACE, AssetType.K8S_SERVICE_ACCOUNT, AssetType.K8S_WORKLOAD,
-                AssetType.K8S_SERVICE, AssetType.K8S_INGRESS} <= types
+        assert {
+            AssetType.K8S_NAMESPACE,
+            AssetType.K8S_SERVICE_ACCOUNT,
+            AssetType.K8S_WORKLOAD,
+            AssetType.K8S_SERVICE,
+            AssetType.K8S_INGRESS,
+        } <= types
 
         cluster = _asset("prod", AssetType.EKS_CLUSTER, arn=self.CLUSTER)
-        role = _asset("api", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/api", region="global")
-        repo = _asset("api", AssetType.CONTAINER_REGISTRY, arn="arn:aws:ecr:us-east-1:111111111111:repository/api",
-                      metadata={"repository_uri": "111111111111.dkr.ecr.us-east-1.amazonaws.com/api"})
-        lb = _asset("k8s-lb", AssetType.LOAD_BALANCER, arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/net/k/1",
-                    metadata={"dns_name": "abc.elb.us-east-1.amazonaws.com"})
+        role = _asset(
+            "api", AssetType.IAM_ROLE, arn="arn:aws:iam::111111111111:role/api", region="global"
+        )
+        repo = _asset(
+            "api",
+            AssetType.CONTAINER_REGISTRY,
+            arn="arn:aws:ecr:us-east-1:111111111111:repository/api",
+            metadata={"repository_uri": "111111111111.dkr.ecr.us-east-1.amazonaws.com/api"},
+        )
+        lb = _asset(
+            "k8s-lb",
+            AssetType.LOAD_BALANCER,
+            arn="arn:aws:elasticloadbalancing:us-east-1:111111111111:loadbalancer/net/k/1",
+            metadata={"dns_name": "abc.elb.us-east-1.amazonaws.com"},
+        )
         assets = k8s + [cluster, role, repo, lb]
         edges = RelationshipLinker(assets).link()
 
@@ -445,7 +606,7 @@ class TestKubernetes:
         assert token.startswith("k8s-aws-v1.")
         import base64
 
-        payload = token[len("k8s-aws-v1."):]
+        payload = token[len("k8s-aws-v1.") :]
         url = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode()
         assert "Action=GetCallerIdentity" in url and "x-k8s-aws-id" in url.lower()
 
@@ -467,23 +628,46 @@ class TestDeepServiceCollectors:
         trust = {
             "Version": "2012-10-17",
             "Statement": [
-                {"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"},
-                {"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::999999999999:root"}, "Action": "sts:AssumeRole"},
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "lambda.amazonaws.com"},
+                    "Action": "sts:AssumeRole",
+                },
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": "arn:aws:iam::999999999999:root"},
+                    "Action": "sts:AssumeRole",
+                },
             ],
         }
-        role = iam.create_role(RoleName="app", AssumeRolePolicyDocument=json.dumps(trust))["Role"]["Arn"]
+        role = iam.create_role(RoleName="app", AssumeRolePolicyDocument=json.dumps(trust))["Role"][
+            "Arn"
+        ]
         sqs = session.client("sqs")
         queue_url = sqs.create_queue(QueueName="jobs")["QueueUrl"]
-        queue = sqs.get_queue_attributes(QueueUrl=queue_url, AttributeNames=["QueueArn"])["Attributes"]["QueueArn"]
+        queue = sqs.get_queue_attributes(QueueUrl=queue_url, AttributeNames=["QueueArn"])[
+            "Attributes"
+        ]["QueueArn"]
         iam.put_role_policy(
             RoleName="app",
             PolicyName="q",
-            PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
-                {"Effect": "Allow", "Action": "sqs:ReceiveMessage", "Resource": queue}]}),
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {"Effect": "Allow", "Action": "sqs:ReceiveMessage", "Resource": queue}
+                    ],
+                }
+            ),
         )
         lam = session.client("lambda")
-        fn = lam.create_function(FunctionName="worker", Runtime="python3.12", Role=role, Handler="h.h",
-                                 Code={"ZipFile": _lambda_zip()})["FunctionArn"]
+        fn = lam.create_function(
+            FunctionName="worker",
+            Runtime="python3.12",
+            Role=role,
+            Handler="h.h",
+            Code={"ZipFile": _lambda_zip()},
+        )["FunctionArn"]
         lam.create_event_source_mapping(EventSourceArn=queue, FunctionName="worker")
         sns = session.client("sns")
         topic = sns.create_topic(Name="alerts")["TopicArn"]
@@ -493,7 +677,9 @@ class TestDeepServiceCollectors:
         ecs.create_cluster(clusterName="prod")
         td = ecs.register_task_definition(
             family="api",
-            containerDefinitions=[{"name": "api", "image": repo["repositoryUri"] + ":1.0", "memory": 256}],
+            containerDefinitions=[
+                {"name": "api", "image": repo["repositoryUri"] + ":1.0", "memory": 256}
+            ],
             taskRoleArn=role,
         )["taskDefinition"]["taskDefinitionArn"]
         ecs.create_service(cluster="prod", serviceName="api", taskDefinition=td, desiredCount=1)
@@ -504,10 +690,19 @@ class TestDeepServiceCollectors:
         s3.create_bucket(Bucket="uploads")
         s3.put_bucket_notification_configuration(
             Bucket="uploads",
-            NotificationConfiguration={"QueueConfigurations": [{"QueueArn": queue, "Events": ["s3:ObjectCreated:*"]}]},
+            NotificationConfiguration={
+                "QueueConfigurations": [{"QueueArn": queue, "Events": ["s3:ObjectCreated:*"]}]
+            },
         )
         session.client("guardduty").create_detector(Enable=True)
-        return {"role": role, "queue": queue, "fn": fn, "topic": topic, "repo": repo["repositoryArn"], "td": td}
+        return {
+            "role": role,
+            "queue": queue,
+            "fn": fn,
+            "topic": topic,
+            "repo": repo["repositoryArn"],
+            "td": td,
+        }
 
     def _collect(self, session, **kwargs):
         collector = AWSDeepInventoryCollector(
@@ -522,9 +717,15 @@ class TestDeepServiceCollectors:
         by_arn = {a.arn: a for a in assets}
         types = {a.asset_type for a in assets}
         for expected in (
-            AssetType.CONTAINER_REGISTRY, AssetType.CONTAINER_SERVICE, AssetType.TASK_DEFINITION,
-            AssetType.MESSAGE_QUEUE, AssetType.NOTIFICATION_TOPIC, AssetType.EVENT_RULE,
-            AssetType.THREAT_DETECTOR, AssetType.LAMBDA_FUNCTION, AssetType.IAM_ROLE,
+            AssetType.CONTAINER_REGISTRY,
+            AssetType.CONTAINER_SERVICE,
+            AssetType.TASK_DEFINITION,
+            AssetType.MESSAGE_QUEUE,
+            AssetType.NOTIFICATION_TOPIC,
+            AssetType.EVENT_RULE,
+            AssetType.THREAT_DETECTOR,
+            AssetType.LAMBDA_FUNCTION,
+            AssetType.IAM_ROLE,
         ):
             assert expected in types, expected
 
@@ -568,7 +769,9 @@ class TestDeepServiceCollectors:
         assert {"ecr", "ecs", "eks"} <= ran
         assert all(SERVICE_FAMILIES.get(name) == "containers" for name in ran)
         assert {a.asset_type for a in assets} <= {
-            AssetType.CONTAINER_REGISTRY, AssetType.CONTAINER_SERVICE, AssetType.TASK_DEFINITION,
+            AssetType.CONTAINER_REGISTRY,
+            AssetType.CONTAINER_SERVICE,
+            AssetType.TASK_DEFINITION,
             AssetType.ECS_CLUSTER,
         }
 
@@ -579,9 +782,15 @@ class TestDeepServiceCollectors:
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
         subnet = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24")["Subnet"]["SubnetId"]
         eks = session.client("eks")
-        eks.create_cluster(name="k", roleArn=ids["role"], resourcesVpcConfig={"subnetIds": [subnet]})
-        eks.create_nodegroup(clusterName="k", nodegroupName="ng", subnets=[subnet], nodeRole=ids["role"])
-        assets, _ = self._collect(session, services=["containers", "network", "identity"], tagging_sweep=False)
+        eks.create_cluster(
+            name="k", roleArn=ids["role"], resourcesVpcConfig={"subnetIds": [subnet]}
+        )
+        eks.create_nodegroup(
+            clusterName="k", nodegroupName="ng", subnets=[subnet], nodeRole=ids["role"]
+        )
+        assets, _ = self._collect(
+            session, services=["containers", "network", "identity"], tagging_sweep=False
+        )
         cluster = next(a for a in assets if a.asset_type == AssetType.EKS_CLUSTER)
         ng = next(a for a in assets if a.asset_type == AssetType.NODE_GROUP)
         sn = next(a for a in assets if a.metadata.get("subnet_id") == subnet)
@@ -602,7 +811,11 @@ class _FakeControlTower:
 
     def get_paginator(self, op):
         data = {
-            "list_landing_zones": {"landingZones": [{"arn": "arn:aws:controltower:us-east-1:123456789012:landingzone/LZ"}]},
+            "list_landing_zones": {
+                "landingZones": [
+                    {"arn": "arn:aws:controltower:us-east-1:123456789012:landingzone/LZ"}
+                ]
+            },
             "list_enabled_controls": {"enabledControls": self._controls},
             "list_enabled_baselines": {"enabledBaselines": []},
         }[op]
@@ -614,8 +827,14 @@ class _FakeControlTower:
         return _P()
 
     def get_landing_zone(self, landingZoneIdentifier):
-        return {"landingZone": {"arn": landingZoneIdentifier, "version": "3.3", "status": "ACTIVE",
-                                "manifest": self._manifest}}
+        return {
+            "landingZone": {
+                "arn": landingZoneIdentifier,
+                "version": "3.3",
+                "status": "ACTIVE",
+                "manifest": self._manifest,
+            }
+        }
 
 
 class _SessionWithCT:
@@ -632,14 +851,18 @@ class _SessionWithCT:
 
 class TestOrganization:
     def test_parse_manifest_v3_and_v4(self):
-        v3 = {"governedRegions": ["us-east-1", "eu-west-1"],
-              "centralizedLogging": {"accountId": "222222222222"},
-              "securityRoles": {"accountId": "333333333333"}}
+        v3 = {
+            "governedRegions": ["us-east-1", "eu-west-1"],
+            "centralizedLogging": {"accountId": "222222222222"},
+            "securityRoles": {"accountId": "333333333333"},
+        }
         regions, shared = _parse_manifest(v3)
         assert regions == ["us-east-1", "eu-west-1"]
         assert shared == {"log_archive": "222222222222", "audit": "333333333333"}
-        v4 = {"config": {"accountId": "444444444444", "enabled": True},
-              "backup": {"configurations": {"backupAdmin": {"accountId": "555555555555"}}}}
+        v4 = {
+            "config": {"accountId": "444444444444", "enabled": True},
+            "backup": {"configurations": {"backupAdmin": {"accountId": "555555555555"}}},
+        }
         _, shared4 = _parse_manifest(v4)
         assert shared4 == {"config_aggregator": "444444444444", "backup_admin": "555555555555"}
 
@@ -647,22 +870,44 @@ class TestOrganization:
         org = session.client("organizations")
         org.create_organization(FeatureSet="ALL")
         root = org.list_roots()["Roots"][0]["Id"]
-        workloads = org.create_organizational_unit(ParentId=root, Name="Workloads")["OrganizationalUnit"]["Id"]
-        prod = org.create_organizational_unit(ParentId=workloads, Name="Prod")["OrganizationalUnit"]["Id"]
-        security = org.create_organizational_unit(ParentId=root, Name="Security")["OrganizationalUnit"]["Id"]
+        workloads = org.create_organizational_unit(ParentId=root, Name="Workloads")[
+            "OrganizationalUnit"
+        ]["Id"]
+        prod = org.create_organizational_unit(ParentId=workloads, Name="Prod")[
+            "OrganizationalUnit"
+        ]["Id"]
+        security = org.create_organizational_unit(ParentId=root, Name="Security")[
+            "OrganizationalUnit"
+        ]["Id"]
 
         def account(name, parent):
-            acct_id = org.create_account(AccountName=name, Email=f"{name}@example.com")["CreateAccountStatus"]["AccountId"]
+            acct_id = org.create_account(AccountName=name, Email=f"{name}@example.com")[
+                "CreateAccountStatus"
+            ]["AccountId"]
             org.move_account(AccountId=acct_id, SourceParentId=root, DestinationParentId=parent)
             return acct_id
 
-        ids = {"prod": account("prod", prod), "audit": account("audit", security), "dev": account("dev", workloads)}
+        ids = {
+            "prod": account("prod", prod),
+            "audit": account("audit", security),
+            "dev": account("dev", workloads),
+        }
         scp = org.create_policy(
             Name="deny-leave",
             Description="d",
             Type="SERVICE_CONTROL_POLICY",
-            Content=json.dumps({"Version": "2012-10-17", "Statement": [
-                {"Effect": "Deny", "Action": "organizations:LeaveOrganization", "Resource": "*"}]}),
+            Content=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Deny",
+                            "Action": "organizations:LeaveOrganization",
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
         )["Policy"]["PolicySummary"]["Id"]
         org.attach_policy(PolicyId=scp, TargetId=workloads)
         return {"root": root, "workloads": workloads, "prod_ou": prod, "security": security, **ids}
@@ -688,13 +933,19 @@ class TestOrganization:
     def test_topology_assets_link_into_a_tree(self, aws_credentials):
         session = boto3.Session(region_name="us-east-1")
         ids = self._build_org(session)
-        controls = [{"arn": "arn:aws:controltower:us-east-1:123456789012:enabledcontrol/C1",
-                     "controlIdentifier": "arn:aws:controlcatalog:::control/abc",
-                     "targetIdentifier": f"arn:aws:organizations::{ACCOUNT}:ou/o-x/{ids['workloads']}",
-                     "statusSummary": {"status": "SUCCEEDED"}}]
-        manifest = {"governedRegions": ["us-east-1", "eu-west-1"],
-                    "centralizedLogging": {"accountId": ids["audit"]},
-                    "securityRoles": {"accountId": ids["audit"]}}
+        controls = [
+            {
+                "arn": "arn:aws:controltower:us-east-1:123456789012:enabledcontrol/C1",
+                "controlIdentifier": "arn:aws:controlcatalog:::control/abc",
+                "targetIdentifier": f"arn:aws:organizations::{ACCOUNT}:ou/o-x/{ids['workloads']}",
+                "statusSummary": {"status": "SUCCEEDED"},
+            }
+        ]
+        manifest = {
+            "governedRegions": ["us-east-1", "eu-west-1"],
+            "centralizedLogging": {"accountId": ids["audit"]},
+            "securityRoles": {"accountId": ids["audit"]},
+        }
         topo = discover_organization(session, control_tower=False)
         discover_control_tower(_SessionWithCT(session, _FakeControlTower(manifest, controls)), topo)
         assert topo.control_tower_enabled
@@ -711,7 +962,9 @@ class TestOrganization:
         prod_account = by_arn[f"arn:aws:iam::{ids['prod']}:root"]
         prod_ou = next(a for a in assets if a.metadata.get("ou_id") == ids["prod_ou"])
         workloads_ou = next(a for a in assets if a.metadata.get("ou_id") == ids["workloads"])
-        scp = next(a for a in assets if a.asset_type == AssetType.ORG_POLICY and a.name == "deny-leave")
+        scp = next(
+            a for a in assets if a.asset_type == AssetType.ORG_POLICY and a.name == "deny-leave"
+        )
         control = next(a for a in assets if a.asset_type == AssetType.GUARDRAIL)
         lz = next(a for a in assets if a.asset_type == AssetType.LANDING_ZONE)
 
@@ -741,14 +994,19 @@ class TestOrganizationMapping:
         org = session.client("organizations")
         org.create_organization(FeatureSet="ALL")
         root = org.list_roots()["Roots"][0]["Id"]
-        ou = org.create_organizational_unit(ParentId=root, Name="Workloads")["OrganizationalUnit"]["Id"]
-        member = org.create_account(AccountName="prod", Email="p@example.com")["CreateAccountStatus"]["AccountId"]
+        ou = org.create_organizational_unit(ParentId=root, Name="Workloads")["OrganizationalUnit"][
+            "Id"
+        ]
+        member = org.create_account(AccountName="prod", Email="p@example.com")[
+            "CreateAccountStatus"
+        ]["AccountId"]
         org.move_account(AccountId=member, SourceParentId=root, DestinationParentId=ou)
 
         # One VPC in the management account, one in the member account
         session.client("ec2").create_vpc(CidrBlock="10.1.0.0/16")
         creds = session.client("sts").assume_role(
-            RoleArn=f"arn:aws:iam::{member}:role/AWSControlTowerExecution", RoleSessionName="test-setup"
+            RoleArn=f"arn:aws:iam::{member}:role/AWSControlTowerExecution",
+            RoleSessionName="test-setup",
         )["Credentials"]
         member_session = boto3.Session(
             aws_access_key_id=creds["AccessKeyId"],
@@ -756,7 +1014,9 @@ class TestOrganizationMapping:
             aws_session_token=creds["SessionToken"],
             region_name="us-east-1",
         )
-        member_vpc = member_session.client("ec2").create_vpc(CidrBlock="10.2.0.0/16")["Vpc"]["VpcId"]
+        member_vpc = member_session.client("ec2").create_vpc(CidrBlock="10.2.0.0/16")["Vpc"][
+            "VpcId"
+        ]
 
         cfg = CloudGConfig(providers=["aws"])
         cfg.aws.regions = ["us-east-1"]
@@ -773,7 +1033,9 @@ class TestOrganizationMapping:
         assert cfg.aws.accounts == []  # caller's config is not mutated
 
         member_account = next(
-            a for a in result.assets if a.asset_type == AssetType.CLOUD_ACCOUNT and a.account_id == member
+            a
+            for a in result.assets
+            if a.asset_type == AssetType.CLOUD_ACCOUNT and a.account_id == member
         )
         ou_node = next(a for a in result.assets if a.metadata.get("ou_id") == ou)
         vpc_node = next(a for a in result.assets if a.metadata.get("vpc_id") == member_vpc)
@@ -804,7 +1066,9 @@ class TestExportAndCli:
 
         self._result().export(tmp_path)
         runner = CliRunner()
-        out = runner.invoke(cli, ["deps", "fn", "--map", str(tmp_path), "--json", "--direction", "up"])
+        out = runner.invoke(
+            cli, ["deps", "fn", "--map", str(tmp_path), "--json", "--direction", "up"]
+        )
         assert out.exit_code == 0, out.output
         assert '"depends_on"' in out.output and "queue" in out.output
         overview = runner.invoke(cli, ["deps", "--map", str(tmp_path)])
@@ -824,7 +1088,9 @@ class TestExportAndCli:
 def test_ontology_uses_declared_relationship():
     from cloudg.graph.ontology import RelationType, infer_relations
 
-    edge = NetworkEdge(source_id="a", target_id="b", edge_type=EdgeType.REFERENCES, relationship="ENCRYPTED_BY_KMS")
+    edge = NetworkEdge(
+        source_id="a", target_id="b", edge_type=EdgeType.REFERENCES, relationship="ENCRYPTED_BY_KMS"
+    )
     assert infer_relations(edge, {})[0] == RelationType.ENCRYPTED_BY_KMS
     typed = NetworkEdge(source_id="a", target_id="b", edge_type=EdgeType.INVOKES)
     assert infer_relations(typed, {}) == [RelationType.INVOKES]
@@ -836,23 +1102,49 @@ class TestCrossProviderExternalAccounts:
         sub_b = "22222222-2222-2222-2222-222222222222"
         vnet = CloudAsset(
             arn=f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/spoke",
-            name="spoke", asset_type=AssetType.VNET, provider=CloudProvider.AZURE, account_id=sub_a,
-            metadata={"relations": [_rel(
-                f"/subscriptions/{sub_b}/resourceGroups/hub/providers/Microsoft.Network/virtualNetworks/hub",
-                EdgeType.PEERING, "VPC_PEERED")]},
+            name="spoke",
+            asset_type=AssetType.VNET,
+            provider=CloudProvider.AZURE,
+            account_id=sub_a,
+            metadata={
+                "relations": [
+                    _rel(
+                        f"/subscriptions/{sub_b}/resourceGroups/hub/providers/Microsoft.Network/virtualNetworks/hub",
+                        EdgeType.PEERING,
+                        "VPC_PEERED",
+                    )
+                ]
+            },
         )
         net = CloudAsset(
             arn="//compute.googleapis.com/projects/svc/global/networks/n",
-            name="n", asset_type=AssetType.VPC, provider=CloudProvider.GCP, account_id="svc",
-            metadata={"relations": [_rel(
-                "//compute.googleapis.com/projects/host/regions/r/subnetworks/shared", EdgeType.REFERENCES)]},
+            name="n",
+            asset_type=AssetType.VPC,
+            provider=CloudProvider.GCP,
+            account_id="svc",
+            metadata={
+                "relations": [
+                    _rel(
+                        "//compute.googleapis.com/projects/host/regions/r/subnetworks/shared",
+                        EdgeType.REFERENCES,
+                    )
+                ]
+            },
         )
         same_sub = CloudAsset(
             arn=f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/s",
-            name="s", asset_type=AssetType.BLOB_STORAGE, provider=CloudProvider.AZURE, account_id=sub_a,
-            metadata={"relations": [_rel(
-                f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/gone",
-                EdgeType.REFERENCES)]},
+            name="s",
+            asset_type=AssetType.BLOB_STORAGE,
+            provider=CloudProvider.AZURE,
+            account_id=sub_a,
+            metadata={
+                "relations": [
+                    _rel(
+                        f"/subscriptions/{sub_a}/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/gone",
+                        EdgeType.REFERENCES,
+                    )
+                ]
+            },
         )
         linker = RelationshipLinker([vnet, net, same_sub])
         edges = linker.link()
@@ -876,15 +1168,30 @@ def test_every_asset_type_has_an_owl_class():
 
 
 def test_permission_set_links_only_its_own_provisioned_roles():
-    ps = _asset("Admin", AssetType.PERMISSION_SET, arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1", region="global",
-                metadata={"provisioned_role_prefix": "AWSReservedSSO_Admin_"})
+    ps = _asset(
+        "Admin",
+        AssetType.PERMISSION_SET,
+        arn="arn:aws:sso:::permissionSet/ssoins-1/ps-1",
+        region="global",
+        metadata={"provisioned_role_prefix": "AWSReservedSSO_Admin_"},
+    )
     path = "/aws-reserved/sso.amazonaws.com/"
-    own = _asset("AWSReservedSSO_Admin_0123456789abcdef", AssetType.IAM_ROLE,
-                 arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_0123456789abcdef",
-                 account="222222222222", region="global", metadata={"path": path})
-    other = _asset("AWSReservedSSO_Admin_Read_0123456789abcdef", AssetType.IAM_ROLE,
-                   arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_Read_0123456789abcdef",
-                   account="222222222222", region="global", metadata={"path": path})
+    own = _asset(
+        "AWSReservedSSO_Admin_0123456789abcdef",
+        AssetType.IAM_ROLE,
+        arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_0123456789abcdef",
+        account="222222222222",
+        region="global",
+        metadata={"path": path},
+    )
+    other = _asset(
+        "AWSReservedSSO_Admin_Read_0123456789abcdef",
+        AssetType.IAM_ROLE,
+        arn="arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_Read_0123456789abcdef",
+        account="222222222222",
+        region="global",
+        metadata={"path": path},
+    )
     edges = RelationshipLinker([ps, own, other]).link()
     assert _edge(edges, ps, own, EdgeType.MANAGES)
     assert not _edge(edges, ps, other, EdgeType.MANAGES)
@@ -895,17 +1202,50 @@ def test_account_block_public_access_overrides_bucket_policy(aws_credentials):
     session = boto3.Session(region_name="us-east-1")
     s3 = session.client("s3")
     s3.create_bucket(Bucket="site")
-    s3.put_bucket_policy(Bucket="site", Policy=json.dumps({"Version": "2012-10-17", "Statement": [
-        {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::site/*"}]}))
-    collector = AWSDeepInventoryCollector(session=session, region="us-east-1", account_id=ACCOUNT,
-                                          kubernetes=False, tagging_sweep=False, services=["s3"])
+    s3.put_bucket_policy(
+        Bucket="site",
+        Policy=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": "s3:GetObject",
+                        "Resource": "arn:aws:s3:::site/*",
+                    }
+                ],
+            }
+        ),
+    )
+    collector = AWSDeepInventoryCollector(
+        session=session,
+        region="us-east-1",
+        account_id=ACCOUNT,
+        kubernetes=False,
+        tagging_sweep=False,
+        services=["s3"],
+    )
     bucket = next(a for a in asyncio.run(collector.collect()) if a.name == "site")
     assert bucket.is_internet_exposed
 
-    session.client("s3control").put_public_access_block(AccountId=ACCOUNT, PublicAccessBlockConfiguration={
-        "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
-    collector = AWSDeepInventoryCollector(session=session, region="us-east-1", account_id=ACCOUNT,
-                                          kubernetes=False, tagging_sweep=False, services=["s3"])
+    session.client("s3control").put_public_access_block(
+        AccountId=ACCOUNT,
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
+    collector = AWSDeepInventoryCollector(
+        session=session,
+        region="us-east-1",
+        account_id=ACCOUNT,
+        kubernetes=False,
+        tagging_sweep=False,
+        services=["s3"],
+    )
     bucket = next(a for a in asyncio.run(collector.collect()) if a.name == "site")
     assert not bucket.is_internet_exposed
     assert bucket.metadata["account_public_access_block"]["RestrictPublicBuckets"]

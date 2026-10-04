@@ -86,12 +86,14 @@ class AzureDeepInventoryCollector(AzureCollector):
 
     def _fetch_nics(self) -> list[dict[str, Any]]:
         return self._rows(
-            self._client("network").network_interfaces.list_all(), "Microsoft.Network/networkInterfaces"
+            self._client("network").network_interfaces.list_all(),
+            "Microsoft.Network/networkInterfaces",
         )
 
     def _fetch_public_ips(self) -> list[dict[str, Any]]:
         return self._rows(
-            self._client("network").public_ip_addresses.list_all(), "Microsoft.Network/publicIPAddresses"
+            self._client("network").public_ip_addresses.list_all(),
+            "Microsoft.Network/publicIPAddresses",
         )
 
     def _fetch_load_balancers(self) -> list[dict[str, Any]]:
@@ -100,10 +102,14 @@ class AzureDeepInventoryCollector(AzureCollector):
         )
 
     def _fetch_route_tables(self) -> list[dict[str, Any]]:
-        return self._rows(self._client("network").route_tables.list_all(), "Microsoft.Network/routeTables")
+        return self._rows(
+            self._client("network").route_tables.list_all(), "Microsoft.Network/routeTables"
+        )
 
     def _fetch_nat_gateways(self) -> list[dict[str, Any]]:
-        return self._rows(self._client("network").nat_gateways.list_all(), "Microsoft.Network/natGateways")
+        return self._rows(
+            self._client("network").nat_gateways.list_all(), "Microsoft.Network/natGateways"
+        )
 
     def _fetch_private_endpoints(self) -> list[dict[str, Any]]:
         return self._rows(
@@ -118,7 +124,9 @@ class AzureDeepInventoryCollector(AzureCollector):
         )
 
     def _fetch_firewalls(self) -> list[dict[str, Any]]:
-        return self._rows(self._client("network").azure_firewalls.list_all(), "Microsoft.Network/azureFirewalls")
+        return self._rows(
+            self._client("network").azure_firewalls.list_all(), "Microsoft.Network/azureFirewalls"
+        )
 
     def _fetch_disks(self) -> list[dict[str, Any]]:
         return self._rows(self._client("compute").disks.list(), "Microsoft.Compute/disks")
@@ -131,7 +139,8 @@ class AzureDeepInventoryCollector(AzureCollector):
 
     def _fetch_disk_encryption_sets(self) -> list[dict[str, Any]]:
         return self._rows(
-            self._client("compute").disk_encryption_sets.list(), "Microsoft.Compute/diskEncryptionSets"
+            self._client("compute").disk_encryption_sets.list(),
+            "Microsoft.Compute/diskEncryptionSets",
         )
 
     def _fetch_resource_sweep(self) -> list[dict[str, Any]]:

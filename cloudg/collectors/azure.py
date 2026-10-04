@@ -198,7 +198,9 @@ class AzureCollector(BaseCollector):
             rows.append(row)
         return rows
 
-    async def _run_service(self, name: str, fetch: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    async def _run_service(
+        self, name: str, fetch: Callable[[], list[dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
         """Run one blocking fetcher in a worker thread; failures stay local."""
         try:
             return await asyncio.to_thread(fetch)
@@ -209,7 +211,9 @@ class AzureCollector(BaseCollector):
             self.service_errors[name] = str(exc)
         return []
 
-    async def _gather_rows(self, fetchers: dict[str, Callable[[], list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+    async def _gather_rows(
+        self, fetchers: dict[str, Callable[[], list[dict[str, Any]]]]
+    ) -> list[dict[str, Any]]:
         results = await asyncio.gather(*(self._run_service(n, f) for n, f in fetchers.items()))
         return [row for rows in results for row in rows]
 
@@ -254,7 +258,9 @@ class AzureCollector(BaseCollector):
                 props = server["properties"] = {}
             if rg:
                 try:
-                    props["firewallRules"] = self._rows(client.firewall_rules.list_by_server(rg, name))
+                    props["firewallRules"] = self._rows(
+                        client.firewall_rules.list_by_server(rg, name)
+                    )
                 except Exception as exc:
                     logger.debug("SQL firewall rules failed for %s: %s", name, exc)
                 try:
@@ -267,7 +273,9 @@ class AzureCollector(BaseCollector):
             if not rg:
                 continue
             try:
-                for db in self._rows(client.databases.list_by_server(rg, name), "Microsoft.Sql/servers/databases"):
+                for db in self._rows(
+                    client.databases.list_by_server(rg, name), "Microsoft.Sql/servers/databases"
+                ):
                     if str(db.get("name", "")).lower() != "master":
                         rows.append(db)
             except Exception as exc:
@@ -347,7 +355,8 @@ class AzureCollector(BaseCollector):
             "port_range": ",".join(dict.fromkeys(ports)) or None,
             "protocol": str(rule.get("protocol") or "ALL"),
             "direction": "ingress",
-            "description": f"NSG rule {rule.get('name')}" + (" (default)" if rule.get("default") else ""),
+            "description": f"NSG rule {rule.get('name')}"
+            + (" (default)" if rule.get("default") else ""),
         }
         edges = [NetworkEdge(source_id=src, cidr=src, **common) for src in dict.fromkeys(sources)]
         for asg in dict.fromkeys(asgs):
@@ -376,7 +385,9 @@ class AzureCollector(BaseCollector):
                     logger.debug("Skipping NSG rule %s on %s", rule, nsg.name, exc_info=True)
 
         # Containment edges: VNet contains Subnet
-        vnet_assets = {a.arn.lower(): a.id for a in assets if a.asset_type == AssetType.VNET and a.arn}
+        vnet_assets = {
+            a.arn.lower(): a.id for a in assets if a.asset_type == AssetType.VNET and a.arn
+        }
         for asset in assets:
             vnet_id = asset.metadata.get("vnet_id")
             if isinstance(vnet_id, str) and vnet_id.lower() in vnet_assets:

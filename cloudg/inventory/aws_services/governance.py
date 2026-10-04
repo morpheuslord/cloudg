@@ -135,7 +135,12 @@ def _pab(config: dict[str, Any] | None) -> dict[str, bool] | None:
         return None
     return {
         k: bool(config.get(k))
-        for k in ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+        for k in (
+            "BlockPublicAcls",
+            "IgnorePublicAcls",
+            "BlockPublicPolicy",
+            "RestrictPublicBuckets",
+        )
     }
 
 
@@ -159,7 +164,11 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             "machine_images": (self._collect_machine_images, "compute", False),
             "rds_snapshots": (self._collect_rds_snapshots, "data", False),
             "s3_access_points": (self._collect_s3_access_points, "storage", False),
-            "s3_multi_region_access_points": (self._collect_s3_multi_region_access_points, "storage", True),
+            "s3_multi_region_access_points": (
+                self._collect_s3_multi_region_access_points,
+                "storage",
+                True,
+            ),
         }
 
     # ------------------------------------------------------------------
@@ -241,7 +250,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         for region in regions:
             try:
                 async with self._client("sso-admin", region=region) as sso:
-                    instances = [i async for i in self._paginate(sso, "list_instances", "Instances")]
+                    instances = [
+                        i async for i in self._paginate(sso, "list_instances", "Instances")
+                    ]
                 reachable = True
             except Exception as exc:
                 logger.debug("Identity Center probe in %s failed: %s", region, exc)
@@ -253,43 +264,73 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             raise last_exc
         return None, None
 
-    async def _permission_set_detail(self, sso: Any, instance_arn: str, ps_arn: str) -> dict[str, Any]:
+    async def _permission_set_detail(
+        self, sso: Any, instance_arn: str, ps_arn: str
+    ) -> dict[str, Any]:
         kw = {"InstanceArn": instance_arn, "PermissionSetArn": ps_arn}
         ps = (await sso.describe_permission_set(**kw)).get("PermissionSet", {})
-        out: dict[str, Any] = {"arn": ps_arn, "ps": ps, "managed": [], "customer": [], "inline": False,
-                               "boundary": None, "accounts": [], "assignments": [], "tags": []}
+        out: dict[str, Any] = {
+            "arn": ps_arn,
+            "ps": ps,
+            "managed": [],
+            "customer": [],
+            "inline": False,
+            "boundary": None,
+            "accounts": [],
+            "assignments": [],
+            "tags": [],
+        }
         try:
             out["managed"] = [
-                p async for p in self._paginate(sso, "list_managed_policies_in_permission_set",
-                                                "AttachedManagedPolicies", **kw)
+                p
+                async for p in self._paginate(
+                    sso, "list_managed_policies_in_permission_set", "AttachedManagedPolicies", **kw
+                )
             ]
         except Exception as exc:
             logger.debug("Managed policies for %s failed: %s", ps_arn, exc)
         try:
             out["customer"] = [
-                p async for p in self._paginate(sso, "list_customer_managed_policy_references_in_permission_set",
-                                                "CustomerManagedPolicyReferences", **kw)
+                p
+                async for p in self._paginate(
+                    sso,
+                    "list_customer_managed_policy_references_in_permission_set",
+                    "CustomerManagedPolicyReferences",
+                    **kw,
+                )
             ]
         except Exception as exc:
             logger.debug("Customer-managed policy refs for %s failed: %s", ps_arn, exc)
         try:
-            out["inline"] = bool((await sso.get_inline_policy_for_permission_set(**kw)).get("InlinePolicy"))
+            out["inline"] = bool(
+                (await sso.get_inline_policy_for_permission_set(**kw)).get("InlinePolicy")
+            )
         except Exception as exc:
             logger.debug("Inline policy for %s failed: %s", ps_arn, exc)
         try:
-            out["boundary"] = (await sso.get_permissions_boundary_for_permission_set(**kw)).get("PermissionsBoundary")
+            out["boundary"] = (await sso.get_permissions_boundary_for_permission_set(**kw)).get(
+                "PermissionsBoundary"
+            )
         except Exception as exc:
             if error_code(exc) != "ResourceNotFoundException":
                 logger.debug("Permissions boundary for %s failed: %s", ps_arn, exc)
         try:
             out["tags"] = [
-                t async for t in self._paginate(sso, "list_tags_for_resource", "Tags",
-                                                InstanceArn=instance_arn, ResourceArn=ps_arn)
+                t
+                async for t in self._paginate(
+                    sso,
+                    "list_tags_for_resource",
+                    "Tags",
+                    InstanceArn=instance_arn,
+                    ResourceArn=ps_arn,
+                )
             ]
         except Exception as exc:
             logger.debug("Tags for %s failed: %s", ps_arn, exc)
         try:
-            async for acct in self._paginate(sso, "list_accounts_for_provisioned_permission_set", "AccountIds", **kw):
+            async for acct in self._paginate(
+                sso, "list_accounts_for_provisioned_permission_set", "AccountIds", **kw
+            ):
                 out["accounts"].append(acct)
                 if len(out["accounts"]) >= _MAX_PS_ACCOUNTS:
                     logger.warning("Permission set %s: provisioned accounts truncated", ps_arn)
@@ -298,14 +339,17 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             logger.debug("Provisioned accounts for %s failed: %s", ps_arn, exc)
         for acct in out["accounts"]:
             try:
-                async for a in self._paginate(sso, "list_account_assignments", "AccountAssignments",
-                                              AccountId=acct, **kw):
+                async for a in self._paginate(
+                    sso, "list_account_assignments", "AccountAssignments", AccountId=acct, **kw
+                ):
                     out["assignments"].append((acct, a.get("PrincipalType"), a.get("PrincipalId")))
             except Exception as exc:
                 logger.debug("Assignments of %s in %s failed: %s", ps_arn, acct, exc)
         return out
 
-    async def _identity_store(self, store_id: str, region: str) -> tuple[list[dict], list[dict], dict[str, set[str]]]:
+    async def _identity_store(
+        self, store_id: str, region: str
+    ) -> tuple[list[dict], list[dict], dict[str, set[str]]]:
         """Users, groups and user -> groups memberships (no contact details)."""
         users: list[dict] = []
         groups: list[dict] = []
@@ -313,28 +357,48 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         async with self._client("identitystore", region=region) as ids:
             try:
                 async for u in self._paginate(ids, "list_users", "Users", IdentityStoreId=store_id):
-                    users.append({
-                        "UserId": u.get("UserId"),
-                        "UserName": u.get("UserName"),
-                        "DisplayName": u.get("DisplayName"),
-                        "UserType": u.get("UserType"),
-                        "Issuers": sorted({e.get("Issuer") for e in u.get("ExternalIds") or [] if e.get("Issuer")}),
-                    })
+                    users.append(
+                        {
+                            "UserId": u.get("UserId"),
+                            "UserName": u.get("UserName"),
+                            "DisplayName": u.get("DisplayName"),
+                            "UserType": u.get("UserType"),
+                            "Issuers": sorted(
+                                {
+                                    e.get("Issuer")
+                                    for e in u.get("ExternalIds") or []
+                                    if e.get("Issuer")
+                                }
+                            ),
+                        }
+                    )
                     if len(users) >= _MAX_IDENTITY_USERS:
                         logger.warning("Identity store users truncated at %d", _MAX_IDENTITY_USERS)
                         break
             except Exception as exc:
                 logger.debug("Identity store user listing failed: %s", exc)
             try:
-                async for g in self._paginate(ids, "list_groups", "Groups", IdentityStoreId=store_id):
-                    groups.append({
-                        "GroupId": g.get("GroupId"),
-                        "DisplayName": g.get("DisplayName"),
-                        "Description": g.get("Description"),
-                        "Issuers": sorted({e.get("Issuer") for e in g.get("ExternalIds") or [] if e.get("Issuer")}),
-                    })
+                async for g in self._paginate(
+                    ids, "list_groups", "Groups", IdentityStoreId=store_id
+                ):
+                    groups.append(
+                        {
+                            "GroupId": g.get("GroupId"),
+                            "DisplayName": g.get("DisplayName"),
+                            "Description": g.get("Description"),
+                            "Issuers": sorted(
+                                {
+                                    e.get("Issuer")
+                                    for e in g.get("ExternalIds") or []
+                                    if e.get("Issuer")
+                                }
+                            ),
+                        }
+                    )
                     if len(groups) >= _MAX_IDENTITY_GROUPS:
-                        logger.warning("Identity store groups truncated at %d", _MAX_IDENTITY_GROUPS)
+                        logger.warning(
+                            "Identity store groups truncated at %d", _MAX_IDENTITY_GROUPS
+                        )
                         break
             except Exception as exc:
                 logger.debug("Identity store group listing failed: %s", exc)
@@ -342,12 +406,19 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             async def members(group_id: str) -> tuple[str, list[str]]:
                 found = [
                     (m.get("MemberId") or {}).get("UserId")
-                    async for m in self._paginate(ids, "list_group_memberships", "GroupMemberships",
-                                                  IdentityStoreId=store_id, GroupId=group_id)
+                    async for m in self._paginate(
+                        ids,
+                        "list_group_memberships",
+                        "GroupMemberships",
+                        IdentityStoreId=store_id,
+                        GroupId=group_id,
+                    )
                 ]
                 return group_id, [f for f in found if f]
 
-            results = await gather_limited([lambda g=g: members(g["GroupId"]) for g in groups if g.get("GroupId")])
+            results = await gather_limited(
+                [lambda g=g: members(g["GroupId"]) for g in groups if g.get("GroupId")]
+            )
             total = 0
             for res in results:
                 if not res:
@@ -368,10 +439,15 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         store_id = instance.get("IdentityStoreId") or ""
 
         async with self._client("sso-admin", region=home) as sso:
-            ps_arns = [p async for p in self._paginate(sso, "list_permission_sets", "PermissionSets",
-                                                       InstanceArn=inst_arn)]
+            ps_arns = [
+                p
+                async for p in self._paginate(
+                    sso, "list_permission_sets", "PermissionSets", InstanceArn=inst_arn
+                )
+            ]
             details = await gather_limited(
-                [lambda a=a: self._permission_set_detail(sso, inst_arn, a) for a in ps_arns], limit=4
+                [lambda a=a: self._permission_set_detail(sso, inst_arn, a) for a in ps_arns],
+                limit=4,
             )
 
         users: list[dict] = []
@@ -400,17 +476,30 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             ps_name = ps.get("Name") or ps_arn.rsplit("/", 1)[-1]
             accounts: list[str] = d["accounts"]
             relations: list[dict | None] = [
-                rel(inst_arn, EdgeType.CONTAINS, reverse=True, description="Identity Center permission set"),
+                rel(
+                    inst_arn,
+                    EdgeType.CONTAINS,
+                    reverse=True,
+                    description="Identity Center permission set",
+                ),
             ]
             for acct in accounts:
                 relations.append(
-                    rel(_root(acct), EdgeType.MANAGES, "OWNED_BY",
-                        description=f"provisions role AWSReservedSSO_{ps_name}_* in {acct}")
+                    rel(
+                        _root(acct),
+                        EdgeType.MANAGES,
+                        "OWNED_BY",
+                        description=f"provisions role AWSReservedSSO_{ps_name}_* in {acct}",
+                    )
                 )
             for pol in d["managed"]:
                 relations.append(
-                    rel(pol.get("Arn"), EdgeType.IAM_POLICY_ATTACHMENT, "ROLE_HAS_POLICY",
-                        description=f"has policy {pol.get('Name')}")
+                    rel(
+                        pol.get("Arn"),
+                        EdgeType.IAM_POLICY_ATTACHMENT,
+                        "ROLE_HAS_POLICY",
+                        description=f"has policy {pol.get('Name')}",
+                    )
                 )
             refs = 0
             for cmp in d["customer"]:
@@ -420,22 +509,31 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         break
                     refs += 1
                     relations.append(
-                        rel(f"arn:aws:iam::{acct}:policy{path}{cmp.get('Name')}", EdgeType.IAM_POLICY_ATTACHMENT,
-                            "ROLE_HAS_POLICY", description=f"customer-managed policy {cmp.get('Name')}")
+                        rel(
+                            f"arn:aws:iam::{acct}:policy{path}{cmp.get('Name')}",
+                            EdgeType.IAM_POLICY_ATTACHMENT,
+                            "ROLE_HAS_POLICY",
+                            description=f"customer-managed policy {cmp.get('Name')}",
+                        )
                     )
             boundary = d["boundary"] or {}
             boundary_desc = None
             if boundary.get("ManagedPolicyArn"):
                 boundary_desc = boundary["ManagedPolicyArn"]
-                relations.append(rel(boundary_desc, EdgeType.REFERENCES, "PERMISSION_BOUNDARY_LIMITS"))
+                relations.append(
+                    rel(boundary_desc, EdgeType.REFERENCES, "PERMISSION_BOUNDARY_LIMITS")
+                )
             elif boundary.get("CustomerManagedPolicyReference"):
                 ref = boundary["CustomerManagedPolicyReference"]
                 path = ref.get("Path") or "/"
                 boundary_desc = f"{path}{ref.get('Name')}"
                 for acct in accounts[:_MAX_POLICY_REFS]:
                     relations.append(
-                        rel(f"arn:aws:iam::{acct}:policy{boundary_desc}", EdgeType.REFERENCES,
-                            "PERMISSION_BOUNDARY_LIMITS")
+                        rel(
+                            f"arn:aws:iam::{acct}:policy{boundary_desc}",
+                            EdgeType.REFERENCES,
+                            "PERMISSION_BOUNDARY_LIMITS",
+                        )
                     )
             ps_principals: dict[str, set[str]] = {}
             for acct, ptype, pid in d["assignments"]:
@@ -446,8 +544,14 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 principal_grants.setdefault(parn, {}).setdefault(acct, set()).add(ps_name)
             for parn, accts in ps_principals.items():
                 relations.append(
-                    rel(parn, EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE", reverse=True,
-                        description=f"assigned permission set {ps_name}", accounts=sorted(accts)[:50])
+                    rel(
+                        parn,
+                        EdgeType.ASSUMES_ROLE,
+                        "ROLE_ASSUMES_ROLE",
+                        reverse=True,
+                        description=f"assigned permission set {ps_name}",
+                        accounts=sorted(accts)[:50],
+                    )
                 )
             managed_arns = [p.get("Arn") for p in d["managed"] if p.get("Arn")]
             assets.append(
@@ -482,13 +586,19 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
 
         def grant_relations(parn: str) -> list[dict | None]:
             return [
-                rel(_root(acct), EdgeType.GRANTS_ACCESS,
+                rel(
+                    _root(acct),
+                    EdgeType.GRANTS_ACCESS,
                     "CROSS_ACCOUNT_TRUST" if acct != self._account_id else "POLICY_ALLOWS_ACTION",
-                    description="Identity Center account assignment", permission_sets=sorted(names))
+                    description="Identity Center account assignment",
+                    permission_sets=sorted(names),
+                )
                 for acct, names in sorted(principal_grants.get(parn, {}).items())
             ]
 
-        group_arns = {g["GroupId"]: principal_arn("GROUP", g["GroupId"]) for g in groups if g.get("GroupId")}
+        group_arns = {
+            g["GroupId"]: principal_arn("GROUP", g["GroupId"]) for g in groups if g.get("GroupId")
+        }
         member_counts: dict[str, int] = {}
         for gids in memberships.values():
             for gid in gids:
@@ -511,7 +621,8 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "member_count": member_counts.get(g["GroupId"], 0),
                         "assigned_accounts": sorted(principal_grants.get(garn, {})),
                     },
-                    relations=[rel(inst_arn, EdgeType.CONTAINS, reverse=True)] + grant_relations(garn),
+                    relations=[rel(inst_arn, EdgeType.CONTAINS, reverse=True)]
+                    + grant_relations(garn),
                 )
             )
         for u in users:
@@ -520,8 +631,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             if not uarn:
                 continue
             membership = [
-                rel(group_arns.get(gid, principal_arn("GROUP", gid)), EdgeType.CONTAINS, reverse=True,
-                    description="group member")
+                rel(
+                    group_arns.get(gid, principal_arn("GROUP", gid)),
+                    EdgeType.CONTAINS,
+                    reverse=True,
+                    description="group member",
+                )
                 for gid in sorted(memberships.get(uid, set()))  # type: ignore[arg-type]
             ]
             assets.append(
@@ -539,7 +654,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "external_issuers": u["Issuers"],
                         "assigned_accounts": sorted(principal_grants.get(uarn, {})),
                     },
-                    relations=[rel(inst_arn, EdgeType.CONTAINS, reverse=True)] + membership + grant_relations(uarn),
+                    relations=[rel(inst_arn, EdgeType.CONTAINS, reverse=True)]
+                    + membership
+                    + grant_relations(uarn),
                 )
             )
 
@@ -599,23 +716,30 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             async for u in self._paginate(iam, "list_users", "Users"):
                 users.append(u)
                 if len(users) >= _MAX_ACCESS_KEY_USERS:
-                    logger.warning("Access key collection truncated at %d users", _MAX_ACCESS_KEY_USERS)
+                    logger.warning(
+                        "Access key collection truncated at %d users", _MAX_ACCESS_KEY_USERS
+                    )
                     break
 
             async def keys_of(user: dict) -> list[CloudAsset]:
                 out = []
-                async for k in self._paginate(iam, "list_access_keys", "AccessKeyMetadata",
-                                              UserName=user["UserName"]):
+                async for k in self._paginate(
+                    iam, "list_access_keys", "AccessKeyMetadata", UserName=user["UserName"]
+                ):
                     key_id = k.get("AccessKeyId")
                     if not key_id:
                         continue
                     last: dict[str, Any] = {}
                     try:
-                        last = (await iam.get_access_key_last_used(AccessKeyId=key_id)).get("AccessKeyLastUsed") or {}
+                        last = (await iam.get_access_key_last_used(AccessKeyId=key_id)).get(
+                            "AccessKeyLastUsed"
+                        ) or {}
                     except Exception as exc:
                         logger.debug("Last-used lookup for %s failed: %s", key_id, exc)
                     last_date = last.get("LastUsedDate")
-                    unused_days = _age_days(last_date) if last_date else _age_days(k.get("CreateDate"))
+                    unused_days = (
+                        _age_days(last_date) if last_date else _age_days(k.get("CreateDate"))
+                    )
                     active = k.get("Status") == "Active"
                     out.append(
                         self._asset(
@@ -634,10 +758,20 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                                 "last_used_service": last.get("ServiceName"),
                                 "last_used_region": last.get("Region"),
                                 "never_used": last_date is None,
-                                "stale": bool(active and unused_days is not None and unused_days > _STALE_KEY_DAYS),
+                                "stale": bool(
+                                    active
+                                    and unused_days is not None
+                                    and unused_days > _STALE_KEY_DAYS
+                                ),
                             },
-                            relations=[rel(user.get("Arn"), EdgeType.CONTAINS, reverse=True,
-                                           description="access key of user")],
+                            relations=[
+                                rel(
+                                    user.get("Arn"),
+                                    EdgeType.CONTAINS,
+                                    reverse=True,
+                                    description="access key of user",
+                                )
+                            ],
                         )
                     )
                 return out
@@ -669,23 +803,42 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "acm_pca_arn": pca,
                         "created": _ts(a.get("createdAt")),
                     },
-                    relations=[rel(pca, EdgeType.REFERENCES, "DEPENDS_ON", description="issuing private CA")],
+                    relations=[
+                        rel(
+                            pca, EdgeType.REFERENCES, "DEPENDS_ON", description="issuing private CA"
+                        )
+                    ],
                     aliases=[a.get("trustAnchorId")],
                 )
             )
         for p in profiles:
             relations: list[dict | None] = [
-                rel(r, EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE", description="Roles Anywhere profile role")
+                rel(
+                    r,
+                    EdgeType.ASSUMES_ROLE,
+                    "ROLE_ASSUMES_ROLE",
+                    description="Roles Anywhere profile role",
+                )
                 for r in p.get("roleArns") or []
             ]
             relations += [
-                rel(m, EdgeType.IAM_POLICY_ATTACHMENT, "ROLE_HAS_POLICY", description="session policy")
+                rel(
+                    m,
+                    EdgeType.IAM_POLICY_ATTACHMENT,
+                    "ROLE_HAS_POLICY",
+                    description="session policy",
+                )
                 for m in p.get("managedPolicyArns") or []
             ]
             if p.get("enabled"):
                 relations += [
-                    rel(anchor, EdgeType.IAM_TRUST, "ROLE_ASSUMES_ROLE", reverse=True,
-                        description="certificates from this trust anchor can use the profile")
+                    rel(
+                        anchor,
+                        EdgeType.IAM_TRUST,
+                        "ROLE_ASSUMES_ROLE",
+                        reverse=True,
+                        description="certificates from this trust anchor can use the profile",
+                    )
                     for anchor in enabled_anchors[:50]
                 ]
             assets.append(
@@ -719,8 +872,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         async with self._client("ram") as ram:
             for owner in ("SELF", "OTHER-ACCOUNTS"):
                 try:
-                    shares = [s async for s in self._paginate(ram, "get_resource_shares", "resourceShares",
-                                                              resourceOwner=owner)]
+                    shares = [
+                        s
+                        async for s in self._paginate(
+                            ram, "get_resource_shares", "resourceShares", resourceOwner=owner
+                        )
+                    ]
                 except Exception:
                     if owner == "SELF":
                         raise
@@ -731,12 +888,16 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 resources: dict[str, list[dict]] = {}
                 principals: dict[str, list[dict]] = {}
                 try:
-                    async for r in self._paginate(ram, "list_resources", "resources", resourceOwner=owner):
+                    async for r in self._paginate(
+                        ram, "list_resources", "resources", resourceOwner=owner
+                    ):
                         resources.setdefault(r.get("resourceShareArn", ""), []).append(r)
                 except Exception as exc:
                     logger.debug("RAM resource listing (%s) failed: %s", owner, exc)
                 try:
-                    async for p in self._paginate(ram, "list_principals", "principals", resourceOwner=owner):
+                    async for p in self._paginate(
+                        ram, "list_principals", "principals", resourceOwner=owner
+                    ):
                         principals.setdefault(p.get("resourceShareArn", ""), []).append(p)
                 except Exception as exc:
                     logger.debug("RAM principal listing (%s) failed: %s", owner, exc)
@@ -759,24 +920,46 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         relations: list[dict | None] = []
         for r in shared:
             relations.append(
-                rel(r.get("arn"), EdgeType.GRANTS_ACCESS, "DEPENDS_ON", description="shared resource",
-                    resource_type=r.get("type"), status=r.get("status"),
-                    region_scope=r.get("resourceRegionScope"))
+                rel(
+                    r.get("arn"),
+                    EdgeType.GRANTS_ACCESS,
+                    "DEPENDS_ON",
+                    description="shared resource",
+                    resource_type=r.get("type"),
+                    status=r.get("status"),
+                    region_scope=r.get("resourceRegionScope"),
+                )
             )
         external = False
         for p in prins:
             pid = str(p.get("id", ""))
             target = _principal_target(pid)
             acct = _arn_account(target or "")
-            other = bool(p.get("external")) or (acct is not None and acct != owning) or ":organizations:" in pid
+            other = (
+                bool(p.get("external"))
+                or (acct is not None and acct != owning)
+                or ":organizations:" in pid
+            )
             external = external or bool(p.get("external"))
             relations.append(
-                rel(target, EdgeType.GRANTS_ACCESS, "CROSS_ACCOUNT_TRUST" if other else "POLICY_ALLOWS_ACTION",
-                    reverse=True, description="resource share principal", external=p.get("external"))
+                rel(
+                    target,
+                    EdgeType.GRANTS_ACCESS,
+                    "CROSS_ACCOUNT_TRUST" if other else "POLICY_ALLOWS_ACTION",
+                    reverse=True,
+                    description="resource share principal",
+                    external=p.get("external"),
+                )
             )
         if incoming and owning:
             relations.append(
-                rel(_root(owning), EdgeType.MANAGES, "OWNED_BY", reverse=True, description="share owner")
+                rel(
+                    _root(owning),
+                    EdgeType.MANAGES,
+                    "OWNED_BY",
+                    reverse=True,
+                    description="share owner",
+                )
             )
         # Received shares stay attributed to the observing account; the owner
         # is recorded in metadata and linked (MANAGES) so it materialises.
@@ -813,17 +996,31 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         product_ids: set[str] = set()
         product_names: list[str] = []
         try:
-            principals = [p async for p in self._paginate(sc, "list_principals_for_portfolio", "Principals",
-                                                          PortfolioId=pid)]
+            principals = [
+                p
+                async for p in self._paginate(
+                    sc, "list_principals_for_portfolio", "Principals", PortfolioId=pid
+                )
+            ]
         except Exception as exc:
             logger.debug("Portfolio %s principals failed: %s", pid, exc)
         try:
-            shared = [a async for a in self._pages(sc.list_portfolio_access, "AccountIds", token_in="PageToken",
-                                                   token_out="NextPageToken", PortfolioId=pid)]
+            shared = [
+                a
+                async for a in self._pages(
+                    sc.list_portfolio_access,
+                    "AccountIds",
+                    token_in="PageToken",
+                    token_out="NextPageToken",
+                    PortfolioId=pid,
+                )
+            ]
         except Exception as exc:
             logger.debug("Portfolio %s access failed: %s", pid, exc)
         try:
-            async for p in self._paginate(sc, "search_products_as_admin", "ProductViewDetails", PortfolioId=pid):
+            async for p in self._paginate(
+                sc, "search_products_as_admin", "ProductViewDetails", PortfolioId=pid
+            ):
                 summary = p.get("ProductViewSummary") or {}
                 if summary.get("ProductId"):
                     product_ids.add(summary["ProductId"])
@@ -832,13 +1029,25 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         except Exception as exc:
             logger.debug("Portfolio %s products failed: %s", pid, exc)
         relations: list[dict | None] = [
-            rel(p.get("PrincipalARN"), EdgeType.GRANTS_ACCESS, "POLICY_ALLOWS_ACTION", reverse=True,
-                description="portfolio principal", principal_type=p.get("PrincipalType"))
+            rel(
+                p.get("PrincipalARN"),
+                EdgeType.GRANTS_ACCESS,
+                "POLICY_ALLOWS_ACTION",
+                reverse=True,
+                description="portfolio principal",
+                principal_type=p.get("PrincipalType"),
+            )
             for p in principals
             if "*" not in str(p.get("PrincipalARN", ""))
         ]
         relations += [
-            rel(_root(a), EdgeType.GRANTS_ACCESS, "CROSS_ACCOUNT_TRUST", reverse=True, description="portfolio share")
+            rel(
+                _root(a),
+                EdgeType.GRANTS_ACCESS,
+                "CROSS_ACCOUNT_TRUST",
+                reverse=True,
+                description="portfolio share",
+            )
             for a in shared
             if _ACCOUNT_RE.match(str(a))
         ]
@@ -855,7 +1064,8 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 "principals": [p.get("PrincipalARN") for p in principals],
                 "shared_accounts": shared,
                 "products": sorted(product_names),
-                "control_tower": "Control Tower" in name or _CT_ACCOUNT_FACTORY_PRODUCT in product_names,
+                "control_tower": "Control Tower" in name
+                or _CT_ACCOUNT_FACTORY_PRODUCT in product_names,
             },
             relations=relations,
             aliases=[pid],
@@ -868,7 +1078,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         pp_id = pp.get("Id", "")
         launch_role = None
         try:
-            detail = (await sc.describe_provisioned_product(Id=pp_id)).get("ProvisionedProductDetail") or {}
+            detail = (await sc.describe_provisioned_product(Id=pp_id)).get(
+                "ProvisionedProductDetail"
+            ) or {}
             launch_role = detail.get("LaunchRoleArn")
         except Exception as exc:
             logger.debug("Provisioned product %s describe failed: %s", pp_id, exc)
@@ -876,8 +1088,13 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         vended_account = None
         output_refs: list[str] = []
         try:
-            async for o in self._pages(sc.get_provisioned_product_outputs, "Outputs", token_in="PageToken",
-                                       token_out="NextPageToken", ProvisionedProductId=pp_id):
+            async for o in self._pages(
+                sc.get_provisioned_product_outputs,
+                "Outputs",
+                token_in="PageToken",
+                token_out="NextPageToken",
+                ProvisionedProductId=pp_id,
+            ):
                 key = o.get("OutputKey") or ""
                 value = str(o.get("OutputValue") or "")
                 output_keys.append(key)
@@ -892,18 +1109,28 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         stack_arn = physical if physical.startswith("arn:aws:cloudformation:") else None
         is_account_factory = pp.get("ProductName") == _CT_ACCOUNT_FACTORY_PRODUCT
         relations: list[dict | None] = [
-            rel(_root(vended_account) if vended_account else None, EdgeType.MANAGES, "OWNED_BY",
-                description="vended account"),
+            rel(
+                _root(vended_account) if vended_account else None,
+                EdgeType.MANAGES,
+                "OWNED_BY",
+                description="vended account",
+            ),
             rel(stack_arn, EdgeType.MANAGES, "OWNED_BY", description="provisioned stack"),
-            rel(launch_role, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="launch constraint role"),
+            rel(
+                launch_role, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="launch constraint role"
+            ),
         ]
-        relations += [rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="product output") for r in output_refs[:20]]
+        relations += [
+            rel(r, EdgeType.REFERENCES, "DEPENDS_ON", description="product output")
+            for r in output_refs[:20]
+        ]
         relations += [
             rel(pf, EdgeType.REFERENCES, "DEPENDS_ON", description="launched from portfolio")
             for pf in portfolios_by_product.get(pp.get("ProductId", ""), [])
         ]
         return self._asset(
-            arn=pp.get("Arn") or self._arn("servicecatalog", f"stack/{pp.get('Name', pp_id)}/{pp_id}"),
+            arn=pp.get("Arn")
+            or self._arn("servicecatalog", f"stack/{pp.get('Name', pp_id)}/{pp_id}"),
             name=pp.get("Name") or pp_id,
             asset_type=AssetType.PROVISIONED_PRODUCT,
             tags=pp.get("Tags"),
@@ -932,8 +1159,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         portfolios_by_product: dict[str, list[str]] = {}
         async with self._client("servicecatalog") as sc:
             try:
-                portfolios = [p async for p in self._paginate(sc, "list_portfolios", "PortfolioDetails")]
-                results = await gather_limited([lambda p=p: self._portfolio_asset(sc, p) for p in portfolios], limit=4)
+                portfolios = [
+                    p async for p in self._paginate(sc, "list_portfolios", "PortfolioDetails")
+                ]
+                results = await gather_limited(
+                    [lambda p=p: self._portfolio_asset(sc, p) for p in portfolios], limit=4
+                )
                 for res in results:
                     if not res:
                         continue
@@ -946,13 +1177,20 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 logger.debug("Service Catalog portfolio listing failed: %s", exc)
             try:
                 products = [
-                    p async for p in self._pages(
-                        sc.search_provisioned_products, "ProvisionedProducts", token_in="PageToken",
-                        token_out="NextPageToken", AccessLevelFilter={"Key": "Account", "Value": "self"},
+                    p
+                    async for p in self._pages(
+                        sc.search_provisioned_products,
+                        "ProvisionedProducts",
+                        token_in="PageToken",
+                        token_out="NextPageToken",
+                        AccessLevelFilter={"Key": "Account", "Value": "self"},
                     )
                 ]
                 results = await gather_limited(
-                    [lambda p=p: self._provisioned_product_asset(sc, p, portfolios_by_product) for p in products],
+                    [
+                        lambda p=p: self._provisioned_product_asset(sc, p, portfolios_by_product)
+                        for p in products
+                    ],
                     limit=4,
                 )
                 assets.extend(a for a in results if a)
@@ -971,13 +1209,16 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         name = summary["StackSetName"]
         ss: dict[str, Any] = {}
         try:
-            ss = (await cfn.describe_stack_set(StackSetName=name, CallAs=call_as)).get("StackSet") or {}
+            ss = (await cfn.describe_stack_set(StackSetName=name, CallAs=call_as)).get(
+                "StackSet"
+            ) or {}
         except Exception as exc:
             logger.debug("Stack set %s describe failed: %s", name, exc)
         instances: list[dict] = []
         try:
-            async for inst in self._paginate(cfn, "list_stack_instances", "Summaries", StackSetName=name,
-                                             CallAs=call_as):
+            async for inst in self._paginate(
+                cfn, "list_stack_instances", "Summaries", StackSetName=name, CallAs=call_as
+            ):
                 instances.append(inst)
                 if len(instances) >= _MAX_STACK_INSTANCES:
                     logger.warning("Stack set %s: instances truncated", name)
@@ -985,30 +1226,59 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         except Exception as exc:
             logger.debug("Stack set %s instances failed: %s", name, exc)
         accounts = sorted({i.get("Account") for i in instances if i.get("Account")})
-        regions = sorted({i.get("Region") for i in instances if i.get("Region")} | set(ss.get("Regions") or []))
+        regions = sorted(
+            {i.get("Region") for i in instances if i.get("Region")} | set(ss.get("Regions") or [])
+        )
         status_counts: dict[str, int] = {}
         relations: list[dict | None] = [
-            rel(ss.get("AdministrationRoleARN"), EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                description="stack set administration role"),
+            rel(
+                ss.get("AdministrationRoleARN"),
+                EdgeType.ASSUMES_ROLE,
+                "RUNS_ON",
+                description="stack set administration role",
+            ),
         ]
         for inst in instances:
             status = inst.get("Status") or "UNKNOWN"
             status_counts[status] = status_counts.get(status, 0) + 1
             relations.append(
-                rel(inst.get("StackId"), EdgeType.MANAGES, "OWNED_BY", description="stack instance",
-                    account=inst.get("Account"), region=inst.get("Region"), status=status,
-                    drift_status=inst.get("DriftStatus"))
+                rel(
+                    inst.get("StackId"),
+                    EdgeType.MANAGES,
+                    "OWNED_BY",
+                    description="stack instance",
+                    account=inst.get("Account"),
+                    region=inst.get("Region"),
+                    status=status,
+                    drift_status=inst.get("DriftStatus"),
+                )
             )
         for acct in accounts:
-            relations.append(rel(_root(acct), EdgeType.MANAGES, "OWNED_BY", description="stack set target account"))
+            relations.append(
+                rel(
+                    _root(acct),
+                    EdgeType.MANAGES,
+                    "OWNED_BY",
+                    description="stack set target account",
+                )
+            )
         for ou in ss.get("OrganizationalUnitIds") or []:
-            relations.append(rel(ou, EdgeType.REFERENCES, "DEPENDS_ON", description="deployment target OU"))
+            relations.append(
+                rel(ou, EdgeType.REFERENCES, "DEPENDS_ON", description="deployment target OU")
+            )
         exec_role = ss.get("ExecutionRoleName")
-        if exec_role and (ss.get("PermissionModel") or summary.get("PermissionModel")) == "SELF_MANAGED":
+        if (
+            exec_role
+            and (ss.get("PermissionModel") or summary.get("PermissionModel")) == "SELF_MANAGED"
+        ):
             for acct in accounts[:_MAX_POLICY_REFS]:
                 relations.append(
-                    rel(f"arn:aws:iam::{acct}:role/{exec_role}", EdgeType.ASSUMES_ROLE, "RUNS_ON",
-                        description="stack set execution role")
+                    rel(
+                        f"arn:aws:iam::{acct}:role/{exec_role}",
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="stack set execution role",
+                    )
                 )
         drift = ss.get("StackSetDriftDetectionDetails") or {}
         auto = ss.get("AutoDeployment") or summary.get("AutoDeployment") or {}
@@ -1049,8 +1319,10 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             for call_as in ("SELF", "DELEGATED_ADMIN"):
                 try:
                     summaries = [
-                        s async for s in self._paginate(cfn, "list_stack_sets", "Summaries", Status="ACTIVE",
-                                                        CallAs=call_as)
+                        s
+                        async for s in self._paginate(
+                            cfn, "list_stack_sets", "Summaries", Status="ACTIVE", CallAs=call_as
+                        )
                     ]
                 except Exception as exc:
                     # DELEGATED_ADMIN fails with ValidationError outside a
@@ -1058,7 +1330,11 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                     logger.debug("StackSets as %s unavailable: %s", call_as, exc)
                     errors.append(exc)
                     continue
-                todo = [s for s in summaries if s.get("StackSetId") not in seen and s.get("StackSetName")]
+                todo = [
+                    s
+                    for s in summaries
+                    if s.get("StackSetId") not in seen and s.get("StackSetName")
+                ]
                 seen.update(s.get("StackSetId") for s in todo)
                 results = await gather_limited(
                     [lambda s=s, c=call_as: self._stack_set_asset(cfn, s, c) for s in todo], limit=4
@@ -1089,7 +1365,10 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 if meta.get("KeyManager") == "AWS":
                     return None
                 rotation: dict[str, Any] = {}
-                if meta.get("KeySpec", "SYMMETRIC_DEFAULT") == "SYMMETRIC_DEFAULT" and meta.get("Origin") != "EXTERNAL":
+                if (
+                    meta.get("KeySpec", "SYMMETRIC_DEFAULT") == "SYMMETRIC_DEFAULT"
+                    and meta.get("Origin") != "EXTERNAL"
+                ):
                     try:
                         rotation = await kms.get_key_rotation_status(KeyId=key_id)
                     except Exception as exc:
@@ -1097,7 +1376,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 policy_rels: list[dict] = []
                 policy_info: dict[str, Any] = {}
                 try:
-                    policy = (await kms.get_key_policy(KeyId=key_id, PolicyName="default")).get("Policy")
+                    policy = (await kms.get_key_policy(KeyId=key_id, PolicyName="default")).get(
+                        "Policy"
+                    )
                     policy_rels, policy_info = self._resource_policy_access(policy)
                 except Exception as exc:
                     logger.debug("KMS key policy for %s failed: %s", key_id, exc)
@@ -1118,7 +1399,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 try:
                     tags = [
                         {"Key": t.get("TagKey"), "Value": t.get("TagValue")}
-                        async for t in self._paginate(kms, "list_resource_tags", "Tags", KeyId=key_id)
+                        async for t in self._paginate(
+                            kms, "list_resource_tags", "Tags", KeyId=key_id
+                        )
                     ]
                 except Exception as exc:
                     logger.debug("KMS tags for %s failed: %s", key_id, exc)
@@ -1128,16 +1411,29 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 is_replica = mrc.get("MultiRegionKeyType") == "REPLICA"
                 relations: list[dict | None] = list(policy_rels)
                 relations += [
-                    rel(target, EdgeType.GRANTS_ACCESS,
-                        "CROSS_ACCOUNT_TRUST" if _arn_account(target) not in (None, self._account_id)
+                    rel(
+                        target,
+                        EdgeType.GRANTS_ACCESS,
+                        "CROSS_ACCOUNT_TRUST"
+                        if _arn_account(target) not in (None, self._account_id)
                         else "POLICY_ALLOWS_ACTION",
-                        reverse=True, description="KMS grant", operations=sorted(g["ops"]),
-                        grant_names=sorted(g["names"])[:10])
+                        reverse=True,
+                        description="KMS grant",
+                        operations=sorted(g["ops"]),
+                        grant_names=sorted(g["names"])[:10],
+                    )
                     for target, g in grants.items()
                 ]
                 if is_replica and primary:
-                    relations.append(rel(primary, EdgeType.REFERENCES, "REPLICATES_TO", reverse=True,
-                                         description="multi-Region primary key"))
+                    relations.append(
+                        rel(
+                            primary,
+                            EdgeType.REFERENCES,
+                            "REPLICATES_TO",
+                            reverse=True,
+                            description="multi-Region primary key",
+                        )
+                    )
                 return self._asset(
                     arn=meta.get("Arn", ""),
                     name=meta.get("KeyId", key_id),
@@ -1168,7 +1464,8 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                     relations=relations,
                     raw=meta,
                     exposed=bool(policy_info.get("public_policy")),
-                    aliases=[a.get("AliasName") for a in key_aliases] + [a.get("AliasArn") for a in key_aliases],
+                    aliases=[a.get("AliasName") for a in key_aliases]
+                    + [a.get("AliasArn") for a in key_aliases],
                 )
 
             results = await gather_limited([lambda k=k: detail(k) for k in keys])
@@ -1182,7 +1479,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 arn = secret.get("ARN", "")
                 replicas: list[dict] = []
                 try:
-                    replicas = (await sm.describe_secret(SecretId=arn)).get("ReplicationStatus") or []
+                    replicas = (await sm.describe_secret(SecretId=arn)).get(
+                        "ReplicationStatus"
+                    ) or []
                 except Exception as exc:
                     logger.debug("Secret %s describe failed: %s", secret.get("Name"), exc)
                 policy_rels: list[dict] = []
@@ -1199,20 +1498,35 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 primary_region = secret.get("PrimaryRegion")
                 relations: list[dict | None] = [
                     rel(kms_key, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                    rel(rotation_fn, EdgeType.INVOKES, "ROTATES_SECRET", description="rotation function"),
+                    rel(
+                        rotation_fn,
+                        EdgeType.INVOKES,
+                        "ROTATES_SECRET",
+                        description="rotation function",
+                    ),
                     *policy_rels,
                 ]
                 for rep in replicas:
                     region = rep.get("Region")
                     if region and region != self._region:
                         relations.append(
-                            rel(arn.replace(f":{self._region}:", f":{region}:", 1), EdgeType.REFERENCES,
-                                "REPLICATES_TO", description="secret replica", status=rep.get("Status"))
+                            rel(
+                                arn.replace(f":{self._region}:", f":{region}:", 1),
+                                EdgeType.REFERENCES,
+                                "REPLICATES_TO",
+                                description="secret replica",
+                                status=rep.get("Status"),
+                            )
                         )
                 if primary_region and primary_region != self._region:
                     relations.append(
-                        rel(arn.replace(f":{self._region}:", f":{primary_region}:", 1), EdgeType.REFERENCES,
-                            "REPLICATES_TO", reverse=True, description="primary secret")
+                        rel(
+                            arn.replace(f":{self._region}:", f":{primary_region}:", 1),
+                            EdgeType.REFERENCES,
+                            "REPLICATES_TO",
+                            reverse=True,
+                            description="primary secret",
+                        )
                     )
                 return self._asset(
                     arn=arn,
@@ -1231,7 +1545,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "next_rotation": _ts(secret.get("NextRotationDate")),
                         "owning_service": secret.get("OwningService"),
                         "primary_region": primary_region,
-                        "replica_regions": sorted(r.get("Region") for r in replicas if r.get("Region")),
+                        "replica_regions": sorted(
+                            r.get("Region") for r in replicas if r.get("Region")
+                        ),
                         "created": _ts(secret.get("CreatedDate")),
                         "deleted_date": _ts(secret.get("DeletedDate")),
                         **policy_info,
@@ -1253,8 +1569,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 arn = table.get("TableArn", "")
                 pitr: dict[str, Any] = {}
                 try:
-                    pitr = ((await ddb.describe_continuous_backups(TableName=table_name))
-                            .get("ContinuousBackupsDescription") or {}).get("PointInTimeRecoveryDescription") or {}
+                    pitr = (
+                        (await ddb.describe_continuous_backups(TableName=table_name)).get(
+                            "ContinuousBackupsDescription"
+                        )
+                        or {}
+                    ).get("PointInTimeRecoveryDescription") or {}
                 except Exception as exc:
                     logger.debug("PITR status for %s failed: %s", table_name, exc)
                 policy_rels: list[dict] = []
@@ -1268,18 +1588,26 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         logger.debug("Resource policy for %s failed: %s", table_name, exc)
                 destinations: list[dict] = []
                 try:
-                    destinations = (await ddb.describe_kinesis_streaming_destination(TableName=table_name)).get(
-                        "KinesisDataStreamDestinations") or []
+                    destinations = (
+                        await ddb.describe_kinesis_streaming_destination(TableName=table_name)
+                    ).get("KinesisDataStreamDestinations") or []
                 except Exception as exc:
                     logger.debug("Kinesis destinations for %s failed: %s", table_name, exc)
                 tags: list[dict] = []
                 try:
-                    tags = [t async for t in self._paginate(ddb, "list_tags_of_resource", "Tags", ResourceArn=arn)]
+                    tags = [
+                        t
+                        async for t in self._paginate(
+                            ddb, "list_tags_of_resource", "Tags", ResourceArn=arn
+                        )
+                    ]
                 except Exception as exc:
                     logger.debug("Tags for %s failed: %s", table_name, exc)
                 sse = table.get("SSEDescription") or {}
                 stream = table.get("StreamSpecification") or {}
-                replicas = [r.get("RegionName") for r in table.get("Replicas") or [] if r.get("RegionName")]
+                replicas = [
+                    r.get("RegionName") for r in table.get("Replicas") or [] if r.get("RegionName")
+                ]
                 restore = table.get("RestoreSummary") or {}
                 relations: list[dict | None] = [
                     rel(sse.get("KMSMasterKeyArn"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
@@ -1288,21 +1616,35 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 for region in replicas:
                     if region != self._region:
                         relations.append(
-                            rel(arn.replace(f":{self._region}:", f":{region}:", 1), EdgeType.REFERENCES,
-                                "REPLICATES_TO", description="global table replica")
+                            rel(
+                                arn.replace(f":{self._region}:", f":{region}:", 1),
+                                EdgeType.REFERENCES,
+                                "REPLICATES_TO",
+                                description="global table replica",
+                            )
                         )
                 for dest in destinations:
                     relations.append(
-                        rel(dest.get("StreamArn"), EdgeType.REFERENCES, "STREAMS_TO",
-                            description="Kinesis streaming destination", status=dest.get("DestinationStatus"))
+                        rel(
+                            dest.get("StreamArn"),
+                            EdgeType.REFERENCES,
+                            "STREAMS_TO",
+                            description="Kinesis streaming destination",
+                            status=dest.get("DestinationStatus"),
+                        )
                     )
                 relations.append(
-                    rel(restore.get("SourceTableArn"), EdgeType.REFERENCES, "DEPENDS_ON",
-                        description="restored from table")
+                    rel(
+                        restore.get("SourceTableArn"),
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="restored from table",
+                    )
                 )
                 index_arns = [
                     i.get("IndexArn")
-                    for i in (table.get("GlobalSecondaryIndexes") or []) + (table.get("LocalSecondaryIndexes") or [])
+                    for i in (table.get("GlobalSecondaryIndexes") or [])
+                    + (table.get("LocalSecondaryIndexes") or [])
                     if i.get("IndexArn")
                 ]
                 return self._asset(
@@ -1314,7 +1656,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "status": table.get("TableStatus"),
                         "item_count": table.get("ItemCount", 0),
                         "size_bytes": table.get("TableSizeBytes", 0),
-                        "billing_mode": (table.get("BillingModeSummary") or {}).get("BillingMode", "PROVISIONED"),
+                        "billing_mode": (table.get("BillingModeSummary") or {}).get(
+                            "BillingMode", "PROVISIONED"
+                        ),
                         "encryption": sse.get("Status", "DISABLED"),
                         "sse_type": sse.get("SSEType"),
                         "kms_key_id": sse.get("KMSMasterKeyArn"),
@@ -1328,7 +1672,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "deletion_protection": table.get("DeletionProtectionEnabled", False),
                         "table_class": (table.get("TableClassSummary") or {}).get("TableClass"),
                         "indexes": [i.rsplit("/", 1)[-1] for i in index_arns],
-                        "kinesis_destinations": [d.get("StreamArn") for d in destinations if d.get("StreamArn")],
+                        "kinesis_destinations": [
+                            d.get("StreamArn") for d in destinations if d.get("StreamArn")
+                        ],
                         **policy_info,
                     },
                     relations=relations,
@@ -1347,14 +1693,20 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
     async def _collect_ebs_snapshots(self) -> list[CloudAsset]:
         async with self._client("ec2") as ec2:
             snaps: list[dict] = []
-            async for s in self._paginate(ec2, "describe_snapshots", "Snapshots", OwnerIds=["self"]):
+            async for s in self._paginate(
+                ec2, "describe_snapshots", "Snapshots", OwnerIds=["self"]
+            ):
                 snaps.append(s)
                 if len(snaps) >= _MAX_SNAPSHOTS:
-                    logger.warning("EBS snapshots truncated at %d in %s", _MAX_SNAPSHOTS, self._region)
+                    logger.warning(
+                        "EBS snapshots truncated at %d in %s", _MAX_SNAPSHOTS, self._region
+                    )
                     break
 
             async def perms(snap_id: str) -> tuple[str, list[dict]]:
-                resp = await ec2.describe_snapshot_attribute(Attribute="createVolumePermission", SnapshotId=snap_id)
+                resp = await ec2.describe_snapshot_attribute(
+                    Attribute="createVolumePermission", SnapshotId=snap_id
+                )
                 return snap_id, resp.get("CreateVolumePermissions") or []
 
             results = await gather_limited([lambda s=s: perms(s["SnapshotId"]) for s in snaps])
@@ -1387,7 +1739,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "sharing_known": snap_id in permissions,
                     },
                     relations=[
-                        rel(s.get("VolumeId"), EdgeType.REFERENCES, description="snapshot of volume"),
+                        rel(
+                            s.get("VolumeId"), EdgeType.REFERENCES, description="snapshot of volume"
+                        ),
                         rel(s.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
                         *self._share_relations(accounts, "createVolumePermission"),
                     ],
@@ -1408,7 +1762,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                     break
 
             async def perms(image_id: str) -> tuple[str, list[dict]]:
-                resp = await ec2.describe_image_attribute(Attribute="launchPermission", ImageId=image_id)
+                resp = await ec2.describe_image_attribute(
+                    Attribute="launchPermission", ImageId=image_id
+                )
                 return image_id, resp.get("LaunchPermissions") or []
 
             results = await gather_limited([lambda i=i: perms(i["ImageId"]) for i in images])
@@ -1419,19 +1775,32 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             grants = permissions.get(image_id, [])
             public = bool(img.get("Public")) or any(g.get("Group") == "all" for g in grants)
             accounts = [g["UserId"] for g in grants if g.get("UserId")]
-            orgs = [g.get("OrganizationArn") or g.get("OrganizationalUnitArn") for g in grants
-                    if g.get("OrganizationArn") or g.get("OrganizationalUnitArn")]
+            orgs = [
+                g.get("OrganizationArn") or g.get("OrganizationalUnitArn")
+                for g in grants
+                if g.get("OrganizationArn") or g.get("OrganizationalUnitArn")
+            ]
             ebs = [b["Ebs"] for b in img.get("BlockDeviceMappings") or [] if b.get("Ebs")]
             snapshots = [e["SnapshotId"] for e in ebs if e.get("SnapshotId")]
             kms_keys = sorted({e["KmsKeyId"] for e in ebs if e.get("KmsKeyId")})
             relations: list[dict | None] = [
-                rel(f"arn:aws:ec2:{self._region}::snapshot/{sid}", EdgeType.REFERENCES, "DEPENDS_ON",
-                    description="AMI backing snapshot")
+                rel(
+                    f"arn:aws:ec2:{self._region}::snapshot/{sid}",
+                    EdgeType.REFERENCES,
+                    "DEPENDS_ON",
+                    description="AMI backing snapshot",
+                )
                 for sid in snapshots
             ]
             relations += [rel(k, EdgeType.REFERENCES, "ENCRYPTED_BY_KMS") for k in kms_keys]
             relations += self._share_relations(accounts + orgs, "launchPermission")
-            relations.append(rel(img.get("SourceInstanceId"), EdgeType.REFERENCES, description="created from instance"))
+            relations.append(
+                rel(
+                    img.get("SourceInstanceId"),
+                    EdgeType.REFERENCES,
+                    description="created from instance",
+                )
+            )
             assets.append(
                 self._asset(
                     arn=f"arn:aws:ec2:{self._region}::image/{image_id}",
@@ -1467,14 +1836,20 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
     async def _collect_rds_snapshots(self) -> list[CloudAsset]:
         async with self._client("rds") as rds:
             instance_snaps: list[dict] = []
-            async for s in self._paginate(rds, "describe_db_snapshots", "DBSnapshots", SnapshotType="manual"):
+            async for s in self._paginate(
+                rds, "describe_db_snapshots", "DBSnapshots", SnapshotType="manual"
+            ):
                 instance_snaps.append(s)
                 if len(instance_snaps) >= _MAX_SNAPSHOTS:
                     break
             cluster_snaps: list[dict] = []
             try:
-                async for s in self._paginate(rds, "describe_db_cluster_snapshots", "DBClusterSnapshots",
-                                              SnapshotType="manual"):
+                async for s in self._paginate(
+                    rds,
+                    "describe_db_cluster_snapshots",
+                    "DBClusterSnapshots",
+                    SnapshotType="manual",
+                ):
                     cluster_snaps.append(s)
                     if len(cluster_snaps) >= _MAX_SNAPSHOTS:
                         break
@@ -1483,16 +1858,24 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
 
             async def instance_attrs(sid: str) -> tuple[str, list[dict]]:
                 resp = await rds.describe_db_snapshot_attributes(DBSnapshotIdentifier=sid)
-                return sid, (resp.get("DBSnapshotAttributesResult") or {}).get("DBSnapshotAttributes") or []
+                return sid, (resp.get("DBSnapshotAttributesResult") or {}).get(
+                    "DBSnapshotAttributes"
+                ) or []
 
             async def cluster_attrs(sid: str) -> tuple[str, list[dict]]:
-                resp = await rds.describe_db_cluster_snapshot_attributes(DBClusterSnapshotIdentifier=sid)
-                return sid, (resp.get("DBClusterSnapshotAttributesResult") or {}).get("DBClusterSnapshotAttributes") or []
+                resp = await rds.describe_db_cluster_snapshot_attributes(
+                    DBClusterSnapshotIdentifier=sid
+                )
+                return sid, (resp.get("DBClusterSnapshotAttributesResult") or {}).get(
+                    "DBClusterSnapshotAttributes"
+                ) or []
 
             inst_results = await gather_limited(
-                [lambda s=s: instance_attrs(s["DBSnapshotIdentifier"]) for s in instance_snaps])
+                [lambda s=s: instance_attrs(s["DBSnapshotIdentifier"]) for s in instance_snaps]
+            )
             cl_results = await gather_limited(
-                [lambda s=s: cluster_attrs(s["DBClusterSnapshotIdentifier"]) for s in cluster_snaps])
+                [lambda s=s: cluster_attrs(s["DBClusterSnapshotIdentifier"]) for s in cluster_snaps]
+            )
         attrs = {r[0]: r[1] for r in inst_results + cl_results if r}
 
         def restore_values(sid: str) -> list[str]:
@@ -1514,8 +1897,9 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
             public = "all" in values
             accounts = [v for v in values if _ACCOUNT_RE.match(v)]
             kms_key = s.get("KmsKeyId")
-            arn = (s.get("DBClusterSnapshotArn") if cluster else s.get("DBSnapshotArn")) or self._arn(
-                "rds", f"{'cluster-snapshot' if cluster else 'snapshot'}:{sid}")
+            arn = (
+                s.get("DBClusterSnapshotArn") if cluster else s.get("DBSnapshotArn")
+            ) or self._arn("rds", f"{'cluster-snapshot' if cluster else 'snapshot'}:{sid}")
             assets.append(
                 self._asset(
                     arn=arn,
@@ -1567,7 +1951,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         acct = self._account_id
         async with self._client("s3control") as s3c:
             account_pab = await self._account_public_access_block(s3c)
-            points = [p async for p in self._pages(s3c.list_access_points, "AccessPointList", AccountId=acct)]
+            points = [
+                p
+                async for p in self._pages(
+                    s3c.list_access_points, "AccessPointList", AccountId=acct
+                )
+            ]
 
             async def detail(ap: dict) -> CloudAsset:
                 name = ap["Name"]
@@ -1578,14 +1967,22 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                     logger.debug("Access point %s describe failed: %s", name, exc)
                 policy_public = None
                 try:
-                    policy_public = bool(((await s3c.get_access_point_policy_status(AccountId=acct, Name=name))
-                                          .get("PolicyStatus") or {}).get("IsPublic"))
+                    policy_public = bool(
+                        (
+                            (
+                                await s3c.get_access_point_policy_status(AccountId=acct, Name=name)
+                            ).get("PolicyStatus")
+                            or {}
+                        ).get("IsPublic")
+                    )
                 except Exception as exc:
                     logger.debug("Access point %s policy status failed: %s", name, exc)
                 policy_rels: list[dict] = []
                 policy_info: dict[str, Any] = {}
                 try:
-                    policy = (await s3c.get_access_point_policy(AccountId=acct, Name=name)).get("Policy")
+                    policy = (await s3c.get_access_point_policy(AccountId=acct, Name=name)).get(
+                        "Policy"
+                    )
                     if policy:
                         policy_rels, policy_info = self._resource_policy_access(policy)
                 except Exception as exc:
@@ -1593,20 +1990,37 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         logger.debug("Access point %s policy failed: %s", name, exc)
                 ap_pab = _pab(info.get("PublicAccessBlockConfiguration"))
                 origin = ap.get("NetworkOrigin") or info.get("NetworkOrigin")
-                vpc_id = (ap.get("VpcConfiguration") or info.get("VpcConfiguration") or {}).get("VpcId")
+                vpc_id = (ap.get("VpcConfiguration") or info.get("VpcConfiguration") or {}).get(
+                    "VpcId"
+                )
                 bucket = ap.get("Bucket") or info.get("Bucket")
                 bucket_account = ap.get("BucketAccountId") or info.get("BucketAccountId")
-                restricted = any(p and p.get("RestrictPublicBuckets") for p in (account_pab, ap_pab))
-                public = bool(origin == "Internet" and (policy_public or policy_info.get("public_policy")))
+                restricted = any(
+                    p and p.get("RestrictPublicBuckets") for p in (account_pab, ap_pab)
+                )
+                public = bool(
+                    origin == "Internet" and (policy_public or policy_info.get("public_policy"))
+                )
                 relations: list[dict | None] = [
-                    rel(f"arn:aws:s3:::{bucket}" if bucket else None, EdgeType.REFERENCES, "READS_FROM",
-                        description="access point bucket", bucket_account=bucket_account),
+                    rel(
+                        f"arn:aws:s3:::{bucket}" if bucket else None,
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="access point bucket",
+                        bucket_account=bucket_account,
+                    ),
                     rel(vpc_id, EdgeType.ATTACHED_TO, description="VPC-restricted access point"),
                     *policy_rels,
                 ]
                 if bucket_account and bucket_account != acct:
-                    relations.append(rel(_root(bucket_account), EdgeType.REFERENCES, "CROSS_ACCOUNT_TRUST",
-                                         description="cross-account bucket owner"))
+                    relations.append(
+                        rel(
+                            _root(bucket_account),
+                            EdgeType.REFERENCES,
+                            "CROSS_ACCOUNT_TRUST",
+                            description="cross-account bucket owner",
+                        )
+                    )
                 return self._asset(
                     arn=ap.get("AccessPointArn") or self._arn("s3", f"accesspoint/{name}"),
                     name=name,
@@ -1641,8 +2055,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
         acct = self._account_id
         # The Multi-Region Access Point control plane lives in us-west-2
         async with self._client("s3control", region="us-west-2") as s3c:
-            points = [p async for p in self._pages(s3c.list_multi_region_access_points, "AccessPoints",
-                                                   AccountId=acct)]
+            points = [
+                p
+                async for p in self._pages(
+                    s3c.list_multi_region_access_points, "AccessPoints", AccountId=acct
+                )
+            ]
         assets = []
         for p in points:
             alias = p.get("Alias") or p.get("Name", "")
@@ -1664,9 +2082,14 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "buckets": [r.get("Bucket") for r in regions],
                     },
                     relations=[
-                        rel(f"arn:aws:s3:::{r['Bucket']}", EdgeType.REFERENCES, "READS_FROM",
-                            description="Multi-Region Access Point bucket", region=r.get("Region"),
-                            bucket_account=r.get("BucketAccountId"))
+                        rel(
+                            f"arn:aws:s3:::{r['Bucket']}",
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                            description="Multi-Region Access Point bucket",
+                            region=r.get("Region"),
+                            bucket_account=r.get("BucketAccountId"),
+                        )
                         for r in regions
                         if r.get("Bucket")
                     ],
@@ -1682,26 +2105,35 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
 
     async def _collect_cognito_user_pools(self) -> list[CloudAsset]:
         async with self._client("cognito-idp") as idp:
-            pools = [p async for p in self._paginate(idp, "list_user_pools", "UserPools", MaxResults=60)]
+            pools = [
+                p async for p in self._paginate(idp, "list_user_pools", "UserPools", MaxResults=60)
+            ]
 
             async def detail(summary: dict) -> CloudAsset:
                 pool_id = summary["Id"]
                 pool = (await idp.describe_user_pool(UserPoolId=pool_id)).get("UserPool") or {}
                 clients = 0
                 try:
-                    async for _ in self._paginate(idp, "list_user_pool_clients", "UserPoolClients",
-                                                  UserPoolId=pool_id):
+                    async for _ in self._paginate(
+                        idp, "list_user_pool_clients", "UserPoolClients", UserPoolId=pool_id
+                    ):
                         clients += 1
                 except Exception as exc:
                     logger.debug("User pool %s clients failed: %s", pool_id, exc)
                 providers: list[dict] = []
                 try:
-                    providers = [p async for p in self._paginate(idp, "list_identity_providers", "Providers",
-                                                                 UserPoolId=pool_id)]
+                    providers = [
+                        p
+                        async for p in self._paginate(
+                            idp, "list_identity_providers", "Providers", UserPoolId=pool_id
+                        )
+                    ]
                 except Exception as exc:
                     logger.debug("User pool %s identity providers failed: %s", pool_id, exc)
                 lambdas = pool.get("LambdaConfig") or summary.get("LambdaConfig") or {}
-                triggers: dict[str, str] = {k: lambdas[k] for k in _COGNITO_TRIGGERS if lambdas.get(k)}
+                triggers: dict[str, str] = {
+                    k: lambdas[k] for k in _COGNITO_TRIGGERS if lambdas.get(k)
+                }
                 for k in _COGNITO_VERSIONED_TRIGGERS:
                     fn = (lambdas.get(k) or {}).get("LambdaArn")
                     if fn:
@@ -1709,16 +2141,34 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 sms = pool.get("SmsConfiguration") or {}
                 email = pool.get("EmailConfiguration") or {}
                 relations: list[dict | None] = [
-                    rel(fn, EdgeType.INVOKES, "INVOKES", description=f"{trigger} trigger", trigger=trigger)
+                    rel(
+                        fn,
+                        EdgeType.INVOKES,
+                        "INVOKES",
+                        description=f"{trigger} trigger",
+                        trigger=trigger,
+                    )
                     for trigger, fn in triggers.items()
                 ]
                 relations += [
-                    rel(sms.get("SnsCallerArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="SMS sender role"),
+                    rel(
+                        sms.get("SnsCallerArn"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="SMS sender role",
+                    ),
                     rel(lambdas.get("KMSKeyID"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                    rel(email.get("SourceArn"), EdgeType.REFERENCES, "DEPENDS_ON", description="SES identity"),
+                    rel(
+                        email.get("SourceArn"),
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="SES identity",
+                    ),
                 ]
                 arn = pool.get("Arn") or self._arn("cognito-idp", f"userpool/{pool_id}")
-                admin_only = (pool.get("AdminCreateUserConfig") or {}).get("AllowAdminCreateUserOnly")
+                admin_only = (pool.get("AdminCreateUserConfig") or {}).get(
+                    "AllowAdminCreateUserOnly"
+                )
                 return self._asset(
                     arn=arn,
                     name=pool.get("Name") or summary.get("Name") or pool_id,
@@ -1731,14 +2181,17 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "deletion_protection": pool.get("DeletionProtection"),
                         "estimated_users": pool.get("EstimatedNumberOfUsers"),
                         "self_signup_enabled": admin_only is False,
-                        "advanced_security": (pool.get("UserPoolAddOns") or {}).get("AdvancedSecurityMode"),
+                        "advanced_security": (pool.get("UserPoolAddOns") or {}).get(
+                            "AdvancedSecurityMode"
+                        ),
                         "domain": pool.get("Domain"),
                         "custom_domain": pool.get("CustomDomain"),
                         "tier": pool.get("UserPoolTier"),
                         "lambda_triggers": triggers,
                         "app_client_count": clients,
                         "identity_providers": [
-                            {"name": p.get("ProviderName"), "type": p.get("ProviderType")} for p in providers
+                            {"name": p.get("ProviderName"), "type": p.get("ProviderType")}
+                            for p in providers
                         ],
                         "created": _ts(pool.get("CreationDate")),
                     },
@@ -1752,7 +2205,12 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
 
     async def _collect_cognito_identity_pools(self) -> list[CloudAsset]:
         async with self._client("cognito-identity") as ci:
-            pools = [p async for p in self._paginate(ci, "list_identity_pools", "IdentityPools", MaxResults=60)]
+            pools = [
+                p
+                async for p in self._paginate(
+                    ci, "list_identity_pools", "IdentityPools", MaxResults=60
+                )
+            ]
 
             async def detail(summary: dict) -> CloudAsset:
                 pool_id = summary["IdentityPoolId"]
@@ -1762,29 +2220,57 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                 try:
                     resp = await ci.get_identity_pool_roles(IdentityPoolId=pool_id)
                     roles = resp.get("Roles") or {}
-                    mapping_roles = [a for a in arns_in(resp.get("RoleMappings") or {}) if ":role/" in a]
+                    mapping_roles = [
+                        a for a in arns_in(resp.get("RoleMappings") or {}) if ":role/" in a
+                    ]
                 except Exception as exc:
                     logger.debug("Identity pool %s roles failed: %s", pool_id, exc)
                 unauth = bool(pool.get("AllowUnauthenticatedIdentities"))
                 unauth_role = roles.get("unauthenticated")
                 relations: list[dict | None] = [
-                    rel(roles.get("authenticated"), EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE",
-                        description="authenticated identities role", identity_type="authenticated"),
-                    rel(unauth_role, EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE",
-                        description="unauthenticated (guest) identities role", identity_type="unauthenticated"),
+                    rel(
+                        roles.get("authenticated"),
+                        EdgeType.ASSUMES_ROLE,
+                        "ROLE_ASSUMES_ROLE",
+                        description="authenticated identities role",
+                        identity_type="authenticated",
+                    ),
+                    rel(
+                        unauth_role,
+                        EdgeType.ASSUMES_ROLE,
+                        "ROLE_ASSUMES_ROLE",
+                        description="unauthenticated (guest) identities role",
+                        identity_type="unauthenticated",
+                    ),
                 ]
                 relations += [
-                    rel(r, EdgeType.ASSUMES_ROLE, "ROLE_ASSUMES_ROLE", description="role mapping rule")
+                    rel(
+                        r,
+                        EdgeType.ASSUMES_ROLE,
+                        "ROLE_ASSUMES_ROLE",
+                        description="role mapping rule",
+                    )
                     for r in mapping_roles[:50]
                 ]
                 for provider in pool.get("CognitoIdentityProviders") or []:
                     relations.append(
-                        rel(provider.get("ProviderName"), EdgeType.REFERENCES, "DEPENDS_ON",
-                            description="Cognito user pool provider", client_id=provider.get("ClientId"))
+                        rel(
+                            provider.get("ProviderName"),
+                            EdgeType.REFERENCES,
+                            "DEPENDS_ON",
+                            description="Cognito user pool provider",
+                            client_id=provider.get("ClientId"),
+                        )
                     )
                 relations += [
-                    rel(p, EdgeType.REFERENCES, "DEPENDS_ON", description="federated identity provider")
-                    for p in (pool.get("OpenIdConnectProviderARNs") or []) + (pool.get("SamlProviderARNs") or [])
+                    rel(
+                        p,
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="federated identity provider",
+                    )
+                    for p in (pool.get("OpenIdConnectProviderARNs") or [])
+                    + (pool.get("SamlProviderARNs") or [])
                 ]
                 return self._asset(
                     arn=self._arn("cognito-identity", f"identitypool/{pool_id}"),
@@ -1797,10 +2283,13 @@ class GovernanceCollectorsMixin(AWSServiceMixin):
                         "allow_classic_flow": pool.get("AllowClassicFlow"),
                         "authenticated_role": roles.get("authenticated"),
                         "unauthenticated_role": unauth_role,
-                        "login_providers": sorted((pool.get("SupportedLoginProviders") or {}).keys()),
+                        "login_providers": sorted(
+                            (pool.get("SupportedLoginProviders") or {}).keys()
+                        ),
                         "developer_provider": pool.get("DeveloperProviderName"),
                         "cognito_providers": [
-                            p.get("ProviderName") for p in pool.get("CognitoIdentityProviders") or []
+                            p.get("ProviderName")
+                            for p in pool.get("CognitoIdentityProviders") or []
                         ],
                     },
                     relations=relations,

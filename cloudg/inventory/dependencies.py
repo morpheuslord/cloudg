@@ -86,7 +86,11 @@ class DependencyGraph:
         self._needed_by: dict[str, list[tuple[str, NetworkEdge]]] = {}
         for e in edges:
             direction = DEPENDENCY_DIRECTION.get(e.edge_type.value)
-            if direction is None or e.source_id not in self.assets or e.target_id not in self.assets:
+            if (
+                direction is None
+                or e.source_id not in self.assets
+                or e.target_id not in self.assets
+            ):
                 continue
             dependent, dependency = (
                 (e.source_id, e.target_id) if direction == "forward" else (e.target_id, e.source_id)
@@ -134,7 +138,9 @@ class DependencyGraph:
                 if nxt in seen:
                     continue
                 seen.add(nxt)
-                out.append(DependencyLink(nxt, edge.edge_type.value, edge.relationship, depth + 1, node))
+                out.append(
+                    DependencyLink(nxt, edge.edge_type.value, edge.relationship, depth + 1, node)
+                )
                 queue.append((nxt, depth + 1))
         return out
 
@@ -204,7 +210,9 @@ class DependencyGraph:
         ranked.sort(reverse=True)
         return [{**self._describe(d), "direct_dependents": n} for n, d in ranked[:top]]
 
-    def blast_radius(self, candidates: Iterable[str] | None = None, top: int = 25) -> list[dict[str, Any]]:
+    def blast_radius(
+        self, candidates: Iterable[str] | None = None, top: int = 25
+    ) -> list[dict[str, Any]]:
         """Largest transitive dependent sets among ``candidates`` (default:
         the 4x``top`` assets with the most direct dependents)."""
         if candidates is None:
@@ -219,8 +227,12 @@ class DependencyGraph:
             scored.append((len(deps), node, len(accounts - {None}), exposed))
         scored.sort(reverse=True)
         return [
-            {**self._describe(n), "transitive_dependents": count, "accounts_affected": accts,
-             "internet_exposed_dependents": exposed}
+            {
+                **self._describe(n),
+                "transitive_dependents": count,
+                "accounts_affected": accts,
+                "internet_exposed_dependents": exposed,
+            }
             for count, n, accts, exposed in scored[:top]
             if count
         ]
@@ -234,7 +246,11 @@ def cross_account_edges(assets: list[CloudAsset], edges: list[NetworkEdge]) -> l
         s, t = by_id.get(e.source_id), by_id.get(e.target_id)
         if not s or not t or not s.account_id or not t.account_id or s.account_id == t.account_id:
             continue
-        if s.asset_type in _HIERARCHY_TYPES and t.asset_type in _HIERARCHY_TYPES and e.edge_type == EdgeType.CONTAINS:
+        if (
+            s.asset_type in _HIERARCHY_TYPES
+            and t.asset_type in _HIERARCHY_TYPES
+            and e.edge_type == EdgeType.CONTAINS
+        ):
             continue
         out.append(
             {
@@ -262,12 +278,22 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         cell[svc] = cell.get(svc, False) or bool(a.metadata.get("enabled"))
 
     scanners = {
-        a.id for a in assets if a.asset_type == AssetType.VULNERABILITY_SCANNER and a.metadata.get("enabled")
+        a.id
+        for a in assets
+        if a.asset_type == AssetType.VULNERABILITY_SCANNER and a.metadata.get("enabled")
     }
-    scanned = {e.target_id for e in edges if e.edge_type == EdgeType.MONITORS and e.source_id in scanners}
+    scanned = {
+        e.target_id for e in edges if e.edge_type == EdgeType.MONITORS and e.source_id in scanners
+    }
     scannable = (AssetType.EC2, AssetType.CONTAINER_REGISTRY, AssetType.LAMBDA_FUNCTION)
     unscanned = [
-        {"name": a.name, "arn": a.arn, "type": a.asset_type.value, "account_id": a.account_id, "region": a.region}
+        {
+            "name": a.name,
+            "arn": a.arn,
+            "type": a.asset_type.value,
+            "account_id": a.account_id,
+            "region": a.region,
+        }
         for a in assets
         if a.asset_type in scannable and a.id not in scanned
     ]

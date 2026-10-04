@@ -189,7 +189,9 @@ class AssetType(str, Enum):
     DIRECT_CONNECT = "DIRECT_CONNECT"  # DX connection / VIF / gateway, ExpressRoute, Interconnect
     ROUTER = "ROUTER"  # GCP Cloud Router, Azure virtual hub router
     PREFIX_LIST = "PREFIX_LIST"
-    ENDPOINT_SERVICE = "ENDPOINT_SERVICE"  # PrivateLink service, private link service, PSC attachment
+    ENDPOINT_SERVICE = (
+        "ENDPOINT_SERVICE"  # PrivateLink service, private link service, PSC attachment
+    )
     VPC_LINK = "VPC_LINK"
     CUSTOM_DOMAIN = "CUSTOM_DOMAIN"
     DNS_RESOLVER = "DNS_RESOLVER"

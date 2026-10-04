@@ -181,7 +181,9 @@ class CloudControlCollectorsMixin(AWSServiceMixin):
                     [lambda n=n: describe(n) for n in sorted(set(names))], limit=8
                 )
             types = [d for d in described if d]
-            logger.info("Cloud Control: %d of %d resource types are listable", len(types), len(names))
+            logger.info(
+                "Cloud Control: %d of %d resource types are listable", len(types), len(names)
+            )
             if types:
                 _save_disk_cache(types)
             _types_cache = types
@@ -252,7 +254,9 @@ class CloudControlCollectorsMixin(AWSServiceMixin):
             async def list_type(type_name: str) -> list[CloudAsset]:
                 out: list[CloudAsset] = []
                 try:
-                    async for desc in self._paginate(cc, "list_resources", "ResourceDescriptions", TypeName=type_name):
+                    async for desc in self._paginate(
+                        cc, "list_resources", "ResourceDescriptions", TypeName=type_name
+                    ):
                         out.append(self._cc_asset(type_name, desc))
                         if len(out) >= _MAX_RESOURCES_PER_TYPE:
                             logger.warning("Cloud Control: %s truncated at %d", type_name, len(out))

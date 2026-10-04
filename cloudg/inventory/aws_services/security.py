@@ -51,7 +51,11 @@ _WAF_RESOURCE_TYPES = (
 
 
 def _disabled_reason(exc: BaseException) -> str:
-    return "not enabled or access denied" if error_code(exc) == "AccessDeniedException" else "not enabled"
+    return (
+        "not enabled or access denied"
+        if error_code(exc) == "AccessDeniedException"
+        else "not enabled"
+    )
 
 
 def _coverage_target(resource_id: str) -> str:
@@ -74,7 +78,10 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 d = await gd.get_detector(DetectorId=det_id)
                 admin = None
                 try:
-                    admin = ((await gd.get_administrator_account(DetectorId=det_id)).get("Administrator") or {}).get("AccountId")
+                    admin = (
+                        (await gd.get_administrator_account(DetectorId=det_id)).get("Administrator")
+                        or {}
+                    ).get("AccountId")
                 except Exception as exc:
                     logger.debug("GuardDuty admin lookup failed: %s", exc)
                 features = {f.get("Name"): f.get("Status") for f in d.get("Features", []) or []}
@@ -93,9 +100,19 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                             "administrator_account": admin,
                         },
                         relations=[
-                            rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="threat detection"),
-                            rel(f"arn:aws:iam::{admin}:root" if admin else None, EdgeType.MONITORS, "MONITORED_BY",
-                                reverse=True, description="GuardDuty administrator"),
+                            rel(
+                                self._account_ref(),
+                                EdgeType.MONITORS,
+                                "MONITORED_BY",
+                                description="threat detection",
+                            ),
+                            rel(
+                                f"arn:aws:iam::{admin}:root" if admin else None,
+                                EdgeType.MONITORS,
+                                "MONITORED_BY",
+                                reverse=True,
+                                description="GuardDuty administrator",
+                            ),
                         ],
                         aliases=[self._security_alias("guardduty")],
                     )
@@ -108,36 +125,67 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 hub = await sh.describe_hub()
             except Exception as exc:
                 if error_code(exc) in _NOT_ENABLED_CODES:
-                    return [self._disabled_asset("securityhub", AssetType.SECURITY_HUB, "Security Hub", _disabled_reason(exc))]
+                    return [
+                        self._disabled_asset(
+                            "securityhub",
+                            AssetType.SECURITY_HUB,
+                            "Security Hub",
+                            _disabled_reason(exc),
+                        )
+                    ]
                 raise
             standards: list[str] = []
             try:
-                async for s in self._paginate(sh, "get_enabled_standards", "StandardsSubscriptions"):
+                async for s in self._paginate(
+                    sh, "get_enabled_standards", "StandardsSubscriptions"
+                ):
                     standards.append(s.get("StandardsArn", "").split("/standards/", 1)[-1])
             except Exception as exc:
                 logger.debug("Security Hub standards unavailable: %s", exc)
             products: list[str] = []
             try:
-                async for p in self._paginate(sh, "list_enabled_products_for_import", "ProductSubscriptions"):
+                async for p in self._paginate(
+                    sh, "list_enabled_products_for_import", "ProductSubscriptions"
+                ):
                     products.append(p)
             except Exception as exc:
                 logger.debug("Security Hub products unavailable: %s", exc)
             admin = None
             try:
-                admin = ((await sh.get_administrator_account()).get("Administrator") or {}).get("AccountId")
+                admin = ((await sh.get_administrator_account()).get("Administrator") or {}).get(
+                    "AccountId"
+                )
             except Exception as exc:
                 logger.debug("Security Hub admin lookup failed: %s", exc)
             integrations = sorted({p.rsplit("/", 1)[-1] for p in products})
             relations = [
-                rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="posture management"),
-                rel(f"arn:aws:iam::{admin}:root" if admin else None, EdgeType.MONITORS, "MONITORED_BY",
-                    reverse=True, description="Security Hub administrator"),
+                rel(
+                    self._account_ref(),
+                    EdgeType.MONITORS,
+                    "MONITORED_BY",
+                    description="posture management",
+                ),
+                rel(
+                    f"arn:aws:iam::{admin}:root" if admin else None,
+                    EdgeType.MONITORS,
+                    "MONITORED_BY",
+                    reverse=True,
+                    description="Security Hub administrator",
+                ),
             ]
             for svc in ("guardduty", "inspector", "macie", "access-analyzer", "config"):
                 if svc in integrations or svc.replace("-", "") in integrations:
-                    alias_svc = {"inspector": "inspector2", "access-analyzer": "accessanalyzer"}.get(svc, svc)
+                    alias_svc = {
+                        "inspector": "inspector2",
+                        "access-analyzer": "accessanalyzer",
+                    }.get(svc, svc)
                     relations.append(
-                        rel(self._security_alias(alias_svc), EdgeType.MONITORS, "READS_FROM", description=f"ingests {svc} findings")
+                        rel(
+                            self._security_alias(alias_svc),
+                            EdgeType.MONITORS,
+                            "READS_FROM",
+                            description=f"ingests {svc} findings",
+                        )
                     )
             return [
                 self._asset(
@@ -160,10 +208,14 @@ class SecurityCollectorsMixin(AWSServiceMixin):
 
     async def _collect_inspector2(self) -> list[CloudAsset]:
         async with self._client("inspector2") as insp:
-            resp = await insp.batch_get_account_status(accountIds=[self._account_id] if self._account_id else [])
+            resp = await insp.batch_get_account_status(
+                accountIds=[self._account_id] if self._account_id else []
+            )
             accounts = resp.get("accounts", [])
             if not accounts:
-                return [self._disabled_asset("inspector2", AssetType.VULNERABILITY_SCANNER, "Inspector")]
+                return [
+                    self._disabled_asset("inspector2", AssetType.VULNERABILITY_SCANNER, "Inspector")
+                ]
             acct = accounts[0]
             resource_state = {
                 k: (v or {}).get("status") for k, v in (acct.get("resourceState") or {}).items()
@@ -172,7 +224,9 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 s == "ENABLED" for s in resource_state.values()
             )
             if not enabled:
-                return [self._disabled_asset("inspector2", AssetType.VULNERABILITY_SCANNER, "Inspector")]
+                return [
+                    self._disabled_asset("inspector2", AssetType.VULNERABILITY_SCANNER, "Inspector")
+                ]
 
             relations: list[dict | None] = []
             status_counts: dict[str, int] = {}
@@ -181,7 +235,9 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 async for res in self._paginate(insp, "list_coverage", "coveredResources"):
                     covered += 1
                     if covered > _MAX_COVERAGE:
-                        logger.warning("Inspector coverage truncated at %d resources", _MAX_COVERAGE)
+                        logger.warning(
+                            "Inspector coverage truncated at %d resources", _MAX_COVERAGE
+                        )
                         break
                     status = (res.get("scanStatus") or {}).get("statusCode", "UNKNOWN")
                     status_counts[status] = status_counts.get(status, 0) + 1
@@ -221,11 +277,19 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 session = await macie.get_macie_session()
             except Exception as exc:
                 if error_code(exc) in _NOT_ENABLED_CODES:
-                    return [self._disabled_asset("macie", AssetType.DATA_SECURITY_SCANNER, "Macie", _disabled_reason(exc))]
+                    return [
+                        self._disabled_asset(
+                            "macie", AssetType.DATA_SECURITY_SCANNER, "Macie", _disabled_reason(exc)
+                        )
+                    ]
                 raise
             enabled = session.get("status") == "ENABLED"
             if not enabled:
-                return [self._disabled_asset("macie", AssetType.DATA_SECURITY_SCANNER, "Macie", "paused")]
+                return [
+                    self._disabled_asset(
+                        "macie", AssetType.DATA_SECURITY_SCANNER, "Macie", "paused"
+                    )
+                ]
             return [
                 self._asset(
                     arn=self._arn("macie2", "session"),
@@ -238,7 +302,12 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                         "service_role": session.get("serviceRole"),
                     },
                     relations=[
-                        rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="sensitive data discovery"),
+                        rel(
+                            self._account_ref(),
+                            EdgeType.MONITORS,
+                            "MONITORED_BY",
+                            description="sensitive data discovery",
+                        ),
                         rel(session.get("serviceRole"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                     ],
                     aliases=[self._security_alias("macie")],
@@ -247,12 +316,16 @@ class SecurityCollectorsMixin(AWSServiceMixin):
 
     async def _collect_config(self) -> list[CloudAsset]:
         async with self._client("config") as cfg:
-            recorders = (await cfg.describe_configuration_recorders()).get("ConfigurationRecorders", [])
+            recorders = (await cfg.describe_configuration_recorders()).get(
+                "ConfigurationRecorders", []
+            )
             if not recorders:
                 return [self._disabled_asset("config", AssetType.CONFIG_RECORDER, "AWS Config")]
             statuses = {
                 s.get("name"): s
-                for s in (await cfg.describe_configuration_recorder_status()).get("ConfigurationRecordersStatus", [])
+                for s in (await cfg.describe_configuration_recorder_status()).get(
+                    "ConfigurationRecordersStatus", []
+                )
             }
             channels = (await cfg.describe_delivery_channels()).get("DeliveryChannels", [])
             rule_names: list[str] = []
@@ -263,7 +336,9 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 logger.debug("Config rule listing failed: %s", exc)
             aggregators: list[str] = []
             try:
-                async for a in self._paginate(cfg, "describe_configuration_aggregators", "ConfigurationAggregators"):
+                async for a in self._paginate(
+                    cfg, "describe_configuration_aggregators", "ConfigurationAggregators"
+                ):
                     aggregators.append(a.get("ConfigurationAggregatorName", ""))
             except Exception as exc:
                 logger.debug("Config aggregator listing failed: %s", exc)
@@ -274,14 +349,23 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 group = rec.get("recordingGroup") or {}
                 status = statuses.get(name, {})
                 relations: list[dict | None] = [
-                    rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="configuration recording"),
+                    rel(
+                        self._account_ref(),
+                        EdgeType.MONITORS,
+                        "MONITORED_BY",
+                        description="configuration recording",
+                    ),
                     rel(rec.get("roleARN"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                 ]
                 for ch in channels:
                     if ch.get("s3BucketName"):
-                        relations.append(rel(f"arn:aws:s3:::{ch['s3BucketName']}", EdgeType.LOGS_TO, "LOGS_TO"))
+                        relations.append(
+                            rel(f"arn:aws:s3:::{ch['s3BucketName']}", EdgeType.LOGS_TO, "LOGS_TO")
+                        )
                     relations.append(rel(ch.get("snsTopicARN"), EdgeType.LOGS_TO, "STREAMS_TO"))
-                    relations.append(rel(ch.get("s3KmsKeyArn"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"))
+                    relations.append(
+                        rel(ch.get("s3KmsKeyArn"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                    )
                 assets.append(
                     self._asset(
                         arn=rec.get("arn") or self._arn("config", f"config-recorder/{name}"),
@@ -308,7 +392,11 @@ class SecurityCollectorsMixin(AWSServiceMixin):
         async with self._client("accessanalyzer") as aa:
             analyzers = [a async for a in self._paginate(aa, "list_analyzers", "analyzers")]
             if not analyzers:
-                return [self._disabled_asset("accessanalyzer", AssetType.ACCESS_ANALYZER, "IAM Access Analyzer")]
+                return [
+                    self._disabled_asset(
+                        "accessanalyzer", AssetType.ACCESS_ANALYZER, "IAM Access Analyzer"
+                    )
+                ]
             return [
                 self._asset(
                     arn=a["arn"],
@@ -321,7 +409,14 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                         "type": a.get("type"),
                         "status": a.get("status"),
                     },
-                    relations=[rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description=f"{a.get('type')} analyzer")],
+                    relations=[
+                        rel(
+                            self._account_ref(),
+                            EdgeType.MONITORS,
+                            "MONITORED_BY",
+                            description=f"{a.get('type')} analyzer",
+                        )
+                    ],
                     aliases=[self._security_alias("accessanalyzer")],
                 )
                 for a in analyzers
@@ -336,7 +431,14 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                     name="detective",
                     asset_type=AssetType.THREAT_DETECTOR,
                     metadata={"security_service": "detective", "enabled": True},
-                    relations=[rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="investigation graph")],
+                    relations=[
+                        rel(
+                            self._account_ref(),
+                            EdgeType.MONITORS,
+                            "MONITORED_BY",
+                            description="investigation graph",
+                        )
+                    ],
                     aliases=[self._security_alias("detective")],
                 )
                 for g in graphs
@@ -361,19 +463,27 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 rules: list[str] = []
                 default_action = None
                 try:
-                    detail = (await waf.get_web_acl(Name=acl["Name"], Scope=scope, Id=acl["Id"]))["WebACL"]
+                    detail = (await waf.get_web_acl(Name=acl["Name"], Scope=scope, Id=acl["Id"]))[
+                        "WebACL"
+                    ]
                     default_action = next(iter(detail.get("DefaultAction") or {}), None)
                     for r in detail.get("Rules", []) or []:
-                        managed = ((r.get("Statement") or {}).get("ManagedRuleGroupStatement") or {}).get("Name")
+                        managed = (
+                            (r.get("Statement") or {}).get("ManagedRuleGroupStatement") or {}
+                        ).get("Name")
                         rules.append(managed or r.get("Name", ""))
                 except Exception as exc:
                     logger.debug("get_web_acl failed for %s: %s", acl.get("Name"), exc)
                 if scope == "REGIONAL":
                     for rtype in _WAF_RESOURCE_TYPES:
                         try:
-                            res = await waf.list_resources_for_web_acl(WebACLArn=acl["ARN"], ResourceType=rtype)
+                            res = await waf.list_resources_for_web_acl(
+                                WebACLArn=acl["ARN"], ResourceType=rtype
+                            )
                             for arn in res.get("ResourceArns", []):
-                                target = arn.split("/stages/", 1)[0] if rtype == "API_GATEWAY" else arn
+                                target = (
+                                    arn.split("/stages/", 1)[0] if rtype == "API_GATEWAY" else arn
+                                )
                                 relations.append(rel(target, EdgeType.PROTECTS, "PROTECTED_BY_WAF"))
                         except Exception as exc:
                             logger.debug("WAF resources (%s) unavailable: %s", rtype, exc)
@@ -414,12 +524,23 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                 firewall = d.get("Firewall") or {}
                 relations: list[dict | None] = [
                     rel(firewall.get("VpcId"), EdgeType.PROTECTS, "PROTECTED_BY_NACL"),
-                    rel(firewall.get("TransitGatewayId"), EdgeType.PROTECTS, "PROTECTED_BY_NACL",
-                        description="transit gateway attached firewall"),
+                    rel(
+                        firewall.get("TransitGatewayId"),
+                        EdgeType.PROTECTS,
+                        "PROTECTED_BY_NACL",
+                        description="transit gateway attached firewall",
+                    ),
                     rel(firewall.get("FirewallPolicyArn"), EdgeType.REFERENCES, "DEPENDS_ON"),
                 ]
                 for m in firewall.get("SubnetMappings", []) or []:
-                    relations.append(rel(m.get("SubnetId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+                    relations.append(
+                        rel(
+                            m.get("SubnetId"),
+                            EdgeType.CONTAINS,
+                            "SUBNET_CONTAINS_INSTANCE",
+                            reverse=True,
+                        )
+                    )
                 assets.append(
                     self._asset(
                         arn=fw["FirewallArn"],
@@ -447,12 +568,18 @@ class SecurityCollectorsMixin(AWSServiceMixin):
                     return []  # Shield Standard only: nothing to map
                 raise
             relations = [
-                rel(p.get("ResourceArn"), EdgeType.PROTECTS, "PROTECTED_BY_WAF", description=f"Shield protection {p.get('Name')}")
+                rel(
+                    p.get("ResourceArn"),
+                    EdgeType.PROTECTS,
+                    "PROTECTED_BY_WAF",
+                    description=f"Shield protection {p.get('Name')}",
+                )
                 async for p in self._paginate(shield, "list_protections", "Protections")
             ]
             return [
                 self._asset(
-                    arn=sub.get("SubscriptionArn") or f"arn:aws:shield::{self._account_id}:subscription",
+                    arn=sub.get("SubscriptionArn")
+                    or f"arn:aws:shield::{self._account_id}:subscription",
                     name="shield-advanced",
                     asset_type=AssetType.DDOS_PROTECTION,
                     region="global",
@@ -476,24 +603,50 @@ class SecurityCollectorsMixin(AWSServiceMixin):
             # from several regions is merged by ARN in the mapper.
             trails = (await ct.describe_trails(includeShadowTrails=True)).get("trailList", [])
             if not trails:
-                return [self._disabled_asset("cloudtrail", AssetType.CLOUDTRAIL, "CloudTrail", "no trail covers this region")]
+                return [
+                    self._disabled_asset(
+                        "cloudtrail",
+                        AssetType.CLOUDTRAIL,
+                        "CloudTrail",
+                        "no trail covers this region",
+                    )
+                ]
             for t in trails:
                 home = t.get("HomeRegion", self._region)
-                if home != self._region and not t.get("IsMultiRegionTrail") and not t.get("IsOrganizationTrail"):
+                if (
+                    home != self._region
+                    and not t.get("IsMultiRegionTrail")
+                    and not t.get("IsOrganizationTrail")
+                ):
                     continue
                 logging_on = None
                 if home == self._region:
                     try:
-                        logging_on = (await ct.get_trail_status(Name=t["TrailARN"])).get("IsLogging")
+                        logging_on = (await ct.get_trail_status(Name=t["TrailARN"])).get(
+                            "IsLogging"
+                        )
                     except Exception as exc:
                         logger.debug("Trail status failed: %s", exc)
                 else:
                     logging_on = True  # visible as a shadow trail: it is delivering here
                 relations = [
-                    rel(self._account_ref(), EdgeType.MONITORS, "MONITORED_BY", description="API audit logging",
-                        organization_trail=t.get("IsOrganizationTrail")),
-                    rel(f"arn:aws:s3:::{t['S3BucketName']}" if t.get("S3BucketName") else None, EdgeType.LOGS_TO, "LOGS_TO"),
-                    rel((t.get("CloudWatchLogsLogGroupArn") or "").removesuffix(":*"), EdgeType.LOGS_TO, "LOGS_TO"),
+                    rel(
+                        self._account_ref(),
+                        EdgeType.MONITORS,
+                        "MONITORED_BY",
+                        description="API audit logging",
+                        organization_trail=t.get("IsOrganizationTrail"),
+                    ),
+                    rel(
+                        f"arn:aws:s3:::{t['S3BucketName']}" if t.get("S3BucketName") else None,
+                        EdgeType.LOGS_TO,
+                        "LOGS_TO",
+                    ),
+                    rel(
+                        (t.get("CloudWatchLogsLogGroupArn") or "").removesuffix(":*"),
+                        EdgeType.LOGS_TO,
+                        "LOGS_TO",
+                    ),
                     rel(t.get("CloudWatchLogsRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                     rel(t.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
                     rel(t.get("SnsTopicARN"), EdgeType.LOGS_TO, "STREAMS_TO"),

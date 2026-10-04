@@ -211,9 +211,14 @@ def collect(
     default=None,
     help="AWS: role assumed in member accounts (default AWSControlTowerExecution)",
 )
-@click.option("--ou", "ous", multiple=True, help="AWS: only accounts under this OU (ID or name). Repeatable.")
 @click.option(
-    "--exclude-account", "exclude_accounts", multiple=True, help="AWS: skip this account. Repeatable."
+    "--ou", "ous", multiple=True, help="AWS: only accounts under this OU (ID or name). Repeatable."
+)
+@click.option(
+    "--exclude-account",
+    "exclude_accounts",
+    multiple=True,
+    help="AWS: skip this account. Repeatable.",
 )
 @click.option(
     "--ct-home-region", default=None, help="AWS: Control Tower home region (auto-detected)"
@@ -340,7 +345,9 @@ def map_inventory(
     if services:
         cfg.inventory.services = [s.strip() for s in services.split(",") if s.strip()]
     if exclude_services:
-        cfg.inventory.exclude_services = [s.strip() for s in exclude_services.split(",") if s.strip()]
+        cfg.inventory.exclude_services = [
+            s.strip() for s in exclude_services.split(",") if s.strip()
+        ]
     if kubernetes is not None:
         cfg.inventory.kubernetes = kubernetes
     if cloud_control is not None:
@@ -350,7 +357,11 @@ def map_inventory(
         "Providers": ", ".join(cfg.providers),
         "AWS regions": ", ".join(cfg.aws.regions),
         "Services": ", ".join(cfg.inventory.services)
-        + (f" (excluding {', '.join(cfg.inventory.exclude_services)})" if cfg.inventory.exclude_services else ""),
+        + (
+            f" (excluding {', '.join(cfg.inventory.exclude_services)})"
+            if cfg.inventory.exclude_services
+            else ""
+        ),
         "Kubernetes workloads": "enabled" if cfg.inventory.kubernetes else "disabled",
         "Catch-all sweep": "enabled" if sweep else "disabled",
         "Cloud Control sweep": "enabled" if cfg.inventory.cloud_control else "disabled",
@@ -412,13 +423,22 @@ def map_inventory(
     ui.ranked_table(
         "Most shared dependencies",
         ["Asset", "Type", "Direct dependents"],
-        [[d["name"], d["type"], d["direct_dependents"]] for d in analysis["shared_dependencies"][:10]],
+        [
+            [d["name"], d["type"], d["direct_dependents"]]
+            for d in analysis["shared_dependencies"][:10]
+        ],
     )
     ui.ranked_table(
         "Largest blast radius",
         ["Asset", "Type", "Dependents", "Accounts", "Exposed"],
         [
-            [d["name"], d["type"], d["transitive_dependents"], d["accounts_affected"], d["internet_exposed_dependents"]]
+            [
+                d["name"],
+                d["type"],
+                d["transitive_dependents"],
+                d["accounts_affected"],
+                d["internet_exposed_dependents"],
+            ]
             for d in analysis["largest_blast_radius"][:10]
         ],
     )
@@ -432,7 +452,9 @@ def map_inventory(
         if s.status.value == "FAILED"
     ]
     if failed:
-        ui.warn(f"{len(failed)} collectors failed (see inventory coverage / -v): {', '.join(failed[:8])}")
+        ui.warn(
+            f"{len(failed)} collectors failed (see inventory coverage / -v): {', '.join(failed[:8])}"
+        )
 
     ui.artifact("Inventory map", paths["map"])
     ui.artifact("GraphML", paths["graphml"])
@@ -491,7 +513,9 @@ def map_inventory(
 @click.option("--depth", default=3, show_default=True, help="Levels to expand")
 @click.option("--top", default=15, show_default=True, help="Rows in the overview tables")
 @click.option("--json", "as_json", is_flag=True, help="Print JSON instead of tables/trees")
-def deps(asset: str | None, map_path: str, direction: str, depth: int, top: int, as_json: bool) -> None:
+def deps(
+    asset: str | None, map_path: str, direction: str, depth: int, top: int, as_json: bool
+) -> None:
     """Explore interdependencies in a saved inventory map.
 
     With an ASSET (ARN, resource ID, internal ID, or unique name), show what
@@ -538,13 +562,22 @@ def deps(asset: str | None, map_path: str, direction: str, depth: int, top: int,
     ui.ranked_table(
         "Most shared dependencies",
         ["Asset", "Type", "Account", "Direct dependents"],
-        [[d["name"], d["type"], d["account_id"] or "-", d["direct_dependents"]] for d in overview["shared_dependencies"]],
+        [
+            [d["name"], d["type"], d["account_id"] or "-", d["direct_dependents"]]
+            for d in overview["shared_dependencies"]
+        ],
     )
     ui.ranked_table(
         "Largest blast radius",
         ["Asset", "Type", "Dependents", "Accounts", "Exposed"],
         [
-            [d["name"], d["type"], d["transitive_dependents"], d["accounts_affected"], d["internet_exposed_dependents"]]
+            [
+                d["name"],
+                d["type"],
+                d["transitive_dependents"],
+                d["accounts_affected"],
+                d["internet_exposed_dependents"],
+            ]
             for d in overview["largest_blast_radius"]
         ],
     )
@@ -552,7 +585,12 @@ def deps(asset: str | None, map_path: str, direction: str, depth: int, top: int,
         "Cross-account edges",
         ["Source", "Relationship", "Target", "External"],
         [
-            [e["source"], e["relationship"] or e["edge_type"], e["target"], "yes" if e["external"] else ""]
+            [
+                e["source"],
+                e["relationship"] or e["edge_type"],
+                e["target"],
+                "yes" if e["external"] else "",
+            ]
             for e in overview["cross_account_edges"][:top]
         ],
     )

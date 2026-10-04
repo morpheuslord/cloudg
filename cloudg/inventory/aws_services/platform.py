@@ -34,8 +34,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_RECORDS_PER_ZONE = 2000
 _ACM_KEY_TYPES = [
-    "RSA_1024", "RSA_2048", "RSA_3072", "RSA_4096",
-    "EC_prime256v1", "EC_secp384r1", "EC_secp521r1",
+    "RSA_1024",
+    "RSA_2048",
+    "RSA_3072",
+    "RSA_4096",
+    "EC_prime256v1",
+    "EC_secp384r1",
+    "EC_secp521r1",
 ]
 _DNS_RECORD_TYPES = {"A", "AAAA", "CNAME"}
 
@@ -82,35 +87,80 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                 name = bucket["Name"]
                 region = bucket.get("BucketRegion")
                 if not region:
-                    loc = (await safe(s3.get_bucket_location, Bucket=name)).get("LocationConstraint")
+                    loc = (await safe(s3.get_bucket_location, Bucket=name)).get(
+                        "LocationConstraint"
+                    )
                     region = loc or "us-east-1"
                 if region == "EU":
                     region = "eu-west-1"
-                enc_rules = ((await safe(s3.get_bucket_encryption, Bucket=name)).get("ServerSideEncryptionConfiguration") or {}).get("Rules", [])
-                sse = (enc_rules[0].get("ApplyServerSideEncryptionByDefault") or {}) if enc_rules else {}
-                pab = (await safe(s3.get_public_access_block, Bucket=name)).get("PublicAccessBlockConfiguration")
+                enc_rules = (
+                    (await safe(s3.get_bucket_encryption, Bucket=name)).get(
+                        "ServerSideEncryptionConfiguration"
+                    )
+                    or {}
+                ).get("Rules", [])
+                sse = (
+                    (enc_rules[0].get("ApplyServerSideEncryptionByDefault") or {})
+                    if enc_rules
+                    else {}
+                )
+                pab = (await safe(s3.get_public_access_block, Bucket=name)).get(
+                    "PublicAccessBlockConfiguration"
+                )
                 acl = await safe(s3.get_bucket_acl, Bucket=name)
                 notif = await safe(s3.get_bucket_notification_configuration, Bucket=name)
-                repl = (await safe(s3.get_bucket_replication, Bucket=name)).get("ReplicationConfiguration") or {}
-                logging_cfg = (await safe(s3.get_bucket_logging, Bucket=name)).get("LoggingEnabled") or {}
+                repl = (await safe(s3.get_bucket_replication, Bucket=name)).get(
+                    "ReplicationConfiguration"
+                ) or {}
+                logging_cfg = (await safe(s3.get_bucket_logging, Bucket=name)).get(
+                    "LoggingEnabled"
+                ) or {}
                 policy = (await safe(s3.get_bucket_policy, Bucket=name)).get("Policy")
 
                 relations: list[dict | None] = [
                     rel(sse.get("KMSMasterKeyID"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
                 ]
-                for key, proto in (("LambdaFunctionConfigurations", "LambdaFunctionArn"),
-                                   ("QueueConfigurations", "QueueArn"),
-                                   ("TopicConfigurations", "TopicArn")):
+                for key, proto in (
+                    ("LambdaFunctionConfigurations", "LambdaFunctionArn"),
+                    ("QueueConfigurations", "QueueArn"),
+                    ("TopicConfigurations", "TopicArn"),
+                ):
                     for cfg in notif.get(key, []) or []:
-                        relations.append(rel(cfg.get(proto), EdgeType.INVOKES, "INVOKES",
-                                             description="event notification", events=cfg.get("Events")))
+                        relations.append(
+                            rel(
+                                cfg.get(proto),
+                                EdgeType.INVOKES,
+                                "INVOKES",
+                                description="event notification",
+                                events=cfg.get("Events"),
+                            )
+                        )
                 for rule in repl.get("Rules", []) or []:
                     dest = rule.get("Destination") or {}
-                    relations.append(rel(dest.get("Bucket"), EdgeType.REFERENCES, "REPLICATES_TO",
-                                         destination_account=dest.get("Account")))
-                relations.append(rel(repl.get("Role"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="replication role"))
+                    relations.append(
+                        rel(
+                            dest.get("Bucket"),
+                            EdgeType.REFERENCES,
+                            "REPLICATES_TO",
+                            destination_account=dest.get("Account"),
+                        )
+                    )
+                relations.append(
+                    rel(
+                        repl.get("Role"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="replication role",
+                    )
+                )
                 if logging_cfg.get("TargetBucket"):
-                    relations.append(rel(f"arn:aws:s3:::{logging_cfg['TargetBucket']}", EdgeType.LOGS_TO, "LOGS_TO"))
+                    relations.append(
+                        rel(
+                            f"arn:aws:s3:::{logging_cfg['TargetBucket']}",
+                            EdgeType.LOGS_TO,
+                            "LOGS_TO",
+                        )
+                    )
                 public_policy = False
                 for st in policy_statements(policy):
                     if st.get("Effect") != "Allow":
@@ -119,10 +169,18 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                         if p == "*":
                             public_policy = public_policy or not st.get("Condition")
                             continue
-                        relations.append(rel(principal_ref(p), EdgeType.GRANTS_ACCESS, "READS_FROM", reverse=True,
-                                             description="bucket policy grant"))
+                        relations.append(
+                            rel(
+                                principal_ref(p),
+                                EdgeType.GRANTS_ACCESS,
+                                "READS_FROM",
+                                reverse=True,
+                                description="bucket policy grant",
+                            )
+                        )
                 blocked = any(
-                    bool(cfg) and all(cfg.get(k) for k in ("BlockPublicPolicy", "RestrictPublicBuckets"))
+                    bool(cfg)
+                    and all(cfg.get(k) for k in ("BlockPublicPolicy", "RestrictPublicBuckets"))
                     for cfg in (pab, account_pab)
                 )
                 return self._asset(
@@ -159,27 +217,57 @@ class PlatformCollectorsMixin(AWSServiceMixin):
     async def _collect_elbv2(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("elbv2") as elb:
-            lbs = [lb async for lb in self._paginate(elb, "describe_load_balancers", "LoadBalancers")]
+            lbs = [
+                lb async for lb in self._paginate(elb, "describe_load_balancers", "LoadBalancers")
+            ]
 
             async def lb_detail(lb: dict) -> CloudAsset:
                 arn = lb["LoadBalancerArn"]
                 relations: list[dict | None] = []
                 listeners = []
-                async for listener in self._paginate(elb, "describe_listeners", "Listeners", LoadBalancerArn=arn):
-                    listeners.append({"port": listener.get("Port"), "protocol": listener.get("Protocol"),
-                                      "ssl_policy": listener.get("SslPolicy")})
+                async for listener in self._paginate(
+                    elb, "describe_listeners", "Listeners", LoadBalancerArn=arn
+                ):
+                    listeners.append(
+                        {
+                            "port": listener.get("Port"),
+                            "protocol": listener.get("Protocol"),
+                            "ssl_policy": listener.get("SslPolicy"),
+                        }
+                    )
                     for cert in listener.get("Certificates", []) or []:
-                        relations.append(rel(cert.get("CertificateArn"), EdgeType.REFERENCES, "CERTIFICATE_SECURES"))
+                        relations.append(
+                            rel(
+                                cert.get("CertificateArn"),
+                                EdgeType.REFERENCES,
+                                "CERTIFICATE_SECURES",
+                            )
+                        )
                 attrs = {}
                 try:
                     resp = await elb.describe_load_balancer_attributes(LoadBalancerArn=arn)
                     attrs = {a["Key"]: a["Value"] for a in resp.get("Attributes", [])}
                 except Exception as exc:
                     logger.debug("LB attributes unavailable for %s: %s", arn, exc)
-                if attrs.get("access_logs.s3.enabled") == "true" and attrs.get("access_logs.s3.bucket"):
-                    relations.append(rel(f"arn:aws:s3:::{attrs['access_logs.s3.bucket']}", EdgeType.LOGS_TO, "LOGS_TO"))
+                if attrs.get("access_logs.s3.enabled") == "true" and attrs.get(
+                    "access_logs.s3.bucket"
+                ):
+                    relations.append(
+                        rel(
+                            f"arn:aws:s3:::{attrs['access_logs.s3.bucket']}",
+                            EdgeType.LOGS_TO,
+                            "LOGS_TO",
+                        )
+                    )
                 for az in lb.get("AvailabilityZones", []) or []:
-                    relations.append(rel(az.get("SubnetId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+                    relations.append(
+                        rel(
+                            az.get("SubnetId"),
+                            EdgeType.CONTAINS,
+                            "SUBNET_CONTAINS_INSTANCE",
+                            reverse=True,
+                        )
+                    )
                 internet = lb.get("Scheme") == "internet-facing"
                 return self._asset(
                     arn=arn,
@@ -194,7 +282,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                         "security_groups": lb.get("SecurityGroups", []),
                         "listeners": listeners,
                         "deletion_protection": attrs.get("deletion_protection.enabled") == "true",
-                        "drops_invalid_headers": attrs.get("routing.http.drop_invalid_header_fields.enabled") == "true",
+                        "drops_invalid_headers": attrs.get(
+                            "routing.http.drop_invalid_header_fields.enabled"
+                        )
+                        == "true",
                     },
                     relations=relations,
                     raw=lb,
@@ -219,8 +310,21 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                     for desc in health.get("TargetHealthDescriptions", []):
                         tid = (desc.get("Target") or {}).get("Id")
                         state = (desc.get("TargetHealth") or {}).get("State")
-                        targets.append({"id": tid, "port": (desc.get("Target") or {}).get("Port"), "state": state})
-                        relations.append(rel(tid, EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE", health=state))
+                        targets.append(
+                            {
+                                "id": tid,
+                                "port": (desc.get("Target") or {}).get("Port"),
+                                "state": state,
+                            }
+                        )
+                        relations.append(
+                            rel(
+                                tid,
+                                EdgeType.LOAD_BALANCER_TARGET,
+                                "LB_TARGETS_INSTANCE",
+                                health=state,
+                            )
+                        )
                 except Exception as exc:
                     logger.debug("Target health unavailable for %s: %s", arn, exc)
                 return self._asset(
@@ -244,13 +348,18 @@ class PlatformCollectorsMixin(AWSServiceMixin):
     async def _collect_elb_classic(self) -> list[CloudAsset]:
         async with self._client("elb") as elb:
             out = []
-            async for lb in self._paginate(elb, "describe_load_balancers", "LoadBalancerDescriptions"):
+            async for lb in self._paginate(
+                elb, "describe_load_balancers", "LoadBalancerDescriptions"
+            ):
                 name = lb.get("LoadBalancerName", "")
                 relations = [
                     rel(i.get("InstanceId"), EdgeType.LOAD_BALANCER_TARGET, "LB_TARGETS_INSTANCE")
                     for i in lb.get("Instances", []) or []
                 ]
-                relations += [rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in lb.get("Subnets", []) or []]
+                relations += [
+                    rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+                    for s in lb.get("Subnets", []) or []
+                ]
                 out.append(
                     self._asset(
                         arn=self._arn("elasticloadbalancing", f"loadbalancer/{name}"),
@@ -277,16 +386,40 @@ class PlatformCollectorsMixin(AWSServiceMixin):
     async def _collect_autoscaling(self) -> list[CloudAsset]:
         assets: list[CloudAsset] = []
         async with self._client("autoscaling") as asg_client:
-            async for g in self._paginate(asg_client, "describe_auto_scaling_groups", "AutoScalingGroups"):
-                lt = g.get("LaunchTemplate") or ((g.get("MixedInstancesPolicy") or {}).get("LaunchTemplate") or {}).get("LaunchTemplateSpecification") or {}
+            async for g in self._paginate(
+                asg_client, "describe_auto_scaling_groups", "AutoScalingGroups"
+            ):
+                lt = (
+                    g.get("LaunchTemplate")
+                    or ((g.get("MixedInstancesPolicy") or {}).get("LaunchTemplate") or {}).get(
+                        "LaunchTemplateSpecification"
+                    )
+                    or {}
+                )
                 relations: list[dict | None] = [
-                    rel(lt.get("LaunchTemplateId"), EdgeType.REFERENCES, "DEPENDS_ON", description="launch template"),
+                    rel(
+                        lt.get("LaunchTemplateId"),
+                        EdgeType.REFERENCES,
+                        "DEPENDS_ON",
+                        description="launch template",
+                    ),
                     rel(g.get("ServiceLinkedRoleARN"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
                 ]
-                relations += [rel(i.get("InstanceId"), EdgeType.MANAGES, "SCALES_WITH") for i in g.get("Instances", []) or []]
-                relations += [rel(tg, EdgeType.LOAD_BALANCER_TARGET, "LOAD_BALANCED_BY", reverse=True) for tg in g.get("TargetGroupARNs", []) or []]
-                subnets = [s.strip() for s in (g.get("VPCZoneIdentifier") or "").split(",") if s.strip()]
-                relations += [rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in subnets]
+                relations += [
+                    rel(i.get("InstanceId"), EdgeType.MANAGES, "SCALES_WITH")
+                    for i in g.get("Instances", []) or []
+                ]
+                relations += [
+                    rel(tg, EdgeType.LOAD_BALANCER_TARGET, "LOAD_BALANCED_BY", reverse=True)
+                    for tg in g.get("TargetGroupARNs", []) or []
+                ]
+                subnets = [
+                    s.strip() for s in (g.get("VPCZoneIdentifier") or "").split(",") if s.strip()
+                ]
+                relations += [
+                    rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+                    for s in subnets
+                ]
                 assets.append(
                     self._asset(
                         arn=g["AutoScalingGroupARN"],
@@ -298,7 +431,8 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "max_size": g.get("MaxSize"),
                             "desired_capacity": g.get("DesiredCapacity"),
                             "instance_count": len(g.get("Instances", []) or []),
-                            "launch_template": lt.get("LaunchTemplateName") or lt.get("LaunchTemplateId"),
+                            "launch_template": lt.get("LaunchTemplateName")
+                            or lt.get("LaunchTemplateId"),
                             "launch_configuration": g.get("LaunchConfigurationName"),
                             "health_check_type": g.get("HealthCheckType"),
                         },
@@ -309,17 +443,21 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
     async def _collect_launch_templates(self) -> list[CloudAsset]:
         async with self._client("ec2") as ec2:
-            templates = [t async for t in self._paginate(ec2, "describe_launch_templates", "LaunchTemplates")]
+            templates = [
+                t async for t in self._paginate(ec2, "describe_launch_templates", "LaunchTemplates")
+            ]
 
             async def detail(t: dict) -> CloudAsset:
                 data: dict[str, Any] = {}
                 try:
-                    resp = await ec2.describe_launch_template_versions(LaunchTemplateId=t["LaunchTemplateId"], Versions=["$Latest"])
+                    resp = await ec2.describe_launch_template_versions(
+                        LaunchTemplateId=t["LaunchTemplateId"], Versions=["$Latest"]
+                    )
                     versions = resp.get("LaunchTemplateVersions", [])
                     data = versions[0].get("LaunchTemplateData", {}) if versions else {}
                 except Exception as exc:
                     logger.debug("Launch template version lookup failed: %s", exc)
-                profile = (data.get("IamInstanceProfile") or {})
+                profile = data.get("IamInstanceProfile") or {}
                 sgs = list(data.get("SecurityGroupIds", []) or [])
                 for ni in data.get("NetworkInterfaces", []) or []:
                     sgs.extend(ni.get("Groups", []) or [])
@@ -334,9 +472,17 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                         "image_id": data.get("ImageId"),
                         "instance_type": data.get("InstanceType"),
                         "security_groups": sgs,
-                        "imdsv2_required": (data.get("MetadataOptions") or {}).get("HttpTokens") == "required",
+                        "imdsv2_required": (data.get("MetadataOptions") or {}).get("HttpTokens")
+                        == "required",
                     },
-                    relations=[rel(profile.get("Arn") or profile.get("Name"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="instance profile")],
+                    relations=[
+                        rel(
+                            profile.get("Arn") or profile.get("Name"),
+                            EdgeType.ASSUMES_ROLE,
+                            "RUNS_ON",
+                            description="instance profile",
+                        )
+                    ],
                     aliases=[t["LaunchTemplateId"]],
                 )
 
@@ -349,10 +495,21 @@ class PlatformCollectorsMixin(AWSServiceMixin):
             async for ep in self._paginate(ec2, "describe_vpc_endpoints", "VpcEndpoints"):
                 relations: list[dict | None] = [
                     rel(ep.get("VpcId"), EdgeType.CONTAINS, reverse=True),
-                    rel(ep.get("ServiceName"), EdgeType.ROUTE, "SERVES_TRAFFIC_TO", description="consumes endpoint service"),
+                    rel(
+                        ep.get("ServiceName"),
+                        EdgeType.ROUTE,
+                        "SERVES_TRAFFIC_TO",
+                        description="consumes endpoint service",
+                    ),
                 ]
-                relations += [rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in ep.get("SubnetIds", []) or []]
-                relations += [rel(r, EdgeType.ROUTE, "TRANSIT_ROUTED", reverse=True) for r in ep.get("RouteTableIds", []) or []]
+                relations += [
+                    rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+                    for s in ep.get("SubnetIds", []) or []
+                ]
+                relations += [
+                    rel(r, EdgeType.ROUTE, "TRANSIT_ROUTED", reverse=True)
+                    for r in ep.get("RouteTableIds", []) or []
+                ]
                 assets.append(
                     self._asset(
                         arn=self._arn("ec2", f"vpc-endpoint/{ep['VpcEndpointId']}"),
@@ -365,7 +522,9 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "endpoint_type": ep.get("VpcEndpointType"),
                             "state": ep.get("State"),
                             "private_dns": ep.get("PrivateDnsEnabled"),
-                            "security_groups": [g.get("GroupId") for g in ep.get("Groups", []) or []],
+                            "security_groups": [
+                                g.get("GroupId") for g in ep.get("Groups", []) or []
+                            ],
                         },
                         relations=relations,
                         aliases=[ep["VpcEndpointId"]],
@@ -396,9 +555,16 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "status": fl.get("FlowLogStatus"),
                         },
                         relations=[
-                            rel(fl.get("ResourceId"), EdgeType.MONITORS, "MONITORED_BY", description="flow logging"),
+                            rel(
+                                fl.get("ResourceId"),
+                                EdgeType.MONITORS,
+                                "MONITORED_BY",
+                                description="flow logging",
+                            ),
                             rel(dest, EdgeType.LOGS_TO, "LOGS_TO"),
-                            rel(fl.get("DeliverLogsPermissionArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
+                            rel(
+                                fl.get("DeliverLogsPermissionArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"
+                            ),
                         ],
                     )
                 )
@@ -415,14 +581,47 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                 group = db.get("DBSubnetGroup") or {}
                 relations: list[dict | None] = [
                     rel(db.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                    rel(db.get("DBClusterIdentifier"), EdgeType.CONTAINS, reverse=True, description="cluster member"),
+                    rel(
+                        db.get("DBClusterIdentifier"),
+                        EdgeType.CONTAINS,
+                        reverse=True,
+                        description="cluster member",
+                    ),
                     rel(db.get("MonitoringRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON"),
-                    rel(db.get("ReadReplicaSourceDBInstanceIdentifier"), EdgeType.REFERENCES, "REPLICATES_TO", reverse=True),
+                    rel(
+                        db.get("ReadReplicaSourceDBInstanceIdentifier"),
+                        EdgeType.REFERENCES,
+                        "REPLICATES_TO",
+                        reverse=True,
+                    ),
                 ]
-                relations += [rel(s.get("SubnetIdentifier"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in group.get("Subnets", []) or []]
-                relations += [rel(r.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON", feature=r.get("FeatureName")) for r in db.get("AssociatedRoles", []) or []]
+                relations += [
+                    rel(
+                        s.get("SubnetIdentifier"),
+                        EdgeType.CONTAINS,
+                        "SUBNET_CONTAINS_INSTANCE",
+                        reverse=True,
+                    )
+                    for s in group.get("Subnets", []) or []
+                ]
+                relations += [
+                    rel(
+                        r.get("RoleArn"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        feature=r.get("FeatureName"),
+                    )
+                    for r in db.get("AssociatedRoles", []) or []
+                ]
                 secret = (db.get("MasterUserSecret") or {}).get("SecretArn")
-                relations.append(rel(secret, EdgeType.REFERENCES, "READS_FROM", description="managed master secret"))
+                relations.append(
+                    rel(
+                        secret,
+                        EdgeType.REFERENCES,
+                        "READS_FROM",
+                        description="managed master secret",
+                    )
+                )
                 assets.append(
                     self._asset(
                         arn=db.get("DBInstanceArn", ""),
@@ -438,7 +637,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "storage_encrypted": db.get("StorageEncrypted", False),
                             "kms_key_id": db.get("KmsKeyId"),
                             "vpc_id": group.get("VpcId"),
-                            "security_groups": [g.get("VpcSecurityGroupId") for g in db.get("VpcSecurityGroups", []) or []],
+                            "security_groups": [
+                                g.get("VpcSecurityGroupId")
+                                for g in db.get("VpcSecurityGroups", []) or []
+                            ],
                             "endpoint": (db.get("Endpoint") or {}).get("Address"),
                             "cluster": db.get("DBClusterIdentifier"),
                             "deletion_protection": db.get("DeletionProtection"),
@@ -453,9 +655,16 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                 async for c in self._paginate(rds, "describe_db_clusters", "DBClusters"):
                     relations = [
                         rel(c.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
-                        rel((c.get("MasterUserSecret") or {}).get("SecretArn"), EdgeType.REFERENCES, "READS_FROM"),
+                        rel(
+                            (c.get("MasterUserSecret") or {}).get("SecretArn"),
+                            EdgeType.REFERENCES,
+                            "READS_FROM",
+                        ),
                     ]
-                    relations += [rel(r.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON") for r in c.get("AssociatedRoles", []) or []]
+                    relations += [
+                        rel(r.get("RoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")
+                        for r in c.get("AssociatedRoles", []) or []
+                    ]
                     assets.append(
                         self._asset(
                             arn=c["DBClusterArn"],
@@ -468,13 +677,23 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                                 "status": c.get("Status"),
                                 "storage_encrypted": c.get("StorageEncrypted"),
                                 "kms_key_id": c.get("KmsKeyId"),
-                                "security_groups": [g.get("VpcSecurityGroupId") for g in c.get("VpcSecurityGroups", []) or []],
-                                "members": [m.get("DBInstanceIdentifier") for m in c.get("DBClusterMembers", []) or []],
+                                "security_groups": [
+                                    g.get("VpcSecurityGroupId")
+                                    for g in c.get("VpcSecurityGroups", []) or []
+                                ],
+                                "members": [
+                                    m.get("DBInstanceIdentifier")
+                                    for m in c.get("DBClusterMembers", []) or []
+                                ],
                                 "endpoint": c.get("Endpoint"),
                             },
                             relations=relations,
                             exposed=bool(c.get("PubliclyAccessible")),
-                            aliases=[c.get("DBClusterIdentifier"), c.get("Endpoint"), c.get("ReaderEndpoint")],
+                            aliases=[
+                                c.get("DBClusterIdentifier"),
+                                c.get("Endpoint"),
+                                c.get("ReaderEndpoint"),
+                            ],
                         )
                     )
             except Exception as exc:
@@ -487,18 +706,33 @@ class PlatformCollectorsMixin(AWSServiceMixin):
             access_points: dict[str, list[str]] = {}
             try:
                 async for ap in self._paginate(efs, "describe_access_points", "AccessPoints"):
-                    access_points.setdefault(ap.get("FileSystemId", ""), []).append(ap.get("AccessPointArn"))
+                    access_points.setdefault(ap.get("FileSystemId", ""), []).append(
+                        ap.get("AccessPointArn")
+                    )
             except Exception as exc:
                 logger.debug("EFS access point listing failed: %s", exc)
             async for fs in self._paginate(efs, "describe_file_systems", "FileSystems"):
                 fs_id = fs["FileSystemId"]
-                relations: list[dict | None] = [rel(fs.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")]
+                relations: list[dict | None] = [
+                    rel(fs.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                ]
                 sgs: list[str] = []
                 try:
-                    async for mt in self._paginate(efs, "describe_mount_targets", "MountTargets", FileSystemId=fs_id):
-                        relations.append(rel(mt.get("SubnetId"), EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True))
+                    async for mt in self._paginate(
+                        efs, "describe_mount_targets", "MountTargets", FileSystemId=fs_id
+                    ):
+                        relations.append(
+                            rel(
+                                mt.get("SubnetId"),
+                                EdgeType.CONTAINS,
+                                "SUBNET_CONTAINS_INSTANCE",
+                                reverse=True,
+                            )
+                        )
                         try:
-                            resp = await efs.describe_mount_target_security_groups(MountTargetId=mt["MountTargetId"])
+                            resp = await efs.describe_mount_target_security_groups(
+                                MountTargetId=mt["MountTargetId"]
+                            )
                             sgs.extend(resp.get("SecurityGroups", []))
                         except Exception as exc:
                             logger.debug("Mount target SG lookup failed: %s", exc)
@@ -506,7 +740,8 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                     logger.debug("Mount target listing failed for %s: %s", fs_id, exc)
                 assets.append(
                     self._asset(
-                        arn=fs.get("FileSystemArn") or self._arn("elasticfilesystem", f"file-system/{fs_id}"),
+                        arn=fs.get("FileSystemArn")
+                        or self._arn("elasticfilesystem", f"file-system/{fs_id}"),
                         name=fs.get("Name") or fs_id,
                         asset_type=AssetType.FILE_SYSTEM,
                         tags=fs.get("Tags"),
@@ -542,7 +777,8 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                 sgs = sorted({sg for m in members for sg in node_sgs(nodes.get(m, {})) if sg})
                 assets.append(
                     self._asset(
-                        arn=rg.get("ARN") or self._arn("elasticache", f"replicationgroup:{rg['ReplicationGroupId']}"),
+                        arn=rg.get("ARN")
+                        or self._arn("elasticache", f"replicationgroup:{rg['ReplicationGroupId']}"),
                         name=rg["ReplicationGroupId"],
                         asset_type=AssetType.CACHE_CLUSTER,
                         metadata={
@@ -555,11 +791,17 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "auth_token_enabled": rg.get("AuthTokenEnabled"),
                             "kms_key_id": rg.get("KmsKeyId"),
                         },
-                        relations=[rel(rg.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")],
+                        relations=[
+                            rel(rg.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                        ],
                         aliases=[
                             rg["ReplicationGroupId"],
                             *members,
-                            *(nodes.get(m, {}).get("ARN") or self._arn("elasticache", f"cluster:{m}") for m in members),
+                            *(
+                                nodes.get(m, {}).get("ARN")
+                                or self._arn("elasticache", f"cluster:{m}")
+                                for m in members
+                            ),
                         ],
                     )
                 )
@@ -586,19 +828,35 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
     async def _collect_opensearch(self) -> list[CloudAsset]:
         async with self._client("opensearch") as os_client:
-            names = [d["DomainName"] for d in (await os_client.list_domain_names()).get("DomainNames", [])]
+            names = [
+                d["DomainName"]
+                for d in (await os_client.list_domain_names()).get("DomainNames", [])
+            ]
             assets = []
             for i in range(0, len(names), 5):
                 resp = await os_client.describe_domains(DomainNames=names[i : i + 5])
                 for d in resp.get("DomainStatusList", []):
                     vpc = d.get("VPCOptions") or {}
                     relations: list[dict | None] = [
-                        rel((d.get("EncryptionAtRestOptions") or {}).get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS"),
+                        rel(
+                            (d.get("EncryptionAtRestOptions") or {}).get("KmsKeyId"),
+                            EdgeType.REFERENCES,
+                            "ENCRYPTED_BY_KMS",
+                        ),
                     ]
-                    relations += [rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True) for s in vpc.get("SubnetIds", []) or []]
+                    relations += [
+                        rel(s, EdgeType.CONTAINS, "SUBNET_CONTAINS_INSTANCE", reverse=True)
+                        for s in vpc.get("SubnetIds", []) or []
+                    ]
                     for opt in (d.get("LogPublishingOptions") or {}).values():
                         if opt.get("Enabled"):
-                            relations.append(rel((opt.get("CloudWatchLogsLogGroupArn") or "").removesuffix(":*"), EdgeType.LOGS_TO, "LOGS_TO"))
+                            relations.append(
+                                rel(
+                                    (opt.get("CloudWatchLogsLogGroupArn") or "").removesuffix(":*"),
+                                    EdgeType.LOGS_TO,
+                                    "LOGS_TO",
+                                )
+                            )
                     assets.append(
                         self._asset(
                             arn=d["ARN"],
@@ -609,9 +867,14 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                                 "in_vpc": bool(vpc),
                                 "vpc_id": vpc.get("VPCId"),
                                 "security_groups": vpc.get("SecurityGroupIds", []) or [],
-                                "endpoint": d.get("Endpoint") or (d.get("Endpoints") or {}).get("vpc"),
-                                "fine_grained_access": (d.get("AdvancedSecurityOptions") or {}).get("Enabled"),
-                                "node_to_node_encryption": (d.get("NodeToNodeEncryptionOptions") or {}).get("Enabled"),
+                                "endpoint": d.get("Endpoint")
+                                or (d.get("Endpoints") or {}).get("vpc"),
+                                "fine_grained_access": (d.get("AdvancedSecurityOptions") or {}).get(
+                                    "Enabled"
+                                ),
+                                "node_to_node_encryption": (
+                                    d.get("NodeToNodeEncryptionOptions") or {}
+                                ).get("Enabled"),
                             },
                             relations=relations,
                             exposed=not vpc,
@@ -624,8 +887,13 @@ class PlatformCollectorsMixin(AWSServiceMixin):
         async with self._client("redshift") as rs:
             async for c in self._paginate(rs, "describe_clusters", "Clusters"):
                 cid = c["ClusterIdentifier"]
-                relations: list[dict | None] = [rel(c.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")]
-                relations += [rel(r.get("IamRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON") for r in c.get("IamRoles", []) or []]
+                relations: list[dict | None] = [
+                    rel(c.get("KmsKeyId"), EdgeType.REFERENCES, "ENCRYPTED_BY_KMS")
+                ]
+                relations += [
+                    rel(r.get("IamRoleArn"), EdgeType.ASSUMES_ROLE, "RUNS_ON")
+                    for r in c.get("IamRoles", []) or []
+                ]
                 assets.append(
                     self._asset(
                         arn=c.get("ClusterNamespaceArn") or self._arn("redshift", f"cluster:{cid}"),
@@ -638,7 +906,10 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                             "encrypted": c.get("Encrypted"),
                             "publicly_accessible": c.get("PubliclyAccessible"),
                             "vpc_id": c.get("VpcId"),
-                            "security_groups": [g.get("VpcSecurityGroupId") for g in c.get("VpcSecurityGroups", []) or []],
+                            "security_groups": [
+                                g.get("VpcSecurityGroupId")
+                                for g in c.get("VpcSecurityGroups", []) or []
+                            ],
                             "endpoint": (c.get("Endpoint") or {}).get("Address"),
                         },
                         relations=relations,
@@ -664,8 +935,15 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                 if private:
                     try:
                         detail = await r53.get_hosted_zone(Id=zone_id)
-                        zone_rel = [rel(v.get("VPCId"), EdgeType.ATTACHED_TO, "DNS_RESOLVED", description="private zone association")
-                                    for v in detail.get("VPCs", []) or []]
+                        zone_rel = [
+                            rel(
+                                v.get("VPCId"),
+                                EdgeType.ATTACHED_TO,
+                                "DNS_RESOLVED",
+                                description="private zone association",
+                            )
+                            for v in detail.get("VPCs", []) or []
+                        ]
                     except Exception as exc:
                         logger.debug("Private zone VPC lookup failed: %s", exc)
                 assets.append(
@@ -674,30 +952,47 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                         name=z["Name"].rstrip("."),
                         asset_type=AssetType.DNS_ZONE,
                         region="global",
-                        metadata={"zone_id": zone_id, "private": private, "record_count": z.get("ResourceRecordSetCount")},
+                        metadata={
+                            "zone_id": zone_id,
+                            "private": private,
+                            "record_count": z.get("ResourceRecordSetCount"),
+                        },
                         relations=zone_rel,
                         aliases=[zone_id],
                     )
                 )
                 count = 0
                 try:
-                    async for rr in self._paginate(r53, "list_resource_record_sets", "ResourceRecordSets", HostedZoneId=zone_id):
+                    async for rr in self._paginate(
+                        r53, "list_resource_record_sets", "ResourceRecordSets", HostedZoneId=zone_id
+                    ):
                         if rr.get("Type") not in _DNS_RECORD_TYPES:
                             continue
                         count += 1
                         if count > _MAX_RECORDS_PER_ZONE:
-                            logger.warning("Route 53 zone %s truncated at %d records", z["Name"], _MAX_RECORDS_PER_ZONE)
+                            logger.warning(
+                                "Route 53 zone %s truncated at %d records",
+                                z["Name"],
+                                _MAX_RECORDS_PER_ZONE,
+                            )
                             break
                         alias = rr.get("AliasTarget") or {}
                         values = [r.get("Value", "") for r in rr.get("ResourceRecords", []) or []]
-                        targets = [_dns(alias.get("DNSName"))] if alias else [_dns(v) if rr["Type"] == "CNAME" else v for v in values]
+                        targets = (
+                            [_dns(alias.get("DNSName"))]
+                            if alias
+                            else [_dns(v) if rr["Type"] == "CNAME" else v for v in values]
+                        )
                         name = _dns(rr["Name"])
-                        relations: list[dict | None] = [rel(zone_arn, EdgeType.CONTAINS, reverse=True)]
+                        relations: list[dict | None] = [
+                            rel(zone_arn, EdgeType.CONTAINS, reverse=True)
+                        ]
                         relations += [rel(t, EdgeType.ROUTE, "DNS_RESOLVED") for t in targets]
                         set_id = rr.get("SetIdentifier")
                         assets.append(
                             self._asset(
-                                arn=f"{zone_arn}/{rr['Type']}/{name}" + (f"/{set_id}" if set_id else ""),
+                                arn=f"{zone_arn}/{rr['Type']}/{name}"
+                                + (f"/{set_id}" if set_id else ""),
                                 name=name,
                                 asset_type=AssetType.DNS_RECORD,
                                 region="global",
@@ -706,7 +1001,9 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                                     "alias": bool(alias),
                                     "values": targets,
                                     "private_zone": private,
-                                    "routing_policy": "weighted" if "Weight" in rr else ("latency" if "Region" in rr else "simple"),
+                                    "routing_policy": "weighted"
+                                    if "Weight" in rr
+                                    else ("latency" if "Region" in rr else "simple"),
                                 },
                                 relations=relations,
                                 exposed=not private,
@@ -726,18 +1023,41 @@ class PlatformCollectorsMixin(AWSServiceMixin):
 
             async def detail(stack: dict) -> CloudAsset:
                 relations: list[dict | None] = [
-                    rel(stack.get("RoleARN"), EdgeType.ASSUMES_ROLE, "RUNS_ON", description="stack service role"),
-                    rel(stack.get("ParentId"), EdgeType.MANAGES, "OWNED_BY", reverse=True, description="nested stack"),
+                    rel(
+                        stack.get("RoleARN"),
+                        EdgeType.ASSUMES_ROLE,
+                        "RUNS_ON",
+                        description="stack service role",
+                    ),
+                    rel(
+                        stack.get("ParentId"),
+                        EdgeType.MANAGES,
+                        "OWNED_BY",
+                        reverse=True,
+                        description="nested stack",
+                    ),
                 ]
                 types: dict[str, int] = {}
                 if self._stack_resources:
-                    async for r in self._paginate(cfn, "list_stack_resources", "StackResourceSummaries", StackName=stack["StackId"]):
+                    async for r in self._paginate(
+                        cfn,
+                        "list_stack_resources",
+                        "StackResourceSummaries",
+                        StackName=stack["StackId"],
+                    ):
                         rtype = r.get("ResourceType", "")
                         types[rtype] = types.get(rtype, 0) + 1
                         physical = r.get("PhysicalResourceId")
                         if physical and rtype != "AWS::CloudFormation::Stack":
-                            relations.append(rel(physical, EdgeType.MANAGES, "OWNED_BY",
-                                                 logical_id=r.get("LogicalResourceId"), resource_type=rtype))
+                            relations.append(
+                                rel(
+                                    physical,
+                                    EdgeType.MANAGES,
+                                    "OWNED_BY",
+                                    logical_id=r.get("LogicalResourceId"),
+                                    resource_type=rtype,
+                                )
+                            )
                 return self._asset(
                     arn=stack["StackId"],
                     name=stack["StackName"],
@@ -745,7 +1065,9 @@ class PlatformCollectorsMixin(AWSServiceMixin):
                     tags=stack.get("Tags"),
                     metadata={
                         "status": stack.get("StackStatus"),
-                        "drift_status": (stack.get("DriftInformation") or {}).get("StackDriftStatus"),
+                        "drift_status": (stack.get("DriftInformation") or {}).get(
+                            "StackDriftStatus"
+                        ),
                         "termination_protection": stack.get("EnableTerminationProtection"),
                         "created": str(stack.get("CreationTime", "")),
                         "last_updated": str(stack.get("LastUpdatedTime", "")),
@@ -798,7 +1120,9 @@ class PlatformCollectorsMixin(AWSServiceMixin):
             ]
 
             async def detail(c: dict) -> CloudAsset:
-                cert = (await acm.describe_certificate(CertificateArn=c["CertificateArn"]))["Certificate"]
+                cert = (await acm.describe_certificate(CertificateArn=c["CertificateArn"]))[
+                    "Certificate"
+                ]
                 return self._asset(
                     arn=cert["CertificateArn"],
                     name=cert.get("DomainName", ""),

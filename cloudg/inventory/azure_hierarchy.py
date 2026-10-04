@@ -129,7 +129,9 @@ def _management_group_assets(rows: list[dict[str, Any]]) -> tuple[list[CloudAsse
         props = row.get("properties") or {}
         details = _get(props, "details") or {}
         parent = _get(details, "parent") or {}
-        parent_name = _get(parent, "name") or (str(_get(parent, "id") or "").rsplit("/", 1)[-1] or None)
+        parent_name = _get(parent, "name") or (
+            str(_get(parent, "id") or "").rsplit("/", 1)[-1] or None
+        )
         tenant = row.get("tenantId") or _get(props, "tenantId")
         is_root = not parent_name or (tenant is not None and name.lower() == str(tenant).lower())
         if is_root:
@@ -152,11 +154,18 @@ def _management_group_assets(rows: list[dict[str, Any]]) -> tuple[list[CloudAsse
                     "landing_zone": archetype is not None,
                     "alz_archetype": archetype,
                     "ancestors": [
-                        _get(a, "name") for a in _list(_get(details, "managementGroupAncestorsChain")) if _get(a, "name")
+                        _get(a, "name")
+                        for a in _list(_get(details, "managementGroupAncestorsChain"))
+                        if _get(a, "name")
                     ],
                 },
                 [
-                    rel(management_group_ref(parent_name), EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT", reverse=True)
+                    rel(
+                        management_group_ref(parent_name),
+                        EdgeType.CONTAINS,
+                        "ORG_CONTAINS_ACCOUNT",
+                        reverse=True,
+                    )
                     if parent_name and not is_root
                     else None
                 ],
@@ -176,9 +185,17 @@ def _subscription_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
         if not sub:
             continue
         props = row.get("properties") or {}
-        chain = [_get(a, "name") for a in _list(_get(props, "managementGroupAncestorsChain")) if _get(a, "name")]
+        chain = [
+            _get(a, "name")
+            for a in _list(_get(props, "managementGroupAncestorsChain"))
+            if _get(a, "name")
+        ]
         parent = chain[0] if chain else None
-        display = row.get("name") if row.get("name") and row.get("name") != sub else _get(props, "displayName")
+        display = (
+            row.get("name")
+            if row.get("name") and row.get("name") != sub
+            else _get(props, "displayName")
+        )
         assets.append(
             _asset(
                 subscription_ref(sub),
@@ -194,8 +211,16 @@ def _subscription_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
                     "management_group_path": list(reversed(chain)),
                     "resource_type": "microsoft.resources/subscriptions",
                 },
-                [rel(management_group_ref(parent), EdgeType.CONTAINS, "ORG_CONTAINS_ACCOUNT", reverse=True)
-                 if parent else None],
+                [
+                    rel(
+                        management_group_ref(parent),
+                        EdgeType.CONTAINS,
+                        "ORG_CONTAINS_ACCOUNT",
+                        reverse=True,
+                    )
+                    if parent
+                    else None
+                ],
                 [sub],
                 account_id=sub,
                 tags=row.get("tags"),
@@ -241,8 +266,14 @@ def _policy_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
                         "assignment_identity": principal,
                     },
                     [
-                        rel(scope, EdgeType.GOVERNS, "COMPLIANCE_GOVERNS", description=f"policy {display}",
-                            enforcement_mode=enforcement, not_scopes=not_scopes)
+                        rel(
+                            scope,
+                            EdgeType.GOVERNS,
+                            "COMPLIANCE_GOVERNS",
+                            description=f"policy {display}",
+                            enforcement_mode=enforcement,
+                            not_scopes=not_scopes,
+                        )
                         if scope and scope != "/"
                         else None
                     ],
@@ -272,10 +303,22 @@ def _policy_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
                         "expires_on": _get(props, "expiresOn"),
                     },
                     [
-                        rel(scope, EdgeType.GOVERNS, "COMPLIANCE_GOVERNS", description=f"exemption {display}",
-                            exemption=True, category=category) if scope else None,
-                        rel(assignment.lower() if isinstance(assignment, str) else None, EdgeType.REFERENCES,
-                            "DEPENDS_ON", description="exempted assignment"),
+                        rel(
+                            scope,
+                            EdgeType.GOVERNS,
+                            "COMPLIANCE_GOVERNS",
+                            description=f"exemption {display}",
+                            exemption=True,
+                            category=category,
+                        )
+                        if scope
+                        else None,
+                        rel(
+                            assignment.lower() if isinstance(assignment, str) else None,
+                            EdgeType.REFERENCES,
+                            "DEPENDS_ON",
+                            description="exempted assignment",
+                        ),
                     ],
                     [rid.lower()],
                     account_id=sub,

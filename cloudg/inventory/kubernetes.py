@@ -110,7 +110,9 @@ class KubernetesReader:
             for item in data.get("items", []) or []:
                 seen += 1
                 if seen > _MAX_OBJECTS:
-                    logger.warning("Kubernetes listing %s truncated at %d objects", path, _MAX_OBJECTS)
+                    logger.warning(
+                        "Kubernetes listing %s truncated at %d objects", path, _MAX_OBJECTS
+                    )
                     return
                 yield item
             token = (data.get("metadata") or {}).get("continue")
@@ -122,7 +124,9 @@ class KubernetesReader:
 def _pod_spec(kind: str, obj: dict[str, Any]) -> dict[str, Any]:
     spec = obj.get("spec") or {}
     if kind == "CronJob":
-        return (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+        return (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get(
+            "spec"
+        ) or {}
     return (spec.get("template") or {}).get("spec") or {}
 
 
@@ -233,11 +237,18 @@ def map_cluster_objects(
             workloads.append((ns, kind, meta["name"], labels))
             relations: list[dict | None] = [ns_rel(ns)]
             relations += [
-                rel(image_repository(img), EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {img}")
+                rel(
+                    image_repository(img), EdgeType.USES_IMAGE, "RUNS_ON", description=f"runs {img}"
+                )
                 for img in dict.fromkeys(images)
             ]
             relations.append(
-                rel(k8s_identifier(cluster_arn, ns, "ServiceAccount", sa_name), EdgeType.REFERENCES, "RUNS_ON", description="runs as service account")
+                rel(
+                    k8s_identifier(cluster_arn, ns, "ServiceAccount", sa_name),
+                    EdgeType.REFERENCES,
+                    "RUNS_ON",
+                    description="runs as service account",
+                )
             )
             spec = obj.get("spec") or {}
             status = obj.get("status") or {}
@@ -255,7 +266,8 @@ def map_cluster_objects(
                         "service_account": sa_name,
                         "host_network": bool(pod.get("hostNetwork")),
                         "privileged_containers": [
-                            c.get("name") for c in containers
+                            c.get("name")
+                            for c in containers
                             if (c.get("securityContext") or {}).get("privileged")
                         ],
                         "node_selector": pod.get("nodeSelector") or {},
@@ -275,11 +287,23 @@ def map_cluster_objects(
             for w_ns, w_kind, w_name, w_labels in workloads:
                 if w_ns == ns and all(w_labels.get(k) == v for k, v in selector.items()):
                     relations.append(
-                        rel(k8s_identifier(cluster_arn, w_ns, w_kind, w_name), EdgeType.LOAD_BALANCER_TARGET, "SERVES_TRAFFIC_TO")
+                        rel(
+                            k8s_identifier(cluster_arn, w_ns, w_kind, w_name),
+                            EdgeType.LOAD_BALANCER_TARGET,
+                            "SERVES_TRAFFIC_TO",
+                        )
                     )
         hostnames = _lb_hostnames(svc)
         for host in hostnames:
-            relations.append(rel(host, EdgeType.ROUTE, "LOAD_BALANCED_BY", reverse=True, description="cloud load balancer"))
+            relations.append(
+                rel(
+                    host,
+                    EdgeType.ROUTE,
+                    "LOAD_BALANCED_BY",
+                    reverse=True,
+                    description="cloud load balancer",
+                )
+            )
         svc_type = spec.get("type", "ClusterIP")
         assets.append(
             asset(
@@ -291,7 +315,10 @@ def map_cluster_objects(
                     "service_type": svc_type,
                     "ports": [p.get("port") for p in spec.get("ports", []) or []],
                     "load_balancer_hostnames": hostnames,
-                    "internal": (meta.get("annotations") or {}).get("service.beta.kubernetes.io/aws-load-balancer-scheme") == "internal",
+                    "internal": (meta.get("annotations") or {}).get(
+                        "service.beta.kubernetes.io/aws-load-balancer-scheme"
+                    )
+                    == "internal",
                 },
                 relations,
                 labels=meta.get("labels"),
@@ -313,7 +340,7 @@ def map_cluster_objects(
         if default:
             backends.add(default)
         for rule in spec.get("rules", []) or []:
-            for p in ((rule.get("http") or {}).get("paths") or []):
+            for p in (rule.get("http") or {}).get("paths") or []:
                 name = ((p.get("backend") or {}).get("service") or {}).get("name")
                 if name:
                     backends.add(name)
@@ -370,4 +397,3 @@ __all__ = [
     "eks_token",
     "map_cluster_objects",
 ]
-

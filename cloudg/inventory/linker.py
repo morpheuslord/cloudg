@@ -80,8 +80,18 @@ _SKIP_GENERIC_KEYS = {"relations", "aliases", "assume_role_policy"}
 
 # Identifiers that are globally unique; ambiguity never needs scoping
 _GLOBAL_PREFIXES = (
-    "arn:", "/subscriptions/", "/providers/", "//", "k8s://", "cloudg:", "aws-security:",
-    "azure-security:", "entra:", "loganalytics:", "gcp-principal:", "k8s-gke://",
+    "arn:",
+    "/subscriptions/",
+    "/providers/",
+    "//",
+    "k8s://",
+    "cloudg:",
+    "aws-security:",
+    "azure-security:",
+    "entra:",
+    "loganalytics:",
+    "gcp-principal:",
+    "k8s-gke://",
 )
 # Synthetic identifier schemes whose last path segment is not a usable short ID
 _NO_TAIL_PREFIXES = ("k8s://", "k8s-gke://", "gcp-principal:", "entra:", "loganalytics:")
@@ -132,7 +142,8 @@ class RelationshipLinker:
         lowered = identifier.lower()
         if lowered != identifier and (
             identifier.startswith(("/subscriptions/", "/providers/"))
-            or "." in identifier and "/" not in identifier
+            or "." in identifier
+            and "/" not in identifier
         ):
             self._register(lowered, asset_id)
 
@@ -191,7 +202,9 @@ class RelationshipLinker:
         for asset in self._assets:
             self._index_asset(asset)
 
-    def _pick(self, candidates: list[str], identifier: str, context: CloudAsset | None) -> str | None:
+    def _pick(
+        self, candidates: list[str], identifier: str, context: CloudAsset | None
+    ) -> str | None:
         # Real assets win over placeholders (e.g. an Entra principal that is
         # a managed identity collected in another subscription).
         real = [c for c in candidates if not self._by_id[c].metadata.get("placeholder")]
@@ -203,8 +216,10 @@ class RelationshipLinker:
         if context is None:
             return candidates[0]
         same_region = [
-            c for c in candidates
-            if self._by_id[c].account_id == context.account_id and self._by_id[c].region == context.region
+            c
+            for c in candidates
+            if self._by_id[c].account_id == context.account_id
+            and self._by_id[c].region == context.region
         ]
         if same_region:
             return same_region[0]
@@ -266,7 +281,7 @@ class RelationshipLinker:
         if lowered != stripped:
             yield lowered
         if lowered.startswith("dualstack."):
-            yield lowered[len("dualstack."):]
+            yield lowered[len("dualstack.") :]
         if stripped.endswith(":*"):
             yield stripped[:-2]
         m = _LAMBDA_QUALIFIED_RE.match(stripped)
@@ -288,7 +303,9 @@ class RelationshipLinker:
     @staticmethod
     def _foreign_account(identifier: str) -> tuple[CloudProvider, str, str] | None:
         """(provider, account id, account node identifier) an identifier lives in."""
-        m = _ARN_ACCOUNT_RE.match(identifier) or re.match(r"^arn:aws[a-zA-Z-]*:iam::(\d{12}):", identifier)
+        m = _ARN_ACCOUNT_RE.match(identifier) or re.match(
+            r"^arn:aws[a-zA-Z-]*:iam::(\d{12}):", identifier
+        )
         if m:
             return CloudProvider.AWS, m.group(1), f"arn:aws:iam::{m.group(1)}:root"
         if re.fullmatch(r"\d{12}", identifier):
@@ -299,7 +316,11 @@ class RelationshipLinker:
             return CloudProvider.AZURE, sub, f"/subscriptions/{sub}"
         m = _GCP_PROJECT_RE.match(identifier)
         if m:
-            return CloudProvider.GCP, m.group(1), f"//cloudresourcemanager.googleapis.com/projects/{m.group(1)}"
+            return (
+                CloudProvider.GCP,
+                m.group(1),
+                f"//cloudresourcemanager.googleapis.com/projects/{m.group(1)}",
+            )
         return None
 
     def _external_account(self, identifier: str, context: CloudAsset) -> str | None:
@@ -323,7 +344,11 @@ class RelationshipLinker:
             provider=provider,
             region="global",
             account_id=acct,
-            metadata={"account_id": acct, "external": True, "discovered_via": "cross-account reference"},
+            metadata={
+                "account_id": acct,
+                "external": True,
+                "discovered_via": "cross-account reference",
+            },
         )
         self.external_assets.append(placeholder)
         self._external_ids.add(placeholder.id)
@@ -334,7 +359,12 @@ class RelationshipLinker:
     def _note_unresolved(self, asset: CloudAsset, target: str, edge: str) -> None:
         if len(self.unresolved) < _MAX_UNRESOLVED:
             self.unresolved.append(
-                {"source": asset.arn or asset.id, "source_name": asset.name, "target": target, "edge_type": edge}
+                {
+                    "source": asset.arn or asset.id,
+                    "source_name": asset.name,
+                    "target": target,
+                    "edge_type": edge,
+                }
             )
 
     # ------------------------------------------------------------------
@@ -425,7 +455,9 @@ class RelationshipLinker:
             )
         nsg_id = md.get("nsg_id")
         if nsg_id:
-            self._add(edges, asset.id, res(nsg_id), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG")
+            self._add(
+                edges, asset.id, res(nsg_id), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"
+            )
 
         # Subnet containment (everything with a subnet_id that isn't a subnet)
         subnet_ref = md.get("subnet_id")
@@ -443,9 +475,17 @@ class RelationshipLinker:
         vpc_config = md.get("vpc_config") or {}
         if isinstance(vpc_config, dict):
             for sn in vpc_config.get("SubnetIds", []) or []:
-                self._add(edges, res(sn), asset.id, EdgeType.CONTAINS, relationship="SUBNET_CONTAINS_INSTANCE")
+                self._add(
+                    edges,
+                    res(sn),
+                    asset.id,
+                    EdgeType.CONTAINS,
+                    relationship="SUBNET_CONTAINS_INSTANCE",
+                )
             for sg in vpc_config.get("SecurityGroupIds", []) or []:
-                self._add(edges, asset.id, res(sg), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG")
+                self._add(
+                    edges, asset.id, res(sg), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"
+                )
         role_ref = raw.get("Role") or md.get("role_arn")
         if role_ref and asset.asset_type in (
             AssetType.LAMBDA_FUNCTION,
@@ -460,12 +500,25 @@ class RelationshipLinker:
                 "RUNS_ON",
             )
         elif role_ref:
-            self._add(edges, asset.id, res(role_ref), EdgeType.REFERENCES, f"{asset.name} references {role_ref}")
+            self._add(
+                edges,
+                asset.id,
+                res(role_ref),
+                EdgeType.REFERENCES,
+                f"{asset.name} references {role_ref}",
+            )
 
         # EC2 instance profile
         profile_arn = (raw.get("IamInstanceProfile") or {}).get("Arn") if raw else None
         if profile_arn:
-            self._add(edges, asset.id, res(profile_arn), EdgeType.ASSUMES_ROLE, "instance profile", "RUNS_ON")
+            self._add(
+                edges,
+                asset.id,
+                res(profile_arn),
+                EdgeType.ASSUMES_ROLE,
+                "instance profile",
+                "RUNS_ON",
+            )
 
         # KMS key references (secrets, volumes, tables, ...)
         kms_ref = md.get("kms_key_id")
@@ -485,7 +538,9 @@ class RelationshipLinker:
             if target is None and isinstance(origin, str):
                 # bucket origins look like <bucket>.s3.<region>.amazonaws.com
                 target = res(origin.split(".s3", 1)[0]) if ".s3" in origin else None
-            if target and ((asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys):
+            if target and (
+                (asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys
+            ):
                 continue  # already linked by a declared (typed) relation
             self._add(
                 edges,
@@ -497,7 +552,9 @@ class RelationshipLinker:
             )
         web_acl = md.get("web_acl_id")
         if web_acl:
-            self._add(edges, res(web_acl), asset.id, EdgeType.PROTECTS, "WAF web ACL", "PROTECTED_BY_WAF")
+            self._add(
+                edges, res(web_acl), asset.id, EdgeType.PROTECTS, "WAF web ACL", "PROTECTED_BY_WAF"
+            )
 
         # Route tables: routes -> gateways, associations -> subnets
         if asset.asset_type == AssetType.ROUTE_TABLE:
@@ -519,16 +576,12 @@ class RelationshipLinker:
                         "NAT_TRANSLATED" if route.get("NatGatewayId") else "TRANSIT_ROUTED",
                     )
             for assoc in md.get("associations", []) or []:
-                self._add(
-                    edges, asset.id, res(assoc.get("SubnetId")), EdgeType.ATTACHED_TO
-                )
+                self._add(edges, asset.id, res(assoc.get("SubnetId")), EdgeType.ATTACHED_TO)
 
         # Internet gateway attachments -> VPC
         for attachment in md.get("attachments", []) or []:
             if isinstance(attachment, dict) and attachment.get("VpcId"):
-                self._add(
-                    edges, asset.id, res(attachment.get("VpcId")), EdgeType.ATTACHED_TO
-                )
+                self._add(edges, asset.id, res(attachment.get("VpcId")), EdgeType.ATTACHED_TO)
 
         # ENI / EBS / EIP attachment -> instance
         inst_ref = md.get("attached_instance_id")
@@ -563,16 +616,25 @@ class RelationshipLinker:
         if not sets:
             return
         roles = [
-            a for a in self._assets
+            a
+            for a in self._assets
             if a.asset_type == AssetType.IAM_ROLE
             and str(a.metadata.get("path") or "").startswith("/aws-reserved/sso.amazonaws.com/")
         ]
         for ps in sets:
             prefix = ps.metadata["provisioned_role_prefix"]
             for role in roles:
-                if role.name.startswith(prefix) and _SSO_ROLE_HASH_RE.fullmatch(role.name[len(prefix):]):
-                    self._add(edges, ps.id, role.id, EdgeType.MANAGES,
-                              f"{ps.name} provisions {role.name}", "OWNED_BY")
+                if role.name.startswith(prefix) and _SSO_ROLE_HASH_RE.fullmatch(
+                    role.name[len(prefix) :]
+                ):
+                    self._add(
+                        edges,
+                        ps.id,
+                        role.id,
+                        EdgeType.MANAGES,
+                        f"{ps.name} provisions {role.name}",
+                        "OWNED_BY",
+                    )
 
     # ------------------------------------------------------------------
     # Pass 3: generic reference scan

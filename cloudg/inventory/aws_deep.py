@@ -236,9 +236,11 @@ class AWSDeepInventoryCollector(
         self._services = services or ["all"]
         self._exclude_services = list(exclude_services or [])
         inc = {s.lower() for s in self._services}
-        self._kubernetes_enabled = kubernetes and "kubernetes" not in {
-            e.lower() for e in self._exclude_services
-        } and ("all" in inc or "kubernetes" in inc or "containers" in inc or "eks" in inc)
+        self._kubernetes_enabled = (
+            kubernetes
+            and "kubernetes" not in {e.lower() for e in self._exclude_services}
+            and ("all" in inc or "kubernetes" in inc or "containers" in inc or "eks" in inc)
+        )
         self._kubernetes_timeout = kubernetes_timeout
         self._iam_resource_edges = iam_resource_edges
         self._max_images = max_images_per_repository
@@ -633,11 +635,13 @@ class AWSDeepInventoryCollector(
             }
         )
         global_tasks = set(GLOBAL_TASKS)
-        for registry in (self._governance_tasks(),
+        for registry in (
+            self._governance_tasks(),
             self._network_ext_tasks(),
             self._application_tasks(),
             self._data_ml_tasks(),
-            self._cloudcontrol_tasks(),):
+            self._cloudcontrol_tasks(),
+        ):
             for name, (task, family, is_global) in registry.items():
                 tasks[name] = task
                 SERVICE_FAMILIES.setdefault(name, family)
