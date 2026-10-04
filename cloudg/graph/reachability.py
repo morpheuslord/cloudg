@@ -138,68 +138,90 @@ class ReachabilityAnalyzer:
             List of Finding objects for reachability-related security issues.
         """
         findings: list[Finding] = []
-        exposed_nodes = self.find_internet_exposed()
 
-        for node_id in exposed_nodes:
-            node_data = self._graph.nodes.get(node_id, {})
-            asset_type_str = node_data.get("asset_type", "")
-            name = node_data.get("name", node_id)
-            arn = node_data.get("arn", "")
+        # Findings for internet-exposed resources
+        for node_id in self.find_internet_exposed():
+            finding = self._exposure_finding(node_id)
+            if finding:
+                findings.append(finding)
 
-            # Skip external/placeholder nodes
-            if node_data.get("is_external"):
-                continue
+        # Findings for sensitive port exposure on security group edges
+        findings.extend(self._sensitive_port_findings())
 
-            try:
-                asset_type = AssetType(asset_type_str)
-            except ValueError:
-                continue
+        logger.info("Generated %d reachability findings", len(findings))
+        return findings
 
-            # Check for sensitive asset types exposed to internet
-            if asset_type in SENSITIVE_ASSET_TYPES:
-                findings.append(
-                    Finding(
-                        resource_id=node_id,
-                        resource_arn=arn,
-                        severity=Severity.CRITICAL,
-                        title=f"Internet-exposed {asset_type.value}: {name}",
-                        description=(
-                            f"The {asset_type.value} resource '{name}' is reachable "
-                            f"from the internet (0.0.0.0/0). Database and data-store "
-                            f"resources should never be directly internet-accessible."
-                        ),
-                        evidence=f"BFS reachability from 0.0.0.0/0 reaches node {node_id}",
-                        remediation=(
-                            "Restrict security group / NSG / firewall rules to remove "
-                            "internet access. Place behind a private subnet with NAT "
-                            "gateway or VPN."
-                        ),
-                        source_tool="cloudg-reachability",
-                        compliance_frameworks=["CIS", "NIST-800-53"],
-                    )
-                )
-            elif asset_type not in EXPECTED_EXPOSED_TYPES:
-                # Non-database but unexpected exposure
-                findings.append(
-                    Finding(
-                        resource_id=node_id,
-                        resource_arn=arn,
-                        severity=Severity.HIGH,
-                        title=f"Unexpected internet-exposed resource: {name}",
-                        description=(
-                            f"The {asset_type.value} resource '{name}' is reachable "
-                            f"from the internet. Verify this exposure is intentional."
-                        ),
-                        evidence=f"BFS reachability from 0.0.0.0/0 reaches node {node_id}",
-                        remediation=(
-                            "Review security group / NSG rules. If exposure is not "
-                            "required, restrict to specific CIDR ranges or VPN."
-                        ),
-                        source_tool="cloudg-reachability",
-                    )
-                )
+    def _exposure_finding(self, node_id: str) -> Finding | None:
+        """Build a finding for one internet-exposed node, if warranted."""
+        node_data = self._graph.nodes.get(node_id, {})
 
-        # Check for sensitive port exposure on security group edges
+        # Skip external/placeholder nodes
+        if node_data.get("is_external"):
+            return None
+
+        try:
+            asset_type = AssetType(node_data.get("asset_type", ""))
+        except ValueError:
+            return None
+
+        # Check for sensitive asset types exposed to internet
+        if asset_type in SENSITIVE_ASSET_TYPES:
+            return self._sensitive_exposure_finding(node_id, node_data, asset_type)
+        if asset_type not in EXPECTED_EXPOSED_TYPES:
+            # Non-database but unexpected exposure
+            return self._unexpected_exposure_finding(node_id, node_data, asset_type)
+        return None
+
+    def _sensitive_exposure_finding(
+        self, node_id: str, node_data: dict[str, Any], asset_type: AssetType
+    ) -> Finding:
+        """Critical finding for an internet-exposed sensitive data store."""
+        name = node_data.get("name", node_id)
+        return Finding(
+            resource_id=node_id,
+            resource_arn=node_data.get("arn", ""),
+            severity=Severity.CRITICAL,
+            title=f"Internet-exposed {asset_type.value}: {name}",
+            description=(
+                f"The {asset_type.value} resource '{name}' is reachable "
+                f"from the internet (0.0.0.0/0). Database and data-store "
+                f"resources should never be directly internet-accessible."
+            ),
+            evidence=f"BFS reachability from 0.0.0.0/0 reaches node {node_id}",
+            remediation=(
+                "Restrict security group / NSG / firewall rules to remove "
+                "internet access. Place behind a private subnet with NAT "
+                "gateway or VPN."
+            ),
+            source_tool="cloudg-reachability",
+            compliance_frameworks=["CIS", "NIST-800-53"],
+        )
+
+    def _unexpected_exposure_finding(
+        self, node_id: str, node_data: dict[str, Any], asset_type: AssetType
+    ) -> Finding:
+        """High finding for an unexpectedly internet-exposed resource."""
+        name = node_data.get("name", node_id)
+        return Finding(
+            resource_id=node_id,
+            resource_arn=node_data.get("arn", ""),
+            severity=Severity.HIGH,
+            title=f"Unexpected internet-exposed resource: {name}",
+            description=(
+                f"The {asset_type.value} resource '{name}' is reachable "
+                f"from the internet. Verify this exposure is intentional."
+            ),
+            evidence=f"BFS reachability from 0.0.0.0/0 reaches node {node_id}",
+            remediation=(
+                "Review security group / NSG rules. If exposure is not "
+                "required, restrict to specific CIDR ranges or VPN."
+            ),
+            source_tool="cloudg-reachability",
+        )
+
+    def _sensitive_port_findings(self) -> list[Finding]:
+        """Findings for sensitive ports open to the internet on edges."""
+        findings: list[Finding] = []
         for source, target, data in self._graph.edges(data=True):
             cidr = data.get("cidr", "")
             if cidr not in ("0.0.0.0/0", "::/0"):
@@ -210,28 +232,30 @@ class ReachabilityAnalyzer:
 
             for port, service in SENSITIVE_PORTS.items():
                 if port in ports or str(port) in port_range:
-                    target_data = self._graph.nodes.get(target, {})
-                    findings.append(
-                        Finding(
-                            resource_id=target,
-                            resource_arn=target_data.get("arn", ""),
-                            severity=Severity.CRITICAL,
-                            title=f"Security group allows {service} (port {port}) from 0.0.0.0/0",
-                            description=(
-                                f"A security group rule allows inbound traffic on "
-                                f"port {port} ({service}) from 0.0.0.0/0. This is a "
-                                f"common attack vector."
-                            ),
-                            evidence=f"Edge from {source} to {target}, port {port}, cidr {cidr}",
-                            remediation=(
-                                f"Restrict port {port} ({service}) access to specific "
-                                f"IP ranges. Use a bastion host or VPN for "
-                                f"administrative access."
-                            ),
-                            source_tool="cloudg-reachability",
-                            compliance_frameworks=["CIS", "NIST-800-53", "PCI-DSS"],
-                        )
-                    )
-
-        logger.info("Generated %d reachability findings", len(findings))
+                    findings.append(self._open_port_finding(source, target, cidr, port, service))
         return findings
+
+    def _open_port_finding(
+        self, source: str, target: str, cidr: str, port: int, service: str
+    ) -> Finding:
+        """Critical finding for one sensitive port open from 0.0.0.0/0."""
+        target_data = self._graph.nodes.get(target, {})
+        return Finding(
+            resource_id=target,
+            resource_arn=target_data.get("arn", ""),
+            severity=Severity.CRITICAL,
+            title=f"Security group allows {service} (port {port}) from 0.0.0.0/0",
+            description=(
+                f"A security group rule allows inbound traffic on "
+                f"port {port} ({service}) from 0.0.0.0/0. This is a "
+                f"common attack vector."
+            ),
+            evidence=f"Edge from {source} to {target}, port {port}, cidr {cidr}",
+            remediation=(
+                f"Restrict port {port} ({service}) access to specific "
+                f"IP ranges. Use a bastion host or VPN for "
+                f"administrative access."
+            ),
+            source_tool="cloudg-reachability",
+            compliance_frameworks=["CIS", "NIST-800-53", "PCI-DSS"],
+        )

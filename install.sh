@@ -74,6 +74,16 @@ install_sys_pkg() {
     esac
 }
 
+# ── Install a pip package quietly; ok/warn instead of aborting ──
+pip_tool() {
+    local pkg="$1" ok_msg="$2" warn_msg="$3"
+    if uv pip install "$pkg" --quiet 2>/dev/null; then
+        ok "$ok_msg"
+    else
+        warn "$warn_msg"
+    fi
+}
+
 detect_os
 
 # ── 1. System Prerequisites ──
@@ -89,7 +99,11 @@ fi
 for tool in curl git unzip; do
     if ! command -v "$tool" &> /dev/null; then
         info "Installing $tool..."
-        install_sys_pkg "$tool" "$tool" "$tool" "$tool" && ok "$tool installed" || warn "Could not install $tool"
+        if install_sys_pkg "$tool" "$tool" "$tool" "$tool"; then
+            ok "$tool installed"
+        else
+            warn "Could not install $tool"
+        fi
     else
         ok "$tool found"
     fi
@@ -166,7 +180,11 @@ info "Installing Graphviz..."
 if command -v dot &> /dev/null; then
     ok "Graphviz already installed"
 else
-    install_sys_pkg graphviz graphviz graphviz graphviz && ok "Graphviz installed" || warn "Could not auto-install Graphviz"
+    if install_sys_pkg graphviz graphviz graphviz graphviz; then
+        ok "Graphviz installed"
+    else
+        warn "Could not auto-install Graphviz"
+    fi
 fi
 
 # ── 4. Node.js (for CloudSploit — optional) ──
@@ -201,7 +219,11 @@ else
             warn "Could not auto-install Node.js. Install from: https://nodejs.org/"
             ;;
     esac
-    command -v node &> /dev/null && ok "Node.js $(node --version) installed" || warn "Node.js installation failed"
+    if command -v node &> /dev/null; then
+        ok "Node.js $(node --version) installed"
+    else
+        warn "Node.js installation failed"
+    fi
 fi
 
 # ── 5. uv (package manager) ──
@@ -211,7 +233,12 @@ if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
-command -v uv &> /dev/null && ok "uv $(uv --version | cut -d' ' -f2) found" || { fail "uv installation failed"; exit 1; }
+if command -v uv &> /dev/null; then
+    ok "uv $(uv --version | cut -d' ' -f2) found"
+else
+    fail "uv installation failed"
+    exit 1
+fi
 
 # ── 6. Create virtual environment ──
 VENV_DIR=".venv"
@@ -231,15 +258,21 @@ ok "Virtual environment activated"
 # ── 7. Install CloudG + all deps ──
 echo ""
 info "Installing CloudG with full dependencies..."
-uv pip install -e ".[all,dev]" --quiet && ok "CloudG core + dev installed" || {
+if uv pip install -e ".[all,dev]" --quiet; then
+    ok "CloudG core + dev installed"
+else
     warn "editable install failed, installing deps directly..."
     uv pip install pydantic click rich aioboto3 boto3 networkx jinja2 svgwrite aiofiles parliament \
         pytest pytest-asyncio moto --quiet
     ok "Core dependencies installed"
-}
+fi
 
 # Attempt full extras (may have optional heavy deps)
-uv pip install -e ".[full]" --quiet 2>/dev/null && ok "Full extras installed" || warn "Some optional extras not available"
+if uv pip install -e ".[full]" --quiet 2>/dev/null; then
+    ok "Full extras installed"
+else
+    warn "Some optional extras not available"
+fi
 
 # ── 8. Install Security Scanner Tools ──
 echo ""
@@ -251,7 +284,7 @@ info "Installing Prowler..."
 if command -v prowler &> /dev/null; then
     ok "Prowler already installed: $(prowler --version 2>/dev/null || echo 'version unknown')"
 else
-    uv pip install prowler --quiet 2>/dev/null && ok "Prowler installed via pip" || warn "Prowler install failed (try: uv pip install prowler)"
+    pip_tool prowler "Prowler installed via pip" "Prowler install failed (try: uv pip install prowler)"
 fi
 
 # Checkov
@@ -259,7 +292,7 @@ info "Installing Checkov..."
 if command -v checkov &> /dev/null; then
     ok "Checkov already installed"
 else
-    uv pip install checkov --quiet 2>/dev/null && ok "Checkov installed via pip" || warn "Checkov install failed (try: uv pip install checkov)"
+    pip_tool checkov "Checkov installed via pip" "Checkov install failed (try: uv pip install checkov)"
 fi
 
 # ScoutSuite
@@ -267,16 +300,16 @@ info "Installing ScoutSuite..."
 if command -v scout &> /dev/null; then
     ok "ScoutSuite already installed"
 else
-    uv pip install scoutsuite --quiet 2>/dev/null && ok "ScoutSuite installed via pip" || warn "ScoutSuite install failed (try: uv pip install scoutsuite)"
+    pip_tool scoutsuite "ScoutSuite installed via pip" "ScoutSuite install failed (try: uv pip install scoutsuite)"
 fi
 
 # Parliament (IAM linter)
 info "Installing Parliament..."
-uv pip install parliament --quiet 2>/dev/null && ok "Parliament installed" || warn "Parliament install failed"
+pip_tool parliament "Parliament installed" "Parliament install failed"
 
 # Policy Sentry
 info "Installing Policy Sentry..."
-uv pip install policy-sentry --quiet 2>/dev/null && ok "Policy Sentry installed" || warn "Policy Sentry install failed"
+pip_tool policy-sentry "Policy Sentry installed" "Policy Sentry install failed"
 
 # Trivy (binary — not a pip package)
 echo ""
@@ -286,24 +319,33 @@ if command -v trivy &> /dev/null; then
 else
     case "$OS" in
         macos)
-            brew install trivy 2>/dev/null && ok "Trivy installed via Homebrew" || {
+            if brew install trivy 2>/dev/null; then
+                ok "Trivy installed via Homebrew"
+            else
                 info "Trying Trivy install script..."
-                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null \
-                    && ok "Trivy installed" || warn "Trivy install failed. Get it from: https://trivy.dev/"
-            }
+                if curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null; then
+                    ok "Trivy installed"
+                else
+                    warn "Trivy install failed. Get it from: https://trivy.dev/"
+                fi
+            fi
             ;;
         debian|fedora|rhel|arch|suse)
             # Try official install script first
-            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin 2>/dev/null \
-                && ok "Trivy installed" || {
+            if curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin 2>/dev/null; then
+                ok "Trivy installed"
+            else
                 # Fallback: try distro-specific repos
                 case "$PKG_MGR" in
                     apt)
                         sudo apt-get install -y wget apt-transport-https gnupg lsb-release 2>/dev/null
                         wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null 2>&1
                         echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list 2>/dev/null
-                        sudo apt-get update -qq 2>/dev/null && sudo apt-get install -y trivy 2>/dev/null \
-                            && ok "Trivy installed via apt" || warn "Trivy install failed"
+                        if sudo apt-get update -qq 2>/dev/null && sudo apt-get install -y trivy 2>/dev/null; then
+                            ok "Trivy installed via apt"
+                        else
+                            warn "Trivy install failed"
+                        fi
                         ;;
                     dnf|yum)
                         sudo rpm --import https://aquasecurity.github.io/trivy-repo/rpm/public.key 2>/dev/null || true
@@ -315,14 +357,17 @@ gpgcheck=1
 enabled=1
 gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
 REPO
-                        sudo "$PKG_MGR" install -y trivy 2>/dev/null \
-                            && ok "Trivy installed via $PKG_MGR" || warn "Trivy install failed"
+                        if sudo "$PKG_MGR" install -y trivy 2>/dev/null; then
+                            ok "Trivy installed via $PKG_MGR"
+                        else
+                            warn "Trivy install failed"
+                        fi
                         ;;
                     *)
                         warn "Could not auto-install Trivy. Get it from: https://trivy.dev/"
                         ;;
                 esac
-            }
+            fi
             ;;
         *)
             warn "Cannot auto-install Trivy on this OS. Get it from: https://trivy.dev/"
@@ -336,15 +381,18 @@ info "Installing CloudSploit..."
 if command -v cloudsploit &> /dev/null; then
     ok "CloudSploit already installed"
 elif command -v npm &> /dev/null; then
-    sudo npm install -g @aqua-security/cloudsploit --silent 2>/dev/null \
-        && ok "CloudSploit installed via npm" || warn "CloudSploit install failed (optional)"
+    if sudo npm install -g @aqua-security/cloudsploit --silent 2>/dev/null; then
+        ok "CloudSploit installed via npm"
+    else
+        warn "CloudSploit install failed (optional)"
+    fi
 else
     warn "npm not available, skipping CloudSploit (optional)"
 fi
 
 # Cloud Custodian (pip)
 info "Installing Cloud Custodian..."
-uv pip install c7n --quiet 2>/dev/null && ok "Cloud Custodian (c7n) installed" || warn "Cloud Custodian install failed (optional)"
+pip_tool c7n "Cloud Custodian (c7n) installed" "Cloud Custodian install failed (optional)"
 
 # ── 9. Install cloud CLIs (if missing) ──
 echo ""
@@ -358,12 +406,20 @@ else
     info "Installing AWS CLI v2..."
     case "$OS" in
         macos)
-            brew install awscli 2>/dev/null && ok "AWS CLI installed" || warn "AWS CLI install failed"
+            if brew install awscli 2>/dev/null; then
+                ok "AWS CLI installed"
+            else
+                warn "AWS CLI install failed"
+            fi
             ;;
         debian|fedora|rhel|arch|suse)
             curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip" 2>/dev/null
             unzip -qo /tmp/awscliv2.zip -d /tmp/ 2>/dev/null
-            sudo /tmp/aws/install --update 2>/dev/null && ok "AWS CLI v2 installed" || warn "AWS CLI install failed. Get it from: https://aws.amazon.com/cli/"
+            if sudo /tmp/aws/install --update 2>/dev/null; then
+                ok "AWS CLI v2 installed"
+            else
+                warn "AWS CLI install failed. Get it from: https://aws.amazon.com/cli/"
+            fi
             rm -rf /tmp/awscliv2.zip /tmp/aws
             ;;
         *)
@@ -379,7 +435,11 @@ else
     info "Installing Azure CLI..."
     case "$OS" in
         macos)
-            brew install azure-cli 2>/dev/null && ok "Azure CLI installed" || warn "Azure CLI install failed"
+            if brew install azure-cli 2>/dev/null; then
+                ok "Azure CLI installed"
+            else
+                warn "Azure CLI install failed"
+            fi
             ;;
         debian)
             az_setup=$(mktemp)
@@ -392,12 +452,14 @@ else
             ;;
         fedora|rhel)
             sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true
-            sudo "$PKG_MGR" install -y azure-cli 2>/dev/null && ok "Azure CLI installed" || {
-                uv pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
-            }
+            if sudo "$PKG_MGR" install -y azure-cli 2>/dev/null; then
+                ok "Azure CLI installed"
+            else
+                pip_tool azure-cli "Azure CLI installed via pip" "Azure CLI install failed"
+            fi
             ;;
         *)
-            uv pip install azure-cli --quiet 2>/dev/null && ok "Azure CLI installed via pip" || warn "Azure CLI install failed"
+            pip_tool azure-cli "Azure CLI installed via pip" "Azure CLI install failed"
             ;;
     esac
 fi
@@ -409,13 +471,20 @@ else
     info "Installing gcloud CLI..."
     case "$OS" in
         macos)
-            brew install --cask google-cloud-sdk 2>/dev/null && ok "gcloud installed" || warn "gcloud install failed"
+            if brew install --cask google-cloud-sdk 2>/dev/null; then
+                ok "gcloud installed"
+            else
+                warn "gcloud install failed"
+            fi
             ;;
         debian)
             curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg 2>/dev/null
             echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list 2>/dev/null
-            sudo apt-get update -qq 2>/dev/null && sudo apt-get install -y google-cloud-cli 2>/dev/null \
-                && ok "gcloud installed" || warn "gcloud install failed. Get it from: https://cloud.google.com/sdk"
+            if sudo apt-get update -qq 2>/dev/null && sudo apt-get install -y google-cloud-cli 2>/dev/null; then
+                ok "gcloud installed"
+            else
+                warn "gcloud install failed. Get it from: https://cloud.google.com/sdk"
+            fi
             ;;
         *)
             warn "Cannot auto-install gcloud. Get it from: https://cloud.google.com/sdk/docs/install"
@@ -433,7 +502,11 @@ if cloudg --version &> /dev/null; then
     ok "cloudg $VERSION"
 else
     warn "CloudG CLI not on PATH — trying direct invocation"
-    "$PYTHON_CMD" -m cloudg.cli --version 2>/dev/null && ok "CloudG accessible via python -m" || warn "CloudG CLI not yet functional"
+    if "$PYTHON_CMD" -m cloudg.cli --version 2>/dev/null; then
+        ok "CloudG accessible via python -m"
+    else
+        warn "CloudG CLI not yet functional"
+    fi
 fi
 
 # ── 11. Summary ──

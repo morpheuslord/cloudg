@@ -72,7 +72,18 @@ class PluginRegistry:
             return
         self._discovered = True
 
-        # Discover collectors
+        self._discover_collector_entry_points()
+        self._discover_scanner_entry_points()
+        self._apply_builtin_fallbacks()
+
+        logger.info(
+            "Plugin registry: %d collectors, %d scanners",
+            len(self._collectors),
+            len(self._scanners),
+        )
+
+    def _discover_collector_entry_points(self) -> None:
+        """Discover collectors registered via entry_points."""
         try:
             eps = entry_points()
             collector_eps = (
@@ -89,7 +100,8 @@ class PluginRegistry:
         except Exception:
             logger.debug("Collector entry point discovery failed", exc_info=True)
 
-        # Discover scanners
+    def _discover_scanner_entry_points(self) -> None:
+        """Discover scanners registered via entry_points."""
         try:
             eps = entry_points()
             scanner_eps = (
@@ -106,7 +118,8 @@ class PluginRegistry:
         except Exception:
             logger.debug("Scanner entry point discovery failed", exc_info=True)
 
-        # Fill in built-in defaults for any not discovered
+    def _apply_builtin_fallbacks(self) -> None:
+        """Fill in built-in defaults for any plugin not discovered."""
         for name, path in _BUILTIN_COLLECTORS.items():
             if name not in self._collectors:
                 try:
@@ -120,12 +133,6 @@ class PluginRegistry:
                     self._scanners[name] = _load_class(path)
                 except Exception as exc:
                     logger.debug("Built-in scanner %s not available: %s", name, exc)
-
-        logger.info(
-            "Plugin registry: %d collectors, %d scanners",
-            len(self._collectors),
-            len(self._scanners),
-        )
 
     def get_collector(self, name: str) -> Type[Any]:
         """Get a collector class by name."""

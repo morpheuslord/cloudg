@@ -54,49 +54,11 @@ class GraphBuilder:
 
         # Add asset nodes
         for asset in assets:
-            self._graph.add_node(
-                asset.id,
-                name=asset.name,
-                asset_type=asset.asset_type.value,
-                provider=asset.provider.value,
-                region=asset.region,
-                arn=asset.arn,
-                account_id=asset.account_id or "",
-                tags=json.dumps(asset.tags) if asset.tags else "{}",
-                is_internet_exposed=asset.is_internet_exposed,
-            )
+            self._add_asset_node(asset)
 
         # Add edges
         for edge in edges:
-            # Ensure source/target nodes exist (create placeholder if needed)
-            if edge.source_id not in self._graph:
-                self._graph.add_node(
-                    edge.source_id,
-                    name=edge.source_id,
-                    asset_type="EXTERNAL",
-                    provider="EXTERNAL",
-                    is_external=True,
-                )
-            if edge.target_id not in self._graph:
-                self._graph.add_node(
-                    edge.target_id,
-                    name=edge.target_id,
-                    asset_type="EXTERNAL",
-                    provider="EXTERNAL",
-                    is_external=True,
-                )
-
-            self._graph.add_edge(
-                edge.source_id,
-                edge.target_id,
-                edge_type=edge.edge_type.value,
-                port_range=edge.port_range or "",
-                protocol=edge.protocol or "",
-                cidr=edge.cidr or "",
-                direction=edge.direction or "",
-                description=edge.description or "",
-                relationship=edge.relationship or "",
-            )
+            self._add_edge(edge)
 
         logger.info(
             "Built graph with %d nodes and %d edges",
@@ -104,6 +66,49 @@ class GraphBuilder:
             self._graph.number_of_edges(),
         )
         return self._graph
+
+    def _add_asset_node(self, asset: CloudAsset) -> None:
+        """Add a cloud asset as a node with its attributes."""
+        self._graph.add_node(
+            asset.id,
+            name=asset.name,
+            asset_type=asset.asset_type.value,
+            provider=asset.provider.value,
+            region=asset.region,
+            arn=asset.arn,
+            account_id=asset.account_id or "",
+            tags=json.dumps(asset.tags) if asset.tags else "{}",
+            is_internet_exposed=asset.is_internet_exposed,
+        )
+
+    def _ensure_node(self, node_id: str) -> None:
+        """Create an external placeholder node if it does not exist yet."""
+        if node_id not in self._graph:
+            self._graph.add_node(
+                node_id,
+                name=node_id,
+                asset_type="EXTERNAL",
+                provider="EXTERNAL",
+                is_external=True,
+            )
+
+    def _add_edge(self, edge: NetworkEdge) -> None:
+        """Add an edge, creating placeholder endpoints as needed."""
+        # Ensure source/target nodes exist (create placeholder if needed)
+        self._ensure_node(edge.source_id)
+        self._ensure_node(edge.target_id)
+
+        self._graph.add_edge(
+            edge.source_id,
+            edge.target_id,
+            edge_type=edge.edge_type.value,
+            port_range=edge.port_range or "",
+            protocol=edge.protocol or "",
+            cidr=edge.cidr or "",
+            direction=edge.direction or "",
+            description=edge.description or "",
+            relationship=edge.relationship or "",
+        )
 
     def compute_centrality(self) -> dict[str, dict[str, float]]:
         """Compute graph centrality metrics for blast-radius scoring.

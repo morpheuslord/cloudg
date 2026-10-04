@@ -11,20 +11,41 @@ that downstream chunking and retrieval systems can exploit.
 from __future__ import annotations
 
 import logging
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 
+# Relation taxonomy and inference rules live in ontology_rules; they are
+# re-exported here so `from cloudg.graph.ontology import ...` keeps working.
+from cloudg.graph.ontology_rules import (
+    RelationGroup,
+    RelationType,
+    get_relation_group,
+    get_relations_for_group,
+    infer_asset_relations,
+    infer_relations,
+)
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
-    EdgeType,
     Finding,
     NetworkEdge,
 )
+
+__all__ = [
+    "CM",
+    "CMP",
+    "CMR",
+    "CloudOntology",
+    "RelationGroup",
+    "RelationType",
+    "get_relation_group",
+    "get_relations_for_group",
+    "infer_asset_relations",
+    "infer_relations",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -36,211 +57,6 @@ CM = Namespace("https://cloudg.io/ontology#")
 CMR = Namespace("https://cloudg.io/resource/")
 CMP = Namespace("https://cloudg.io/property/")
 
-# ---------------------------------------------------------------------------
-# Relation taxonomy — ~62 semantic relation types across 7 groups
-# ---------------------------------------------------------------------------
-
-
-class RelationGroup(str, Enum):
-    """Top-level grouping of relation types."""
-
-    NETWORK = "NETWORK"
-    CONTAINMENT = "CONTAINMENT"
-    IAM = "IAM"
-    DATA_FLOW = "DATA_FLOW"
-    SECURITY = "SECURITY"
-    COMPUTE = "COMPUTE"
-    GOVERNANCE = "GOVERNANCE"
-
-
-class RelationType(str, Enum):
-    """Fine-grained semantic relation types for cloud asset mapping."""
-
-    # ── Network (15) ──
-    INGRESS_ALLOWED = "INGRESS_ALLOWED"
-    INGRESS_DENIED = "INGRESS_DENIED"
-    EGRESS_ALLOWED = "EGRESS_ALLOWED"
-    EGRESS_DENIED = "EGRESS_DENIED"
-    ONLY_HTTP = "ONLY_HTTP"
-    ONLY_HTTPS = "ONLY_HTTPS"
-    ONLY_SSH = "ONLY_SSH"
-    ONLY_RDP = "ONLY_RDP"
-    ALL_TRAFFIC = "ALL_TRAFFIC"
-    PORT_RESTRICTED = "PORT_RESTRICTED"
-    CIDR_RESTRICTED = "CIDR_RESTRICTED"
-    INTERNET_REACHABLE = "INTERNET_REACHABLE"
-    VPC_PEERED = "VPC_PEERED"
-    TRANSIT_ROUTED = "TRANSIT_ROUTED"
-    NAT_TRANSLATED = "NAT_TRANSLATED"
-    DNS_RESOLVED = "DNS_RESOLVED"
-
-    # ── Containment (7) ──
-    VPC_CONTAINS_SUBNET = "VPC_CONTAINS_SUBNET"
-    SUBNET_CONTAINS_INSTANCE = "SUBNET_CONTAINS_INSTANCE"
-    REGION_CONTAINS_VPC = "REGION_CONTAINS_VPC"
-    ACCOUNT_CONTAINS_REGION = "ACCOUNT_CONTAINS_REGION"
-    ORG_CONTAINS_ACCOUNT = "ORG_CONTAINS_ACCOUNT"
-    CLUSTER_CONTAINS_SERVICE = "CLUSTER_CONTAINS_SERVICE"
-    LB_TARGETS_INSTANCE = "LB_TARGETS_INSTANCE"
-
-    # ── IAM / Access (10) ──
-    ROLE_ASSUMES_ROLE = "ROLE_ASSUMES_ROLE"
-    USER_HAS_POLICY = "USER_HAS_POLICY"
-    ROLE_HAS_POLICY = "ROLE_HAS_POLICY"
-    GROUP_HAS_POLICY = "GROUP_HAS_POLICY"
-    POLICY_ALLOWS_ACTION = "POLICY_ALLOWS_ACTION"
-    POLICY_DENIES_ACTION = "POLICY_DENIES_ACTION"
-    CROSS_ACCOUNT_TRUST = "CROSS_ACCOUNT_TRUST"
-    SERVICE_LINKED_ROLE = "SERVICE_LINKED_ROLE"
-    PERMISSION_BOUNDARY_LIMITS = "PERMISSION_BOUNDARY_LIMITS"
-    SCP_RESTRICTS = "SCP_RESTRICTS"
-
-    # ── Data Flow (9) ──
-    READS_FROM = "READS_FROM"
-    WRITES_TO = "WRITES_TO"
-    ENCRYPTS_WITH = "ENCRYPTS_WITH"
-    DECRYPTS_WITH = "DECRYPTS_WITH"
-    LOGS_TO = "LOGS_TO"
-    STREAMS_TO = "STREAMS_TO"
-    REPLICATES_TO = "REPLICATES_TO"
-    BACKUP_TO = "BACKUP_TO"
-    CACHE_FOR = "CACHE_FOR"
-
-    # ── Security (9) ──
-    PROTECTED_BY_SG = "PROTECTED_BY_SG"
-    PROTECTED_BY_NACL = "PROTECTED_BY_NACL"
-    PROTECTED_BY_WAF = "PROTECTED_BY_WAF"
-    ENCRYPTED_BY_KMS = "ENCRYPTED_BY_KMS"
-    ROTATES_SECRET = "ROTATES_SECRET"  # nosec B105 - ontology relation name, not a credential
-    CERTIFICATE_SECURES = "CERTIFICATE_SECURES"
-    FINDING_AFFECTS = "FINDING_AFFECTS"
-    VULNERABILITY_EXPLOITS = "VULNERABILITY_EXPLOITS"
-    COMPLIANCE_GOVERNS = "COMPLIANCE_GOVERNS"
-
-    # ── Compute (8) ──
-    RUNS_ON = "RUNS_ON"
-    TRIGGERED_BY = "TRIGGERED_BY"
-    INVOKES = "INVOKES"
-    SCALES_WITH = "SCALES_WITH"
-    LOAD_BALANCED_BY = "LOAD_BALANCED_BY"
-    SCHEDULED_BY = "SCHEDULED_BY"
-    DEPENDS_ON = "DEPENDS_ON"
-    SERVES_TRAFFIC_TO = "SERVES_TRAFFIC_TO"
-
-    # ── Governance (4) ──
-    TAGGED_WITH = "TAGGED_WITH"
-    COST_ALLOCATED_TO = "COST_ALLOCATED_TO"
-    OWNED_BY = "OWNED_BY"
-    MONITORED_BY = "MONITORED_BY"
-
-
-# Mapping from RelationType → RelationGroup
-_RELATION_GROUPS: dict[RelationType, RelationGroup] = {}
-_GROUP_RANGES = {
-    RelationGroup.NETWORK: [
-        RelationType.INGRESS_ALLOWED,
-        RelationType.INGRESS_DENIED,
-        RelationType.EGRESS_ALLOWED,
-        RelationType.EGRESS_DENIED,
-        RelationType.ONLY_HTTP,
-        RelationType.ONLY_HTTPS,
-        RelationType.ONLY_SSH,
-        RelationType.ONLY_RDP,
-        RelationType.ALL_TRAFFIC,
-        RelationType.PORT_RESTRICTED,
-        RelationType.CIDR_RESTRICTED,
-        RelationType.INTERNET_REACHABLE,
-        RelationType.VPC_PEERED,
-        RelationType.TRANSIT_ROUTED,
-        RelationType.NAT_TRANSLATED,
-        RelationType.DNS_RESOLVED,
-    ],
-    RelationGroup.CONTAINMENT: [
-        RelationType.VPC_CONTAINS_SUBNET,
-        RelationType.SUBNET_CONTAINS_INSTANCE,
-        RelationType.REGION_CONTAINS_VPC,
-        RelationType.ACCOUNT_CONTAINS_REGION,
-        RelationType.ORG_CONTAINS_ACCOUNT,
-        RelationType.CLUSTER_CONTAINS_SERVICE,
-        RelationType.LB_TARGETS_INSTANCE,
-    ],
-    RelationGroup.IAM: [
-        RelationType.ROLE_ASSUMES_ROLE,
-        RelationType.USER_HAS_POLICY,
-        RelationType.ROLE_HAS_POLICY,
-        RelationType.GROUP_HAS_POLICY,
-        RelationType.POLICY_ALLOWS_ACTION,
-        RelationType.POLICY_DENIES_ACTION,
-        RelationType.CROSS_ACCOUNT_TRUST,
-        RelationType.SERVICE_LINKED_ROLE,
-        RelationType.PERMISSION_BOUNDARY_LIMITS,
-        RelationType.SCP_RESTRICTS,
-    ],
-    RelationGroup.DATA_FLOW: [
-        RelationType.READS_FROM,
-        RelationType.WRITES_TO,
-        RelationType.ENCRYPTS_WITH,
-        RelationType.DECRYPTS_WITH,
-        RelationType.LOGS_TO,
-        RelationType.STREAMS_TO,
-        RelationType.REPLICATES_TO,
-        RelationType.BACKUP_TO,
-        RelationType.CACHE_FOR,
-    ],
-    RelationGroup.SECURITY: [
-        RelationType.PROTECTED_BY_SG,
-        RelationType.PROTECTED_BY_NACL,
-        RelationType.PROTECTED_BY_WAF,
-        RelationType.ENCRYPTED_BY_KMS,
-        RelationType.ROTATES_SECRET,
-        RelationType.CERTIFICATE_SECURES,
-        RelationType.FINDING_AFFECTS,
-        RelationType.VULNERABILITY_EXPLOITS,
-        RelationType.COMPLIANCE_GOVERNS,
-    ],
-    RelationGroup.COMPUTE: [
-        RelationType.RUNS_ON,
-        RelationType.TRIGGERED_BY,
-        RelationType.INVOKES,
-        RelationType.SCALES_WITH,
-        RelationType.LOAD_BALANCED_BY,
-        RelationType.SCHEDULED_BY,
-        RelationType.DEPENDS_ON,
-        RelationType.SERVES_TRAFFIC_TO,
-    ],
-    RelationGroup.GOVERNANCE: [
-        RelationType.TAGGED_WITH,
-        RelationType.COST_ALLOCATED_TO,
-        RelationType.OWNED_BY,
-        RelationType.MONITORED_BY,
-    ],
-}
-for _group, _types in _GROUP_RANGES.items():
-    for _rt in _types:
-        _RELATION_GROUPS[_rt] = _group
-
-
-def get_relation_group(rt: RelationType) -> RelationGroup:
-    """Return the group a relation type belongs to."""
-    return _RELATION_GROUPS[rt]
-
-
-def get_relations_for_group(group: RelationGroup) -> list[RelationType]:
-    """Return all relation types in a group."""
-    return list(_GROUP_RANGES.get(group, []))
-
-
-# ---------------------------------------------------------------------------
-# Relation inference from raw CloudG edges
-# ---------------------------------------------------------------------------
-
-# Port → protocol-specific relation mapping
-_PORT_RELATIONS: dict[int, RelationType] = {
-    80: RelationType.ONLY_HTTP,
-    443: RelationType.ONLY_HTTPS,
-    22: RelationType.ONLY_SSH,
-    3389: RelationType.ONLY_RDP,
-}
 
 # AssetType → OWL class URI mapping
 _ASSET_TYPE_CLASSES: dict[AssetType, str] = {
@@ -289,6 +105,7 @@ _ASSET_TYPE_CLASSES: dict[AssetType, str] = {
     AssetType.KEY_VAULT: "KeyVault",
     AssetType.CLOUDTRAIL: "AuditLog",
     AssetType.FLOW_LOG: "FlowLog",
+    AssetType.OTHER: "CloudResource",
     AssetType.NETWORK_INTERFACE: "NetworkInterface",
     AssetType.LOG_GROUP: "LogGroup",
     AssetType.CONTAINER_REGISTRY: "ContainerRegistry",
@@ -337,24 +154,6 @@ _ASSET_TYPE_CLASSES: dict[AssetType, str] = {
     AssetType.ORG_POLICY: "OrganizationPolicy",
     AssetType.LANDING_ZONE: "LandingZone",
     AssetType.GUARDRAIL: "Guardrail",
-    AssetType.OTHER: "CloudResource",
-}
-
-
-# Default ontology relation for the typed inventory edges (used when the
-# edge carries no explicit ``relationship``)
-_TYPED_EDGE_RELATIONS: dict[EdgeType, RelationType] = {
-    EdgeType.INVOKES: RelationType.INVOKES,
-    EdgeType.USES_IMAGE: RelationType.RUNS_ON,
-    EdgeType.ASSUMES_ROLE: RelationType.RUNS_ON,
-    EdgeType.GRANTS_ACCESS: RelationType.POLICY_ALLOWS_ACTION,
-    EdgeType.LOGS_TO: RelationType.LOGS_TO,
-    EdgeType.PROTECTS: RelationType.PROTECTED_BY_WAF,
-    EdgeType.MONITORS: RelationType.MONITORED_BY,
-    EdgeType.MANAGES: RelationType.OWNED_BY,
-    EdgeType.GOVERNS: RelationType.COMPLIANCE_GOVERNS,
-    EdgeType.REFERENCES: RelationType.DEPENDS_ON,
-    EdgeType.ATTACHED_TO: RelationType.DEPENDS_ON,
 }
 
 
@@ -368,200 +167,89 @@ for _t in AssetType:
     _ASSET_TYPE_CLASSES.setdefault(_t, _class_name(_t))
 
 
-def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> list[RelationType]:
-    """Infer semantic relation types from a raw NetworkEdge.
-
-    Analyses CIDR, ports, protocol, direction, and connected asset types
-    to produce a list of semantic relations for the edge.
-    """
-    relations: list[RelationType] = []
-    declared = getattr(edge, "relationship", None)
-    if declared and declared in RelationType.__members__:
-        relations.append(RelationType[declared])
-    cidr = edge.cidr or ""
-    ports = edge.ports or []
-    protocol = (edge.protocol or "").upper()
-    direction = (edge.direction or "ingress").lower()
-    edge_type = edge.edge_type
-
-    # --- Network relations ---
-    is_internet = cidr in ("0.0.0.0/0", "::/0")
-
-    if edge_type == EdgeType.SECURITY_GROUP_RULE:
-        if direction == "ingress":
-            relations.append(RelationType.INGRESS_ALLOWED)
-        else:
-            relations.append(RelationType.EGRESS_ALLOWED)
-
-        if is_internet:
-            relations.append(RelationType.INTERNET_REACHABLE)
-
-        # Port-specific relations
-        if len(ports) == 1:
-            port_rel = _PORT_RELATIONS.get(ports[0])
-            if port_rel:
-                relations.append(port_rel)
-            else:
-                relations.append(RelationType.PORT_RESTRICTED)
-        elif len(ports) > 1 and len(ports) <= 20:
-            # Specific port set (not wide open)
-            for p in ports:
-                port_rel = _PORT_RELATIONS.get(p)
-                if port_rel and port_rel not in relations:
-                    relations.append(port_rel)
-            if not any(
-                r in relations
-                for r in [
-                    RelationType.ONLY_HTTP,
-                    RelationType.ONLY_HTTPS,
-                    RelationType.ONLY_SSH,
-                    RelationType.ONLY_RDP,
-                ]
-            ):
-                relations.append(RelationType.PORT_RESTRICTED)
-        elif protocol == "ALL" or (edge.port_range and edge.port_range == "0-65535"):
-            relations.append(RelationType.ALL_TRAFFIC)
-
-        if not is_internet and cidr:
-            relations.append(RelationType.CIDR_RESTRICTED)
-
-    elif edge_type == EdgeType.CONTAINS:
-        # Infer containment sub-type from asset types
-        src = assets_by_id.get(edge.source_id)
-        tgt = assets_by_id.get(edge.target_id)
-        if src and tgt:
-            if (
-                src.asset_type in (AssetType.VPC, AssetType.VNET)
-                and tgt.asset_type == AssetType.SUBNET
-            ):
-                relations.append(RelationType.VPC_CONTAINS_SUBNET)
-            elif src.asset_type == AssetType.SUBNET:
-                relations.append(RelationType.SUBNET_CONTAINS_INSTANCE)
-            elif src.asset_type in (
-                AssetType.ECS_CLUSTER,
-                AssetType.EKS_CLUSTER,
-                AssetType.AKS_CLUSTER,
-                AssetType.GKE_CLUSTER,
-            ):
-                relations.append(RelationType.CLUSTER_CONTAINS_SERVICE)
-            else:
-                relations.append(RelationType.VPC_CONTAINS_SUBNET)  # generic containment
-
-    elif edge_type == EdgeType.IAM_TRUST:
-        relations.append(RelationType.ROLE_ASSUMES_ROLE)
-        # Check for cross-account trust
-        src = assets_by_id.get(edge.source_id)
-        tgt = assets_by_id.get(edge.target_id)
-        if src and tgt and src.account_id and tgt.account_id:
-            if src.account_id != tgt.account_id:
-                relations.append(RelationType.CROSS_ACCOUNT_TRUST)
-
-    elif edge_type == EdgeType.IAM_POLICY_ATTACHMENT:
-        tgt = assets_by_id.get(edge.target_id)
-        if tgt:
-            if tgt.asset_type == AssetType.IAM_USER:
-                relations.append(RelationType.USER_HAS_POLICY)
-            elif tgt.asset_type == AssetType.IAM_ROLE:
-                relations.append(RelationType.ROLE_HAS_POLICY)
-            elif tgt.asset_type == AssetType.IAM_GROUP:
-                relations.append(RelationType.GROUP_HAS_POLICY)
-
-    elif edge_type == EdgeType.LOAD_BALANCER_TARGET:
-        relations.append(RelationType.LB_TARGETS_INSTANCE)
-        relations.append(RelationType.LOAD_BALANCED_BY)
-
-    elif edge_type == EdgeType.PEERING:
-        relations.append(RelationType.VPC_PEERED)
-
-    elif edge_type == EdgeType.ROUTE:
-        relations.append(RelationType.TRANSIT_ROUTED)
-
-    elif edge_type == EdgeType.INTERNET_EXPOSED:
-        relations.append(RelationType.INTERNET_REACHABLE)
-
-    elif edge_type in _TYPED_EDGE_RELATIONS and not relations:
-        relations.append(_TYPED_EDGE_RELATIONS[edge_type])
-
-    # --- Security relations from asset metadata ---
-    tgt_asset = assets_by_id.get(edge.target_id)
-    if tgt_asset:
-        # SG protection
-        if edge_type == EdgeType.SECURITY_GROUP_RULE:
-            relations.append(RelationType.PROTECTED_BY_SG)
-        elif edge_type == EdgeType.NACL_RULE:
-            relations.append(RelationType.PROTECTED_BY_NACL)
-
-        # KMS encryption (from metadata)
-        if tgt_asset.metadata.get("encryption") or tgt_asset.metadata.get("storage_encrypted"):
-            kms_key = tgt_asset.metadata.get("kms_key_id", "")
-            if kms_key:
-                relations.append(RelationType.ENCRYPTED_BY_KMS)
-
-    return relations
-
-
-def infer_asset_relations(
-    asset: CloudAsset, all_assets: list[CloudAsset]
-) -> list[tuple[RelationType, str]]:
-    """Infer additional semantic relations from asset metadata alone.
-
-    Returns list of (RelationType, target_asset_id) tuples.
-    """
-    relations: list[tuple[RelationType, str]] = []
-
-    # Tag-based governance
-    if asset.tags:
-        for tag_key in asset.tags:
-            tag_lower = tag_key.lower()
-            if tag_lower in ("owner", "team", "department"):
-                relations.append((RelationType.OWNED_BY, f"tag:{asset.tags[tag_key]}"))
-            elif tag_lower in ("costcenter", "cost-center", "cost_center"):
-                relations.append((RelationType.COST_ALLOCATED_TO, f"tag:{asset.tags[tag_key]}"))
-            elif tag_lower in ("monitoring", "monitored-by"):
-                relations.append((RelationType.MONITORED_BY, f"tag:{asset.tags[tag_key]}"))
-
-    # VPC/Subnet containment from metadata
-    vpc_id = asset.metadata.get("vpc_id")
-    if vpc_id and asset.asset_type != AssetType.VPC:
-        for other in all_assets:
-            if (
-                other.asset_type in (AssetType.VPC, AssetType.VNET)
-                and other.metadata.get("vpc_id") == vpc_id
-            ):
-                if asset.asset_type == AssetType.SUBNET:
-                    relations.append((RelationType.VPC_CONTAINS_SUBNET, other.id))
-                else:
-                    relations.append((RelationType.SUBNET_CONTAINS_INSTANCE, other.id))
-                break
-
-    # Lambda VPC config → DEPENDS_ON VPC
-    if asset.asset_type == AssetType.LAMBDA_FUNCTION:
-        vpc_config = asset.metadata.get("vpc_config")
-        if vpc_config and isinstance(vpc_config, dict) and vpc_config.get("VpcId"):
-            relations.append((RelationType.DEPENDS_ON, f"vpc:{vpc_config['VpcId']}"))
-
-    # Secret rotation
-    if asset.asset_type == AssetType.SECRET:
-        if asset.metadata.get("rotation_enabled"):
-            relations.append((RelationType.ROTATES_SECRET, asset.id))
-
-    # KMS key rotation
-    if asset.asset_type == AssetType.KMS_KEY:
-        if asset.metadata.get("rotation_enabled"):
-            relations.append((RelationType.ROTATES_SECRET, asset.id))
-
-    # SG membership from EC2 metadata
-    if asset.asset_type == AssetType.EC2:
-        sg_ids = asset.metadata.get("security_groups", [])
-        for sg_id in sg_ids:
-            relations.append((RelationType.PROTECTED_BY_SG, f"sg:{sg_id}"))
-
-    return relations
-
-
 # ---------------------------------------------------------------------------
 # OWL Ontology Builder
 # ---------------------------------------------------------------------------
+
+# Top-level OWL classes declared in the schema (TBox)
+_ONTOLOGY_CLASSES = [
+    "CloudResource",
+    "ComputeInstance",
+    "ServerlessFunction",
+    "ContainerCluster",
+    "ManagedAppService",
+    "VirtualNetwork",
+    "Subnet",
+    "SecurityGroup",
+    "NetworkACL",
+    "RouteTable",
+    "InternetGateway",
+    "NATGateway",
+    "LoadBalancer",
+    "CDNDistribution",
+    "TransitGateway",
+    "PeeringConnection",
+    "ElasticIP",
+    "ObjectStorage",
+    "BlockStorage",
+    "RelationalDatabase",
+    "NoSQLDatabase",
+    "IAMUser",
+    "IAMRole",
+    "IAMPolicy",
+    "IAMGroup",
+    "ServicePrincipal",
+    "EncryptionKey",
+    "Secret",
+    "Certificate",
+    "KeyVault",
+    "AuditLog",
+    "FlowLog",
+    "SecurityFinding",
+    "ComplianceControl",
+    "Region",
+    "Account",
+    "Organization",
+    "TagValue",
+]
+
+# Class hierarchy: child → parent
+_CLASS_HIERARCHY = {
+    "ComputeInstance": "CloudResource",
+    "ServerlessFunction": "CloudResource",
+    "ContainerCluster": "CloudResource",
+    "ManagedAppService": "CloudResource",
+    "VirtualNetwork": "CloudResource",
+    "Subnet": "CloudResource",
+    "SecurityGroup": "CloudResource",
+    "NetworkACL": "CloudResource",
+    "LoadBalancer": "CloudResource",
+    "CDNDistribution": "CloudResource",
+    "ObjectStorage": "CloudResource",
+    "BlockStorage": "CloudResource",
+    "RelationalDatabase": "CloudResource",
+    "NoSQLDatabase": "CloudResource",
+    "IAMUser": "CloudResource",
+    "IAMRole": "CloudResource",
+    "IAMPolicy": "CloudResource",
+    "EncryptionKey": "CloudResource",
+    "Secret": "CloudResource",  # nosec B105 - class hierarchy label, not a credential
+}
+
+# Data properties declared in the schema
+_DATA_PROPERTIES = [
+    "hasARN",
+    "hasName",
+    "hasRegion",
+    "hasProvider",
+    "hasAccountId",
+    "hasCIDR",
+    "hasPort",
+    "hasProtocol",
+    "hasSeverity",
+    "hasRiskScore",
+    "isInternetExposed",
+]
 
 
 class CloudOntology:
@@ -597,174 +285,23 @@ class CloudOntology:
         g = self._graph
 
         # Top-level classes
-        for cls_name in [
-            "CloudResource",
-            "ComputeInstance",
-            "ServerlessFunction",
-            "ContainerCluster",
-            "ManagedAppService",
-            "VirtualNetwork",
-            "Subnet",
-            "SecurityGroup",
-            "NetworkACL",
-            "RouteTable",
-            "InternetGateway",
-            "NATGateway",
-            "LoadBalancer",
-            "CDNDistribution",
-            "TransitGateway",
-            "PeeringConnection",
-            "ElasticIP",
-            "ObjectStorage",
-            "BlockStorage",
-            "RelationalDatabase",
-            "NoSQLDatabase",
-            "IAMUser",
-            "IAMRole",
-            "IAMPolicy",
-            "IAMGroup",
-            "ServicePrincipal",
-            "EncryptionKey",
-            "Secret",
-            "Certificate",
-            "KeyVault",
-            "AuditLog",
-            "FlowLog",
-            "SecurityFinding",
-            "ComplianceControl",
-            "Region",
-            "Account",
-            "Organization",
-            "TagValue",
-            "NetworkInterface",
-            "LogGroup",
-            "ContainerRegistry",
-            "ContainerService",
-            "TaskDefinition",
-            "NodeGroup",
-            "FargateProfile",
-            "ClusterAddon",
-            "KubernetesNamespace",
-            "KubernetesWorkload",
-            "KubernetesService",
-            "KubernetesIngress",
-            "KubernetesServiceAccount",
-            "AutoScalingGroup",
-            "LaunchTemplate",
-            "TargetGroup",
-            "APIGateway",
-            "VPCEndpoint",
-            "InstanceProfile",
-            "IdentityProvider",
-            "MessageQueue",
-            "NotificationTopic",
-            "EventBus",
-            "EventRule",
-            "StateMachine",
-            "DataStream",
-            "CacheCluster",
-            "SearchDomain",
-            "DataWarehouse",
-            "FileSystem",
-            "DNSZone",
-            "DNSRecord",
-            "IaCStack",
-            "WebApplicationFirewall",
-            "NetworkFirewall",
-            "DDoSProtection",
-            "ThreatDetector",
-            "SecurityPostureHub",
-            "VulnerabilityScanner",
-            "DataSecurityScanner",
-            "ConfigurationRecorder",
-            "AccessAnalyzer",
-            "OrganizationalUnit",
-            "OrganizationPolicy",
-            "LandingZone",
-            "Guardrail",
-        ]:
+        for cls_name in _ONTOLOGY_CLASSES:
             cls_uri = CM[cls_name]
             g.add((cls_uri, RDF.type, OWL.Class))
             g.add((cls_uri, RDFS.label, Literal(cls_name)))
 
         # Class hierarchy
-        hierarchy = {
-            "ComputeInstance": "CloudResource",
-            "ServerlessFunction": "CloudResource",
-            "ContainerCluster": "CloudResource",
-            "ManagedAppService": "CloudResource",
-            "VirtualNetwork": "CloudResource",
-            "Subnet": "CloudResource",
-            "SecurityGroup": "CloudResource",
-            "NetworkACL": "CloudResource",
-            "LoadBalancer": "CloudResource",
-            "CDNDistribution": "CloudResource",
-            "ObjectStorage": "CloudResource",
-            "BlockStorage": "CloudResource",
-            "RelationalDatabase": "CloudResource",
-            "NoSQLDatabase": "CloudResource",
-            "IAMUser": "CloudResource",
-            "IAMRole": "CloudResource",
-            "IAMPolicy": "CloudResource",
-            "EncryptionKey": "CloudResource",
-            "Secret": "CloudResource",  # nosec B105 - class hierarchy label, not a credential
-            "LogGroup": "CloudResource",
-            "ContainerRegistry": "CloudResource",
-            "ContainerService": "CloudResource",
-            "TaskDefinition": "CloudResource",
-            "NodeGroup": "CloudResource",
-            "FargateProfile": "CloudResource",
-            "ClusterAddon": "CloudResource",
-            "KubernetesNamespace": "CloudResource",
-            "KubernetesWorkload": "CloudResource",
-            "KubernetesService": "CloudResource",
-            "KubernetesIngress": "CloudResource",
-            "KubernetesServiceAccount": "CloudResource",
-            "AutoScalingGroup": "CloudResource",
-            "LaunchTemplate": "CloudResource",
-            "TargetGroup": "CloudResource",
-            "APIGateway": "CloudResource",
-            "VPCEndpoint": "CloudResource",
-            "InstanceProfile": "CloudResource",
-            "IdentityProvider": "CloudResource",
-            "MessageQueue": "CloudResource",
-            "NotificationTopic": "CloudResource",
-            "EventBus": "CloudResource",
-            "EventRule": "CloudResource",
-            "StateMachine": "CloudResource",
-            "DataStream": "CloudResource",
-            "CacheCluster": "CloudResource",
-            "SearchDomain": "CloudResource",
-            "DataWarehouse": "CloudResource",
-            "FileSystem": "CloudResource",
-            "DNSZone": "CloudResource",
-            "DNSRecord": "CloudResource",
-            "IaCStack": "CloudResource",
-            "WebApplicationFirewall": "CloudResource",
-            "NetworkFirewall": "CloudResource",
-            "DDoSProtection": "CloudResource",
-            "ThreatDetector": "CloudResource",
-            "SecurityPostureHub": "CloudResource",
-            "VulnerabilityScanner": "CloudResource",
-            "DataSecurityScanner": "CloudResource",
-            "ConfigurationRecorder": "CloudResource",
-            "AccessAnalyzer": "CloudResource",
-            "OrganizationalUnit": "CloudResource",
-            "OrganizationPolicy": "CloudResource",
-            "LandingZone": "CloudResource",
-            "Guardrail": "CloudResource",
-        }
-        for child, parent in hierarchy.items():
+        for child, parent in _CLASS_HIERARCHY.items():
             g.add((CM[child], RDFS.subClassOf, CM[parent]))
 
-        # Classes for every asset type (including ones added after the
-        # literal list above), all under CloudResource.
+        # Classes for every asset type (including ones not in the literal
+        # list above), all under CloudResource.
         for cls_name in sorted(set(_ASSET_TYPE_CLASSES.values()) - {"CloudResource"}):
             cls_uri = CM[cls_name]
             if (cls_uri, RDF.type, OWL.Class) not in g:
                 g.add((cls_uri, RDF.type, OWL.Class))
                 g.add((cls_uri, RDFS.label, Literal(cls_name)))
-            if cls_name not in hierarchy:
+            if cls_name not in _CLASS_HIERARCHY:
                 g.add((cls_uri, RDFS.subClassOf, CM["CloudResource"]))
 
         # Object properties (relations)
@@ -776,19 +313,7 @@ class CloudOntology:
             g.add((prop_uri, CM["relationGroup"], Literal(group.value)))
 
         # Data properties
-        for dp_name in [
-            "hasARN",
-            "hasName",
-            "hasRegion",
-            "hasProvider",
-            "hasAccountId",
-            "hasCIDR",
-            "hasPort",
-            "hasProtocol",
-            "hasSeverity",
-            "hasRiskScore",
-            "isInternetExposed",
-        ]:
+        for dp_name in _DATA_PROPERTIES:
             dp_uri = CMP[dp_name]
             g.add((dp_uri, RDF.type, OWL.DatatypeProperty))
 

@@ -51,6 +51,9 @@ _SSO_ROLE_HASH_RE = re.compile(r"[0-9a-f]{16}")
 _ASSUMED_ROLE_RE = re.compile(r"^arn:aws[a-zA-Z-]*:sts::(\d{12}):assumed-role/([^/]+)/")
 _LAMBDA_QUALIFIED_RE = re.compile(r"^(arn:aws[a-zA-Z-]*:lambda:[^:]+:\d{12}:function:[^:]+):.+$")
 
+# GCP full resource names, anchored so ".googleapis.com" cannot match mid-string
+_GCP_NAME_RE = re.compile(r"^//[a-z0-9-]+\.googleapis\.com/")
+
 # Metadata keys whose values identify the asset itself (never link targets)
 _SELF_ID_KEYS = {
     "group_id",
@@ -590,7 +593,7 @@ class RelationshipLinker:
     def _looks_like_identifier(self, value: str) -> bool:
         if value.startswith("arn:") or value.startswith("/subscriptions/"):
             return True
-        if value.startswith("//") and ".googleapis.com/" in value:
+        if _GCP_NAME_RE.match(value):
             return True
         return bool(_AWS_ID_RE.match(value))
 

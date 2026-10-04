@@ -16,9 +16,16 @@ import click
 from rich.logging import RichHandler
 
 from cloudg import __version__, ui
+from cloudg.cli_commands import run
+from cloudg.cli_helpers import (
+    _build_scan_jobs,
+    _gather_ingest_reports,
+    _parse_ingest_reports,
+    _parse_region_flag,
+    _render_ingest_reports,
+    _run_scan_jobs,
+)
 from cloudg.ui import console
-
-logger = logging.getLogger(__name__)
 
 # Global config reference (set by CLI group)
 _config = None
@@ -56,13 +63,16 @@ class BannerGroup(click.Group):
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 @click.option("-c", "--config", "config_path", default=None, help="Path to config.yaml")
 @click.option("--log-file", default=None, help="Path to log file")
-def cli(verbose: bool, config_path: str | None, log_file: str | None) -> None:
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool, config_path: str | None, log_file: str | None) -> None:
     """☁️  cloudg — cloud graphing: infrastructure mapping and security intelligence."""
     global _config
     from cloudg.config import load_config
 
     ui.print_banner(__version__)
     _config = load_config(config_path)
+    # Expose the loaded config to subcommands defined outside this module
+    ctx.obj = _config
     effective_verbose = verbose or _config.verbose
     effective_log = log_file or _config.log_file
     setup_logging(effective_verbose, effective_log)
@@ -301,10 +311,7 @@ def map_inventory(
     cfg.providers = providers_list
 
     if scan_regions:
-        if scan_regions.lower() == "all":
-            region_list = ["ALL"]
-        else:
-            region_list = [r.strip() for r in scan_regions.split(",")]
+        region_list = _parse_region_flag(scan_regions)
         cfg.aws.regions = region_list
         cfg.azure.regions = region_list
         cfg.gcp.regions = region_list
@@ -581,14 +588,11 @@ def scan(
     scanners: str,
 ) -> None:
     """Run security scanners and generate findings."""
-    import concurrent.futures
-
     ui.section("Security Scan")
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
     scanner_list = [s.strip().lower() for s in scanners.split(",")]
-    all_findings: list[Any] = []
 
     resolved_iac_dir = iac_dir or "."
     resolved_images = [i.strip() for i in images.split(",")] if images else []
@@ -598,80 +602,10 @@ def scan(
         {"Provider": provider, "Scanners": ", ".join(scanner_list)},
     )
 
-    def _run_prowler() -> list[Any]:
-        from cloudg.scanners.prowler import ProwlerScanner
-
-        s = ProwlerScanner(
-            provider=provider, profile=profile, output_dir=str(output_dir / "prowler")
-        )
-        return s.run()
-
-    def _run_scoutsuite() -> list[Any]:
-        from cloudg.scanners.scoutsuite import ScoutSuiteScanner
-
-        s = ScoutSuiteScanner(
-            provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite")
-        )
-        return s.run()
-
-    def _run_checkov() -> list[Any]:
-        from cloudg.scanners.checkov import CheckovScanner
-
-        s = CheckovScanner(target_dir=resolved_iac_dir)
-        return s.run()
-
-    def _run_trivy() -> list[Any]:
-        from cloudg.scanners.trivy import TrivyScanner
-
-        s = TrivyScanner()
-        return s.scan_images(resolved_images)
-
-    def _run_trivy_fs() -> list[Any]:
-        from cloudg.scanners.trivy import TrivyScanner
-
-        s = TrivyScanner()
-        return s.scan_filesystem([resolved_iac_dir])
-
-    with ui.scanner_progress() as progress:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(scanner_list) + 1) as executor:
-            future_to_task: dict[concurrent.futures.Future, tuple[str, Any]] = {}
-
-            def submit(name: str, description: str, fn: Any) -> None:
-                task_id = progress.add_task(description, total=None)
-                future_to_task[executor.submit(fn)] = (name, task_id)
-
-            if "prowler" in scanner_list:
-                submit("Prowler", "Prowler", _run_prowler)
-
-            if "scoutsuite" in scanner_list:
-                submit("ScoutSuite", "ScoutSuite", _run_scoutsuite)
-
-            if "checkov" in scanner_list:
-                submit("Checkov", f"Checkov [muted](target: {resolved_iac_dir})[/]", _run_checkov)
-
-            if "trivy" in scanner_list:
-                if resolved_images:
-                    submit(
-                        "Trivy",
-                        f"Trivy [muted]({len(resolved_images)} images)[/]",
-                        _run_trivy,
-                    )
-                else:
-                    ui.warn("Trivy: no images specified, falling back to filesystem scan")
-                    submit(
-                        "Trivy (filesystem)",
-                        f"Trivy filesystem [muted](target: {resolved_iac_dir})[/]",
-                        _run_trivy_fs,
-                    )
-
-            for future in concurrent.futures.as_completed(future_to_task):
-                name, task_id = future_to_task[future]
-                try:
-                    findings = future.result(timeout=3600)
-                    all_findings.extend(findings)
-                    ui.task_done(progress, task_id, f"{name} — {len(findings)} findings")
-                except Exception as exc:
-                    ui.task_failed(progress, task_id, f"{name} failed: {exc}")
+    jobs = _build_scan_jobs(
+        provider, profile, scanner_list, resolved_iac_dir, resolved_images, output_dir
+    )
+    all_findings = _run_scan_jobs(jobs)
 
     # Save raw findings
     findings_path = output_dir / "raw-findings.json"
@@ -824,21 +758,10 @@ def ingest(
     """
     ui.section("Ingest Scanner Outputs")
 
-    reports: dict[str, list[str]] = {}
-    if prowler_paths:
-        reports["prowler"] = list(prowler_paths)
-    if scoutsuite_paths:
-        reports["scoutsuite"] = list(scoutsuite_paths)
-    if checkov_paths:
-        reports["checkov"] = list(checkov_paths)
-    if trivy_paths:
-        reports["trivy"] = list(trivy_paths)
-
+    reports = _gather_ingest_reports(prowler_paths, scoutsuite_paths, checkov_paths, trivy_paths)
     if not reports:
-        ui.error_panel(
-            "No inputs",
-            "Pass at least one report: --prowler, --scoutsuite, --checkov, or --trivy",
-        )
+        msg = "Pass at least one report: --prowler, --scoutsuite, --checkov, or --trivy"
+        ui.error_panel("No inputs", msg)
         sys.exit(1)
 
     ui.config_panel(
@@ -846,22 +769,7 @@ def ingest(
         {tool: ", ".join(paths) for tool, paths in reports.items()},
     )
 
-    from cloudg.ingest import parse_report
-
-    all_findings: list[Any] = []
-    per_tool: dict[str, int] = {}
-    for tool, paths in reports.items():
-        count = 0
-        for path in paths:
-            try:
-                findings = parse_report(tool, path)
-            except (ValueError, FileNotFoundError) as exc:
-                ui.warn(f"{tool}: skipping {path} — {exc}")
-                continue
-            count += len(findings)
-            all_findings.extend(findings)
-        per_tool[tool] = count
-        ui.detail(f"{tool}: {count} findings")
+    all_findings, per_tool = _parse_ingest_reports(reports)
 
     if not all_findings:
         ui.warn("No findings parsed from the given reports")
@@ -879,613 +787,27 @@ def ingest(
     # Save raw (pre-normalisation) findings alongside the reports
     raw_path = output_dir / "raw-findings.json"
     with open(raw_path, "w") as f:
-        json.dump(
-            [fi.model_dump(mode="json") for fi in all_findings],
-            f,
-            indent=2,
-            default=str,
-        )
+        dumped = [fi.model_dump(mode="json") for fi in all_findings]
+        json.dump(dumped, f, indent=2, default=str)
 
-    if fmt in ("json", "all"):
-        from cloudg.renderers.json_export import JSONExporter
-
-        exporter = JSONExporter(output_dir=str(output_dir))
-        path = exporter.export(scan_result)
-        ui.artifact("JSON", path)
-
-    if fmt in ("html", "all"):
-        from cloudg.renderers.html_report import HTMLReportGenerator
-
-        generator = HTMLReportGenerator(output_dir=str(output_dir))
-        path = generator.generate(scan_result)
-        ui.artifact("HTML", path)
+    _render_ingest_reports(scan_result, fmt, output_dir)
 
     ui.artifact("Raw findings", raw_path)
 
     console.print()
     ui.success(
-        f"Ingested [metric]{len(all_findings)}[/] findings "
-        f"from {len(per_tool)} tool(s) — "
+        f"Ingested [metric]{len(all_findings)}[/] findings from {len(per_tool)} tool(s) — "
         f"[metric]{len(scan_result.findings)}[/] after deduplication"
     )
 
 
 # ─────────────────────────────────────────────────────────────────────
-# RUN command (full pipeline)
+# RUN command (full pipeline) — defined in cloudg.cli_commands
 # ─────────────────────────────────────────────────────────────────────
 
-
-@cli.command()
-@click.option(
-    "-p",
-    "--provider",
-    type=click.Choice(["aws", "azure", "gcp", "all"], case_sensitive=False),
-    multiple=True,
-    required=True,
-    help="Cloud provider(s) to scan. Use multiple times or 'all' for simultaneous scanning.",
-)
-@click.option("--profile", default=None, help="AWS profile name (fallback if no direct keys)")
-@click.option("--aws-key", default=None, help="AWS access key ID (direct credential)")
-@click.option("--aws-secret", default=None, help="AWS secret access key (direct credential)")
-@click.option("--aws-session-token", default=None, help="AWS session token (temporary credentials)")
-@click.option(
-    "--aws-role-arn",
-    default=None,
-    help="Role ARN to assume via STS (or OIDC target with --aws-web-identity-token-file)",
-)
-@click.option(
-    "--aws-external-id",
-    default=None,
-    help="ExternalId for AssumeRole (third-party auditor pattern)",
-)
-@click.option(
-    "--aws-web-identity-token-file",
-    default=None,
-    help="OIDC token file for AssumeRoleWithWebIdentity (GitHub Actions, EKS)",
-)
-@click.option("--region", default=None, help="AWS region (ignored if --regions is set)")
-@click.option("--subscription-id", default=None, help="Azure subscription ID")
-@click.option(
-    "--azure-tenant-id",
-    default=None,
-    help="Azure AD tenant ID (service principal / workload identity)",
-)
-@click.option(
-    "--azure-client-id", default=None, help="Azure service principal or workload identity client ID"
-)
-@click.option("--azure-client-secret", default=None, help="Azure service principal client secret")
-@click.option("--azure-cert-path", default=None, help="Azure service principal certificate path")
-@click.option(
-    "--azure-federated-token-file",
-    default=None,
-    help="Federated OIDC token file (Azure workload identity)",
-)
-@click.option(
-    "--azure-managed-identity",
-    is_flag=True,
-    default=False,
-    help="Authenticate with the host's Azure managed identity",
-)
-@click.option("--project-id", default=None, help="GCP project ID")
-@click.option(
-    "--gcp-credentials-file",
-    default=None,
-    help="GCP service account key JSON or workload identity federation config",
-)
-@click.option("--gcp-impersonate-sa", default=None, help="GCP service account email to impersonate")
-@click.option("--iac-dir", default=None, help="IaC directory for Checkov")
-@click.option("--images", default=None, help="Container images for Trivy (comma-separated)")
-@click.option(
-    "-o",
-    "--output",
-    default="./reports",
-    help="Output directory",
-)
-@click.option(
-    "--scanners",
-    default=None,
-    help="Scanners to run (comma-separated: prowler,scoutsuite,checkov,trivy,iam). Defaults to config.yaml scanners.enabled.",
-)
-@click.option("--ontology/--no-ontology", default=True, help="Build semantic ontology graph")
-@click.option("--rag-export/--no-rag-export", default=True, help="Generate RAG-ready chunks")
-@click.option(
-    "--terraform/--no-terraform", default=False, help="Generate Terraform .tf.json recreation files"
-)
-@click.option(
-    "--regions",
-    "scan_regions",
-    default=None,
-    help="Regions to scan: 'all' for auto-discovery, or comma-separated list (e.g. 'us-east-1,eu-west-1')",
-)
-def run(
-    provider: tuple[str, ...],
-    profile: str | None,
-    aws_key: str | None,
-    aws_secret: str | None,
-    aws_session_token: str | None,
-    aws_role_arn: str | None,
-    aws_external_id: str | None,
-    aws_web_identity_token_file: str | None,
-    region: str | None,
-    subscription_id: str | None,
-    azure_tenant_id: str | None,
-    azure_client_id: str | None,
-    azure_client_secret: str | None,
-    azure_cert_path: str | None,
-    azure_federated_token_file: str | None,
-    azure_managed_identity: bool,
-    project_id: str | None,
-    gcp_credentials_file: str | None,
-    gcp_impersonate_sa: str | None,
-    iac_dir: str | None,
-    images: str | None,
-    output: str,
-    scanners: str | None,
-    ontology: bool,
-    rag_export: bool,
-    terraform: bool,
-    scan_regions: str | None,
-) -> None:
-    """Run the full pipeline: collect → scan → normalise → render.
-
-    Supports multi-provider scanning:
-        cloudg run -p aws -p azure
-        cloudg run -p all
-        cloudg run -p aws --regions all
-        cloudg run -p aws --aws-key AKIAXX --aws-secret yyy
-    """
-    ui.section("Full Pipeline")
-
-    output_dir = Path(output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    from cloudg.config import CloudGConfig
-    from cloudg.graph.builder import GraphBuilder
-    from cloudg.graph.reachability import ReachabilityAnalyzer
-    from cloudg.normaliser import FindingsNormaliser
-    from cloudg.renderers.html_report import HTMLReportGenerator
-    from cloudg.renderers.json_export import JSONExporter
-    from cloudg.renderers.svg import SVGRenderer
-    from cloudg.scanners.iam_linter import IAMLinter
-
-    # Use global config if loaded, else defaults
-    cfg: CloudGConfig = _config or CloudGConfig()
-
-    # Resolve providers from CLI flags
-    providers_list = list(provider)
-    if "all" in providers_list:
-        providers_list = ["aws", "azure", "gcp"]
-    cfg.providers = providers_list
-
-    # Resolve regions from CLI flag
-    if scan_regions:
-        if scan_regions.lower() == "all":
-            region_list = ["ALL"]
-        else:
-            region_list = [r.strip() for r in scan_regions.split(",")]
-        cfg.aws.regions = region_list
-        cfg.azure.regions = region_list
-        cfg.gcp.regions = region_list
-    elif region:
-        cfg.aws.regions = [region]
-
-    # Inject credentials and IDs from CLI flags
-    if subscription_id:
-        cfg.azure.subscription_ids = [subscription_id]
-    if project_id:
-        cfg.gcp.project_ids = [project_id]
-    if profile:
-        cfg.aws.profile = profile
-    if aws_key:
-        cfg.aws.access_key_id = aws_key
-    if aws_secret:
-        cfg.aws.secret_access_key = aws_secret
-    if aws_session_token:
-        cfg.aws.session_token = aws_session_token
-    if aws_role_arn:
-        cfg.aws.role_arn = aws_role_arn
-    if aws_external_id:
-        cfg.aws.external_id = aws_external_id
-    if aws_web_identity_token_file:
-        cfg.aws.web_identity_token_file = aws_web_identity_token_file
-    if azure_tenant_id:
-        cfg.azure.tenant_id = azure_tenant_id
-    if azure_client_id:
-        cfg.azure.client_id = azure_client_id
-    if azure_client_secret:
-        cfg.azure.client_secret = azure_client_secret
-    if azure_cert_path:
-        cfg.azure.certificate_path = azure_cert_path
-    if azure_federated_token_file:
-        cfg.azure.federated_token_file = azure_federated_token_file
-    if azure_managed_identity:
-        cfg.azure.use_managed_identity = True
-    if gcp_credentials_file:
-        cfg.gcp.credentials_file = gcp_credentials_file
-    if gcp_impersonate_sa:
-        cfg.gcp.impersonate_service_account = gcp_impersonate_sa
-
-    coverage_records = []
-
-    # ── Resolve scanner list from CLI flag or config ──
-    if scanners is not None:
-        scanner_list = [s.strip().lower() for s in scanners.split(",")]
-    else:
-        scanner_list = [s.strip().lower() for s in cfg.scanners.enabled]
-
-    run_config: dict[str, str] = {
-        "Providers": ", ".join(cfg.providers),
-        "Scanners": ", ".join(scanner_list),
-        "AWS regions": ", ".join(cfg.aws.regions),
-    }
-    if "azure" in cfg.providers:
-        run_config["Azure regions"] = ", ".join(cfg.azure.regions)
-    if "gcp" in cfg.providers:
-        run_config["GCP regions"] = ", ".join(cfg.gcp.regions)
-    run_config["Output"] = str(output_dir)
-    ui.config_panel("Run Configuration", run_config)
-
-    # ── Resolve container images: CLI flag → config ──
-    resolved_images: list[str] = []
-    if images:
-        resolved_images = [i.strip() for i in images.split(",")]
-    elif cfg.scanners.trivy_images:
-        resolved_images = list(cfg.scanners.trivy_images)
-
-    # Phase 1: Asset Collection (always uses multi-provider orchestrator)
-    ui.phase("Phase 1 · Asset Collection")
-
-    from cloudg.collectors.multi import MultiAccountCollector
-
-    multi_collector = MultiAccountCollector(cfg)
-
-    try:
-        with console.status("[accent]Collecting assets across providers…[/]", spinner="dots"):
-            assets, edges, coverage_records = asyncio.run(multi_collector.collect_all())
-        ui.success(f"[metric]{len(assets)}[/] assets, [metric]{len(edges)}[/] edges")
-        if hasattr(multi_collector, "_resolved_regions"):
-            for prov, regs in multi_collector._resolved_regions.items():
-                ui.detail(f"{prov}: {len(regs)} regions")
-    except Exception as exc:
-        ui.error_panel("Collection failed", exc)
-        assets, edges = [], []
-
-    # Phase 2: Graph Analysis
-    ui.phase("Phase 2 · Graph Analysis")
-    graph_builder = GraphBuilder()
-    graph = graph_builder.build(assets, edges)
-    graph_json = graph_builder.to_d3_json()
-
-    # Persist graph as GraphML
-    graphml_path = output_dir / "topology.graphml"
-    graph_builder.save_graphml(graphml_path)
-    ui.artifact("GraphML", graphml_path)
-
-    # Cytoscape export
-    cytoscape_path = output_dir / "topology-cytoscape.json"
-    with open(cytoscape_path, "w") as f:
-        json.dump(graph_builder.to_cytoscape_json(), f, indent=2, default=str)
-    ui.artifact("Cytoscape", cytoscape_path)
-
-    analyzer = ReachabilityAnalyzer(graph)
-    reachability_findings = analyzer.generate_findings()
-    ui.success(
-        f"Graph: [metric]{graph.number_of_nodes()}[/] nodes, "
-        f"[metric]{graph.number_of_edges()}[/] edges"
-    )
-    ui.success(f"Reachability findings: [metric]{len(reachability_findings)}[/]")
-
-    # Attack paths
-    if cfg.graph.compute_attack_paths:
-        lateral_paths = graph_builder.find_lateral_movement_paths()
-        if lateral_paths:
-            ui.warn(f"{len(lateral_paths)} lateral movement paths detected")
-
-    # Phase 2b: Semantic Ontology — deferred to after scanner phase
-    # (so security/compliance findings can be included in the ontology)
-
-    # Phase 2c: RAG Export
-    if rag_export and cfg.rag.enabled:
-        ui.phase("Phase 2c · RAG Export")
-        try:
-            from cloudg.graph.rag_export import RAGExporter
-
-            rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
-            rag_paths = rag.export_all(
-                assets,
-                edges,
-                graph,
-                findings=reachability_findings,
-                output_dir=output_dir,
-            )
-            ui.artifact("RAG chunks", rag_paths["chunks"])
-            ui.artifact("RAG index", rag_paths["index"])
-        except Exception as exc:
-            ui.fail(f"RAG export failed: {exc}")
-
-    # Phase 2d: Terraform Recreation
-    tf_dir: str | None = None
-    if terraform or cfg.terraform.enabled:
-        ui.phase("Phase 2d · Terraform Recreation")
-        try:
-            from cloudg.renderers.terraform_export import TerraformExporter
-
-            tf_dir = cfg.terraform.output_dir or str(output_dir / "terraform")
-            tf_exporter = TerraformExporter(output_dir=tf_dir)
-            preview = tf_exporter.preview(assets)
-            ui.detail(
-                f"Preview: {preview['total_mapped']} resources mappable, "
-                f"{preview['total_unmapped']} unmapped"
-            )
-
-            tf_paths = tf_exporter.export(assets, edges)
-            ui.artifact("Provider", tf_paths["provider"])
-            ui.artifact("Variables", tf_paths["variables"])
-            ui.artifact("Main", tf_paths["main"])
-            ui.artifact("Import", tf_paths["import_commands"])
-        except Exception as exc:
-            ui.fail(f"Terraform export failed: {exc}")
-            tf_dir = None
-
-    import concurrent.futures
-
-    # Phase 3: Security Scanning (all scanners in parallel)
-    ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
-    scanner_findings: list[Any] = []
-
-    # ── Resolve IaC scan targets: CLI flag → config → Terraform recreation ──
-    # No fallback to "." — scanning the directory cloudg runs from is not a
-    # scan of the cloud, and its zero findings look like a clean result.
-    from cloudg.api import resolve_iac_dirs
-
-    resolved_iac_dirs, iac_source = resolve_iac_dirs(iac_dir, cfg.scanners.iac_directories, tf_dir)
-    if iac_source == "terraform":
-        ui.detail(
-            "IaC scanners target the Terraform recreation of the live "
-            f"infrastructure ({resolved_iac_dirs[0]})"
-        )
-
-    def run_prowler(prov: str) -> list[Any]:
-        from cloudg.scanners.prowler import ProwlerScanner
-
-        prowler_region = cfg.aws.regions[0] if cfg.aws.regions else None
-        s = ProwlerScanner(
-            provider=prov,
-            profile=profile,
-            output_dir=str(output_dir / "prowler" / prov),
-            extra_args=cfg.scanners.prowler_extra_args or [],
-            aws_access_key_id=cfg.aws.access_key_id if prov == "aws" else None,
-            aws_secret_access_key=cfg.aws.secret_access_key if prov == "aws" else None,
-            aws_region=prowler_region if prov == "aws" else None,
-        )
-        return s.run()
-
-    def run_scoutsuite(prov: str) -> list[Any]:
-        from cloudg.scanners.scoutsuite import ScoutSuiteScanner
-
-        s = ScoutSuiteScanner(
-            provider=prov,
-            profile=profile if prov == "aws" else None,
-            report_dir=str(output_dir / "scoutsuite" / prov),
-            extra_args=cfg.scanners.scoutsuite_extra_args or [],
-        )
-        return s.run()
-
-    def run_checkov(target_dir: str) -> list[Any]:
-        from cloudg.scanners.checkov import CheckovScanner
-
-        frameworks = cfg.scanners.checkov_frameworks or []
-        s = CheckovScanner(
-            target_dir=target_dir,
-            frameworks=frameworks if frameworks else None,
-            extra_args=cfg.scanners.checkov_extra_args or [],
-        )
-        return s.run()
-
-    def run_trivy(image_list: list[str]) -> list[Any]:
-        from cloudg.scanners.trivy import TrivyScanner
-
-        s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
-        return s.scan_images(image_list)
-
-    def run_trivy_fs(target_dirs: list[str]) -> list[Any]:
-        from cloudg.scanners.trivy import TrivyScanner
-
-        s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
-        return s.scan_filesystem(target_dirs)
-
-    def run_iam_linter() -> list[Any]:
-        iam_linter = IAMLinter()
-        return iam_linter.analyze_policies(assets)
-
-    checkov_frameworks = cfg.scanners.checkov_frameworks or []
-    checkov_fw_label = ", ".join(checkov_frameworks) if checkov_frameworks else "auto-detect"
-
-    # Execute ALL enabled scanners concurrently
-    iam_findings: list[Any] = []
-    max_workers = len(scanner_list) + len(cfg.providers) + 1  # +1 for IAM linter
-    with ui.scanner_progress() as progress:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
-            future_to_scanner: dict[concurrent.futures.Future, tuple[str, Any]] = {}
-
-            def submit(name: str, description: str, fn: Any, *args: Any) -> None:
-                task_id = progress.add_task(description, total=None)
-                future_to_scanner[executor.submit(fn, *args)] = (name, task_id)
-
-            # Prowler — one instance per provider
-            if "prowler" in scanner_list:
-                for prov in cfg.providers:
-                    if prov in ("aws", "azure", "gcp"):
-                        submit(
-                            f"Prowler ({prov})", f"Prowler [muted]({prov})[/]", run_prowler, prov
-                        )
-            else:
-                ui.skip("Prowler: not enabled")
-
-            # ScoutSuite — one instance per provider
-            if "scoutsuite" in scanner_list:
-                for prov in cfg.providers:
-                    if prov in ("aws", "azure", "gcp"):
-                        submit(
-                            f"ScoutSuite ({prov})",
-                            f"ScoutSuite [muted]({prov})[/]",
-                            run_scoutsuite,
-                            prov,
-                        )
-            else:
-                ui.skip("ScoutSuite: not enabled")
-
-            # Checkov — runs against resolved IaC directories
-            if "checkov" in scanner_list:
-                if resolved_iac_dirs:
-                    for d in resolved_iac_dirs:
-                        submit(
-                            f"Checkov ({d})",
-                            f"Checkov [muted](target: {d}, frameworks: {checkov_fw_label})[/]",
-                            run_checkov,
-                            d,
-                        )
-                else:
-                    ui.warn(
-                        "Checkov: nothing to scan — pass --iac-dir, set "
-                        "scanners.iac_directories, or enable --terraform to scan the "
-                        "recreated infrastructure"
-                    )
-            else:
-                ui.skip("Checkov: not enabled")
-
-            # Trivy — scans container images if configured, else the IaC targets
-            if "trivy" in scanner_list:
-                if resolved_images:
-                    submit(
-                        "Trivy (images)",
-                        f"Trivy [muted]({len(resolved_images)} images)[/]",
-                        run_trivy,
-                        resolved_images,
-                    )
-                elif resolved_iac_dirs:
-                    ui.warn("Trivy: no images configured, falling back to filesystem scan")
-                    submit(
-                        "Trivy (filesystem)",
-                        f"Trivy filesystem [muted]({len(resolved_iac_dirs)} directories)[/]",
-                        run_trivy_fs,
-                        resolved_iac_dirs,
-                    )
-                else:
-                    ui.warn(
-                        "Trivy: nothing to scan — configure --images, "
-                        "--iac-dir, or enable --terraform"
-                    )
-            else:
-                ui.skip("Trivy: not enabled")
-
-            # IAM Linter — always runs internally to analyze collected assets
-            if "iam" in scanner_list or assets:
-                submit("IAM Linter", "IAM Lint", run_iam_linter)
-
-            for future in concurrent.futures.as_completed(future_to_scanner):
-                scanner_name, task_id = future_to_scanner[future]
-                try:
-                    findings = future.result(timeout=cfg.scanners.timeout_seconds)
-                    if scanner_name == "IAM Linter":
-                        iam_findings.extend(findings)
-                    else:
-                        scanner_findings.extend(findings)
-                    ui.task_done(progress, task_id, f"{scanner_name} — {len(findings)} findings")
-                except concurrent.futures.TimeoutError:
-                    ui.task_failed(
-                        progress,
-                        task_id,
-                        f"{scanner_name} timed out after {cfg.scanners.timeout_seconds}s",
-                    )
-                except Exception as exc:
-                    ui.task_failed(progress, task_id, f"{scanner_name} failed: {exc}")
-
-    # Combine all findings for downstream phases
-    all_security_findings = scanner_findings + iam_findings + reachability_findings
-    console.print()
-    ui.success(f"[bold]Phase 3 complete:[/] [metric]{len(all_security_findings)}[/] total findings")
-
-    # Phase 3b: Semantic Ontology (runs AFTER scanners so findings are included)
-    if ontology and cfg.ontology.enabled:
-        ui.phase("Phase 3b · Semantic Ontology", note="includes security findings")
-        try:
-            from cloudg.graph.ontology import CloudOntology
-
-            cloud_ontology = CloudOntology()
-            cloud_ontology.build(assets, edges, findings=all_security_findings)
-            stats = cloud_ontology.stats()
-            ui.success(
-                f"Ontology: [metric]{stats['total_triples']}[/] triples, "
-                f"[metric]{stats['classes_used']}[/] classes, "
-                f"[metric]{stats['individuals']}[/] individuals"
-            )
-            ui.success(f"Security findings in ontology: [metric]{len(all_security_findings)}[/]")
-
-            for fmt in cfg.ontology.export_formats:
-                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
-                ext = ext_map.get(fmt, "ttl")
-                onto_path = cloud_ontology.save(output_dir / f"ontology.{ext}", fmt=fmt)
-                ui.artifact(f"Ontology ({fmt})", onto_path)
-
-            # Group summary
-            for group, count in stats["relation_group_counts"].items():
-                ui.detail(f"{group}: {count} relations")
-        except Exception as exc:
-            ui.fail(f"Ontology build failed: {exc}")
-
-    # Also update RAG export with all findings
-    if rag_export and cfg.rag.enabled:
-        try:
-            from cloudg.graph.rag_export import RAGExporter
-
-            rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
-            rag_paths = rag.export_all(
-                assets,
-                edges,
-                graph,
-                findings=all_security_findings,
-                output_dir=output_dir,
-            )
-        except Exception:
-            # RAG already ran in Phase 2c, this is an update pass
-            logger.debug("RAG update pass failed; keeping Phase 2c export", exc_info=True)
-
-    # Phase 4: Normalise (with external rulesets)
-    ui.phase("Phase 4 · Normalisation")
-    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir)
-    scan_result = normaliser.normalise(
-        reachability_findings, scanner_findings, iam_findings, assets=assets
-    )
-    scan_result.edges = edges
-    ui.success(f"[metric]{len(scan_result.findings)}[/] normalised findings")
-
-    # Phase 5: Render
-    ui.phase("Phase 5 · Report Generation")
-
-    exporter = JSONExporter(output_dir=str(output_dir))
-    json_path = exporter.export(scan_result, graph_json=graph_json)
-    ui.artifact("JSON", json_path)
-
-    svg_renderer = SVGRenderer(output_dir=str(output_dir))
-    svg_path = svg_renderer.render(assets, edges)
-    ui.artifact("SVG", svg_path)
-
-    html_gen = HTMLReportGenerator(output_dir=str(output_dir))
-    html_path = html_gen.generate(scan_result, graph_json=graph_json)
-    ui.artifact("HTML", html_path)
-
-    # Summary
-    ui.section("Results")
-    ui.summary_table(scan_result.summary)
-
-    # Coverage summary
-    if coverage_records:
-        ui.coverage_table(coverage_records)
-
-    console.print()
-    ui.success(f"All reports saved to [path]{output_dir}[/]")
+cli.add_command(run)
 
 
 if __name__ == "__main__":
-    cli()
+    # Click injects the arguments at call time
+    cli()  # pylint: disable=no-value-for-parameter

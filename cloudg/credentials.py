@@ -74,6 +74,103 @@ class GCPCredentials:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _aws_session_from_web_identity(
+    boto3: Any,
+    role_arn: str,
+    token_file: str,
+    session_name: str,
+    region: str,
+) -> Any:
+    """2. OIDC / web identity federation."""
+    logger.info("AWS auth: web identity federation into %s", role_arn)
+    with open(token_file) as f:
+        token = f.read().strip()
+    sts = boto3.client("sts", region_name=region)
+    try:
+        resp = sts.assume_role_with_web_identity(
+            RoleArn=role_arn,
+            RoleSessionName=session_name,
+            WebIdentityToken=token,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}") from exc
+    creds = resp["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=region,
+    )
+
+
+def _aws_base_session(
+    boto3: Any,
+    cfg: Any,
+    region: str,
+    session_name: str,
+    role_arn: str | None,
+    token_file: str | None,
+) -> tuple[Any, bool]:
+    """Build the base session; returns (session, assumed_via_oidc)."""
+    session_kwargs: dict[str, str] = {"region_name": region}
+
+    if cfg.access_key_id and cfg.secret_access_key:
+        # 1. Direct access keys
+        session_kwargs["aws_access_key_id"] = cfg.access_key_id
+        session_kwargs["aws_secret_access_key"] = cfg.secret_access_key
+        if getattr(cfg, "session_token", None):
+            session_kwargs["aws_session_token"] = cfg.session_token
+        logger.info("AWS auth: direct access keys (region %s)", region)
+        return boto3.Session(**session_kwargs), False
+
+    if role_arn and token_file:
+        # 2. OIDC / web identity federation
+        return (
+            _aws_session_from_web_identity(boto3, role_arn, token_file, session_name, region),
+            True,
+        )
+
+    if getattr(cfg, "profile", None):
+        # 3. Named profile (plain or SSO)
+        session_kwargs["profile_name"] = cfg.profile
+        logger.info("AWS auth: profile '%s' (region %s)", cfg.profile, region)
+        return boto3.Session(**session_kwargs), False
+
+    # 4. Default chain: env vars, instance/task role, SSO cache
+    logger.info("AWS auth: default provider chain (region %s)", region)
+    return boto3.Session(**session_kwargs), False
+
+
+def _aws_assume_role(
+    boto3: Any,
+    session: Any,
+    target_role: str,
+    session_name: str,
+    external_id: str | None,
+    region: str,
+) -> Any:
+    """5. STS AssumeRole on top of the base credentials."""
+    logger.info("AWS auth: assuming role %s", target_role)
+    assume_kwargs: dict[str, Any] = {
+        "RoleArn": target_role,
+        "RoleSessionName": session_name,
+        "DurationSeconds": 3600,
+    }
+    if external_id:
+        assume_kwargs["ExternalId"] = external_id
+    try:
+        assumed = session.client("sts").assume_role(**assume_kwargs)
+    except Exception as exc:
+        raise RuntimeError(f"AssumeRole failed for {target_role}: {exc}") from exc
+    creds = assumed["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=region,
+    )
+
+
 def build_aws_session(
     cfg: Any,
     region: str,
@@ -101,7 +198,6 @@ def build_aws_session(
             "boto3 is required for AWS. Install with: pip install cloudg[aws]"
         ) from exc
 
-    session_kwargs: dict[str, str] = {"region_name": region}
     session_name = getattr(cfg, "role_session_name", None) or "cloudg-scan"
     role_arn = getattr(cfg, "role_arn", None)
     token_file = getattr(cfg, "web_identity_token_file", None) or os.environ.get(
@@ -109,47 +205,9 @@ def build_aws_session(
     )
     external_id = getattr(cfg, "external_id", None)
 
-    assumed_via_oidc = False
-
-    if cfg.access_key_id and cfg.secret_access_key:
-        # 1. Direct access keys
-        session_kwargs["aws_access_key_id"] = cfg.access_key_id
-        session_kwargs["aws_secret_access_key"] = cfg.secret_access_key
-        if getattr(cfg, "session_token", None):
-            session_kwargs["aws_session_token"] = cfg.session_token
-        logger.info("AWS auth: direct access keys (region %s)", region)
-        session = boto3.Session(**session_kwargs)
-    elif role_arn and token_file:
-        # 2. OIDC / web identity federation
-        logger.info("AWS auth: web identity federation into %s", role_arn)
-        with open(token_file) as f:
-            token = f.read().strip()
-        sts = boto3.client("sts", region_name=region)
-        try:
-            resp = sts.assume_role_with_web_identity(
-                RoleArn=role_arn,
-                RoleSessionName=session_name,
-                WebIdentityToken=token,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}") from exc
-        creds = resp["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-            region_name=region,
-        )
-        assumed_via_oidc = True
-    elif getattr(cfg, "profile", None):
-        # 3. Named profile (plain or SSO)
-        session_kwargs["profile_name"] = cfg.profile
-        logger.info("AWS auth: profile '%s' (region %s)", cfg.profile, region)
-        session = boto3.Session(**session_kwargs)
-    else:
-        # 4. Default chain: env vars, instance/task role, SSO cache
-        logger.info("AWS auth: default provider chain (region %s)", region)
-        session = boto3.Session(**session_kwargs)
+    session, assumed_via_oidc = _aws_base_session(
+        boto3, cfg, region, session_name, role_arn, token_file
+    )
 
     # 5. Optional role assumption on top of the base credentials
     target_role: str | None = None
@@ -159,25 +217,7 @@ def build_aws_session(
         target_role = f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
 
     if target_role:
-        logger.info("AWS auth: assuming role %s", target_role)
-        assume_kwargs: dict[str, Any] = {
-            "RoleArn": target_role,
-            "RoleSessionName": session_name,
-            "DurationSeconds": 3600,
-        }
-        if external_id:
-            assume_kwargs["ExternalId"] = external_id
-        try:
-            assumed = session.client("sts").assume_role(**assume_kwargs)
-        except Exception as exc:
-            raise RuntimeError(f"AssumeRole failed for {target_role}: {exc}") from exc
-        creds = assumed["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-            region_name=region,
-        )
+        session = _aws_assume_role(boto3, session, target_role, session_name, external_id, region)
 
     return session
 
