@@ -2,6 +2,15 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## 0.5.3 (2026-10-04)
+
+A security fix release for CodeQL's "incomplete URL substring sanitization" alerts (`py/incomplete-url-substring-sanitization`).
+
+Security:
+
+- The GCP relation extractors decided a resource's API service by testing whether a string started with a host-like literal. The affected checks were the CMEK scan skip for `cloudkms.googleapis.com/` asset types, service-account detection on `//iam.googleapis.com/` names, and the `//sqladmin.googleapis.com/` and `//container.googleapis.com/` name normalisation. They now parse the service out of the name with anchored regular expressions, through the new helpers `api_service()` and `asset_type_service()` in `cloudg.inventory.gcp_relations.names`. Behaviour is unchanged; the new code was checked against the previous implementation on about 92,000 generated inputs with no differences.
+- Test assertions that checked a host-like literal against a list with `in` now use set comparison, so the scanner no longer reads them as URL checks.
+
 ## 0.5.2 (2026-10-04)
 
 A documentation release: the inventory mapper's return structures, asset types and internals are now documented in full. No code changes.

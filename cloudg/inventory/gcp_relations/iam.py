@@ -16,6 +16,7 @@ from cloudg.inventory.gcp_relations.names import (
     PUBLIC_MEMBERS,
     _list,
     _num,
+    api_service,
     dig,
     sa_email,
     sa_ref,
@@ -252,7 +253,7 @@ def _mark_public(target: CloudAsset, member: str, role: str) -> None:
 def _is_sa_resource(resource: str) -> bool:
     return (
         "/serviceAccounts/" in resource
-        and resource.startswith("//iam.googleapis.com/")
+        and api_service(resource) == "iam"
         and "/keys/" not in resource
     )
 

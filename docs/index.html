@@ -270,7 +270,7 @@
 <div class="shell">
 <nav class="toc" aria-label="Contents">
   <div class="brand">cloud<span class="g">g</span></div>
-  <div class="ver">v0.5.2 &middot; handbook</div>
+  <div class="ver">v0.5.3 &middot; handbook</div>
   <ul>
     <li class="group">Start</li>
     <li><a href="#install">Installation</a></li>
@@ -691,6 +691,12 @@ docker compose run --rm cloudg run -p aws --regions us-east-1</code></pre>
 <section id="changelog">
   <h2>Changelog</h2>
   <p>Every release, newest first. The full detail lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+
+  <div class="release">
+    <span class="tag">0.5.3</span> <span class="date">2026-10-04</span>
+    <h3>URL sanitization fix</h3>
+    <p>A security fix for CodeQL "incomplete URL substring sanitization" alerts. The GCP relation extractors identified a resource's API service with string prefix tests on host-like literals (<code>cloudkms.googleapis.com/</code>, <code>//iam.googleapis.com/</code>, <code>//sqladmin.googleapis.com/</code>, <code>//container.googleapis.com/</code>). They now parse the service out of the name with anchored regular expressions. Behaviour is unchanged, which was checked against the previous implementation on about 92,000 generated inputs.</p>
+  </div>
 
   <div class="release">
     <span class="tag">0.5.2</span> <span class="date">2026-10-04</span>
