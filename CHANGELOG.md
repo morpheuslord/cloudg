@@ -2,6 +2,18 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## 0.5.2 (2026-10-04)
+
+A documentation release: the inventory mapper's return structures, asset types and internals are now documented in full. No code changes.
+
+Documentation:
+
+- [Inventory reference](docs/INVENTORY_REFERENCE.md): every return structure and exported file of the inventory mapper, field by field, with annotated examples.
+- [Inventory catalog](docs/INVENTORY_CATALOG.md): all 156 asset types with the native types mapped to each, their metadata keys, declared relations and the relationship matrix.
+- [Inventory internals](docs/INVENTORY_INTERNALS.md): architecture, code map, the collector task registry, linker resolution rules, Azure and GCP extractor frameworks, dependency semantics, recipes for extending the mapper, security rules and testing.
+- The feature reference and handbook describe the full `AssetType` and `EdgeType` sets and the new models' fields.
+- The handbook changelog lists 0.5.0 and 0.5.1 as separate releases.
+
 ## 0.5.1 (2026-10-04)
 
 A much deeper inventory map. `cloudg map` now follows workloads into containers and Kubernetes, through serverless and event wiring, across the IAM graph and the security services watching it all, and across every account of an AWS Organization / Control Tower landing zone. Edges say what they mean, and `cloudg deps` answers what an asset needs and what breaks with it.
@@ -37,6 +49,9 @@ Changed:
 - `AsyncAWSCollector._service_tasks()` returns collector callables instead of coroutine objects, so subclasses can prune tasks without leaving unawaited coroutines.
 - `MultiAccountCollector` passes `is_primary_region` to collectors that support region scoping, and collects the caller's own account with the base credentials instead of assuming the member role there.
 - GraphML / D3 exports carry `account_id` on nodes and `relationship` / `description` on edges; the ontology uses each edge's declared relationship.
+- `AWSDeepInventoryCollector` and `GCPCollector` take their options as keyword arguments validated by `DeepInventoryOptions` / `GCPCollectorOptions`: an unknown option name raises `TypeError` instead of being ignored. `tagging_sweep` stays the fourth positional parameter of `AWSDeepInventoryCollector`.
+- Large inventory modules were split into packages and focused modules (`aws_services/*`, `azure_graph/`, `gcp_relations/`, `mapper_result`, `linker_index`, `aws_deep_tasks`, `organization_assets`); the previous import paths keep re-exporting the same names.
+- URL and host checks in the collectors and the linker (SQS queue URLs, ECR and ACR registry hosts, S3 endpoints) parse the URL and match the host with anchored expressions instead of substring tests.
 
 Fixed:
 

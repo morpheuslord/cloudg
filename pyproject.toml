@@ -1,6 +1,6 @@
 [project]
 name = "cloudg"
-version = "0.5.1"
+version = "0.5.2"
 description = "cloudg (cloud graphing) - multi-cloud infrastructure mapping, knowledge graphs and security intelligence for AWS, Azure and GCP"
 # The PyPI project page renders the full documentation, not the repo README
 readme = "docs/DOCUMENTATION.md"
