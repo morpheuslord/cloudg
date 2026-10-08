@@ -1,6 +1,6 @@
 """Relation taxonomy and inference rules for the cloud ontology.
 
-Defines the ~62 typed semantic relations across 7 domain groups and the
+Defines the ~63 typed semantic relations across 7 domain groups and the
 inference layer that derives them from raw CloudG edges and asset metadata.
 The OWL graph builder itself lives in :mod:`cloudg.graph.ontology`.
 """
@@ -18,7 +18,7 @@ from cloudg.schema.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Relation taxonomy — ~62 semantic relation types across 7 groups
+# Relation taxonomy: ~63 semantic relation types across 7 groups
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +55,8 @@ class RelationType(str, Enum):
     NAT_TRANSLATED = "NAT_TRANSLATED"
     DNS_RESOLVED = "DNS_RESOLVED"
 
-    # ── Containment (7) ──
+    # ── Containment (8) ──
+    CONTAINS = "CONTAINS"
     VPC_CONTAINS_SUBNET = "VPC_CONTAINS_SUBNET"
     SUBNET_CONTAINS_INSTANCE = "SUBNET_CONTAINS_INSTANCE"
     REGION_CONTAINS_VPC = "REGION_CONTAINS_VPC"
@@ -137,6 +138,7 @@ _GROUP_RANGES = {
         RelationType.DNS_RESOLVED,
     ],
     RelationGroup.CONTAINMENT: [
+        RelationType.CONTAINS,
         RelationType.VPC_CONTAINS_SUBNET,
         RelationType.SUBNET_CONTAINS_INSTANCE,
         RelationType.REGION_CONTAINS_VPC,
@@ -272,26 +274,40 @@ def _infer_sg_rule_relations(
     return relations
 
 
+_CLUSTER_TYPES = {
+    AssetType.ECS_CLUSTER,
+    AssetType.EKS_CLUSTER,
+    AssetType.AKS_CLUSTER,
+    AssetType.GKE_CLUSTER,
+    AssetType.K8S_NAMESPACE,
+}
+_ORG_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT}
+
+
 def _infer_containment_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer containment sub-type from connected asset types."""
+    """Infer the containment sub-type from the source and target asset types.
+
+    A specific relation is used only when both ends match it: VPC / VNet to
+    subnet, subnet to placed resource, cluster or namespace to workload,
+    organization or OU to account. Anything else (organization to OU,
+    account to VPC, VNet to VM, resource group to resource, unresolved
+    endpoints) is plain ``CONTAINS``.
+    """
     src = assets_by_id.get(edge.source_id)
     tgt = assets_by_id.get(edge.target_id)
     if not (src and tgt):
-        return []
+        return [RelationType.CONTAINS]
     if src.asset_type in (AssetType.VPC, AssetType.VNET) and tgt.asset_type == AssetType.SUBNET:
         return [RelationType.VPC_CONTAINS_SUBNET]
     if src.asset_type == AssetType.SUBNET:
         return [RelationType.SUBNET_CONTAINS_INSTANCE]
-    if src.asset_type in (
-        AssetType.ECS_CLUSTER,
-        AssetType.EKS_CLUSTER,
-        AssetType.AKS_CLUSTER,
-        AssetType.GKE_CLUSTER,
-    ):
+    if src.asset_type in _CLUSTER_TYPES:
         return [RelationType.CLUSTER_CONTAINS_SERVICE]
-    return [RelationType.VPC_CONTAINS_SUBNET]  # generic containment
+    if src.asset_type in _ORG_TYPES and tgt.asset_type == AssetType.CLOUD_ACCOUNT:
+        return [RelationType.ORG_CONTAINS_ACCOUNT]
+    return [RelationType.CONTAINS]
 
 
 def _infer_iam_trust_relations(
@@ -324,27 +340,26 @@ def _infer_policy_attachment_relations(
     return [rel] if rel else []
 
 
-def _infer_target_security_relations(
+# Filter asset type -> relation for "resource ATTACHED_TO filter" edges
+_FILTER_TARGET_RELATIONS: dict[AssetType, RelationType] = {
+    AssetType.SECURITY_GROUP: RelationType.PROTECTED_BY_SG,
+    AssetType.NSG: RelationType.PROTECTED_BY_SG,
+    AssetType.NACL: RelationType.PROTECTED_BY_NACL,
+}
+
+
+def _infer_attachment_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer security relations from the target asset's metadata."""
-    tgt_asset = assets_by_id.get(edge.target_id)
-    if not tgt_asset:
-        return []
-    relations: list[RelationType] = []
+    """Infer the relation for an ATTACHED_TO edge from the target type.
 
-    # SG protection
-    if edge.edge_type == EdgeType.SECURITY_GROUP_RULE:
-        relations.append(RelationType.PROTECTED_BY_SG)
-    elif edge.edge_type == EdgeType.NACL_RULE:
-        relations.append(RelationType.PROTECTED_BY_NACL)
-
-    # KMS encryption (from metadata)
-    if tgt_asset.metadata.get("encryption") or tgt_asset.metadata.get("storage_encrypted"):
-        if tgt_asset.metadata.get("kms_key_id", ""):
-            relations.append(RelationType.ENCRYPTED_BY_KMS)
-
-    return relations
+    A resource attached to a security group, NSG or NACL is protected by
+    it (``resource PROTECTED_BY_SG group``). Other attachments (ENI to
+    instance, disk to VM, gateway to VPC) are dependencies.
+    """
+    tgt = assets_by_id.get(edge.target_id)
+    rel = _FILTER_TARGET_RELATIONS.get(tgt.asset_type) if tgt else None
+    return [rel] if rel else [RelationType.DEPENDS_ON]
 
 
 # EdgeType → inference rule for edge types needing asset context
@@ -355,6 +370,7 @@ _EDGE_RELATION_RULES: dict[
     EdgeType.CONTAINS: _infer_containment_relations,
     EdgeType.IAM_TRUST: _infer_iam_trust_relations,
     EdgeType.IAM_POLICY_ATTACHMENT: _infer_policy_attachment_relations,
+    EdgeType.ATTACHED_TO: _infer_attachment_relations,
 }
 
 # EdgeType → fixed relations for simple edge types
@@ -377,12 +393,12 @@ _SIMPLE_EDGE_RELATIONS: dict[EdgeType, list[RelationType]] = {
     EdgeType.MANAGES: [RelationType.OWNED_BY],
     EdgeType.GOVERNS: [RelationType.COMPLIANCE_GOVERNS],
     EdgeType.REFERENCES: [RelationType.DEPENDS_ON],
-    EdgeType.ATTACHED_TO: [RelationType.DEPENDS_ON],
 }
 
-# Edge types whose default relation is only used when the edge carries no
-# explicit ``relationship`` of its own.
+# Edge types whose default (or inferred) relation is only used when the edge
+# carries no explicit ``relationship`` of its own.
 _TYPED_EDGE_TYPES = {
+    EdgeType.CONTAINS,
     EdgeType.INVOKES,
     EdgeType.USES_IMAGE,
     EdgeType.ASSUMES_ROLE,
@@ -412,15 +428,14 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
 
     # --- Network / containment / IAM relations by edge type ---
     rule = _EDGE_RELATION_RULES.get(edge.edge_type)
-    if rule:
+    if relations and edge.edge_type in _TYPED_EDGE_TYPES:
+        pass  # the declared relationship replaces the default
+    elif rule:
         relations.extend(r for r in rule(edge, assets_by_id) if r not in relations)
-    elif not (relations and edge.edge_type in _TYPED_EDGE_TYPES):
+    else:
         relations.extend(
             r for r in _SIMPLE_EDGE_RELATIONS.get(edge.edge_type, []) if r not in relations
         )
-
-    # --- Security relations from asset metadata ---
-    relations.extend(_infer_target_security_relations(edge, assets_by_id))
 
     return relations
 
@@ -448,22 +463,84 @@ def _infer_tag_relations(asset: CloudAsset) -> list[tuple[RelationType, str]]:
     return relations
 
 
+_NETWORK_TYPES = (AssetType.VPC, AssetType.VNET)
+
+
 def _infer_vpc_containment(
     asset: CloudAsset, all_assets: list[CloudAsset]
 ) -> list[tuple[RelationType, str]]:
-    """Infer VPC/Subnet containment from metadata."""
+    """Infer what a VPC or VNet contains from its members' ``vpc_id`` metadata.
+
+    The relations point from the network to the member, so they are produced
+    when ``asset`` is the VPC: ``vpc VPC_CONTAINS_SUBNET subnet`` for a subnet
+    and ``vpc CONTAINS member`` for anything else with the same ``vpc_id``
+    (instances, security groups, endpoints). For a member asset this returns
+    nothing. If several VPC / VNet assets share a ``vpc_id``, only the first
+    one in ``all_assets`` claims the members.
+    """
     vpc_id = asset.metadata.get("vpc_id")
-    if not vpc_id or asset.asset_type == AssetType.VPC:
+    if not vpc_id or asset.asset_type not in _NETWORK_TYPES:
         return []
+    owner = next(
+        (
+            o
+            for o in all_assets
+            if o.asset_type in _NETWORK_TYPES and o.metadata.get("vpc_id") == vpc_id
+        ),
+        None,
+    )
+    if owner is None or owner.id != asset.id:
+        return []
+    relations: list[tuple[RelationType, str]] = []
     for other in all_assets:
-        if (
-            other.asset_type in (AssetType.VPC, AssetType.VNET)
-            and other.metadata.get("vpc_id") == vpc_id
-        ):
-            if asset.asset_type == AssetType.SUBNET:
-                return [(RelationType.VPC_CONTAINS_SUBNET, other.id)]
-            return [(RelationType.SUBNET_CONTAINS_INSTANCE, other.id)]
-    return []
+        if other.asset_type in _NETWORK_TYPES or other.metadata.get("vpc_id") != vpc_id:
+            continue
+        if other.asset_type == AssetType.SUBNET:
+            relations.append((RelationType.VPC_CONTAINS_SUBNET, other.id))
+        else:
+            relations.append((RelationType.CONTAINS, other.id))
+    return relations
+
+
+def _kms_key_identifiers(key: CloudAsset) -> set[str]:
+    """Every string a ``kms_key_id`` reference may use for this key."""
+    names = {key.id, key.name}
+    if key.arn:
+        names.add(key.arn)
+        names.add(key.arn.rsplit("/", 1)[-1])  # bare key id
+    names.update(a for a in key.metadata.get("aliases") or [] if isinstance(a, str))
+    return names
+
+
+def _resolve_kms_key(ref: str, all_assets: list[CloudAsset]) -> str:
+    """Asset id of the KMS key ``ref`` names, or ``ref`` itself if not collected.
+
+    ``ref`` may be the key's asset id, ARN, bare key id, alias name
+    (``alias/app``) or alias ARN.
+    """
+    for other in all_assets:
+        if other.asset_type == AssetType.KMS_KEY and ref in _kms_key_identifiers(other):
+            return other.id
+    return ref
+
+
+def _infer_kms_encryption(
+    asset: CloudAsset, all_assets: list[CloudAsset]
+) -> list[tuple[RelationType, str]]:
+    """Infer ``asset ENCRYPTED_BY_KMS key`` for an asset encrypted with a named key.
+
+    The asset needs ``encryption`` or ``storage_encrypted`` set in its
+    metadata and a ``kms_key_id``. The key reference is resolved to the
+    collected KMS key asset when there is one; otherwise the raw reference
+    is the object.
+    """
+    md = asset.metadata
+    kms_ref = md.get("kms_key_id")
+    if not kms_ref or not isinstance(kms_ref, str):
+        return []
+    if not (md.get("encryption") or md.get("storage_encrypted")):
+        return []
+    return [(RelationType.ENCRYPTED_BY_KMS, _resolve_kms_key(kms_ref, all_assets))]
 
 
 def _infer_metadata_relations(asset: CloudAsset) -> list[tuple[RelationType, str]]:
@@ -494,10 +571,14 @@ def infer_asset_relations(
 ) -> list[tuple[RelationType, str]]:
     """Infer additional semantic relations from asset metadata alone.
 
-    Returns list of (RelationType, target_asset_id) tuples.
+    Returns a list of ``(RelationType, object_id)`` tuples. ``asset`` is
+    always the subject, so each tuple reads ``asset REL object``. Relations
+    that point at an asset from elsewhere (a VPC containing it) are returned
+    when that other asset is passed in instead.
     """
     relations: list[tuple[RelationType, str]] = []
     relations.extend(_infer_tag_relations(asset))
     relations.extend(_infer_vpc_containment(asset, all_assets))
+    relations.extend(_infer_kms_encryption(asset, all_assets))
     relations.extend(_infer_metadata_relations(asset))
     return relations
