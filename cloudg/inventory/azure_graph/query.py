@@ -1,4 +1,13 @@
-"""Azure Resource Graph querying: paginated KQL with 429 back-off."""
+"""Azure Resource Graph querying: paginated KQL with 429 back-off.
+
+Resource Graph allows ~15 queries per 5-second window per user. Every page
+takes a token from the shared ``azure/*/*/resourcegraph`` bucket (3 rps,
+burst 15: cloudg.resilience), throttled pages wait for the server's
+``Retry-After`` / ``x-ms-user-quota-resets-after`` (or exponential back-off
+when there is none), and clients built by
+:func:`default_graph_client_factory` also read the quota headers of every
+response to pause before the quota runs out.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +17,18 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from cloudg.inventory.azure_graph.helpers import _kql, to_rest
+from cloudg.resilience.errors import retry_after
+from cloudg.resilience.governor import get_governor
+from cloudg.resilience.limiter import Scope
 
 
 def default_graph_client_factory(credential: Any) -> Any:
     """Build a real ``ResourceGraphClient`` (raises ImportError when absent)."""
     from azure.mgmt.resourcegraph import ResourceGraphClient  # type: ignore[import-not-found]
 
-    return ResourceGraphClient(credential)
+    from cloudg.resilience.azure import build_azure_client
+
+    return build_azure_client(ResourceGraphClient, credential)
 
 
 def _make_request(
@@ -73,18 +87,43 @@ class QueryLimits:
     max_retries: int = 5
 
 
+_GRAPH_SCOPE = Scope("azure", None, None, "resourcegraph")
+
+
 def _fetch_page(client: Any, request: Any, max_retries: int, sleep: Callable[[float], None]) -> Any:
-    """One ``resources`` call, retrying throttled (429) responses."""
+    """One ``resources`` call, retrying throttled (429) responses.
+
+    Waits at least the server's Retry-After / quota-reset hint, otherwise
+    exponential back-off (2s, 4s, ... capped at 30s).
+    """
+    gov = get_governor()
+    # Clients from default_graph_client_factory pace every HTTP attempt in
+    # their pipeline; others (custom factories) are paced here per page.
+    paced_by_client = bool(getattr(client, "_cloudg_throttle_policy", False))
     attempt = 0
     while True:
+        if not paced_by_client and gov.provider_enabled("azure"):
+            gov.check(_GRAPH_SCOPE)
+            gov.limiter.acquire_sync(_GRAPH_SCOPE, sleep=sleep)
         try:
-            return client.resources(request)
+            response = client.resources(request)
         except Exception as exc:
-            if _status_code(exc) == 429 and attempt < max_retries:
-                attempt += 1
-                sleep(min(2.0**attempt, 30.0))
-                continue
+            if _status_code(exc) == 429:
+                hint = retry_after(exc)
+                gov.on_throttle(_GRAPH_SCOPE, hint, str(exc)[:200])
+                if attempt < max_retries:
+                    attempt += 1
+                    gov.record_retry(_GRAPH_SCOPE)
+                    delay = min(2.0**attempt, 30.0)
+                    if paced_by_client or not gov.provider_enabled("azure"):
+                        # Otherwise the limiter, paused for the hint, waits it out
+                        delay = max(delay, min(hint or 0.0, 300.0))
+                    sleep(delay)
+                    continue
+                gov.on_gave_up(_GRAPH_SCOPE, f"throttled: Resource Graph query: {str(exc)[:150]}")
             raise
+        gov.on_success(_GRAPH_SCOPE)
+        return response
 
 
 def run_query(

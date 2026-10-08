@@ -16,6 +16,7 @@ from typing import Any
 
 from cloudg.config import CloudGConfig
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.resilience.errors import describe_error
 from cloudg.region_discovery import RegionDiscovery, is_all_regions
 from cloudg.schema.models import CloudAsset, NetworkEdge
 
@@ -54,6 +55,13 @@ class MultiAccountCollector:
         # the standard collector for that provider.
         self._collector_overrides = collector_overrides or {}
         self._caller_account: str | None = None
+        # Shared throttling resilience (rate limits, breakers, retries) from
+        # config.ratelimit / aws.max_retries / aws.retry_mode
+        from cloudg.resilience import configure
+
+        configure(config)
+        #: Throttling telemetry of the last collect_all() run
+        self.resilience_stats: Any = None
 
     async def collect_all(
         self,
@@ -63,6 +71,19 @@ class MultiAccountCollector:
         Returns:
             Tuple of (all_assets, all_edges, coverage_records).
         """
+        from cloudg.resilience import current_stats, stats_scope
+
+        bound = current_stats()
+        if bound is not None:  # the caller (e.g. InventoryMapper) owns the run's stats
+            self.resilience_stats = bound
+            return await self._collect_all()
+        with stats_scope() as stats:
+            self.resilience_stats = stats
+            return await self._collect_all()
+
+    async def _collect_all(
+        self,
+    ) -> tuple[list[CloudAsset], list[NetworkEdge], list[CollectionCoverage]]:
         providers = self._config.providers
         all_assets: list[CloudAsset] = []
         all_edges: list[NetworkEdge] = []
@@ -95,7 +116,7 @@ class MultiAccountCollector:
             if isinstance(result, Exception):
                 logger.error("Provider %s collection failed: %s", label, result)
                 coverage = CollectionCoverage(provider=label)
-                coverage.record(f"{label}_full", ServiceStatus.FAILED, error=str(result))
+                coverage.record(f"{label}_full", ServiceStatus.FAILED, error=describe_error(result))
                 self._coverage.append(coverage)
             elif isinstance(result, list):
                 for assets, edges in result:
@@ -200,7 +221,7 @@ class MultiAccountCollector:
 
             except Exception as exc:
                 logger.error("AWS collection failed for %s/%s: %s", account_id, region, exc)
-                coverage.record("aws_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("aws_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
     @staticmethod
@@ -228,7 +249,7 @@ class MultiAccountCollector:
             return build_aws_session(cfg, region, account_id=assume_into)
         except RuntimeError as exc:
             logger.error("AWS auth failed for %s/%s: %s", account_id, region, exc)
-            coverage.record("sts_assume_role", ServiceStatus.FAILED, error=str(exc))
+            coverage.record("sts_assume_role", ServiceStatus.FAILED, error=describe_error(exc))
             return None
 
     def _build_aws_collector(
@@ -343,7 +364,7 @@ class MultiAccountCollector:
                 assets = await collector.collect()
             except Exception as exc:
                 logger.error("Azure collection failed for %s: %s", subscription_id, exc)
-                coverage.record("azure_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("azure_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
             edges: list[NetworkEdge] = []
@@ -351,7 +372,7 @@ class MultiAccountCollector:
                 edges = await collector.collect_edges()
             except Exception as exc:
                 logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
-                coverage.record("azure_edges", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("azure_edges", ServiceStatus.FAILED, error=describe_error(exc))
 
             duration_ms = int((time.time() - start) * 1000)
             service_errors = dict(getattr(collector, "service_errors", None) or {})
@@ -463,7 +484,7 @@ class MultiAccountCollector:
 
             except Exception as exc:
                 logger.error("GCP collection failed for %s: %s", label, exc)
-                coverage.record("gcp_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("gcp_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
     @staticmethod

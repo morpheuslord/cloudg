@@ -106,6 +106,10 @@ class InventoryResult:
     duration_ms: int = 0
     organization: dict[str, Any] | None = None
     unresolved_references: list[dict[str, Any]] = field(default_factory=list)
+    #: Throttling telemetry of the run (``cloudg.resilience`` summary: totals,
+    #: per-scope counters, human-readable messages, skipped scopes); None when
+    #: no API pushed back
+    throttling: dict[str, Any] | None = None
 
     @property
     def summary(self) -> dict[str, Any]:
@@ -146,6 +150,12 @@ class InventoryResult:
         }
         if self.organization:
             out["organization"] = _organization_summary(self.organization)
+        if self.throttling:
+            out["throttling"] = {
+                "totals": self.throttling.get("totals", {}),
+                "messages": self.throttling.get("messages", []),
+                "skipped": self.throttling.get("skipped", {}),
+            }
         return out
 
     # ------------------------------------------------------------------
@@ -200,6 +210,7 @@ class InventoryResult:
                 "assets": [a.model_dump(mode="json") for a in self.assets],
                 "edges": [e.model_dump(mode="json") for e in self.edges],
                 "unresolved_references": self.unresolved_references,
+                **({"throttling": self.throttling} if self.throttling else {}),
             },
         )
 
@@ -242,6 +253,7 @@ class InventoryResult:
             regions=data.get("regions", {}),
             organization=org,
             unresolved_references=data.get("unresolved_references", []),
+            throttling=data.get("throttling"),
         )
 
 

@@ -1,4 +1,10 @@
-"""Async AWS resource collector using aioboto3 with adaptive retries."""
+"""Async AWS resource collector using aioboto3 with adaptive retries.
+
+Every aioboto3 session is wired into :mod:`cloudg.resilience` (shared
+adaptive rate limits, circuit breakers, throttle telemetry); a service whose
+calls stay throttled after retries is recorded FAILED / PARTIAL with reason
+"throttled" instead of failing the run.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +17,8 @@ from cloudg.collectors.aws_services import CoreServiceCollectorsMixin
 from cloudg.collectors.aws_services_extended import ExtendedServiceCollectorsMixin
 from cloudg.collectors.base import BaseCollector
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.resilience.errors import describe_error
+from cloudg.resilience.stats import throttle_ledger
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -21,22 +29,45 @@ from cloudg.schema.models import (
 logger = logging.getLogger(__name__)
 
 
-def _get_aio_config() -> Any:
-    """Return AioConfig with adaptive retries."""
+def _retries(max_attempts: int | None = None, mode: str | None = None) -> dict[str, Any]:
+    """botocore ``retries`` from ``aws.max_retries`` / ``aws.retry_mode``
+    (applied to the resilience governor by the orchestrator; adaptive / 10)."""
+    from cloudg.resilience.aws import botocore_retries
+
+    retries = botocore_retries()
+    if max_attempts is not None:
+        retries["max_attempts"] = max_attempts
+    if mode is not None:
+        retries["mode"] = mode
+    return retries
+
+
+def _get_aio_config(max_attempts: int | None = None, mode: str | None = None) -> Any:
+    """Return AioConfig with the configured retries (default: adaptive mode, 10 retries)."""
+    retries = _retries(max_attempts, mode)
     try:
         from aiobotocore.config import AioConfig
 
         return AioConfig(
-            retries={"mode": "adaptive", "max_attempts": 10},
+            retries=retries,
             connect_timeout=10,
             read_timeout=30,
         )
     except ImportError:
         from botocore.config import Config
 
-        return Config(
-            retries={"mode": "adaptive", "max_attempts": 10},
-        )
+        return Config(retries=retries)
+
+
+def _default_client_config() -> Any:
+    """Session-wide default for clients created without ``config=``: the
+    configured retries only (botocore's default timeouts are kept)."""
+    try:
+        from aiobotocore.config import AioConfig
+
+        return AioConfig(retries=_retries())
+    except ImportError:  # pragma: no cover (aiobotocore always ships with aioboto3)
+        return None
 
 
 class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMixin, BaseCollector):
@@ -92,6 +123,16 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
                 session_kwargs["profile_name"] = self._boto3_session.profile_name
 
             self._aioboto3_session = aioboto3.Session(**session_kwargs)
+            # Every client of this session shares cloudg's adaptive rate
+            # limiter, circuit breakers and throttle telemetry.
+            from cloudg.resilience.aws import install_aws_hooks
+
+            install_aws_hooks(
+                self._aioboto3_session,
+                account_id=self._account_id,
+                region=self._region,
+                default_config=_default_client_config(),
+            )
         return self._aioboto3_session
 
     # ------------------------------------------------------------------
@@ -182,20 +223,34 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
     async def _run_service_collector(self, name: str, coro: Any) -> list[CloudAsset]:
         """Run a service collector with coverage tracking."""
         start = time.time()
-        try:
-            result = await coro
-            duration_ms = int((time.time() - start) * 1000)
+        # The ledger collects throttling that per-item error handling inside
+        # the collector swallowed, so the service shows up PARTIAL
+        # ("throttled: ...") instead of a silently incomplete SUCCESS.
+        with throttle_ledger() as ledger:
+            try:
+                result = await coro
+            except Exception as exc:
+                duration_ms = int((time.time() - start) * 1000)
+                logger.error("Collector %s failed: %s", name, exc)
+                self.coverage.record(
+                    name, ServiceStatus.FAILED, error=describe_error(exc), duration_ms=duration_ms
+                )
+                return []
+        duration_ms = int((time.time() - start) * 1000)
+        if ledger.degraded:
+            logger.warning("Collector %s: %s", name, ledger.describe())
+            self.coverage.record(
+                name,
+                ServiceStatus.PARTIAL,
+                asset_count=len(result),
+                error=ledger.describe(),
+                duration_ms=duration_ms,
+            )
+        else:
             self.coverage.record(
                 name, ServiceStatus.SUCCESS, asset_count=len(result), duration_ms=duration_ms
             )
-            return result
-        except Exception as exc:
-            duration_ms = int((time.time() - start) * 1000)
-            logger.error("Collector %s failed: %s", name, exc)
-            self.coverage.record(
-                name, ServiceStatus.FAILED, error=str(exc), duration_ms=duration_ms
-            )
-            return []
+        return result
 
     def _service_tasks(self) -> dict[str, Any]:
         """Collector callables per service, invoked lazily by :meth:`collect`.

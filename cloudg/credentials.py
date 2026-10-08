@@ -208,6 +208,7 @@ def build_aws_session(
     session, assumed_via_oidc = _aws_base_session(
         boto3, cfg, region, session_name, role_arn, token_file
     )
+    _instrument_aws_session(session, None, region)
 
     # 5. Optional role assumption on top of the base credentials
     target_role: str | None = None
@@ -218,8 +219,28 @@ def build_aws_session(
 
     if target_role:
         session = _aws_assume_role(boto3, session, target_role, session_name, external_id, region)
+        _instrument_aws_session(session, account_id, region)
 
     return session
+
+
+def _instrument_aws_session(session: Any, account_id: str | None, region: str) -> None:
+    """Route the session's (STS, Organizations, Control Tower, ...) calls
+    through cloudg's shared rate limiter / circuit breakers, with the
+    configured botocore retries as the default client config."""
+    try:
+        from botocore.config import Config
+
+        from cloudg.resilience.aws import botocore_retries, install_aws_hooks
+
+        install_aws_hooks(
+            session,
+            account_id=account_id,
+            region=region,
+            default_config=Config(retries=botocore_retries()),
+        )
+    except Exception as exc:  # instrumentation must never break authentication
+        logger.debug("AWS session instrumentation skipped: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────

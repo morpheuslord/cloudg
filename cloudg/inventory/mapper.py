@@ -437,7 +437,27 @@ class InventoryMapper:
     # ------------------------------------------------------------------
 
     async def map_inventory(self) -> InventoryResult:
-        """Deep-collect every provider and link the assets into a map."""
+        """Deep-collect every provider and link the assets into a map.
+
+        Cloud API throttling never fails the map: calls are rate limited and
+        retried (``config.ratelimit``), a service still throttled after its
+        retries is recorded FAILED / PARTIAL with reason "throttled", and the
+        run's throttling telemetry is attached as ``result.throttling``.
+        """
+        from cloudg.resilience import configure, current_stats, get_governor, stats_scope
+
+        configure(self._config)
+        # Reuse a run already bound by the caller (e.g. an MCP live tool) so
+        # its stats see this map's throttling too
+        with stats_scope(current_stats()) as stats:
+            result = await self._map_inventory()
+        if stats.eventful:
+            result.throttling = get_governor().summary(stats)
+            for line in result.throttling.get("messages", []):
+                logger.warning("Throttling: %s", line)
+        return result
+
+    async def _map_inventory(self) -> InventoryResult:
         start = time.time()
         cfg = self._config.model_copy(deep=True)
         org_coverage: list[CollectionCoverage] = []

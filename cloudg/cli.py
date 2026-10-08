@@ -25,6 +25,7 @@ from cloudg.cli_helpers import (
     _run_scan_jobs,
 )
 from cloudg.cli_inventory import deps, map_inventory
+from cloudg.mcp.cli import mcp_group
 from cloudg.ui import console
 
 # Global config reference (set by CLI group)
@@ -69,6 +70,10 @@ def cli(ctx: click.Context, verbose: bool, config_path: str | None, log_file: st
     global _config
     from cloudg.config import load_config
 
+    if ctx.invoked_subcommand == "mcp":
+        # stdout is the MCP stdio protocol channel / machine-readable output
+        console.stderr = True
+        ctx.call_on_close(lambda: setattr(console, "stderr", False))
     ui.print_banner(__version__)
     _config = load_config(config_path)
     # Expose the loaded config to subcommands defined outside this module
@@ -420,6 +425,7 @@ def ingest(
 cli.add_command(run)
 cli.add_command(map_inventory)
 cli.add_command(deps)
+cli.add_command(mcp_group)
 
 
 if __name__ == "__main__":

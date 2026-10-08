@@ -469,23 +469,23 @@ without its JSON key / version suffix).
 ### 5.6 AWS service modules
 
 What each module collects, the asset types it creates, and the `(edge, relationship)` pairs it
-declares (`-` = no relationship). Generated from the source; see the
+declares (`none` = no asset type or no relationship). Generated from the source; see the
 [catalog](INVENTORY_CATALOG.md) for the metadata keys of each type.
 
 **`aws_services (top level)`**
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services._base` | helpers | — | `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `INVOKES`/`TRIGGERED_BY` |
-| `aws_services._policy_grants` | helpers | — | `GRANTS_ACCESS`/`READS_FROM` |
+| `aws_services._base` | helpers | none | `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `INVOKES`/`TRIGGERED_BY` |
+| `aws_services._policy_grants` | helpers | none | `GRANTS_ACCESS`/`READS_FROM` |
 | `aws_services.identity` | `iam` | `IAM_GROUP`, `IAM_POLICY`, `IAM_ROLE`, `IAM_USER`, `IDENTITY_PROVIDER`, `INSTANCE_PROFILE` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `IAM_POLICY_ATTACHMENT`, `IAM_TRUST`/`CROSS_ACCOUNT_TRUST`, `IAM_TRUST`/`ROLE_ASSUMES_ROLE`, `REFERENCES`/`PERMISSION_BOUNDARY_LIMITS` |
-| `aws_services.cloudcontrol` | `cloud_control` | `OTHER` | — |
+| `aws_services.cloudcontrol` | `cloud_control` | `OTHER` | none |
 
 **`application`**
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.application._common` | helpers | — | `ASSUMES_ROLE`/`RUNS_ON`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`READS_FROM` |
+| `aws_services.application._common` | helpers | none | `ASSUMES_ROLE`/`RUNS_ON`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`READS_FROM` |
 | `aws_services.application.alarms` | `cloudwatch_alarms` | `ALARM` | `INVOKES`/`INVOKES`, `INVOKES`/`SCALES_WITH`, `MONITORS`/`MONITORED_BY`, `REFERENCES`/`DEPENDS_ON` |
 | `aws_services.application.backup` | `backup_plans`, `backup_vaults` | `BACKUP_PLAN`, `BACKUP_VAULT` | `MANAGES`/`BACKUP_TO`, `REFERENCES`/`BACKUP_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS` |
 | `aws_services.application.batch` | `batch` | `BATCH_ENVIRONMENT`, `JOB_DEFINITION`, `JOB_QUEUE` | `LOGS_TO`/`LOGS_TO`, `MANAGES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`RUNS_ON`, `USES_IMAGE`/`RUNS_ON` |
@@ -511,7 +511,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.data_ml._common` | helpers | — | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
+| `aws_services.data_ml._common` | helpers | none | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
 | `aws_services.data_ml.analytics` | `emr`, `emr_serverless`, `athena` | `BIG_DATA_CLUSTER`, `QUERY_WORKGROUP` | `ASSUMES_ROLE`/`RUNS_ON`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`RUNS_ON`, `REFERENCES`/`WRITES_TO`, `USES_IMAGE`/`RUNS_ON` |
 | `aws_services.data_ml.bedrock` | `bedrock` | `AI_AGENT`, `AI_GUARDRAIL`, `KNOWLEDGE_BASE`, `LOG_SINK` | `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `PROTECTS`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
 | `aws_services.data_ml.databases` | `rds_proxies`, `rds_global_clusters`, `memorydb`, `dax` | `AURORA_CLUSTER`, `CACHE_CLUSTER`, `DATABASE_PROXY` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`, `LOAD_BALANCER_TARGET`/`SERVES_TRAFFIC_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`REPLICATES_TO`, `REFERENCES`/`WRITES_TO` |
@@ -519,7 +519,7 @@ declares (`-` = no relationship). Generated from the source; see the
 | `aws_services.data_ml.glue_etl` | helpers | `DATA_CATALOG`, `ETL_JOB`, `EVENT_RULE` | `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `INVOKES`/`TRIGGERED_BY`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
 | `aws_services.data_ml.lakeformation` | `lakeformation` | `DATA_CATALOG` | `ASSUMES_ROLE`/`RUNS_ON`, `GOVERNS`/`COMPLIANCE_GOVERNS`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
 | `aws_services.data_ml.messaging` | `msk`, `amazon_mq` | `MESSAGE_BROKER` | `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`REPLICATES_TO` |
-| `aws_services.data_ml.registry` | `ecr_public` | `CONTAINER_REGISTRY` | — |
+| `aws_services.data_ml.registry` | `ecr_public` | `CONTAINER_REGISTRY` | none |
 | `aws_services.data_ml.sagemaker` | `sagemaker` | `ML_ENDPOINT`, `ML_MODEL`, `ML_WORKSPACE` | `ASSUMES_ROLE`/`RUNS_ON`, `ATTACHED_TO`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO`, `USES_IMAGE`/`RUNS_ON` |
 | `aws_services.data_ml.serverless_data` | `opensearch_serverless`, `redshift_serverless` | `DATA_WAREHOUSE`, `SEARCH_DOMAIN` | `ASSUMES_ROLE`/`RUNS_ON`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM` |
 | `aws_services.data_ml.transfer` | `transfer_family`, `datasync`, `fsx` | `DATA_TRANSFER`, `FILE_SYSTEM`, `IDENTITY_USER` | `ASSUMES_ROLE`/`RUNS_ON`, `ATTACHED_TO`, `CONTAINS`, `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
@@ -528,7 +528,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.governance._common` | helpers | — | `GRANTS_ACCESS` |
+| `aws_services.governance._common` | helpers | none | `GRANTS_ACCESS` |
 | `aws_services.governance.cognito` | `cognito_user_pools`, `cognito_identity_pools` | `IDENTITY_POOL`, `USER_POOL` | `ASSUMES_ROLE`/`ROLE_ASSUMES_ROLE`, `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS` |
 | `aws_services.governance.data_protection` | `kms`, `secrets_manager`, `dynamodb` | `DYNAMODB_TABLE`, `KMS_KEY`, `SECRET` | `GRANTS_ACCESS`, `INVOKES`/`ROTATES_SECRET`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`REPLICATES_TO`, `REFERENCES`/`STREAMS_TO` |
 | `aws_services.governance.iam_extras` | `iam_saml_providers`, `iam_access_keys`, `rolesanywhere` | `ACCESS_KEY`, `IDENTITY_PROVIDER`, `PERMISSION_SET` | `ASSUMES_ROLE`/`ROLE_ASSUMES_ROLE`, `CONTAINS`, `IAM_POLICY_ATTACHMENT`/`ROLE_HAS_POLICY`, `IAM_TRUST`/`ROLE_ASSUMES_ROLE`, `REFERENCES`/`DEPENDS_ON` |
@@ -543,7 +543,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.network_ext.__init__` | `cloudfront` | — | — |
+| `aws_services.network_ext.__init__` | `cloudfront` | none | none |
 | `aws_services.network_ext.apigateway` | `apigateway_authorizers`, `apigateway_vpc_links`, `apigateway_domains` | `AUTHORIZER`, `CUSTOM_DOMAIN`, `VPC_LINK` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `INVOKES`/`INVOKES`, `LOAD_BALANCER_TARGET`/`SERVES_TRAFFIC_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `ROUTE`/`SERVES_TRAFFIC_TO` |
 | `aws_services.network_ext.cloudfront` | `cloudfront_deep` | `CLOUDFRONT`, `EDGE_FUNCTION` | `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `ROUTE`/`SERVES_TRAFFIC_TO` |
 | `aws_services.network_ext.direct_connect` | `direct_connect`, `direct_connect_gateways` | `DIRECT_CONNECT` | `ATTACHED_TO`, `CONTAINS`, `ROUTE`/`TRANSIT_ROUTED` |
@@ -570,7 +570,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.security._common` | helpers | — | `MONITORS`/`MONITORED_BY` |
+| `aws_services.security._common` | helpers | none | `MONITORS`/`MONITORED_BY` |
 | `aws_services.security.detection` | `guardduty`, `securityhub`, `inspector2`, `macie`, `detective` | `DATA_SECURITY_SCANNER`, `SECURITY_HUB`, `THREAT_DETECTOR`, `VULNERABILITY_SCANNER` | `ASSUMES_ROLE`/`RUNS_ON`, `MONITORS`/`MONITORED_BY`, `MONITORS`/`READS_FROM` |
 | `aws_services.security.network_protection` | `wafv2`, `network_firewall`, `shield` | `DDOS_PROTECTION`, `NETWORK_FIREWALL`, `WAF_WEB_ACL` | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `PROTECTS`/`PROTECTED_BY_NACL`, `PROTECTS`/`PROTECTED_BY_WAF`, `REFERENCES`/`DEPENDS_ON` |
 | `aws_services.security.posture` | `config`, `access_analyzer`, `cloudtrail` | `ACCESS_ANALYZER`, `CLOUDTRAIL`, `CONFIG_RECORDER` | `ASSUMES_ROLE`/`RUNS_ON`, `LOGS_TO`/`LOGS_TO`, `LOGS_TO`/`STREAMS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS` |

@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/version-0.5.3-4c1.svg" alt="Version 0.5.3">
+  <img src="https://img.shields.io/badge/version-0.6.0-4c1.svg" alt="Version 0.6.0">
   <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
 </p>
 
@@ -20,7 +20,9 @@ One command collects assets from every configured provider in parallel, feeds th
 
 Need the map without the security tooling? `cloudg map` is a scanner-independent inventory mapper: it deep-collects everything deployed (or default) in an account, down to the network fabric, sweeps every service for the rest, and links it all into one asset map you can overlay with scanner findings later. See [Inventory mapping](#inventory-mapping).
 
-**Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md). The inventory mapper has its own deep-dive documents: the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md) (every return structure and output file, field by field), the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md) (all 156 asset types, their metadata and relationships) and the [inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md) (how it works and how to extend it).
+Want an AI agent to work with all of it? `cloudg mcp serve` turns cloudg into an MCP server for Claude Desktop, Claude Code, Cursor or anything else that speaks the Model Context Protocol. See [MCP server](#mcp-server).
+
+**Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md). The inventory mapper has its own deep-dive documents: the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md) (every return structure and output file, field by field), the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md) (all 156 asset types, their metadata and relationships) and the [inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md) (how it works and how to extend it). The MCP server is covered by the [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md), the [tool reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md) and the [privacy reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md), and throttling by [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
 
 ---
 
@@ -47,7 +49,7 @@ cloudg run -p aws --regions us-east-1 --terraform
 
 Reports land in `./reports`. Open `report.html` first.
 
-Already ran the scanners yourself? Feed cloudg their native output files instead — no cloud credentials, no scanner binaries:
+Already ran the scanners yourself? Feed cloudg their native output files instead. No cloud credentials, no scanner binaries:
 
 ```bash
 cloudg ingest --prowler ./prowler-output/ --checkov ./results_json.json --trivy ./trivy.json
@@ -115,6 +117,31 @@ print(inventory.summary["assets_by_service"])
 
 ---
 
+## MCP server
+
+cloudg can hand its inventory, graph, findings, compliance mappings and ontology to AI agents over the Model Context Protocol: 74 tools, 13 resources, 11 resource templates and 11 prompts, from `find_assets` and `attack_paths` to `blast_radius`, `compliance_gaps` and a `security_posture_review` prompt.
+
+```bash
+pip install "cloudg[mcp]"     # the native server needs no extra; this adds the official SDK (mcp>=1.30,<3)
+
+# stdio for a desktop client, with a map you already made
+cloudg mcp serve --dataset prod=./reports/inventory-map.json
+cloudg mcp config --client claude-desktop --dataset prod=./reports/inventory-map.json
+
+# streamable HTTP on 127.0.0.1:8765/mcp with a bearer token
+cloudg mcp serve --transport http --auth-token env:CLOUDG_MCP_TOKEN:analyst
+```
+
+Already running an MCP server? Mount cloudg into it (official `mcp` SDK 1.x or 2.x, or fastmcp) with `CloudGMCPLayer(...).register_into(server)`, or skip the wire and `await layer.call_tool(...)` from Python. Every request, whichever way it arrives, goes through one policy. The default `standard` profile redacts secrets and fences attacker-controllable text; `strict` also pseudonymises account ids, ARNs, IPs and names (pseudonyms passed back as arguments are resolved) and hides the tools that touch the cloud. The live tools (`map_inventory`, `collect_assets`, `run_scanners`, `run_pipeline`) check credentials before the first API call and refuse to re-collect a scope that was collected a couple of minutes ago.
+
+The [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md) covers serving, client setup, transports, mounting and in-process use; the [tool reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md) lists every primitive, and the [privacy reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md) every profile and transform.
+
+### Rate limits
+
+Mapping a whole AWS Organization means thousands of API calls per account, so every call cloudg makes goes through a shared rate limiter with per-service limits at or below what each provider publishes. A throttled API gets slowed down for every client at once, Retry-After is honoured, requests in flight are capped per account, retries draw from one budget per provider, and an API that stays throttled is skipped for a while by a circuit breaker. The map does not fail over it: coverage says `throttled: ...` and the result carries a `throttling` summary. Limits are tunable under `ratelimit` in `config.yaml`; see [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
+
+---
+
 ## Authentication
 
 Every provider supports several auth methods, resolved in a fixed priority order. The same config works on a laptop, in CI, and on cloud compute. The full set of fields lives in `config.yaml` with comments for each method.
@@ -176,7 +203,7 @@ Collection runs all providers concurrently with asyncio, iterating accounts and 
 
 The same inventory feeds three other exports. The ontology module infers about 62 typed relations (`exposed_to_internet`, `assumes_role`, `encrypted_by`, `hosted_in_vpc` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
 
-Scanner findings are deduplicated in two passes — within a scanner by (scanner, check ID, resource), and across scanners only when both the normalised title and the underlying check semantics (`rules/check_equivalence.yaml`) match — then rescored against CVSS and mapped to compliance controls.
+Scanner findings are deduplicated in two passes (within a scanner by scanner, check ID and resource; across scanners only when both the normalised title and the underlying check semantics in `rules/check_equivalence.yaml` match), then rescored against CVSS and mapped to compliance controls.
 
 ---
 
@@ -318,6 +345,8 @@ Much more of cloudg is public, importable API than the CLI suggests. The [Python
 | `cloudg.renderers.terraform_export.TerraformExporter` | `.tf.json` recreation of live infrastructure plus `import.sh` |
 | `cloudg.ingest.parse_report` and the scanner classes | every scanner's parser, usable standalone |
 | `cloudg.normaliser.FindingsNormaliser` | cross-scanner dedupe, CVSS rescoring, compliance mapping |
+| `cloudg.mcp.CloudGMCPLayer` | the MCP layer, in-process or mounted into your own MCP server |
+| `cloudg.resilience` | shared rate limits, circuit breakers and retries (`call_with_resilience`, `@resilient`) for your own cloud calls |
 
 Custom collectors and scanners register through entry points, no core changes needed:
 
@@ -332,7 +361,7 @@ mycloud = "my_package.collector:MyCollector"
 
 ```bash
 uv pip install -e ".[all,dev]"
-pytest             # 152 tests, moto-mocked AWS included
+pytest             # about 1,300 tests, moto-mocked AWS included
 ruff check cloudg/ tests/
 uv build           # wheel + sdist for PyPI
 ```

@@ -1,4 +1,13 @@
-"""Retry decorator with exponential backoff and jitter."""
+"""Retry decorator with exponential backoff and jitter.
+
+Backwards-compatible shim: :func:`with_retry` keeps its public signature and
+behaviour, and now also retries anything :func:`cloudg.resilience.classify`
+recognises as throttling / transient (Azure 429s, GCP ResourceExhausted,
+botocore connection errors, ...) and never sleeps less than the server's
+``Retry-After``. New code should use :mod:`cloudg.resilience`
+(``call_with_resilience``), which adds shared adaptive rate limiting,
+circuit breakers, retry budgets and telemetry.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +16,16 @@ import logging
 import random
 from functools import wraps
 from typing import Any, Callable, Type
+
+from cloudg.resilience import (  # noqa: F401 (re-exported for callers of cloudg.retry)
+    ErrorKind,
+    RetryPolicy,
+    Scope,
+    call_with_resilience,
+    call_with_resilience_sync,
+    classify,
+    retry_after,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +98,18 @@ def with_retry(
                         exc_str = str(exc)
                         is_retryable = any(code in exc_str for code in aws_codes)
 
+                    # Provider-aware throttling / transient classification
+                    if not is_retryable:
+                        is_retryable = classify(exc) is not ErrorKind.FATAL
+
                     if not is_retryable or attempt == max_attempts:
                         raise
 
                     # Exponential backoff with full jitter
                     delay = min(max_delay, base_delay * (backoff_factor ** (attempt - 1)))
                     jitter = _jitter_rng.uniform(0, delay)
-                    actual_delay = jitter
+                    # Never retry sooner than the server asked (capped at max_delay)
+                    actual_delay = max(jitter, min(retry_after(exc) or 0.0, max_delay))
 
                     logger.warning(
                         "Retry %d/%d for %s after %.1fs (error: %s)",

@@ -1,0 +1,521 @@
+"""Resources and resource templates.
+
+Resources give clients addressable, cacheable views of the workspace.
+The tool results link to them (``resource_link``) instead of inlining big
+payloads:
+
+=====================================  =======================================
+``cloudg://workspace``                 loaded datasets, active one, roots
+``cloudg://datasets``                  dataset listing
+``cloudg://datasets/{dataset}/summary``  headline numbers of one dataset
+``cloudg://assets/{+ref}``             one asset (detail)
+``cloudg://assets/{+ref}/neighbors``   its edges and neighbours
+``cloudg://assets/{+ref}/findings``    its findings
+``cloudg://findings/summary``          finding counts by severity / tool
+``cloudg://findings/{finding_id}``     one finding in full
+``cloudg://findings/severity/{severity}``  findings of one severity (max 200)
+``cloudg://compliance``                posture of every framework
+``cloudg://compliance/{framework}``    one framework: controls and gaps
+``cloudg://graph/d3``, ``/{format}``   whole graph as D3 / Cytoscape / GraphML
+``cloudg://ontology/turtle``, ``/{format}``  ontology (turtle, json-ld, xml, nt)
+``cloudg://schema/asset-types`` ...    vocabulary (public)
+``cloudg://docs``, ``/{topic}``        cloudg documentation sections
+=====================================  =======================================
+
+Asset / dataset / framework / severity / topic variables have completions.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+from cloudg.mcp.catalog._common import (
+    asset_brief,
+    edge_brief,
+    finding_brief,
+    max_severity,
+    ws_dataset,
+)
+from cloudg.mcp.core import Registry, Sensitivity, TextResourceContents
+from cloudg.mcp.state import SEVERITY_RANK, Dataset, ReferenceNotFoundError
+from cloudg.schema.models import AssetType, EdgeType, Severity
+
+GRAPH_FORMATS = ("d3", "cytoscape", "graphml")
+ONTOLOGY_FORMATS = {
+    "turtle": "text/turtle",
+    "json-ld": "application/ld+json",
+    "xml": "application/rdf+xml",
+    "nt": "application/n-triples",
+}
+
+DOC_TOPICS: dict[str, tuple[str, str, str]] = {
+    # topic: (file, heading prefix, one-line description)
+    "pipeline": ("DOCUMENTATION.md", "## The pipeline", "Phases of a cloudg run"),
+    "cli": ("DOCUMENTATION.md", "## CLI reference", "cloudg command-line reference"),
+    "inputs": ("DOCUMENTATION.md", "## Input requirements", "Scanner report formats"),
+    "outputs": ("DOCUMENTATION.md", "## Output contract", "Files cloudg writes"),
+    "data-models": ("DOCUMENTATION.md", "## Data models", "Finding / CloudAsset / NetworkEdge"),
+    "configuration": ("DOCUMENTATION.md", "## Configuration", "config.yaml reference"),
+    "python-api": ("DOCUMENTATION.md", "## Python API", "CloudGEngine and inventory API"),
+    "recipes": ("DOCUMENTATION.md", "## Integration recipes", "Integration recipes"),
+    "authentication": ("DOCUMENTATION.md", "## Authentication", "Cloud credentials"),
+    "identifiers": ("INVENTORY_REFERENCE.md", "## 4. Identifier formats",
+                    "ARN / Azure / GCP / placeholder identifier formats"),
+    "edges": ("INVENTORY_REFERENCE.md", "## 5. NetworkEdge", "NetworkEdge fields"),
+    "edge-types": ("INVENTORY_REFERENCE.md", "## 6. Edge types and direction",
+                   "Edge types, direction and dependency semantics"),
+    "relations": ("INVENTORY_REFERENCE.md", "## 7. The relation object",
+                  "Declared relations on assets"),
+    "inventory-summary": ("INVENTORY_REFERENCE.md", "## 9. summary", "InventoryResult.summary"),
+    "dependencies": ("INVENTORY_REFERENCE.md", "## 12. DependencyGraph results",
+                     "depends_on / dependents / tree / blast radius"),
+    "inventory-map": ("INVENTORY_REFERENCE.md", "## 14. inventory-map.json",
+                      "inventory-map.json format"),
+    "organization": ("INVENTORY_REFERENCE.md", "## 17. OrganizationTopology",
+                     "Organization / Control Tower topology"),
+}
+
+MCP_GUIDE = """\
+# Using cloudg through MCP
+
+1. `workspace_status` shows what is loaded. Load data with `load_dataset(path=...)`
+   (inventory-map.json, findings.json, scanner output) or collect live with
+   `map_inventory` (needs cloud credentials on the server).
+2. Orient: `dataset_summary`, `count_assets(group_by=...)`, `findings_summary`.
+3. Prioritise: `top_risks`, `internet_exposure`, `attack_paths`.
+4. Drill down: `get_asset(ref)`, `findings_for_asset`, `neighbors`, `blast_radius`,
+   `dependency_tree`, `find_paths`.
+5. Compliance: `compliance_summary`, `list_controls`, `control_status`, `compliance_gaps`.
+6. Semantics: `relation_groups`, `ontology_neighbourhood`, `sparql_query` (read-only).
+7. Change tracking: `snapshot_dataset` before re-collecting, then `diff_datasets`.
+
+Asset references accept ids, ARNs, unique names or unique ARN tails. List tools
+are paginated: pass `next_cursor` back as `cursor`. Identifiers may be
+pseudonymised by the server's privacy policy; pass them back unchanged.
+Prompts (`security_posture_review`, `investigate_asset`, ...) package these
+steps for common jobs.
+"""
+
+
+def docs_dir() -> Path | None:
+    env = os.environ.get("CLOUDG_DOCS_DIR")
+    candidates = [Path(env)] if env else []
+    import cloudg
+
+    pkg = Path(cloudg.__file__).resolve().parent
+    # A source checkout keeps them in docs/; wheels ship them in cloudg/_docs
+    candidates += [pkg.parent / "docs", pkg / "_docs"]
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return None
+
+
+def doc_section(topic: str) -> str:
+    if topic == "mcp":
+        return MCP_GUIDE
+    if topic not in DOC_TOPICS:
+        raise ReferenceNotFoundError(
+            f"Unknown docs topic {topic!r}. Topics: mcp, {', '.join(DOC_TOPICS)}")
+    fname, heading, _ = DOC_TOPICS[topic]
+    d = docs_dir()
+    path = d / fname if d else None
+    if path is None or not path.exists():
+        return (f"# {topic}\n\nThe cloudg documentation files are not installed with this "
+                "package. See https://morpheuslord.github.io/cloudg/ or read the 'mcp' topic.")
+    lines = path.read_text().splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.startswith(heading)), None)
+    if start is None:
+        return f"# {topic}\n\nSection '{heading}' not found in {fname}."
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        m = re.match(r"^(#+)\s", lines[i])
+        if m and len(m.group(1)) <= level and not _in_code(lines, i):
+            end = i
+            break
+    text = "\n".join(lines[start:end]).strip()
+    return text[:40_000]
+
+
+def _in_code(lines: list[str], idx: int) -> bool:
+    return sum(1 for ln in lines[:idx] if ln.startswith("```")) % 2 == 1
+
+
+# ---------------------------------------------------------------------------
+# Completions (fn(ctx, partial) -> list[str])
+# ---------------------------------------------------------------------------
+
+
+def _ctx_dataset(ctx: Any) -> Dataset | None:
+    name = (getattr(ctx, "meta", {}) or {}).get("arguments", {}).get("dataset") or None
+    try:
+        return ctx.workspace.get(name)
+    except Exception:
+        return None
+
+
+def complete_dataset(ctx: Any, partial: str = "") -> list[str]:
+    return [n for n in ctx.workspace.names() if n.lower().startswith(partial.lower())]
+
+
+def complete_asset(ctx: Any, partial: str = "") -> list[str]:
+    ds = _ctx_dataset(ctx)
+    if ds is None:
+        return []
+    p = partial.lower()
+    names: dict[str, int] = {}
+    for a in ds.assets:
+        names[a.name] = names.get(a.name, 0) + 1
+    starts, contains = [], []
+    for a in ds.assets:
+        # Unique names complete to the name; shared names to the ARN / id
+        label = a.name if names[a.name] == 1 else (a.arn or a.id)
+        keys = [k.lower() for k in (a.name, a.arn or "", a.id)]
+        if not p or any(k.startswith(p) for k in keys):
+            starts.append(label)
+        elif any(p in k for k in keys):
+            contains.append(label)
+    # The full list: the layer caps what it sends and computes hasMore
+    return list(dict.fromkeys(sorted(starts) + sorted(contains)))
+
+
+def complete_finding(ctx: Any, partial: str = "") -> list[str]:
+    ds = _ctx_dataset(ctx)
+    if ds is None:
+        return []
+    ranked = sorted(ds.findings, key=lambda f: -f.risk_score)
+    return [f.id for f in ranked if f.id.startswith(partial)]
+
+
+def complete_severity(ctx: Any, partial: str = "") -> list[str]:
+    return [s.value for s in Severity if s.value.startswith(partial.upper())]
+
+
+def complete_framework(ctx: Any, partial: str = "") -> list[str]:
+    names: set[str] = set()
+    ds = _ctx_dataset(ctx)
+    if ds is not None:
+        names |= {c.framework for c in ds.compliance}
+        names |= {fw for f in ds.findings for fw in f.compliance_frameworks}
+    if not names:
+        from cloudg.mcp.catalog.compliance import _rules_dir, ruleset_catalog
+
+        names = set(ruleset_catalog(_rules_dir(ctx)))
+    return sorted(n for n in names if partial.lower() in n.lower())
+
+
+def complete_topic(ctx: Any, partial: str = "") -> list[str]:
+    return [t for t in ["mcp", *DOC_TOPICS] if t.startswith(partial.lower())]
+
+
+def complete_asset_type(ctx: Any, partial: str = "") -> list[str]:
+    return [t.value for t in AssetType if t.value.startswith(partial.upper())]
+
+
+def complete_graph_format(ctx: Any, partial: str = "") -> list[str]:
+    return [f for f in GRAPH_FORMATS if f.startswith(partial.lower())]
+
+
+def complete_ontology_format(ctx: Any, partial: str = "") -> list[str]:
+    return [f for f in ONTOLOGY_FORMATS if f.startswith(partial.lower())]
+
+
+# ---------------------------------------------------------------------------
+# Content builders shared with prompts
+# ---------------------------------------------------------------------------
+
+
+def asset_detail(ds: Dataset, ref: str) -> dict[str, Any]:
+    if ref in ds.graph and ref not in ds.by_id:
+        return {"id": ref, "external": True, "name": ds.graph.nodes[ref].get("name", ref),
+                "degree": ds.graph.degree(ref)}
+    a = ds.resolve_asset(ref)
+    out = asset_brief(ds, a, tags=True)
+    rel: dict[str, dict[str, int]] = {"outgoing": {}, "incoming": {}}
+    for e, _, d in ds.adjacency.get(a.id, []):
+        side = rel["outgoing" if d == "out" else "incoming"]
+        side[e.edge_type.value] = side.get(e.edge_type.value, 0) + 1
+    out["relations"] = rel
+    out["findings"] = [finding_brief(ds, f) for f in
+                       sorted(ds.open_findings(a.id), key=lambda f: -f.risk_score)[:10]]
+    out["metadata_keys"] = sorted(a.metadata)[:100]
+    needs, needed_by = ds.dependency_graph().direct_counts(a.id)
+    out["dependencies"] = {"direct_depends_on": needs, "direct_dependents": needed_by}
+    return out
+
+
+def finding_detail(ds: Dataset, f: Any) -> dict[str, Any]:
+    """Content of ``cloudg://findings/{finding_id}``."""
+    return {**finding_brief(ds, f), "description": f.description, "evidence": f.evidence,
+            "remediation": f.remediation}
+
+
+def framework_detail(ds: Dataset, framework: str) -> dict[str, Any]:
+    """Content of ``cloudg://compliance/{framework}``."""
+    from cloudg.mcp.catalog.compliance import framework_rollup
+
+    rows = [r for r in framework_rollup(ds, framework)
+            if r["framework"].lower() == framework.lower()] or framework_rollup(ds, framework)
+    if not rows:
+        raise ReferenceNotFoundError(f"No compliance data for framework {framework!r}.")
+    fw_names = {r["framework"] for r in rows}
+    failing = []
+    for c in ds.compliance:
+        if c.framework in fw_names and c.status.value == "FAIL":
+            open_f = [ds.findings_by_id[i] for i in c.finding_ids
+                      if i in ds.findings_by_id and not ds.findings_by_id[i].is_suppressed]
+            failing.append({"framework": c.framework, "control_id": c.control_id,
+                            "control_title": c.control_title, "open_findings": len(open_f),
+                            "max_severity": max_severity(open_f)})
+    failing.sort(key=lambda r: (-SEVERITY_RANK.get(r["max_severity"] or "", -1),
+                                r["control_id"]))
+    return {"dataset": ds.name, "posture": rows, "failing_controls": failing[:300]}
+
+
+def register(reg: Registry) -> None:
+    # -- workspace ------------------------------------------------------
+
+    @reg.resource("cloudg://workspace", title="Workspace", category="workspace",
+                  sensitivity=Sensitivity.INTERNAL,
+                  description="Loaded datasets, the active dataset and allowed directories.")
+    def workspace_resource(ctx: Any) -> dict:
+        return ctx.workspace.status()
+
+    @reg.resource("cloudg://datasets", title="Datasets", category="workspace",
+                  sensitivity=Sensitivity.INTERNAL, description="Loaded datasets.")
+    def datasets_resource(ctx: Any) -> dict:
+        ws = ctx.workspace
+        return {"active_dataset": ws.active_name,
+                "datasets": [d.describe() for d in ws.datasets()]}
+
+    @reg.resource_template("cloudg://datasets/{dataset}/summary", title="Dataset summary",
+                           category="workspace", sensitivity=Sensitivity.INTERNAL,
+                           description="Headline numbers of one dataset.",
+                           completions={"dataset": complete_dataset})
+    def dataset_summary_resource(ctx: Any, dataset: str) -> dict:
+        return ctx.workspace.get(dataset).summary()
+
+    # -- assets ---------------------------------------------------------
+
+    @reg.resource_template("cloudg://assets/{+ref}", title="Asset", category="inventory",
+                           sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="One asset of the active dataset (ref = id, ARN or "
+                           "unique name, URL-encoded).",
+                           completions={"ref": complete_asset})
+    def asset_resource(ctx: Any, ref: str) -> dict:
+        return asset_detail(ws_dataset(ctx), ref)
+
+    @reg.resource_template("cloudg://assets/{+ref}/neighbors", title="Asset neighbours",
+                           category="graph", sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="Edges and one-hop neighbours of an asset.",
+                           completions={"ref": complete_asset})
+    def asset_neighbors_resource(ctx: Any, ref: str) -> dict:
+        ds = ws_dataset(ctx)
+        node = ref if (ref in ds.graph and ref not in ds.by_id) else ds.resolve_asset(ref).id
+        adj = ds.adjacency.get(node, [])[:500]
+        others = list(dict.fromkeys(o for _, o, _ in adj))
+        return {
+            "asset": node,
+            "edges": [edge_brief(ds, e) for e, _, _ in adj],
+            "neighbors": [asset_brief(ds, ds.by_id[o]) if o in ds.by_id else
+                          {"id": o, "external": True} for o in others],
+        }
+
+    @reg.resource_template("cloudg://assets/{+ref}/findings", title="Asset findings",
+                           category="findings", sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="Open findings of an asset.",
+                           completions={"ref": complete_asset})
+    def asset_findings_resource(ctx: Any, ref: str) -> dict:
+        ds = ws_dataset(ctx)
+        a = ds.resolve_asset(ref)
+        fs = sorted(ds.open_findings(a.id), key=lambda f: -f.risk_score)
+        return {"asset": asset_brief(ds, a), "findings": [finding_brief(ds, f) for f in fs]}
+
+    # -- findings -------------------------------------------------------
+
+    @reg.resource("cloudg://findings/summary", title="Findings summary", category="findings",
+                  sensitivity=Sensitivity.INTERNAL,
+                  description="Open finding counts by severity and tool (active dataset).")
+    def findings_summary_resource(ctx: Any) -> dict:
+        ds = ws_dataset(ctx)
+        by_tool: dict[str, int] = {}
+        for f in ds.open_findings():
+            by_tool[f.source_tool] = by_tool.get(f.source_tool, 0) + 1
+        s = ds.summary()
+        return {"dataset": ds.name, "open_findings": s["open_findings"],
+                "suppressed": s["suppressed_findings"],
+                "severity_breakdown": s["severity_breakdown"], "by_tool": by_tool}
+
+    @reg.resource_template("cloudg://findings/{finding_id}", title="Finding",
+                           category="findings", sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="One finding with evidence and remediation.",
+                           completions={"finding_id": complete_finding})
+    def finding_resource(ctx: Any, finding_id: str) -> dict:
+        ds = ws_dataset(ctx)
+        return finding_detail(ds, ds.get_finding(finding_id))
+
+    @reg.resource_template("cloudg://findings/severity/{severity}",
+                           title="Findings by severity", category="findings",
+                           sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="Open findings of one severity (first 200, by risk).",
+                           completions={"severity": complete_severity})
+    def findings_by_severity_resource(ctx: Any, severity: str) -> dict:
+        ds = ws_dataset(ctx)
+        sev = severity.upper()
+        if sev not in SEVERITY_RANK:
+            raise ReferenceNotFoundError(
+                f"Unknown severity {severity!r}; use one of {', '.join(SEVERITY_RANK)}")
+        fs = sorted((f for f in ds.open_findings() if f.severity.value == sev),
+                    key=lambda f: -f.risk_score)
+        return {"dataset": ds.name, "severity": sev, "total": len(fs),
+                "truncated": len(fs) > 200, "findings": [finding_brief(ds, f) for f in fs[:200]]}
+
+    # -- compliance -----------------------------------------------------
+
+    @reg.resource("cloudg://compliance", title="Compliance posture", category="compliance",
+                  sensitivity=Sensitivity.INTERNAL,
+                  description="Posture of every compliance framework in the active dataset.")
+    def compliance_resource(ctx: Any) -> dict:
+        from cloudg.mcp.catalog.compliance import framework_rollup
+
+        ds = ws_dataset(ctx)
+        return {"dataset": ds.name, "frameworks": framework_rollup(ds)}
+
+    @reg.resource_template("cloudg://compliance/{framework}", title="Framework posture",
+                           category="compliance", sensitivity=Sensitivity.INTERNAL,
+                           description="One framework: posture and failing controls.",
+                           completions={"framework": complete_framework})
+    def framework_resource(ctx: Any, framework: str) -> dict:
+        return framework_detail(ws_dataset(ctx), framework)
+
+    # -- graph / ontology -----------------------------------------------
+
+    def _graph(ctx: Any, fmt: str) -> list[TextResourceContents]:
+        import networkx as nx
+
+        ds = ws_dataset(ctx)
+        uri = f"cloudg://graph/{fmt}"
+        if fmt == "d3":
+            import json
+
+            return [TextResourceContents(uri, json.dumps(ds.builder.to_d3_json(), default=str))]
+        if fmt == "cytoscape":
+            import json
+
+            return [TextResourceContents(uri, json.dumps(ds.builder.to_cytoscape_json(),
+                                                         default=str))]
+        if fmt == "graphml":
+            return [TextResourceContents(uri, "\n".join(nx.generate_graphml(ds.graph)),
+                                         "application/graphml+xml")]
+        raise ReferenceNotFoundError(
+            f"Unknown graph format {fmt!r}; use {', '.join(GRAPH_FORMATS)}")
+
+    @reg.resource("cloudg://graph/d3", title="Graph (D3)", category="graph",
+                  sensitivity=Sensitivity.CONFIDENTIAL,
+                  description="The active dataset's whole relationship graph as D3 JSON "
+                  "({nodes, links}). Large; prefer subgraph_export for parts.")
+    def graph_d3_resource(ctx: Any) -> list[TextResourceContents]:
+        return _graph(ctx, "d3")
+
+    @reg.resource_template("cloudg://graph/{format}", title="Graph export", category="graph",
+                           sensitivity=Sensitivity.CONFIDENTIAL,
+                           description="Whole graph as d3 or cytoscape (application/json) "
+                           "or graphml (application/graphml+xml); each read returns the "
+                           "format's own mimeType.",
+                           completions={"format": complete_graph_format})
+    def graph_resource(ctx: Any, format: str) -> list[TextResourceContents]:
+        return _graph(ctx, format)
+
+    def _ontology(ctx: Any, fmt: str) -> list[TextResourceContents]:
+        if fmt not in ONTOLOGY_FORMATS:
+            raise ReferenceNotFoundError(
+                f"Unknown ontology format {fmt!r}; use {', '.join(ONTOLOGY_FORMATS)}")
+        g = ws_dataset(ctx).ontology().graph
+        return [TextResourceContents(f"cloudg://ontology/{fmt}", g.serialize(format=fmt),
+                                     ONTOLOGY_FORMATS[fmt])]
+
+    @reg.resource("cloudg://ontology/turtle", title="Ontology (Turtle)", category="ontology",
+                  sensitivity=Sensitivity.CONFIDENTIAL, mime_type="text/turtle",
+                  description="The active dataset's RDF ontology in Turtle.")
+    def ontology_turtle_resource(ctx: Any) -> list[TextResourceContents]:
+        return _ontology(ctx, "turtle")
+
+    @reg.resource_template("cloudg://ontology/{format}", title="Ontology export",
+                           category="ontology", sensitivity=Sensitivity.CONFIDENTIAL,
+                           mime_type="text/turtle",
+                           description="Ontology as turtle (text/turtle), json-ld "
+                           "(application/ld+json), xml (application/rdf+xml) or nt "
+                           "(application/n-triples); each read returns the format's own "
+                           "mimeType.",
+                           completions={"format": complete_ontology_format})
+    def ontology_resource(ctx: Any, format: str) -> list[TextResourceContents]:
+        return _ontology(ctx, format)
+
+    # -- schema / docs (public) -----------------------------------------
+
+    @reg.resource("cloudg://schema/asset-types", title="Asset types", category="meta",
+                  sensitivity=Sensitivity.PUBLIC, description="Asset types by family.")
+    def asset_types_resource(ctx: Any) -> dict:
+        from cloudg.mcp.catalog.meta import enum_comments
+
+        fam: dict[str, list[str]] = {}
+        for t in AssetType:
+            fam.setdefault(enum_comments()["family"].get(t.name, "Other"), []).append(t.value)
+        return fam
+
+    @reg.resource_template("cloudg://schema/asset-types/{asset_type}", title="Asset type",
+                           category="meta", sensitivity=Sensitivity.PUBLIC,
+                           description="How cloudg models one asset type.",
+                           completions={"asset_type": complete_asset_type})
+    def asset_type_resource(ctx: Any, asset_type: str) -> dict:
+        from cloudg.graph.ontology import _ASSET_TYPE_CLASSES
+        from cloudg.mcp.catalog.meta import enum_comments
+        from cloudg.renderers.terraform_export import _TF_RESOURCE_MAP
+
+        try:
+            t = AssetType(asset_type.upper())
+        except ValueError:
+            raise ReferenceNotFoundError(f"Unknown asset type {asset_type!r}.") from None
+        return {"asset_type": t.value, "family": enum_comments()["family"].get(t.name),
+                "note": enum_comments()["asset_note"].get(t.name),
+                "ontology_class": f"cm:{_ASSET_TYPE_CLASSES.get(t, 'CloudResource')}",
+                "terraform_type": _TF_RESOURCE_MAP.get(t)}
+
+    @reg.resource("cloudg://schema/edge-types", title="Edge types", category="meta",
+                  sensitivity=Sensitivity.PUBLIC,
+                  description="Edge types with direction and dependency semantics.")
+    def edge_types_resource(ctx: Any) -> dict:
+        from cloudg.inventory.dependencies import DEPENDENCY_DIRECTION
+        from cloudg.mcp.catalog.meta import EDGE_READS
+
+        return {e.value: {"reads_as": EDGE_READS.get(e.value, ("", ""))[0],
+                          "typical": EDGE_READS.get(e.value, ("", ""))[1],
+                          "dependency_direction": DEPENDENCY_DIRECTION.get(e.value, "none")}
+                for e in EdgeType}
+
+    @reg.resource("cloudg://schema/relation-types", title="Ontology relation types",
+                  category="meta", sensitivity=Sensitivity.PUBLIC,
+                  description="Semantic relation types by relation group.")
+    def relation_types_resource(ctx: Any) -> dict:
+        from cloudg.mcp.catalog.meta import _relation_types
+
+        return _relation_types()
+
+    @reg.resource("cloudg://docs", title="Documentation topics", category="meta",
+                  sensitivity=Sensitivity.PUBLIC,
+                  description="Index of cloudg documentation topics (cloudg://docs/{topic}).")
+    def docs_index_resource(ctx: Any) -> dict:
+        return {"available": docs_dir() is not None,
+                "topics": {"mcp": "How to use cloudg through MCP",
+                           **{k: v[2] for k, v in DOC_TOPICS.items()}}}
+
+    @reg.resource_template("cloudg://docs/{topic}", title="Documentation", category="meta",
+                           sensitivity=Sensitivity.PUBLIC, mime_type="text/markdown",
+                           description="One cloudg documentation section (markdown).",
+                           completions={"topic": complete_topic})
+    def docs_resource(ctx: Any, topic: str) -> str:
+        return doc_section(topic)

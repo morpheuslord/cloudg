@@ -1,0 +1,59 @@
+# cloudg MCP policy profile: strict
+#
+# For sending cloud data to a model you do not fully trust (or under data
+# protection rules): every identifier is replaced by a reversible,
+# format-preserving pseudonym. Tools still work: pass pseudonyms back
+# unchanged and the layer resolves the real resources.
+#
+#   accounts / subscriptions / projects -> fake but well-formed IDs
+#   ARNs, Azure resource IDs, GCP names -> rewritten component-wise
+#   resource names, hostnames, emails   -> res-.../host-....example/user-...@d-....example
+#   private IPs / CIDRs                 -> prefix-preserving inside the same private block
+#   public IPs                          -> 198.18.0.0/15 (benchmark range)
+#   0.0.0.0/0, loopback, metadata IPs   -> kept (security-relevant, not identifying)
+#   tag values                          -> pseudonymised (env/stage/tier... kept)
+#   secrets + credential IDs            -> redacted, private keys dropped
+#   restricted-sensitivity primitives   -> hidden
+#   cloud_access, exec, write_fs, reveal -> denied for everyone
+name: strict
+extends: standard
+description: >-
+  Pseudonymise every identifier, redact secrets and credentials, hide restricted
+  primitives, deny cloud access / exec / file writes / reveal.
+max_sensitivity: confidential
+deny_capabilities: [cloud_access, exec, write_fs, reveal]
+rules:
+  - name: never-reveal
+    description: Explicit deny - wins over any role grant inherited from standard.
+    deny_capabilities: [reveal]
+rate_limits:
+  - tools: ["*"]
+    rate: 240
+    per: minute
+    burst: 120
+    scope: principal
+transforms:
+  - type: sanitize
+    options:
+      on_suspicious: fence
+      max_free_text: 1000
+  - type: redact
+    options:
+      strategies:
+        secret: redact
+        private_key: drop
+        credential: redact
+        identifier: pseudonymize
+        uuid: keep
+        network: pseudonymize
+        special_ip: keep
+        special_cidr: keep
+        pii: pseudonymize
+        free_text: pseudonymize
+        temporal: keep
+  - type: project
+    options:
+      exclude: ["**.raw_data", "**._raw", "**.user_data"]
+      max_string: 4000
+      max_chars: 100000
+  - type: annotate

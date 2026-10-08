@@ -17,6 +17,9 @@ import threading
 from typing import Any, Callable
 
 from cloudg.collectors.base import BaseCollector
+from cloudg.resilience.azure import azure_scope_of_error, build_azure_client
+from cloudg.resilience.errors import describe_error, is_throttle
+from cloudg.resilience.governor import get_governor
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -52,11 +55,13 @@ def _subscription_client_class() -> Any:
 
 
 def resource_management_client(credential: Any, subscription_id: str) -> Any:
-    return _resource_client_class()(credential, subscription_id)
+    return build_azure_client(
+        _resource_client_class(), credential, subscription_id, subscription_id=subscription_id
+    )
 
 
 def subscription_client(credential: Any) -> Any:
-    return _subscription_client_class()(credential)
+    return build_azure_client(_subscription_client_class(), credential)
 
 
 def _subscription_dict(sub: Any) -> dict[str, Any]:
@@ -176,7 +181,11 @@ class AzureCollector(BaseCollector):
                 return client
             else:  # pragma: no cover - programming error
                 raise ValueError(kind)
-            client = cls(self._credential, self._subscription_id)
+            # Shared rate limits / breakers / throttle feedback and the
+            # configured azure-core retries (cloudg.resilience.azure)
+            client = build_azure_client(
+                cls, self._credential, self._subscription_id, subscription_id=self._subscription_id
+            )
             self._clients[kind] = client
             return client
 
@@ -204,7 +213,12 @@ class AzureCollector(BaseCollector):
             logger.warning("Azure %s collection skipped: SDK not installed (%s)", name, exc)
         except Exception as exc:
             logger.error("Failed to collect Azure %s: %s", name, exc)
-            self.service_errors[name] = str(exc)
+            self.service_errors[name] = describe_error(exc)
+            if is_throttle(exc):
+                get_governor().on_gave_up(
+                    azure_scope_of_error(exc, self._subscription_id, name),
+                    f"throttled: Azure {name}: {str(exc)[:150]}",
+                )
         return []
 
     async def _gather_rows(

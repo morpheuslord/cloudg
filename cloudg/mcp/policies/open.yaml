@@ -1,0 +1,11 @@
+# cloudg MCP policy profile: open
+#
+# No transforms and nothing denied. Every value, including secrets found in
+# collected metadata, reaches the model verbatim. Use only for trusted,
+# local experiments on non-production data.
+name: open
+description: No transforms, no restrictions. Trusted local experiments only.
+hide_denied: true
+honor_hints: true
+transforms: []
+input_transforms: []
