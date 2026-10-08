@@ -1,10 +1,15 @@
-"""RAG-ready export — generates chunked, metadata-enriched representations
-of the cloud infrastructure graph for retrieval-augmented generation.
+"""RAG-ready export: chunked, metadata-enriched representations of the
+cloud infrastructure graph for retrieval-augmented generation.
 
 Three complementary chunking strategies:
 1. Entity-centric: one chunk per cloud asset with 1-hop neighbourhood
 2. Community-detection: Louvain clusters with aggregate summaries
 3. Relation-group: one chunk per semantic relation group (Network, IAM, etc.)
+
+Relation-group chunks carry the same relations the ontology holds: the
+relations inferred from each edge plus the asset-level ones inferred from
+metadata (``ENCRYPTED_BY_KMS``, VPC containment from ``vpc_id``, tag
+governance, rotation, EC2 security group membership).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from cloudg.graph.ontology import (
     RelationGroup,
     get_relation_group,
     infer_relations,
+    iter_asset_relations,
 )
 from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
@@ -115,8 +121,9 @@ def _index_findings(
 ) -> dict[str, list[Finding]]:
     """Group findings by the asset ID they resolve to.
 
-    ``index`` matches a finding by ID, ARN, unique name or unique ARN
-    tail; findings it cannot place stay keyed by their raw resource_id.
+    ``index`` matches a finding by ID, ARN, unique name, unique ARN tail
+    or unique ARN resource-part tail (:meth:`AssetIndex.resolve_finding`);
+    findings it cannot place stay keyed by their raw resource_id.
     """
     findings_by_resource: dict[str, list[Finding]] = defaultdict(list)
     if findings:
@@ -287,33 +294,53 @@ def _count_community_edges(graph: nx.DiGraph, member_set: set[str]) -> tuple[int
     return internal_edges, external_edges
 
 
+def _label(asset_id: str, assets_by_id: dict[str, CloudAsset]) -> str:
+    """Display name of an asset id, or the id itself when it is not an asset."""
+    asset = assets_by_id.get(asset_id)
+    return asset.name if asset else asset_id
+
+
+def _triple(
+    subject_id: str, predicate: str, object_id: str, assets_by_id: dict[str, CloudAsset]
+) -> dict[str, str]:
+    """A relation triple with display labels and empty edge evidence."""
+    return {
+        "subject": _label(subject_id, assets_by_id),
+        "subject_id": subject_id,
+        "predicate": predicate,
+        "object": _label(object_id, assets_by_id),
+        "object_id": object_id,
+        "port_range": "",
+        "protocol": "",
+        "cidr": "",
+    }
+
+
 def _group_relation_triples(
     edges: list[NetworkEdge],
     assets_by_id: dict[str, CloudAsset],
 ) -> dict[RelationGroup, list[dict[str, str]]]:
-    """Group edge triples by their inferred relation group."""
+    """Group relation triples by their relation group.
+
+    The triples are the relations inferred from every edge (with the
+    edge's port, protocol and CIDR as evidence) followed by the asset-level
+    relations of every asset in ``assets_by_id``, the same two sources the
+    ontology is built from.
+    """
     group_triples: dict[RelationGroup, list[dict[str, str]]] = defaultdict(list)
 
     for edge in edges:
-        src_name = assets_by_id.get(edge.source_id)
-        tgt_name = assets_by_id.get(edge.target_id)
-        src_label = src_name.name if src_name else edge.source_id
-        tgt_label = tgt_name.name if tgt_name else edge.target_id
-
         for rel in infer_relations(edge, assets_by_id):
-            group = get_relation_group(rel)
-            group_triples[group].append(
-                {
-                    "subject": src_label,
-                    "subject_id": edge.source_id,
-                    "predicate": rel.value,
-                    "object": tgt_label,
-                    "object_id": edge.target_id,
-                    "port_range": edge.port_range or "",
-                    "protocol": edge.protocol or "",
-                    "cidr": edge.cidr or "",
-                }
-            )
+            triple = _triple(edge.source_id, rel.value, edge.target_id, assets_by_id)
+            triple["port_range"] = edge.port_range or ""
+            triple["protocol"] = edge.protocol or ""
+            triple["cidr"] = edge.cidr or ""
+            group_triples[get_relation_group(rel)].append(triple)
+
+    for asset, rel, object_id in iter_asset_relations(list(assets_by_id.values())):
+        group_triples[get_relation_group(rel)].append(
+            _triple(asset.id, rel.value, object_id, assets_by_id)
+        )
 
     return group_triples
 
@@ -614,7 +641,7 @@ class RAGExporter:
         relation_chunks = self.export_relation_chunks(edges, assets_by_id)
         all_chunks.extend(relation_chunks)
 
-        # Write JSONL (one JSON object per line — standard for vector DBs)
+        # Write JSONL (one JSON object per line, the usual vector DB input)
         chunks_path = out / "rag_chunks.jsonl"
         with open(chunks_path, "w") as f:
             for chunk in all_chunks:

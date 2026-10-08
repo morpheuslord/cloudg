@@ -46,8 +46,9 @@ def _redactor_for(policy: Any, principal: Any) -> Any:
     return None
 
 
-def detector_table(policy: Any, principal: Any = None, category: str | None = None
-                   ) -> dict[str, Any]:
+def detector_table(
+    policy: Any, principal: Any = None, category: str | None = None
+) -> dict[str, Any]:
     """Detectors and key rules with the strategy the policy applies."""
     from cloudg.mcp.transforms.detectors import ENTITY_PARENTS
     from cloudg.mcp.transforms.redaction import _chain
@@ -69,9 +70,14 @@ def detector_table(policy: Any, principal: Any = None, category: str | None = No
             row["strategy"] = red.resolve(_chain(d.entity) + (d.name, d.category)).kind
             # a list, so entity names are values rather than keys that key
             # rules (account, name...) would act on
-            refined = [{"entity": e, "strategy": red.resolve(
-                _chain(e) + (d.entity, d.name, d.category)).kind}
-                for e, p in ENTITY_PARENTS.items() if p == d.entity]
+            refined = [
+                {
+                    "entity": e,
+                    "strategy": red.resolve(_chain(e) + (d.entity, d.name, d.category)).kind,
+                }
+                for e, p in ENTITY_PARENTS.items()
+                if p == d.entity
+            ]
             if refined:
                 row["refined"] = refined
             row["active"] = d.name in red.active_detectors
@@ -80,8 +86,12 @@ def detector_table(policy: Any, principal: Any = None, category: str | None = No
     for r in policy.detectors().key_rules:
         if category and r.category != category:
             continue
-        item = {"name": r.name, "entity": r.entity, "category": r.category,
-                "key_pattern": r.pattern}
+        item = {
+            "name": r.name,
+            "entity": r.entity,
+            "category": r.category,
+            "key_pattern": r.pattern,
+        }
         if red is not None:
             item["strategy"] = red._rule_strategy(r).kind
         key_rules.append(item)
@@ -159,8 +169,10 @@ def register(registry: Registry) -> Registry:
         ],
         tool: Annotated[
             str | None,
-            Field(description="Preview with the pipeline of this tool (default: the policy's "
-                  "generic pipeline)"),
+            Field(
+                description="Preview with the pipeline of this tool (default: the policy's "
+                "generic pipeline)"
+            ),
         ] = None,
         parse_json: Annotated[
             bool, Field(description="Parse `data` as JSON when it is a JSON string")
@@ -200,8 +212,10 @@ def register(registry: Registry) -> Registry:
         ctx: Any,
         category: Annotated[
             str | None,
-            Field(description="Only this category: secret, credential, identifier, network, "
-                  "pii, temporal, free_text"),
+            Field(
+                description="Only this category: secret, credential, identifier, network, "
+                "pii, temporal, free_text"
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """List the sensitive-entity detectors (content regexes and key-name
@@ -247,8 +261,11 @@ def register(registry: Registry) -> Registry:
         found: dict[int, Any] = {}
         for spec in ctx.layer.list_tools(ctx.principal):
             for t in policy.output_pipeline(spec, ctx.principal).transforms:
-                maps = t.alias_maps if isinstance(t, Substitution) else (
-                    [t] if isinstance(t, AliasMap) and t.aliases else [])
+                maps = (
+                    t.alias_maps
+                    if isinstance(t, Substitution)
+                    else ([t] if isinstance(t, AliasMap) and t.aliases else [])
+                )
                 for m in maps:
                     found.setdefault(id(m), m)
         return list(found.values())
@@ -265,15 +282,23 @@ def register(registry: Registry) -> Registry:
         idempotent=True,
         open_world=False,
         # Must see the token itself and return the real value untouched
-        transform_hints={"pseudonymize": False, "depseudonymize": False, "input_guard": False,
-                         "skip": ["substitute", "alias"]},
+        transform_hints={
+            "pseudonymize": False,
+            "depseudonymize": False,
+            "input_guard": False,
+            "skip": ["substitute", "alias"],
+        },
     )
     def reveal_token(
         ctx: Any,
         token: Annotated[
             str,
-            Field(description="A pseudonym (e.g. an account ID, ARN or IP from a result) or "
-                  "text containing pseudonyms", min_length=1, max_length=20000),
+            Field(
+                description="A pseudonym (e.g. an account ID, ARN or IP from a result) or "
+                "text containing pseudonyms",
+                min_length=1,
+                max_length=20000,
+            ),
         ],
     ) -> dict[str, Any]:
         """Reverse pseudonymisation: return the real value behind a pseudonym
@@ -295,25 +320,32 @@ def register(registry: Registry) -> Registry:
             n = int(tctx.report.get("depseudonymized", 0))
             audit_logger.warning(
                 "reveal_token principal=%s reversed=%d token_hash=%s",
-                ctx.principal.id, n, vault.hash_value(token, entity_type="audit"),
+                ctx.principal.id,
+                n,
+                vault.hash_value(token, entity_type="audit"),
             )
-            return {"pseudonym": token, "found": n > 0, "value": real if n else None,
-                    "replaced": n}
+            return {"pseudonym": token, "found": n > 0, "value": real if n else None, "replaced": n}
         if entry is not None:
             audit_logger.warning(
                 "reveal_token principal=%s entity=%s token_hash=%s",
-                ctx.principal.id, entry["entity_type"],
+                ctx.principal.id,
+                entry["entity_type"],
                 vault.hash_value(token, entity_type="audit"),
             )
-            return {"pseudonym": token, "found": True, "value": entry["value"],
-                    "entity_type": entry["entity_type"]}
+            return {
+                "pseudonym": token,
+                "found": True,
+                "value": entry["value"],
+                "entity_type": entry["entity_type"],
+            }
         text, n = vault.detokenize_text_count(token, namespace=ns)
         audit_logger.warning(
             "reveal_token principal=%s embedded_tokens=%d token_hash=%s",
-            ctx.principal.id, n, vault.hash_value(token, entity_type="audit"),
+            ctx.principal.id,
+            n,
+            vault.hash_value(token, entity_type="audit"),
         )
-        return {"pseudonym": token, "found": n > 0, "value": text if n else None,
-                "replaced": n}
+        return {"pseudonym": token, "found": n > 0, "value": text if n else None, "replaced": n}
 
     @registry.resource(
         "cloudg://policy",

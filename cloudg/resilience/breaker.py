@@ -10,7 +10,9 @@ while the rest of the map keeps going:
   (carrying ``retry_after``) for ``cooldown`` seconds.
 - HALF_OPEN: after the cooldown one probe call is let through; success
   closes the breaker, failure re-opens it with the cooldown doubled (up to
-  ``max_cooldown``).
+  ``max_cooldown``). A probe that never reports back (cancelled, or ended
+  by a FATAL error or a deadline before it was sent) is given up after
+  one cooldown, so the breaker cannot stay half-open with no probe left.
 
 FATAL errors (AccessDenied, validation) are not health signals and leave
 the breaker untouched.
@@ -68,13 +70,23 @@ class CircuitBreaker:
         self._opened_at = 0.0
         self._cooldown = self.base_cooldown
         self._probes = 0
+        self._probe_at = 0.0
         self.trips = 0
 
     # -- state ---------------------------------------------------------
 
+    def _probe_lease(self) -> float:
+        return max(self._cooldown, 1.0)
+
+    def _probes_exhausted(self) -> bool:
+        return self._state is BreakerState.HALF_OPEN and self._probes >= self.half_open_probes
+
     def _advance(self, now: float) -> None:
         if self._state is BreakerState.OPEN and now - self._opened_at >= self._cooldown:
             self._state = BreakerState.HALF_OPEN
+            self._probes = 0
+        elif self._probes_exhausted() and now - self._probe_at >= self._probe_lease():
+            # The probes never reported a result: let a new one through
             self._probes = 0
 
     @property
@@ -90,6 +102,8 @@ class CircuitBreaker:
             self._advance(now)
             if self._state is BreakerState.OPEN:
                 return max(0.0, self._opened_at + self._cooldown - now)
+            if self._probes_exhausted():
+                return max(0.0, self._probe_at + self._probe_lease() - now)
             return 0.0
 
     def allow(self) -> bool:
@@ -101,6 +115,7 @@ class CircuitBreaker:
                 return True
             if self._state is BreakerState.HALF_OPEN and self._probes < self.half_open_probes:
                 self._probes += 1
+                self._probe_at = now
                 return True
             return False
 

@@ -148,6 +148,9 @@ class Governor:
         self._retry: dict[str, RetrySettings] = {p: RetrySettings() for p in PROVIDERS}
         self._budgets: dict[str, RetryBudget] = {}
         self._lock = threading.Lock()
+        # Serialises whole configure() calls, so two threads applying different
+        # configs cannot leave the limiter of one and the breakers of the other
+        self._configure_lock = threading.Lock()
         self.ratelimit: Any = None
         self.configure(config)
 
@@ -155,6 +158,11 @@ class Governor:
 
     def configure(self, config: Any) -> "Governor":
         """Apply a CloudGConfig, a RateLimitConfig, or None (defaults)."""
+        with self._configure_lock:
+            self._apply(config)
+        return self
+
+    def _apply(self, config: Any) -> None:
         if config is None:
             ratelimit, aws_cfg = None, None
         elif _get(config, "providers") is not None or _get(config, "ratelimit") is not None:
@@ -196,7 +204,6 @@ class Governor:
             self._retry = retry
         self.limiter.configure(limits)
         self.breakers.configure(breaker_settings)
-        return self
 
     def retry_settings(self, provider: str) -> RetrySettings:
         with self._lock:
@@ -228,6 +235,10 @@ class Governor:
                 s.record_rate(scope, value)
 
     # Telemetry is aggregated per service scope (operations fold into it)
+
+    def record_wait(self, scope: Scope, seconds: float) -> None:
+        """Time a call in ``scope`` waited for a rate-limit token."""
+        self._limiter_event("wait", scope, seconds)
 
     def record_call(self, scope: Scope) -> None:
         for s in self._targets():

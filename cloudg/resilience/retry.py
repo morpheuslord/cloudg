@@ -56,6 +56,12 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+#: ``sleep`` hook of the async loop and of the blocking loop
+AsyncSleep = Callable[[float], Awaitable[Any]]
+SyncSleep = Callable[[float], Any]
+#: Monotonic clock
+Clock = Callable[[], float]
+
 # Jitter is not cryptographic; SystemRandom also satisfies Bandit B311
 _rng = random.SystemRandom()
 
@@ -95,7 +101,7 @@ class _Attempts:
     """Retry bookkeeping shared by the async and sync loops."""
 
     def __init__(
-        self, gov: Governor, scope: Scope, policy: RetryPolicy, clock: Callable[[], float]
+        self, gov: Governor, scope: Scope, policy: RetryPolicy, clock: Clock
     ):
         settings = gov.retry_settings(scope.provider)
         self.gov = gov
@@ -177,8 +183,8 @@ async def call_with_resilience(
     scope: Scope,
     policy: RetryPolicy | None = None,
     governor: Governor | None = None,
-    sleep: Callable[[float], Awaitable[Any]] | None = None,
-    clock: Callable[[], float] | None = None,
+    sleep: AsyncSleep | None = None,
+    clock: Clock | None = None,
     **kwargs: Any,
 ) -> T:
     """Call ``fn(*args, **kwargs)`` (async, or sync run in a worker thread)
@@ -196,7 +202,7 @@ async def call_with_resilience(
         wait = gov.limiter.reserve(scope)
         if wait > 0:
             state.check_wait(wait)
-            gov._limiter_event("wait", scope, wait)
+            gov.record_wait(scope, wait)
             await do_sleep(wait)
         gov.record_call(scope)
         try:
@@ -207,9 +213,7 @@ async def call_with_resilience(
                     result = await asyncio.to_thread(fn, *args, **kwargs)
                     if inspect.isawaitable(result):
                         result = await result
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
+        except Exception as exc:  # CancelledError is a BaseException: not retried
             delay = state.on_error(exc)
             await do_sleep(delay)
             continue
@@ -223,8 +227,8 @@ def call_with_resilience_sync(
     scope: Scope,
     policy: RetryPolicy | None = None,
     governor: Governor | None = None,
-    sleep: Callable[[float], Any] = time.sleep,
-    clock: Callable[[], float] | None = None,
+    sleep: SyncSleep = time.sleep,
+    clock: Clock | None = None,
     **kwargs: Any,
 ) -> T:
     """Blocking variant of :func:`call_with_resilience` for worker threads."""
@@ -237,7 +241,7 @@ def call_with_resilience_sync(
         wait = gov.limiter.reserve(scope)
         if wait > 0:
             state.check_wait(wait)
-            gov._limiter_event("wait", scope, wait)
+            gov.record_wait(scope, wait)
             sleep(wait)
         gov.record_call(scope)
         try:

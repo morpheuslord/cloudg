@@ -19,7 +19,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from cloudg.mcp.catalog._common import DatasetArg, ws_dataset
+from cloudg.mcp.catalog._common import Catalog, DatasetArg, ws_dataset
 from cloudg.mcp.core import (
     AccessDeniedError,
     Capability,
@@ -375,237 +375,237 @@ Replace = Annotated[bool, Field(
     description="Overwrite an existing dataset with the same name (otherwise a name clash "
     "is an error, reported before any cloud call).")]
 
+CATALOG = Catalog()
 
-def register(reg: Registry) -> None:
-    live = dict(category=CATEGORY, read_only=False, destructive=False, idempotent=False,
-                open_world=True)
-    @reg.tool(title="Map inventory (live)", sensitivity=Sensitivity.CONFIDENTIAL,
-              capabilities={R, W, CLOUD}, timeout_seconds=3600, **live)
-    async def map_inventory(
-        ctx: Any,
-        providers: Providers = None,
-        regions: Regions = None,
-        services: Annotated[list[str] | None, Field(
-            description="Service families: all, network, compute, containers, kubernetes, "
-            "serverless, integration, data, storage, identity, security, dns, iac, logging.")]
-        = None,
-        tagging_sweep: Annotated[bool | None, Field(
-            description="AWS Resource Groups Tagging API sweep; default from config.")] = None,
-        name: NameArg = "",
-        replace: Replace = False,
-        preflight: Preflight = True,
-        force: Force = False,
-    ) -> dict:
-        """Map the complete live inventory (no scanners) with read-only cloud
-        API calls using the server's configured credentials: deep collectors,
-        catch-all sweeps and relationship linking, across accounts when
-        organization discovery is configured. Takes minutes. The result
-        becomes the active dataset; this returns a summary and links.
-        Guarded: identical concurrent calls share one run, a scope collected
-        recently is refused with retry_after (use the existing dataset), and
-        only a few live operations run at once."""
-        started = time.monotonic()
-        cfg = _config(ctx, providers, regions, services=services)
-        ds_name = _name(ctx, name, "inventory", replace)
-        _bypass(ctx, force)
-        if preflight:
-            await _preflight(cfg)
-        scopes = live_scopes(cfg)
+_LIVE = dict(category=CATEGORY, read_only=False, destructive=False, idempotent=False,
+            open_world=True)
+@CATALOG.tool(title="Map inventory (live)", sensitivity=Sensitivity.CONFIDENTIAL,
+          capabilities={R, W, CLOUD}, timeout_seconds=3600, **_LIVE)
+async def map_inventory(
+    ctx: Any,
+    providers: Providers = None,
+    regions: Regions = None,
+    services: Annotated[list[str] | None, Field(
+        description="Service families: all, network, compute, containers, kubernetes, "
+        "serverless, integration, data, storage, identity, security, dns, iac, logging.")]
+    = None,
+    tagging_sweep: Annotated[bool | None, Field(
+        description="AWS Resource Groups Tagging API sweep; default from config.")] = None,
+    name: NameArg = "",
+    replace: Replace = False,
+    preflight: Preflight = True,
+    force: Force = False,
+) -> dict:
+    """Map the complete live inventory (no scanners) with read-only cloud
+    API calls using the server's configured credentials: deep collectors,
+    catch-all sweeps and relationship linking, across accounts when
+    organization discovery is configured. Takes minutes. The result
+    becomes the active dataset; this returns a summary and links.
+    Guarded: identical concurrent calls share one run, a scope collected
+    recently is refused with retry_after (use the existing dataset), and
+    only a few live operations run at once."""
+    started = time.monotonic()
+    cfg = _config(ctx, providers, regions, services=services)
+    ds_name = _name(ctx, name, "inventory", replace)
+    _bypass(ctx, force)
+    if preflight:
+        await _preflight(cfg)
+    scopes = live_scopes(cfg)
 
-        async def op() -> dict[str, Any]:
-            engine = _engine(cfg)
-            _hook_progress(ctx, engine, 2.0)
-            await ctx.report_progress(0.5, 2, "mapping inventory")
-            with stats_scope() as stats:
-                result = await engine.map_inventory(tagging_sweep=tagging_sweep)
-            ds = Dataset.from_inventory(result, ds_name, source="live")
-            throttling = _run_throttling(result, stats)
-            if throttling:
-                ds.metadata["throttling"] = throttling
-            await _done(ctx, 2)
-            cov = [c.to_summary() for c in ds.coverage]
-            return _land(ctx, ds, "map_inventory", started, {
-                "collection_failures": [f for c in cov for f in c["failures"]][:20],
+    async def op() -> dict[str, Any]:
+        engine = _engine(cfg)
+        _hook_progress(ctx, engine, 2.0)
+        await ctx.report_progress(0.5, 2, "mapping inventory")
+        with stats_scope() as stats:
+            result = await engine.map_inventory(tagging_sweep=tagging_sweep)
+        ds = Dataset.from_inventory(result, ds_name, source="live")
+        throttling = _run_throttling(result, stats)
+        if throttling:
+            ds.metadata["throttling"] = throttling
+        await _done(ctx, 2)
+        cov = [c.to_summary() for c in ds.coverage]
+        return _land(ctx, ds, "map_inventory", started, {
+            "collection_failures": [f for c in cov for f in c["failures"]][:20],
+            "errors": getattr(engine, "_mcp_errors", []),
+        }, replace)
+
+    return await _guarded(ctx, "map", cfg, (regions, services, tagging_sweep), scopes,
+                          force, op)
+
+@CATALOG.tool(title="Collect assets (live)", sensitivity=Sensitivity.CONFIDENTIAL,
+          capabilities={R, W, CLOUD}, timeout_seconds=3600, **_LIVE)
+async def collect_assets(
+    ctx: Any,
+    providers: Providers = None,
+    regions: Regions = None,
+    name: NameArg = "",
+    replace: Replace = False,
+    preflight: Preflight = True,
+    force: Force = False,
+) -> dict:
+    """Run the standard multi-provider asset collection (the `cloudg
+    collect` phase: core services, network edges, IAM). It is lighter than
+    map_inventory. The result becomes the active dataset. Guarded like
+    map_inventory (shared runs, per-scope cooldown, concurrency caps)."""
+    started = time.monotonic()
+    cfg = _config(ctx, providers, regions)
+    ds_name = _name(ctx, name, "collect", replace)
+    _bypass(ctx, force)
+    if preflight:
+        await _preflight(cfg)
+
+    async def op() -> dict[str, Any]:
+        engine = _engine(cfg)
+        _hook_progress(ctx, engine, 2.0)
+        with stats_scope() as stats:
+            result = await engine.collect()
+        ds = Dataset.from_collection(result, ds_name)
+        throttling = _run_throttling(result, stats)
+        if throttling:
+            ds.metadata["throttling"] = throttling
+        await _done(ctx, 2)
+        return _land(ctx, ds, "collect_assets", started,
+                     {"errors": getattr(engine, "_mcp_errors", [])}, replace)
+
+    return await _guarded(ctx, "collect", cfg, (regions,), live_scopes(cfg), force, op)
+
+@CATALOG.tool(title="Run scanners", sensitivity=Sensitivity.CONFIDENTIAL,
+          capabilities={R, W, Capability.READ_FS, FS, CLOUD, EXEC}, timeout_seconds=7200,
+          **_LIVE)
+async def run_scanners(
+    ctx: Any,
+    scanners: Annotated[list[str] | None, Field(
+        description="Subset of prowler, scoutsuite, checkov, trivy, iam; empty = "
+        "configured.")] = None,
+    iac_dir: Annotated[str, Field(description="IaC directory for Checkov (inside an "
+                                  "allowed root).")] = "",
+    images: Annotated[list[str] | None, Field(description="Container images for "
+                                              "Trivy.")] = None,
+    normalise: bool = True,
+    dataset: DatasetArg = "",
+    preflight: Preflight = True,
+    force: Force = False,
+) -> dict:
+    """Run security scanners (external binaries, cloud credentials)
+    plus cloudg's reachability analysis against a dataset's assets and
+    add the findings to it (deduplicated and compliance-mapped when
+    normalise=true). Scanner output files go to <output_dir>/scans.
+    When Prowler or ScoutSuite run, the call is guarded like the
+    collection tools (shared runs, per-scope cooldown, concurrency caps)."""
+    started = time.monotonic()
+    ds = ws_dataset(ctx, dataset)
+    if scanners:
+        bad = [s for s in scanners if s.lower() not in SCANNERS]
+        if bad:
+            raise InvalidArgumentsError(
+                f"Unknown scanner(s) {', '.join(bad)}. Use: {', '.join(SCANNERS)}")
+    cfg = _config(ctx, None, None)
+    if scanners:
+        cfg.scanners.enabled = [s.lower() for s in scanners]
+    iac = str(ctx.workspace.check_path(iac_dir)) if iac_dir else None
+    out_dir = ctx.workspace.output_path("scans")
+    _bypass(ctx, force)
+    # Only the cloud scanners need credentials (and cloud scopes);
+    # checkov / trivy / iam run offline
+    cloud = bool({"prowler", "scoutsuite"} & {s.lower() for s in cfg.scanners.enabled})
+    if preflight and cloud:
+        await _preflight(cfg)
+
+    async def op() -> dict[str, Any]:
+        engine = _engine(cfg)
+        _hook_progress(ctx, engine, 3.0)
+        with stats_scope() as stats:
+            findings = await engine.scan(ds.assets, ds.edges, iac_dir=iac, images=images,
+                                         output_dir=out_dir)
+        before = len(ds.findings)
+        if normalise:
+            from cloudg.mcp.catalog.findings import renormalise
+
+            await asyncio.to_thread(renormalise, ctx.workspace, ds, findings)
+        else:
+            ds.add_findings(findings)
+        ctx.workspace.mutated(ds)
+        await _done(ctx, 3)
+        sev: dict[str, int] = {}
+        for f in findings:
+            sev[f.severity.value] = sev.get(f.severity.value, 0) + 1
+        throttling = _run_throttling(None, stats)
+        extra = {"throttling": _throttling_summary(throttling)} if throttling else {}
+        return {**extra, "dataset": ds.name, "scanners": cfg.scanners.enabled,
+                "new_findings": len(findings), "severity_breakdown": sev,
+                "findings_before": before, "findings_after": len(ds.findings),
+                "output_dir": str(out_dir),
+                "duration_s": round(time.monotonic() - started, 1),
                 "errors": getattr(engine, "_mcp_errors", []),
-            }, replace)
+                "next_steps": ["top_risks", "list_findings(min_severity='HIGH')",
+                               "compliance_summary"]}
 
-        return await _guarded(ctx, "map", cfg, (regions, services, tagging_sweep), scopes,
-                              force, op)
+    scopes = live_scopes(cfg) if cloud else []
+    return await _guarded(ctx, "scan", cfg,
+                          (ds.name, sorted(cfg.scanners.enabled), iac, images, normalise),
+                          scopes, force, op)
 
-    @reg.tool(title="Collect assets (live)", sensitivity=Sensitivity.CONFIDENTIAL,
-              capabilities={R, W, CLOUD}, timeout_seconds=3600, **live)
-    async def collect_assets(
-        ctx: Any,
-        providers: Providers = None,
-        regions: Regions = None,
-        name: NameArg = "",
-        replace: Replace = False,
-        preflight: Preflight = True,
-        force: Force = False,
-    ) -> dict:
-        """Run the standard multi-provider asset collection (the `cloudg
-        collect` phase: core services, network edges, IAM). It is lighter than
-        map_inventory. The result becomes the active dataset. Guarded like
-        map_inventory (shared runs, per-scope cooldown, concurrency caps)."""
-        started = time.monotonic()
-        cfg = _config(ctx, providers, regions)
-        ds_name = _name(ctx, name, "collect", replace)
-        _bypass(ctx, force)
-        if preflight:
-            await _preflight(cfg)
+@CATALOG.tool(title="Run full pipeline", sensitivity=Sensitivity.CONFIDENTIAL,
+          capabilities={R, W, FS, CLOUD, EXEC}, timeout_seconds=7200, **_LIVE)
+async def run_pipeline(
+    ctx: Any,
+    providers: Providers = None,
+    regions: Regions = None,
+    subdir: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-/]{0,200}$",
+                                 description="Output sub-directory for reports.")] = "pipeline",
+    name: NameArg = "",
+    replace: Replace = False,
+    preflight: Preflight = True,
+    force: Force = False,
+) -> dict:
+    """The complete cloudg pipeline: collect -> scan -> analyse (graph,
+    ontology, RAG, Terraform) -> normalise -> JSON + HTML reports. The
+    result becomes the active dataset; report paths are returned.
+    Guarded like map_inventory (shared runs, per-scope cooldown,
+    concurrency caps)."""
+    started = time.monotonic()
+    cfg = _config(ctx, providers, regions)
+    ds_name = _name(ctx, name, "pipeline", replace)
+    out_dir = ctx.workspace.output_path(subdir)
+    _bypass(ctx, force)
+    if preflight:
+        await _preflight(cfg)
 
-        async def op() -> dict[str, Any]:
-            engine = _engine(cfg)
-            _hook_progress(ctx, engine, 2.0)
-            with stats_scope() as stats:
-                result = await engine.collect()
-            ds = Dataset.from_collection(result, ds_name)
-            throttling = _run_throttling(result, stats)
-            if throttling:
-                ds.metadata["throttling"] = throttling
-            await _done(ctx, 2)
-            return _land(ctx, ds, "collect_assets", started,
-                         {"errors": getattr(engine, "_mcp_errors", [])}, replace)
+    async def op() -> dict[str, Any]:
+        engine = _engine(cfg)
+        _hook_progress(ctx, engine, 6.0)
+        with stats_scope() as stats:
+            result = await engine.run_pipeline(output_dir=out_dir)
+        ds = Dataset.from_pipeline(result, ds_name)
+        throttling = _run_throttling(result, stats)
+        if throttling:
+            ds.metadata["throttling"] = throttling
+        await _done(ctx, 6)
+        return _land(ctx, ds, "run_pipeline", started, {
+            "report_paths": {k: str(v) for k, v in result.report_paths.items()},
+            "attack_paths_found": len(result.attack_paths),
+            "errors": list(result.errors) + getattr(engine, "_mcp_errors", []),
+        }, replace)
 
-        return await _guarded(ctx, "collect", cfg, (regions,), live_scopes(cfg), force, op)
+    return await _guarded(ctx, "pipeline", cfg, (regions, subdir), live_scopes(cfg),
+                          force, op)
 
-    @reg.tool(title="Run scanners", sensitivity=Sensitivity.CONFIDENTIAL,
-              capabilities={R, W, Capability.READ_FS, FS, CLOUD, EXEC}, timeout_seconds=7200,
-              **live)
-    async def run_scanners(
-        ctx: Any,
-        scanners: Annotated[list[str] | None, Field(
-            description="Subset of prowler, scoutsuite, checkov, trivy, iam; empty = "
-            "configured.")] = None,
-        iac_dir: Annotated[str, Field(description="IaC directory for Checkov (inside an "
-                                      "allowed root).")] = "",
-        images: Annotated[list[str] | None, Field(description="Container images for "
-                                                  "Trivy.")] = None,
-        normalise: bool = True,
-        dataset: DatasetArg = "",
-        preflight: Preflight = True,
-        force: Force = False,
-    ) -> dict:
-        """Run security scanners (external binaries, cloud credentials)
-        plus cloudg's reachability analysis against a dataset's assets and
-        add the findings to it (deduplicated and compliance-mapped when
-        normalise=true). Scanner output files go to <output_dir>/scans.
-        When Prowler or ScoutSuite run, the call is guarded like the
-        collection tools (shared runs, per-scope cooldown, concurrency caps)."""
-        started = time.monotonic()
-        ds = ws_dataset(ctx, dataset)
-        if scanners:
-            bad = [s for s in scanners if s.lower() not in SCANNERS]
-            if bad:
-                raise InvalidArgumentsError(
-                    f"Unknown scanner(s) {', '.join(bad)}. Use: {', '.join(SCANNERS)}")
-        cfg = _config(ctx, None, None)
-        if scanners:
-            cfg.scanners.enabled = [s.lower() for s in scanners]
-        iac = str(ctx.workspace.check_path(iac_dir)) if iac_dir else None
-        out_dir = ctx.workspace.output_path("scans")
-        _bypass(ctx, force)
-        # Only the cloud scanners need credentials (and cloud scopes);
-        # checkov / trivy / iam run offline
-        cloud = bool({"prowler", "scoutsuite"} & {s.lower() for s in cfg.scanners.enabled})
-        if preflight and cloud:
-            await _preflight(cfg)
+@CATALOG.tool(title="Rate limit status", category=CATEGORY, sensitivity=Sensitivity.INTERNAL,
+          capabilities={R}, read_only=True, idempotent=True, open_world=False)
+def rate_limit_status(ctx: Any) -> dict:
+    """Live-operation guard and cloud API throttling state, without
+    calling any cloud API: live operations in flight, scopes cooling
+    down (seconds left before a new live collection is accepted), the
+    cooldown and concurrency settings, and the throttling governor's
+    tripped circuit breakers, slowed rate buckets and recent throttling.
+    Check it before map_inventory / collect_assets to avoid a refusal."""
+    return rate_limit_snapshot(ctx.workspace)
 
-        async def op() -> dict[str, Any]:
-            engine = _engine(cfg)
-            _hook_progress(ctx, engine, 3.0)
-            with stats_scope() as stats:
-                findings = await engine.scan(ds.assets, ds.edges, iac_dir=iac, images=images,
-                                             output_dir=out_dir)
-            before = len(ds.findings)
-            if normalise:
-                from cloudg.mcp.catalog.findings import renormalise
-
-                await asyncio.to_thread(renormalise, ctx.workspace, ds, findings)
-            else:
-                ds.add_findings(findings)
-            ctx.workspace.mutated(ds)
-            await _done(ctx, 3)
-            sev: dict[str, int] = {}
-            for f in findings:
-                sev[f.severity.value] = sev.get(f.severity.value, 0) + 1
-            throttling = _run_throttling(None, stats)
-            extra = {"throttling": _throttling_summary(throttling)} if throttling else {}
-            return {**extra, "dataset": ds.name, "scanners": cfg.scanners.enabled,
-                    "new_findings": len(findings), "severity_breakdown": sev,
-                    "findings_before": before, "findings_after": len(ds.findings),
-                    "output_dir": str(out_dir),
-                    "duration_s": round(time.monotonic() - started, 1),
-                    "errors": getattr(engine, "_mcp_errors", []),
-                    "next_steps": ["top_risks", "list_findings(min_severity='HIGH')",
-                                   "compliance_summary"]}
-
-        scopes = live_scopes(cfg) if cloud else []
-        return await _guarded(ctx, "scan", cfg,
-                              (ds.name, sorted(cfg.scanners.enabled), iac, images, normalise),
-                              scopes, force, op)
-
-    @reg.tool(title="Run full pipeline", sensitivity=Sensitivity.CONFIDENTIAL,
-              capabilities={R, W, FS, CLOUD, EXEC}, timeout_seconds=7200, **live)
-    async def run_pipeline(
-        ctx: Any,
-        providers: Providers = None,
-        regions: Regions = None,
-        subdir: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-/]{0,200}$",
-                                     description="Output sub-directory for reports.")] = "pipeline",
-        name: NameArg = "",
-        replace: Replace = False,
-        preflight: Preflight = True,
-        force: Force = False,
-    ) -> dict:
-        """The complete cloudg pipeline: collect -> scan -> analyse (graph,
-        ontology, RAG, Terraform) -> normalise -> JSON + HTML reports. The
-        result becomes the active dataset; report paths are returned.
-        Guarded like map_inventory (shared runs, per-scope cooldown,
-        concurrency caps)."""
-        started = time.monotonic()
-        cfg = _config(ctx, providers, regions)
-        ds_name = _name(ctx, name, "pipeline", replace)
-        out_dir = ctx.workspace.output_path(subdir)
-        _bypass(ctx, force)
-        if preflight:
-            await _preflight(cfg)
-
-        async def op() -> dict[str, Any]:
-            engine = _engine(cfg)
-            _hook_progress(ctx, engine, 6.0)
-            with stats_scope() as stats:
-                result = await engine.run_pipeline(output_dir=out_dir)
-            ds = Dataset.from_pipeline(result, ds_name)
-            throttling = _run_throttling(result, stats)
-            if throttling:
-                ds.metadata["throttling"] = throttling
-            await _done(ctx, 6)
-            return _land(ctx, ds, "run_pipeline", started, {
-                "report_paths": {k: str(v) for k, v in result.report_paths.items()},
-                "attack_paths_found": len(result.attack_paths),
-                "errors": list(result.errors) + getattr(engine, "_mcp_errors", []),
-            }, replace)
-
-        return await _guarded(ctx, "pipeline", cfg, (regions, subdir), live_scopes(cfg),
-                              force, op)
-
-    @reg.tool(title="Rate limit status", category=CATEGORY, sensitivity=Sensitivity.INTERNAL,
-              capabilities={R}, read_only=True, idempotent=True, open_world=False)
-    def rate_limit_status(ctx: Any) -> dict:
-        """Live-operation guard and cloud API throttling state, without
-        calling any cloud API: live operations in flight, scopes cooling
-        down (seconds left before a new live collection is accepted), the
-        cooldown and concurrency settings, and the throttling governor's
-        tripped circuit breakers, slowed rate buckets and recent throttling.
-        Check it before map_inventory / collect_assets to avoid a refusal."""
-        return rate_limit_snapshot(ctx.workspace)
-
-    @reg.resource("cloudg://ratelimit", title="Rate limit status", category=CATEGORY,
-                  sensitivity=Sensitivity.INTERNAL,
-                  description="Live-operation guard and cloud API throttling state.")
-    def ratelimit_resource(ctx: Any) -> dict:
-        return rate_limit_snapshot(ctx.workspace)
+@CATALOG.resource("cloudg://ratelimit", title="Rate limit status", category=CATEGORY,
+              sensitivity=Sensitivity.INTERNAL,
+              description="Live-operation guard and cloud API throttling state.")
+def ratelimit_resource(ctx: Any) -> dict:
+    return rate_limit_snapshot(ctx.workspace)
 
 
 def rate_limit_snapshot(workspace: Any) -> dict[str, Any]:
@@ -623,3 +623,8 @@ def rate_limit_snapshot(workspace: Any) -> dict[str, Any]:
         },
         "throttling": get_governor().summary(),
     }
+
+
+def register(reg: Registry) -> None:
+    """Add this module's tools to ``reg``."""
+    CATALOG.register(reg)

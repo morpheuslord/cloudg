@@ -9,35 +9,27 @@ from typing import Any
 
 import networkx as nx
 
+from cloudg.graph.ports import (
+    ALL_PORTS_RANGE,
+    ALL_PROTOCOLS,
+    FILTER_RULE_EDGES,
+    PORTED_PROTOCOLS,
+    PORTLESS_PROTOCOLS,
+)
 from cloudg.schema.models import CloudAsset, EdgeType, NetworkEdge
 
 logger = logging.getLogger(__name__)
 
 # Edge types that carry ports. When two of them share a source and target
 # they are merged into one graph edge (see GraphBuilder._add_edge).
-_MERGEABLE_EDGES = frozenset(
-    {
-        EdgeType.SECURITY_GROUP_RULE.value,
-        EdgeType.NACL_RULE.value,
-        EdgeType.INTERNET_EXPOSED.value,
-    }
-)
+_MERGEABLE_EDGES = FILTER_RULE_EDGES | {EdgeType.INTERNET_EXPOSED.value}
 
-# Filter rules, where an empty port list allows every port of the protocol
-_FILTER_RULE_EDGES = frozenset({EdgeType.SECURITY_GROUP_RULE.value, EdgeType.NACL_RULE.value})
-
-# Protocols that carry ports, by name and IANA number, plus the spellings of
-# "every protocol" (AWS -1, which the collector writes as ALL; Azure * and Any)
-_PORTED_PROTOCOLS = frozenset({"TCP", "UDP", "SCTP", "6", "17", "132", "ALL", "-1", "*", "ANY"})
-
-# Protocols without ports. AWS stores the ICMP type and code in the port
-# fields and Azure writes "*" for an ICMP rule, so these numbers are dropped
-# when such a rule is merged with a rule for another protocol.
-_PORTLESS_PROTOCOLS = frozenset(
-    {"ICMP", "ICMPV6", "ESP", "AH", "GRE", "IPIP", "1", "58", "50", "51", "47", "4"}
-)
-
-_ALL_PORTS = "0-65535"
+# Protocols whose empty port list on a filter rule allows every port: the
+# port-carrying protocols plus the spellings of "every protocol". The
+# port-less protocols (ICMP and the like, see cloudg.graph.ports) add no
+# ports when such a rule is merged with a rule for another protocol: AWS
+# stores the ICMP type and code in the port fields and Azure writes "*".
+_EMPTY_MEANS_ALL_PROTOCOLS = PORTED_PROTOCOLS | ALL_PROTOCOLS
 
 
 def _split(value: str) -> list[str]:
@@ -69,7 +61,7 @@ def _can_merge(existing: dict[str, Any], new: dict[str, Any]) -> bool:
 def _rule_ports(attrs: dict[str, Any], mixed_protocols: bool) -> list[str]:
     """The ``port_range`` tokens one edge contributes to a merged edge."""
     protocols = {p.upper() for p in _split(str(attrs.get("protocol", "")))}
-    if mixed_protocols and protocols and protocols <= _PORTLESS_PROTOCOLS:
+    if mixed_protocols and protocols and protocols <= PORTLESS_PROTOCOLS:
         return []
     tokens = _split(str(attrs.get("port_range", "")))
     if tokens:
@@ -77,8 +69,8 @@ def _rule_ports(attrs: dict[str, Any], mixed_protocols: bool) -> list[str]:
     # An empty port list on a TCP / UDP / all-protocol filter rule allows
     # every port (the GCP collector writes it that way). Spell it out so the
     # other rule's ports do not narrow it.
-    if attrs.get("edge_type") in _FILTER_RULE_EDGES and protocols & _PORTED_PROTOCOLS:
-        return [_ALL_PORTS]
+    if attrs.get("edge_type") in FILTER_RULE_EDGES and protocols & _EMPTY_MEANS_ALL_PROTOCOLS:
+        return [ALL_PORTS_RANGE]
     return []
 
 

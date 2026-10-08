@@ -55,21 +55,46 @@ from cloudg.mcp.transforms.detectors import (
 
 STRATEGIES = ("redact", "mask", "hash", "pseudonymize", "generalize", "drop", "keep")
 _STRATEGY_ALIASES = {
-    "pseudonymise": "pseudonymize", "tokenize": "pseudonymize", "tokenise": "pseudonymize",
-    "generalise": "generalize", "remove": "drop", "replace": "redact", "none": "keep",
-    "allow": "keep", "bucket": "generalize",
+    "pseudonymise": "pseudonymize",
+    "tokenize": "pseudonymize",
+    "tokenise": "pseudonymize",
+    "generalise": "generalize",
+    "remove": "drop",
+    "replace": "redact",
+    "none": "keep",
+    "allow": "keep",
+    "bucket": "generalize",
 }
 #: Report section per strategy.
 _REPORT_KEY = {
-    "redact": "redacted", "mask": "masked", "hash": "hashed", "pseudonymize": "pseudonymized",
-    "generalize": "generalized", "drop": "dropped",
+    "redact": "redacted",
+    "mask": "masked",
+    "hash": "hashed",
+    "pseudonymize": "pseudonymized",
+    "generalize": "generalized",
+    "drop": "dropped",
 }
 #: Default tag keys whose values are operational, not identifying.
-DEFAULT_TAG_KEY_ALLOWLIST = frozenset({
-    "env", "environment", "stage", "tier", "managed_by", "managedby", "terraform",
-    "cost_center", "costcenter", "project_type", "application_tier", "criticality",
-    "data_classification", "compliance", "backup", "patch_group",
-})
+DEFAULT_TAG_KEY_ALLOWLIST = frozenset(
+    {
+        "env",
+        "environment",
+        "stage",
+        "tier",
+        "managed_by",
+        "managedby",
+        "terraform",
+        "cost_center",
+        "costcenter",
+        "project_type",
+        "application_tier",
+        "criticality",
+        "data_classification",
+        "compliance",
+        "backup",
+        "patch_group",
+    }
+)
 
 
 class _Drop:
@@ -181,8 +206,7 @@ class Redactor:
         disabled = list(disabled_detectors)
         if disabled:
             reg = reg.disable(disabled)
-        extra = [s if isinstance(s, KeyRule) else _key_rule_from_config(s)
-                 for s in extra_key_rules]
+        extra = [s if isinstance(s, KeyRule) else _key_rule_from_config(s) for s in extra_key_rules]
         self.registry = reg
         self.strategies: dict[str, Strategy] = {
             str(k): parse_strategy(v) for k, v in (strategies or {}).items()
@@ -268,8 +292,11 @@ class Redactor:
             # a list, so entity names (secret, credential...) are values, not
             # keys the sensitive-key rule would redact
             "strategies": [
-                {"applies_to": k, "strategy": v.kind, **({"options": v.options} if v.options
-                                                          else {})}
+                {
+                    "applies_to": k,
+                    "strategy": v.kind,
+                    **({"options": v.options} if v.options else {}),
+                }
                 for k, v in self.strategies.items()
             ],
             "active_detectors": list(self.active_detectors),
@@ -293,8 +320,10 @@ class Redactor:
         if vault is not None and getattr(vault, "autosave", False):
             vault.maybe_autosave()
         if out is DROP:
-            return None if not isinstance(value, str) else self.redact_template.format(
-                entity="content"
+            return (
+                None
+                if not isinstance(value, str)
+                else self.redact_template.format(entity="content")
             )
         return out
 
@@ -338,13 +367,41 @@ _ENUM_KEYS: frozenset[str] | None = None
 _NO_MENTION_ENTITIES = frozenset({"sensitive_field", "tag_value", "person", "rag_chunk_id"})
 _NAME_PASS_LIMIT = 5000
 #: Keys whose values are vocabulary, never names (left alone by the mention pass).
-_ENUMISH_KEYS = frozenset({
-    "type", "asset_type", "resource_type", "provider", "region", "status", "severity",
-    "predicate", "edge_type", "relationship", "kind", "chunk_type", "metric", "mode",
-    "format", "category", "direction", "protocol", "max_severity", "severity_max",
-    "relation_group", "feature_set", "env", "environment", "stage", "tier", "strategy",
-    "applies_to", "entity", "entity_type", "decision",
-})
+_ENUMISH_KEYS = frozenset(
+    {
+        "type",
+        "asset_type",
+        "resource_type",
+        "provider",
+        "region",
+        "status",
+        "severity",
+        "predicate",
+        "edge_type",
+        "relationship",
+        "kind",
+        "chunk_type",
+        "metric",
+        "mode",
+        "format",
+        "category",
+        "direction",
+        "protocol",
+        "max_severity",
+        "severity_max",
+        "relation_group",
+        "feature_set",
+        "env",
+        "environment",
+        "stage",
+        "tier",
+        "strategy",
+        "applies_to",
+        "entity",
+        "entity_type",
+        "decision",
+    }
+)
 _RAG_FIELD_RE = re.compile(r"^(Resource|Account|Tags): ?(.*)$")
 _RAG_REL_RE = re.compile(r"^(\s+[\u2192\u2190] [A-Z0-9_]+: )(.+)$")
 _RAG_MEMBER_RE = re.compile(r"^(\s+\u2022 )(.+?)( \([A-Z0-9_]+\))$")
@@ -358,7 +415,9 @@ def _asset_type_names() -> frozenset[str]:
         try:
             from cloudg.schema.models import AssetType
 
-            _ASSET_TYPE_NAMES = frozenset({t.value for t in AssetType} | {t.name for t in AssetType})
+            _ASSET_TYPE_NAMES = frozenset(
+                {t.value for t in AssetType} | {t.name for t in AssetType}
+            )
         except Exception:  # pragma: no cover
             _ASSET_TYPE_NAMES = frozenset()
     return _ASSET_TYPE_NAMES
@@ -374,8 +433,13 @@ def _enum_keys() -> frozenset[str]:
         try:
             from cloudg.schema import models
 
-            for enum_name in ("AssetType", "EdgeType", "Severity", "CloudProvider",
-                              "ComplianceStatus"):
+            for enum_name in (
+                "AssetType",
+                "EdgeType",
+                "Severity",
+                "CloudProvider",
+                "ComplianceStatus",
+            ):
                 enum = getattr(models, enum_name, None)
                 if enum is not None:
                     for member in enum:
@@ -526,8 +590,11 @@ class _Run:
         if rule.defer and isinstance(value, (list, tuple)):
             out = []
             for item in value:
-                res = self.apply_rule(rule, item) if isinstance(item, (str, list, tuple)) \
+                res = (
+                    self.apply_rule(rule, item)
+                    if isinstance(item, (str, list, tuple))
                     else self.walk(item, ())
+                )
                 if res is not DROP:
                     out.append(res)
             return out
@@ -551,8 +618,13 @@ class _Run:
         else:
             strat = self.r._rule_strategy(rule)
         out = self.whole(value, entity, strat)
-        if (strat.kind == "pseudonymize" and isinstance(out, str) and out != value
-                and len(value) >= 3 and entity not in _NO_MENTION_ENTITIES):
+        if (
+            strat.kind == "pseudonymize"
+            and isinstance(out, str)
+            and out != value
+            and len(value) >= 3
+            and entity not in _NO_MENTION_ENTITIES
+        ):
             self.issued[value] = out
         return out
 
@@ -589,8 +661,7 @@ class _Run:
                 continue
             m = _RAG_MEMBER_RE.match(line)
             if m and name_rule:
-                out_lines.append(f"{m.group(1)}{self.rule_str(name_rule, m.group(2))}"
-                                 f"{m.group(3)}")
+                out_lines.append(f"{m.group(1)}{self.rule_str(name_rule, m.group(2))}{m.group(3)}")
                 continue
             m = _RAG_TRIPLE_RE.match(line)
             if m and name_rule:
@@ -611,8 +682,10 @@ class _Run:
         r = self.r
         hit = r._full_cache.get(value)
         if hit is None:
-            hit = any(m.start == 0 and m.end == len(value)
-                      for m in r.scanner.scan(value, r.min_confidence))
+            hit = any(
+                m.start == 0 and m.end == len(value)
+                for m in r.scanner.scan(value, r.min_confidence)
+            )
             if len(r._full_cache) > 100_000:
                 r._full_cache.clear()
             r._full_cache[value] = hit
@@ -628,8 +701,9 @@ class _Run:
             return value
         table = self.issued
         names = sorted(table, key=len, reverse=True)
-        rx = re.compile(r"(?<![\w.\-/:@])(?:" + "|".join(re.escape(n) for n in names)
-                        + r")(?![\w\-@]|\.\w)")
+        rx = re.compile(
+            r"(?<![\w.\-/:@])(?:" + "|".join(re.escape(n) for n in names) + r")(?![\w\-@]|\.\w)"
+        )
         count = 0
 
         def sub(m: re.Match[str]) -> str:
@@ -732,8 +806,9 @@ class _Run:
                     vk = next((k for k in item if str(k).lower() == "value"), None)
                     if kk is not None and vk is not None:
                         new_item = dict(item)
-                        new_item[kk] = self.scan_str(item[kk]) if isinstance(item[kk], str) \
-                            else item[kk]
+                        new_item[kk] = (
+                            self.scan_str(item[kk]) if isinstance(item[kk], str) else item[kk]
+                        )
                         res = self.tag_value(item[kk], item[vk])
                         if res is DROP:
                             continue
@@ -837,8 +912,12 @@ def generalize(text: str, entity: str, opts: dict[str, Any] | None = None) -> st
                 net = ipaddress.ip_network(text, strict=False)
             else:
                 net = ipaddress.ip_network(text)
-            target = int(opts.get("ipv4_prefix" if net.version == 4 else "ipv6_prefix",
-                                  24 if net.version == 4 else 48))
+            target = int(
+                opts.get(
+                    "ipv4_prefix" if net.version == 4 else "ipv6_prefix",
+                    24 if net.version == 4 else 48,
+                )
+            )
             if entity.startswith("special"):
                 return text
             if net.prefixlen > target:
@@ -957,8 +1036,13 @@ class SecretArgumentGuard:
         )
 
     def apply(self, value: Any, ctx: TransformContext) -> Any:
-        probe = TransformContext(principal=ctx.principal, spec=ctx.spec, kind=ctx.kind,
-                                 direction=ctx.direction, vault=ctx.vault)
+        probe = TransformContext(
+            principal=ctx.principal,
+            spec=ctx.spec,
+            kind=ctx.kind,
+            direction=ctx.direction,
+            vault=ctx.vault,
+        )
         out = self.redactor.apply(value, probe)
         found = sorted(probe.report.get("redacted", {}))
         if not found:

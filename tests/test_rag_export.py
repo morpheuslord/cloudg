@@ -236,6 +236,44 @@ class TestRelationGroupChunks:
         group_names = {c.metadata.get("relation_group") for c in chunks}
         assert "NETWORK" in group_names
 
+    def test_asset_level_relations_match_the_ontology(self):
+        """KMS encryption and vpc_id containment reach RAG as they reach the ontology."""
+        from cloudg.graph.ontology import CMP, CMR, CloudOntology
+
+        assets = [
+            *_make_assets(),
+            CloudAsset(
+                id="kms-1",
+                name="orders-key",
+                arn="arn:aws:kms:us-east-1:111:key/1234",
+                asset_type=AssetType.KMS_KEY,
+                provider=CloudProvider.AWS,
+                metadata={"aliases": ["alias/orders"]},
+            ),
+            CloudAsset(
+                id="orders-db",
+                name="orders-db",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
+                metadata={"storage_encrypted": True, "kms_key_id": "alias/orders"},
+            ),
+        ]
+        assets_by_id = {a.id: a for a in assets}
+        chunks = RAGExporter().export_relation_chunks(_make_edges(), assets_by_id)
+        by_group = {c.metadata["relation_group"]: c for c in chunks}
+
+        security = by_group["SECURITY"]
+        assert {"predicate": "ENCRYPTED_BY_KMS", "object": "orders-key", "evidence": ""} in (
+            security.relations
+        )
+        assert "orders-db → ENCRYPTED_BY_KMS → orders-key" in security.content
+        containment = by_group["CONTAINMENT"]
+        assert "prod-vpc → CONTAINS → web-server" in containment.content
+
+        onto = CloudOntology().build(assets, _make_edges())
+        assert (CMR["orders-db"], CMP["ENCRYPTED_BY_KMS"], CMR["kms-1"]) in onto
+        assert (CMR["vpc-1"], CMP["CONTAINS"], CMR["ec2-1"]) in onto
+
 
 # ── Combined Export Tests ──
 

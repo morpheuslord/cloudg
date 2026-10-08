@@ -43,15 +43,19 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import time
 from collections import deque
-from typing import Any, Awaitable, Callable, Hashable, Iterable, TypeVar
+from collections.abc import Hashable
+from dataclasses import dataclass, fields, replace
+from typing import Any, Awaitable, Callable, Iterable, Mapping, TypeVar
 
 __all__ = [
     "CallerQuotaExceeded",
     "CooldownActive",
+    "GuardSettings",
     "LiveOperationBusy",
     "LiveOperationGuard",
     "LiveOperationRejected",
@@ -122,8 +126,30 @@ def _provider_of(scope: str) -> str:
     return scope
 
 
+@dataclass(frozen=True)
+class GuardSettings:
+    """Limits of a :class:`LiveOperationGuard` (see its docstring for each field)."""
+
+    cooldown_seconds: float = 120.0
+    max_concurrent_per_scope: int = 1
+    max_concurrent_total: int = 2
+    caller_max_operations: int = 0
+    caller_window_seconds: float = 3600.0
+    cooldown_after_failure: bool = True
+    provider_cooldowns: Mapping[str, float] | None = None
+
+
+_SETTING_NAMES = frozenset(f.name for f in fields(GuardSettings))
+
+#: Monotonic clock
+Clock = Callable[[], float]
+
+
 class LiveOperationGuard:
     """Single-flight, concurrency caps, cooldowns and caller quotas for live operations.
+
+    Settings are passed as keyword arguments (or as one :class:`GuardSettings`,
+    which the keyword arguments then override):
 
     Args:
         cooldown_seconds: Minimum time between two live operations on a scope.
@@ -140,23 +166,26 @@ class LiveOperationGuard:
 
     def __init__(
         self,
+        settings: GuardSettings | None = None,
         *,
-        cooldown_seconds: float = 120.0,
-        max_concurrent_per_scope: int = 1,
-        max_concurrent_total: int = 2,
-        caller_max_operations: int = 0,
-        caller_window_seconds: float = 3600.0,
-        cooldown_after_failure: bool = True,
-        provider_cooldowns: dict[str, float] | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = time.monotonic,
+        **overrides: Any,
     ) -> None:
-        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
-        self.max_concurrent_per_scope = max(1, int(max_concurrent_per_scope))
-        self.max_concurrent_total = max(1, int(max_concurrent_total))
-        self.caller_max_operations = max(0, int(caller_max_operations))
-        self.caller_window_seconds = max(1.0, float(caller_window_seconds))
-        self.cooldown_after_failure = cooldown_after_failure
-        self.provider_cooldowns = {k: float(v) for k, v in (provider_cooldowns or {}).items()}
+        unknown = set(overrides) - _SETTING_NAMES
+        if unknown:
+            raise TypeError(
+                "LiveOperationGuard() got unexpected keyword arguments: "
+                + ", ".join(sorted(unknown))
+            )
+        cfg = replace(settings or GuardSettings(), **overrides)
+        self.settings = cfg
+        self.cooldown_seconds = max(0.0, float(cfg.cooldown_seconds))
+        self.max_concurrent_per_scope = max(1, int(cfg.max_concurrent_per_scope))
+        self.max_concurrent_total = max(1, int(cfg.max_concurrent_total))
+        self.caller_max_operations = max(0, int(cfg.caller_max_operations))
+        self.caller_window_seconds = max(1.0, float(cfg.caller_window_seconds))
+        self.cooldown_after_failure = cfg.cooldown_after_failure
+        self.provider_cooldowns = {k: float(v) for k, v in (cfg.provider_cooldowns or {}).items()}
         self._clock = clock
         self._inflight: dict[Hashable, asyncio.Task[Any]] = {}
         self._inflight_scopes: dict[Hashable, list[str]] = {}
@@ -164,8 +193,9 @@ class LiveOperationGuard:
         self._active_total = 0
         self._last_done: dict[str, float] = {}
         self._callers: dict[str, deque[float]] = {}
-        self._cond: asyncio.Condition | None = None
-        self._cond_loop: Any = None
+        # Set (and replaced) whenever a slot frees up; waiters re-check capacity
+        self._freed: asyncio.Event | None = None
+        self._freed_loop: Any = None
         self.joined = 0
         self.started = 0
 
@@ -300,11 +330,22 @@ class LiveOperationGuard:
                     caller=caller,
                 )
 
-    def _condition(self) -> asyncio.Condition:
+    def _freed_event(self) -> asyncio.Event:
         loop = asyncio.get_running_loop()
-        if self._cond is None or self._cond_loop is not loop:
-            self._cond, self._cond_loop = asyncio.Condition(), loop
-        return self._cond
+        if self._freed is None or self._freed_loop is not loop:
+            self._freed, self._freed_loop = asyncio.Event(), loop
+        return self._freed
+
+    def _wake_waiters(self) -> None:
+        event, self._freed = self._freed, None
+        if event is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._freed_loop:
+            event.set()
 
     def _has_capacity(self, scopes: list[str]) -> bool:
         return self._active_total < self.max_concurrent_total and all(
@@ -347,13 +388,8 @@ class LiveOperationGuard:
         scope_list = [str(s) for s in scopes]
         self._admit(scope_list, caller, bypass_cooldown, check_busy=not wait)
         if wait and not self._has_capacity(scope_list):
-            cond = self._condition()
-            async with cond:
-                while not self._has_capacity(scope_list):
-                    existing = self._inflight.get(key)
-                    if existing is not None:
-                        break
-                    await cond.wait()
+            while not self._has_capacity(scope_list) and key not in self._inflight:
+                await self._freed_event().wait()
             existing = self._inflight.get(key)
             if existing is not None:
                 self.joined += 1
@@ -367,34 +403,30 @@ class LiveOperationGuard:
             self._active[s] = self._active.get(s, 0) + 1
         self._active_total += 1
         self.started += 1
-        task = asyncio.ensure_future(self._execute(key, factory, scope_list))
-        task.add_done_callback(_consume_exception)
+        task = asyncio.ensure_future(_await(factory))
+        # The release runs as a done callback, so the slots are freed even
+        # when the task is cancelled before its first step (loop shutdown)
+        task.add_done_callback(functools.partial(self._release, key, scope_list))
         self._inflight[key] = task
         self._inflight_scopes[key] = scope_list
         return await asyncio.shield(task)
 
-    async def _execute(
-        self, key: Hashable, factory: Callable[[], Awaitable[T]], scopes: list[str]
-    ) -> T:
-        ok = False
-        try:
-            result = await factory()
-            ok = True
-            return result
-        finally:
-            for s in scopes:
-                self._active[s] = max(0, self._active.get(s, 0) - 1)
-                if ok or self.cooldown_after_failure:
-                    self._last_done[s] = self._clock()
-            self._active_total = max(0, self._active_total - 1)
-            self._inflight.pop(key, None)
+    def _release(self, key: Hashable, scopes: list[str], task: "asyncio.Task[Any]") -> None:
+        """Free the slots of a finished operation and start its cooldown."""
+        # Also marks the exception as retrieved: every caller may have gone
+        ok = not task.cancelled() and task.exception() is None
+        now = self._clock()
+        for s in scopes:
+            self._active[s] = max(0, self._active.get(s, 0) - 1)
+            if ok or self.cooldown_after_failure:
+                self._last_done[s] = now
+        self._active_total = max(0, self._active_total - 1)
+        if self._inflight.get(key) is task:
+            del self._inflight[key]
             self._inflight_scopes.pop(key, None)
-            if self._cond is not None and self._cond_loop is asyncio.get_running_loop():
-                async with self._cond:
-                    self._cond.notify_all()
+        self._wake_waiters()
 
 
-def _consume_exception(task: "asyncio.Task[Any]") -> None:
-    """Mark a shared task's exception as retrieved (callers may all have gone)."""
-    if not task.cancelled():
-        task.exception()
+async def _await(factory: Callable[[], Awaitable[T]]) -> T:
+    """Run ``factory()`` inside the task, so a factory that raises does so there."""
+    return await factory()

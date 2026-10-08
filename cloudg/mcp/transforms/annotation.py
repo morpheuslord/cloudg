@@ -44,17 +44,35 @@ from cloudg.mcp.transforms.substitution import FENCE_CLOSE, FENCE_OPEN
 # ---------------------------------------------------------------------------
 
 _INVISIBLE_RANGES: tuple[tuple[int, int], ...] = (
-    (0x00, 0x08), (0x0B, 0x0C), (0x0E, 0x1F), (0x7F, 0x9F),
-    (0xAD, 0xAD), (0x34F, 0x34F), (0x61C, 0x61C), (0x115F, 0x1160), (0x17B4, 0x17B5),
-    (0x180B, 0x180F), (0x200B, 0x200F), (0x2028, 0x202E), (0x2060, 0x206F),
-    (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0),
-    (0xFFF9, 0xFFFB), (0x1D173, 0x1D17A), (0xE0000, 0xE007F), (0xE0100, 0xE01EF),
+    (0x00, 0x08),
+    (0x0B, 0x0C),
+    (0x0E, 0x1F),
+    (0x7F, 0x9F),
+    (0xAD, 0xAD),
+    (0x34F, 0x34F),
+    (0x61C, 0x61C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x2028, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF9, 0xFFFB),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE007F),
+    (0xE0100, 0xE01EF),
 )
 _STRIP_TABLE = {cp: None for lo, hi in _INVISIBLE_RANGES for cp in range(lo, hi + 1)}
 _INVISIBLE_RE = re.compile(
-    "[" + "".join(
+    "["
+    + "".join(
         f"\\U{lo:08x}" if lo == hi else f"\\U{lo:08x}-\\U{hi:08x}" for lo, hi in _INVISIBLE_RANGES
-    ) + "]"
+    )
+    + "]"
 )
 
 
@@ -95,9 +113,23 @@ INJECTION_PATTERNS: tuple[str, ...] = (
 )
 
 DEFAULT_FREE_TEXT_KEYS = (
-    "name", "*_name", "display*", "title", "description", "*description*", "comment*",
-    "message", "note*", "summary", "evidence", "remediation", "label*", "value", "tags",
-    "alias*", "subject",
+    "name",
+    "*_name",
+    "display*",
+    "title",
+    "description",
+    "*description*",
+    "comment*",
+    "message",
+    "note*",
+    "summary",
+    "evidence",
+    "remediation",
+    "label*",
+    "value",
+    "tags",
+    "alias*",
+    "subject",
 )
 
 #: Report notice explaining fenced content.
@@ -222,8 +254,9 @@ class UntrustedTextGuard:
                         if n:
                             stats["stripped_chars"] += n
                             stats["sanitized_fields"] += 1
-                    out[nk] = walk(x, k if isinstance(k, str) else key,
-                                   f"{path}.{k}" if path else str(k))
+                    out[nk] = walk(
+                        x, k if isinstance(k, str) else key, f"{path}.{k}" if path else str(k)
+                    )
                 return out
             if isinstance(v, (list, tuple)):
                 return [walk(x, key, f"{path}[{i}]") for i, x in enumerate(v)]
@@ -318,8 +351,16 @@ class Annotator:
             done = {
                 k: sum(v.values()) if isinstance(v, dict) else v
                 for k, v in ctx.report.items()
-                if k in ("redacted", "masked", "hashed", "pseudonymized", "generalized",
-                         "dropped", "aliased")
+                if k
+                in (
+                    "redacted",
+                    "masked",
+                    "hashed",
+                    "pseudonymized",
+                    "generalized",
+                    "dropped",
+                    "aliased",
+                )
             }
             if done:
                 ann["transformed"] = done
@@ -344,23 +385,30 @@ class Annotator:
     def _classify(sens: str | None, report: dict[str, Any]) -> dict[str, Any]:
         level = sens or "confidential"
         contains = sorted(
-            {e for sec in ("redacted", "masked", "hashed", "dropped")
-             for e in (report.get(sec) or {})}
+            {
+                e
+                for sec in ("redacted", "masked", "hashed", "dropped")
+                for e in (report.get(sec) or {})
+            }
         )
         out: dict[str, Any] = {"sensitivity": level}
         if contains:
             out["withheld_entities"] = contains
         if report.get("pseudonymized"):
             out["pseudonymized_entities"] = sorted(report["pseudonymized"])
-            out["note"] = ("Identifiers are pseudonyms; pass them back unchanged and tools "
-                           "resolve the real resources.")
+            out["note"] = (
+                "Identifiers are pseudonyms; pass them back unchanged and tools "
+                "resolve the real resources."
+            )
         return out
 
     def _findings(self, value: Any, counts: dict[str, int], label: bool) -> Any:
         if isinstance(value, dict):
             sev = value.get("severity")
-            is_finding = isinstance(sev, str) and sev.lower() in _SEVERITIES and (
-                "title" in value or "resource_id" in value
+            is_finding = (
+                isinstance(sev, str)
+                and sev.lower() in _SEVERITIES
+                and ("title" in value or "resource_id" in value)
             )
             if not label and not is_finding:
                 # fast path: no mutation needed, only counting
@@ -368,8 +416,10 @@ class Annotator:
                     if isinstance(v, (dict, list)):
                         self._findings(v, counts, label)
                 return value
-            out = {k: self._findings(v, counts, label) if isinstance(v, (dict, list)) else v
-                   for k, v in value.items()}
+            out = {
+                k: self._findings(v, counts, label) if isinstance(v, (dict, list)) else v
+                for k, v in value.items()
+            }
             if is_finding:
                 s = sev.lower()  # type: ignore[union-attr]
                 counts[s] = counts.get(s, 0) + 1

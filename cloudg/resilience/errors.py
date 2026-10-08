@@ -392,6 +392,34 @@ def retry_after(exc: BaseException, now: float | None = None) -> float | None:
 # ---------------------------------------------------------------------------
 
 
+def _classify_code(code: str, message: str | None, exc: BaseException) -> ErrorKind | None:
+    """Kind from a provider error code (None: the code alone does not say)."""
+    if code in AWS_THROTTLE_CODES or code in _AZURE_THROTTLE_CODES:
+        return ErrorKind.THROTTLED
+    if code in _AZURE_TRANSIENT_429_CODES:
+        return ErrorKind.TRANSIENT
+    if code == "LimitExceededException":
+        text = f"{message or ''} {exc}"
+        return ErrorKind.THROTTLED if _LIMIT_EXCEEDED_RATE_RE.search(text) else ErrorKind.FATAL
+    if code in AWS_TRANSIENT_CODES:
+        return ErrorKind.TRANSIENT
+    return None
+
+
+def _classify_shape(exc: BaseException, status: int | None) -> ErrorKind | None:
+    """Kind from the exception's class hierarchy and HTTP status."""
+    names = _mro_names(exc)
+    if names & _GCP_THROTTLE_CLASSES:
+        return ErrorKind.THROTTLED
+    if status in _THROTTLE_STATUSES or status in _OVERLOAD_STATUSES:
+        return ErrorKind.THROTTLED
+    if names & _GCP_TRANSIENT_CLASSES or status in _TRANSIENT_STATUSES:
+        return ErrorKind.TRANSIENT
+    if names & _TRANSIENT_CLASSES or isinstance(exc, (ConnectionError, TimeoutError)):
+        return ErrorKind.TRANSIENT
+    return None
+
+
 def _classify_one(exc: BaseException) -> ErrorKind | None:
     if isinstance(exc, (CircuitOpenError, RetryBudgetExhaustedError)):
         return ErrorKind.THROTTLED
@@ -401,34 +429,14 @@ def _classify_one(exc: BaseException) -> ErrorKind | None:
     code, message, _ = _aws_error(exc)
     code = code or error_code(exc)
     status = status_code(exc)
-    if code:
-        if code in AWS_THROTTLE_CODES or code in _AZURE_THROTTLE_CODES:
-            return ErrorKind.THROTTLED
-        if code in _AZURE_TRANSIENT_429_CODES:
-            return ErrorKind.TRANSIENT
-        if code == "LimitExceededException":
-            text = f"{message or ''} {exc}"
-            return ErrorKind.THROTTLED if _LIMIT_EXCEEDED_RATE_RE.search(text) else ErrorKind.FATAL
-        if code in AWS_TRANSIENT_CODES:
-            return ErrorKind.TRANSIENT
-
-    names = _mro_names(exc)
-    if names & _GCP_THROTTLE_CLASSES:
-        return ErrorKind.THROTTLED
-    if status in _THROTTLE_STATUSES or status in _OVERLOAD_STATUSES:
-        return ErrorKind.THROTTLED
-    if names & _GCP_TRANSIENT_CLASSES or status in _TRANSIENT_STATUSES:
-        return ErrorKind.TRANSIENT
-    if names & _TRANSIENT_CLASSES:
-        return ErrorKind.TRANSIENT
-    if isinstance(exc, (ConnectionError, TimeoutError)):
-        return ErrorKind.TRANSIENT
-    if status is not None or code:
+    kind = _classify_code(code, message, exc) if code else None
+    if kind is None:
+        kind = _classify_shape(exc, status)
+    if kind is None and (status is not None or code):
         # A real provider answer that is neither throttling nor transient
-        if _THROTTLE_TEXT_RE.search(f"{message or ''} {exc}"):
-            return ErrorKind.THROTTLED
-        return ErrorKind.FATAL
-    return None
+        throttled = _THROTTLE_TEXT_RE.search(f"{message or ''} {exc}")
+        kind = ErrorKind.THROTTLED if throttled else ErrorKind.FATAL
+    return kind
 
 
 def classify(exc: BaseException) -> ErrorKind:

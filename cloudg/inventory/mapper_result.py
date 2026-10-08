@@ -94,6 +94,21 @@ def _write_json(path: Path, data: Any) -> Path:
     return path
 
 
+def _asset_flags(assets: list[CloudAsset], linked_ids: set[str]) -> dict[str, int]:
+    """Counts of unlinked, internet-exposed, external-account and security-gap assets."""
+    flags = {"unlinked": 0, "exposed": 0, "external": 0, "gaps": 0}
+    for a in assets:
+        if a.id not in linked_ids and a.asset_type not in _HIERARCHY_TYPES:
+            flags["unlinked"] += 1
+        if a.is_internet_exposed:
+            flags["exposed"] += 1
+        if a.asset_type == AssetType.CLOUD_ACCOUNT and a.metadata.get("external"):
+            flags["external"] += 1
+        if a.metadata.get("security_service") and a.metadata.get("enabled") is False:
+            flags["gaps"] += 1
+    return flags
+
+
 @dataclass
 class InventoryResult:
     """Complete inventory map — assets, interconnections, and summary."""
@@ -115,17 +130,7 @@ class InventoryResult:
     def summary(self) -> dict[str, Any]:
         by_type, by_region, by_account, by_service = _asset_counts(self.assets)
         edge_types, relationships, linked_ids, cross_account = _edge_stats(self.assets, self.edges)
-        orphans = sum(
-            1
-            for a in self.assets
-            if a.id not in linked_ids and a.asset_type not in _HIERARCHY_TYPES
-        )
-        security_gaps = sum(
-            1
-            for a in self.assets
-            if a.metadata.get("security_service") and a.metadata.get("enabled") is False
-        )
-
+        flags = _asset_flags(self.assets, linked_ids)
         out = {
             "total_assets": len(self.assets),
             "total_edges": len(self.edges),
@@ -136,16 +141,12 @@ class InventoryResult:
             "assets_by_account": by_account,
             "edges_by_type": edge_types,
             "edges_by_relationship": _by_count(relationships),
-            "unlinked_assets": orphans,
-            "internet_exposed": sum(1 for a in self.assets if a.is_internet_exposed),
+            "unlinked_assets": flags["unlinked"],
+            "internet_exposed": flags["exposed"],
             "accounts": len([k for k in by_account if k != "unknown"]),
             "cross_account_edges": cross_account,
-            "external_accounts": sum(
-                1
-                for a in self.assets
-                if a.asset_type == AssetType.CLOUD_ACCOUNT and a.metadata.get("external")
-            ),
-            "security_service_gaps": security_gaps,
+            "external_accounts": flags["external"],
+            "security_service_gaps": flags["gaps"],
             "unresolved_references": len(self.unresolved_references),
         }
         if self.organization:

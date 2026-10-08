@@ -184,12 +184,19 @@ class AliasMap:
         if not self.pseudonym_aware or vault is None:
             return self
         ns = vault.namespace_for(ctx.principal)
-        extra = {tok: alias for real, alias in self.aliases.items()
-                 for tok in vault.tokens_for(real, namespace=ns)}
+        extra = {
+            tok: alias
+            for real, alias in self.aliases.items()
+            for tok in vault.tokens_for(real, namespace=ns)
+        }
         if not extra:
             return self
-        return AliasMap({**self.aliases, **extra}, substring=self.substring,
-                        case_sensitive=self.case_sensitive, pseudonym_aware=False)
+        return AliasMap(
+            {**self.aliases, **extra},
+            substring=self.substring,
+            case_sensitive=self.case_sensitive,
+            pseudonym_aware=False,
+        )
 
     def apply(self, value: Any, ctx: TransformContext) -> Any:
         if not self.aliases:
@@ -238,8 +245,12 @@ class RegexReplace:
                 flags |= {"i": re.I, "m": re.M, "s": re.S, "x": re.X}.get(f.lower(), 0)
             repl = str(r.get("replace", r.get("replacement", "")))
             self.rules.append(
-                (re.compile(str(r["pattern"]), flags), repl, _globs(r.get("keys")),
-                 int(r.get("count", 0)))
+                (
+                    re.compile(str(r["pattern"]), flags),
+                    repl,
+                    _globs(r.get("keys")),
+                    int(r.get("count", 0)),
+                )
             )
 
     def apply(self, value: Any, ctx: TransformContext) -> Any:
@@ -365,8 +376,9 @@ class Substitution:
         rename: dict[str, str] | None = None,
         templates: Iterable[dict[str, Any]] = (),
     ) -> None:
-        self.alias_map = AliasMap(aliases, files=alias_files, substring=substring,
-                                  case_sensitive=case_sensitive)
+        self.alias_map = AliasMap(
+            aliases, files=alias_files, substring=substring, case_sensitive=case_sensitive
+        )
         self.steps: list[Any] = [
             self.alias_map,
             RegexReplace(regex),
@@ -456,8 +468,11 @@ class Depseudonymizer:
                 return self._reverse(v, vault, ns, counter)
             if isinstance(v, dict):
                 return {
-                    (self._reverse(k, vault, ns, counter) if self.keys and isinstance(k, str)
-                     else k): walk(x)
+                    (
+                        self._reverse(k, vault, ns, counter)
+                        if self.keys and isinstance(k, str)
+                        else k
+                    ): walk(x)
                     for k, x in v.items()
                 }
             if isinstance(v, (list, tuple)):

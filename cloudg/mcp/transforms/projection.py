@@ -172,8 +172,9 @@ class Projection:
                     sec[k] = v
         return out
 
-    def _run(self, value: Any, allow: Any, limits: tuple[Any, Any, Any], stats: dict[str, int]
-             ) -> Any:
+    def _run(
+        self, value: Any, allow: Any, limits: tuple[Any, Any, Any], stats: dict[str, int]
+    ) -> Any:
         inc = self.include.initial if self.include else None
         exc = self.exclude.initial if self.exclude else None
         out = self._walk(value, inc, exc, 0, allow, limits, stats)
@@ -302,8 +303,11 @@ class Projection:
         first = size
         if isinstance(original, str):
             out = original[: max(0, budget - 40)] + f"… [+{len(original) - budget + 40} chars]"
-            stats["budget"] = {"max_chars": budget, "original_chars": first,  # type: ignore
-                               "final_chars": len(out)}
+            stats["budget"] = {
+                "max_chars": budget,
+                "original_chars": first,  # type: ignore
+                "final_chars": len(out),
+            }
             return out
         depth, max_list, max_string = limits
         longest = _longest_list(original)

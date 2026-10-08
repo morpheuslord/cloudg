@@ -97,20 +97,39 @@ _SERVICE_LABELS = frozenset(
 _CLOUD_SUFFIXES = tuple(
     sorted(
         (
-            "amazonaws.com", "amazonaws.com.cn", "cloudfront.net", "awsapps.com",
-            "azurewebsites.net", "cloudapp.azure.com", "cloudapp.net", "windows.net",
-            "azure.com", "azurecr.io", "azure-api.net", "azureedge.net",
-            "googleapis.com", "appspot.com", "run.app", "cloudfunctions.net",
-            "internal", "compute.internal", "ec2.internal", "gserviceaccount.com",
+            "amazonaws.com",
+            "amazonaws.com.cn",
+            "cloudfront.net",
+            "awsapps.com",
+            "azurewebsites.net",
+            "cloudapp.azure.com",
+            "cloudapp.net",
+            "windows.net",
+            "azure.com",
+            "azurecr.io",
+            "azure-api.net",
+            "azureedge.net",
+            "googleapis.com",
+            "appspot.com",
+            "run.app",
+            "cloudfunctions.net",
+            "internal",
+            "compute.internal",
+            "ec2.internal",
+            "gserviceaccount.com",
         ),
         key=len,
         reverse=True,
     )
 )
-_GSA_RE = re.compile(r"^(?P<local>[^@]+)@(?P<proj>[a-z][a-z0-9\-]{4,28}[a-z0-9])"
-                     r"\.iam\.gserviceaccount\.com$")
-_GSA_NUM_RE = re.compile(r"^(?P<prefix>service-|)(?P<num>\d{6,20})(?P<rest>-compute|)"
-                         r"@(?P<domain>[a-z0-9.\-]*gserviceaccount\.com)$")
+_GSA_RE = re.compile(
+    r"^(?P<local>[^@]+)@(?P<proj>[a-z][a-z0-9\-]{4,28}[a-z0-9])"
+    r"\.iam\.gserviceaccount\.com$"
+)
+_GSA_NUM_RE = re.compile(
+    r"^(?P<prefix>service-|)(?P<num>\d{6,20})(?P<rest>-compute|)"
+    r"@(?P<domain>[a-z0-9.\-]*gserviceaccount\.com)$"
+)
 
 #: Shapes of tokens the vault can issue; used to find tokens in free text.
 _SHAPE_RE = re.compile(
@@ -250,8 +269,9 @@ class TokenVault:
     # Tokenize / detokenize
     # ------------------------------------------------------------------
 
-    def tokenize(self, value: str, entity_type: str = "generic", *, namespace: str | None = None
-                 ) -> str:
+    def tokenize(
+        self, value: str, entity_type: str = "generic", *, namespace: str | None = None
+    ) -> str:
         """Return the stable token for ``value`` (creating it if needed).
         Values that should never be pseudonymised (``0.0.0.0/0``,
         loopback, ``*``) come back unchanged."""
@@ -273,8 +293,10 @@ class TokenVault:
             table = self._rev.setdefault(ns, {})
             tok = value
             for attempt in range(64):
-                cand = fmt(value, ns, attempt) if attempt < 48 else self._fmt_generic(
-                    value, ns, attempt, entity_type
+                cand = (
+                    fmt(value, ns, attempt)
+                    if attempt < 48
+                    else self._fmt_generic(value, ns, attempt, entity_type)
                 )
                 if cand == value:
                     return value  # not pseudonymised (special address, wildcard...)
@@ -294,11 +316,15 @@ class TokenVault:
         """Every token already issued for ``value`` (any entity type)."""
         ns = namespace or GLOBAL_NAMESPACE
         with self._lock:
-            return [t for e in self._entities
-                    if (t := self._fwd.get((ns, e, value))) is not None and t != value]
+            return [
+                t
+                for e in self._entities
+                if (t := self._fwd.get((ns, e, value))) is not None and t != value
+            ]
 
-    def lookup(self, value: str, entity_type: str = "generic", *, namespace: str | None = None
-               ) -> str | None:
+    def lookup(
+        self, value: str, entity_type: str = "generic", *, namespace: str | None = None
+    ) -> str | None:
         """Existing token for ``value`` or ``None`` (never creates one)."""
         with self._lock:
             return self._fwd.get((namespace or GLOBAL_NAMESPACE, entity_type, str(value)))
@@ -322,8 +348,12 @@ class TokenVault:
             e = self._rev.get(namespace or GLOBAL_NAMESPACE, {}).get(token)
             if e is None or self._expired(e, time.time()):
                 return None
-            return {"value": e.value, "entity_type": e.entity, "namespace": e.namespace,
-                    "created": e.created}
+            return {
+                "value": e.value,
+                "entity_type": e.entity,
+                "namespace": e.namespace,
+                "created": e.created,
+            }
 
     def is_token(self, value: str, *, namespace: str | None = None) -> bool:
         with self._lock:
@@ -333,8 +363,7 @@ class TokenVault:
         """Replace every known token inside ``text`` with its real value."""
         return self.detokenize_text_count(text, namespace=namespace)[0]
 
-    def detokenize_text_count(self, text: str, *, namespace: str | None = None
-                              ) -> tuple[str, int]:
+    def detokenize_text_count(self, text: str, *, namespace: str | None = None) -> tuple[str, int]:
         ns = namespace or GLOBAL_NAMESPACE
         with self._lock:
             table = self._rev.get(ns)
@@ -548,14 +577,13 @@ class TokenVault:
     def _xor_stream(self, data: bytes, nonce: bytes) -> bytes:
         blocks = []
         for i in range((len(data) + 31) // 32):
-            blocks.append(hmac.new(self._k_enc, nonce + i.to_bytes(8, "big"),
-                                   hashlib.sha256).digest())
+            blocks.append(
+                hmac.new(self._k_enc, nonce + i.to_bytes(8, "big"), hashlib.sha256).digest()
+            )
         ks = b"".join(blocks)[: len(data)]
         if not data:
             return b""
-        return (int.from_bytes(data, "big") ^ int.from_bytes(ks, "big")).to_bytes(
-            len(data), "big"
-        )
+        return (int.from_bytes(data, "big") ^ int.from_bytes(ks, "big")).to_bytes(len(data), "big")
 
     # ------------------------------------------------------------------
     # Token formats
@@ -598,8 +626,16 @@ class TokenVault:
             "aws_ou_id": self._fmt_org_id,
             "aws_root_id": self._fmt_org_id,
         }
-        for name in ("ip_address", "private_ip", "public_ip", "special_ip", "cidr",
-                     "private_cidr", "public_cidr", "special_cidr"):
+        for name in (
+            "ip_address",
+            "private_ip",
+            "public_ip",
+            "special_ip",
+            "cidr",
+            "private_cidr",
+            "public_cidr",
+            "special_cidr",
+        ):
             f[name] = ip
         return f
 
@@ -689,7 +725,7 @@ class TokenVault:
                 changed = True
         if not changed:
             return value
-        return ".".join(out) + "." + host[len(host) - len(suffix):]
+        return ".".join(out) + "." + host[len(host) - len(suffix) :]
 
     def _fmt_arn(self, value: str, ns: str, attempt: int) -> str:
         parts = value.split(":", 5)
@@ -710,8 +746,11 @@ class TokenVault:
                 out.append(seg)
                 continue
             idx = i // 2
-            if (idx == 0 and first_kept) or seg in ("", "*") or seg.startswith("$") or (
-                seg.isdigit() and len(seg) <= 4 and idx > 0
+            if (
+                (idx == 0 and first_kept)
+                or seg in ("", "*")
+                or seg.startswith("$")
+                or (seg.isdigit() and len(seg) <= 4 and idx > 0)
             ):
                 out.append(seg)
             else:
@@ -770,8 +809,9 @@ class TokenVault:
             if coll in ("zones", "regions", "locations") or seg == "-":
                 out.append(seg)
             elif coll == "projects":
-                out.append(self._sub(seg, "gcp_project_number" if seg.isdigit()
-                                     else "gcp_project_id", ns))
+                out.append(
+                    self._sub(seg, "gcp_project_number" if seg.isdigit() else "gcp_project_id", ns)
+                )
             elif coll in ("organizations", "folders", "billingaccounts") and seg.isdigit():
                 out.append(self._sub(seg, "number", ns))
             else:
@@ -822,7 +862,7 @@ class TokenVault:
         parts, pos = [], 0
         for part in rest.split("-"):
             n = max(len(part), 4)
-            parts.append(h[pos:pos + n])
+            parts.append(h[pos : pos + n])
             pos += n
         return f"{prefix}-{'-'.join(parts)}"
 
@@ -845,13 +885,19 @@ class TokenVault:
         from cloudg.mcp.transforms.redaction import DEFAULT_TAG_KEY_ALLOWLIST
 
         prefix = "cmr:" if value.startswith("cmr:") else "https://cloudg.io/resource/"
-        local = value[len(prefix):]
+        local = value[len(prefix) :]
         if not local or local.startswith(("finding_", "compliance_")):
             return value
         if local.startswith("tag_"):
             rest = local[4:]
-            key = next((k for k in sorted(DEFAULT_TAG_KEY_ALLOWLIST, key=len, reverse=True)
-                        if rest.lower().startswith(k + "_")), None)
+            key = next(
+                (
+                    k
+                    for k in sorted(DEFAULT_TAG_KEY_ALLOWLIST, key=len, reverse=True)
+                    if rest.lower().startswith(k + "_")
+                ),
+                None,
+            )
             if key is not None:
                 return value
             tkey, sep, tval = rest.partition("_")
@@ -904,9 +950,12 @@ class TokenVault:
             ck = (ns, block, i, prefix)
             flip = cache.get(ck)
             if flip is None:
-                flip = hashlib.blake2b(
-                    f"{ns}|{block}|{i}|{prefix}".encode(), key=self._k_bit, digest_size=1
-                ).digest()[0] & 1
+                flip = (
+                    hashlib.blake2b(
+                        f"{ns}|{block}|{i}|{prefix}".encode(), key=self._k_bit, digest_size=1
+                    ).digest()[0]
+                    & 1
+                )
                 cache[ck] = flip
             out = (out << 1) | (((host >> (shift - 1)) & 1) ^ flip)
         return out
@@ -952,8 +1001,9 @@ class TokenVault:
                 else:
                     return value
             hbits = bits - pool.prefixlen
-            rnd = int.from_bytes(self._digest(ns, "ip", str(addr) if is_net else value,
-                                              attempt), "big")
+            rnd = int.from_bytes(
+                self._digest(ns, "ip", str(addr) if is_net else value, attempt), "big"
+            )
             fake = int(pool.network_address) | (rnd & ((1 << hbits) - 1))
         if is_net:
             netmask = ((1 << bits) - 1) ^ ((1 << (bits - plen)) - 1)

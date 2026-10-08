@@ -34,10 +34,10 @@ def _build(edges: list[NetworkEdge]):
     return GraphBuilder().build([], edges)
 
 
-def _open_ports(edges: list[NetworkEdge]) -> dict[str, str]:
-    """Sensitive-port finding titles by finding id."""
-    findings = ReachabilityAnalyzer(_build(edges))._sensitive_port_findings()
-    return {f.id: f.title for f in findings}
+def _open_ports(edges: list[NetworkEdge], assets: list[CloudAsset] | None = None) -> dict[str, str]:
+    """Sensitive-port finding titles by finding id, from generate_findings()."""
+    findings = ReachabilityAnalyzer(GraphBuilder().build(assets or [], edges)).generate_findings()
+    return {f.id: f.title for f in findings if f.title.startswith("Security group allows")}
 
 
 def _ssh_id(source: str = INTERNET, target: str = SG) -> str:
@@ -238,6 +238,10 @@ class TestCollectorEdges:
         data = GraphBuilder().build([nsg], edges).edges["Internet", "nsg-1"]
         assert data["port_range"] == "3389,80,443"
         assert data["description"] == "NSG rule rdp; NSG rule web"
+        # the Internet service tag is the internet for the port findings too
+        assert list(_open_ports(edges, [nsg]).values()) == [
+            "Security group allows RDP (port 3389) from Internet"
+        ]
 
 
 def test_exports_carry_the_merged_edge(tmp_path):

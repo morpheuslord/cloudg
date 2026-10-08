@@ -257,8 +257,23 @@ def looks_like_secret(text: str, min_entropy: float = 4.0) -> bool:
 
 
 _NOT_SECRET_VALUES = {
-    "null", "none", "true", "false", "undefined", "redacted", "****", "******", "xxx",
-    "changeme?", "<redacted>", "n/a", "na", "empty", "string", "required", "optional",
+    "null",
+    "none",
+    "true",
+    "false",
+    "undefined",
+    "redacted",
+    "****",
+    "******",
+    "xxx",
+    "changeme?",
+    "<redacted>",
+    "n/a",
+    "na",
+    "empty",
+    "string",
+    "required",
+    "optional",
 }
 
 
@@ -288,202 +303,327 @@ _URL_STOP = r"[^\s\"'<>,;)\]}]"
 
 BUILTIN_DETECTORS: tuple[Detector, ...] = (
     Detector(
-        "cloudg_uri", "cloudg_uri",
+        "cloudg_uri",
+        "cloudg_uri",
         r"cloudg://(?:assets|datasets)/[^\s\"'<>,;)\]}]+",
-        category="identifier", confidence=0.99, min_length=16,
+        category="identifier",
+        confidence=0.99,
+        min_length=16,
         description="cloudg resource URIs naming an asset or dataset",
     ),
     # -- secrets ---------------------------------------------------------
     Detector(
-        "private_key", "private_key",
+        "private_key",
+        "private_key",
         r"-----BEGIN[ A-Z0-9]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?"
         r"(?:-----END[ A-Z0-9]*PRIVATE KEY(?: BLOCK)?-----|\Z)",
-        category="secret", confidence=1.0, min_length=30,
+        category="secret",
+        confidence=1.0,
+        min_length=30,
         description="PEM / OpenSSH / PGP private key blocks",
     ),
     Detector(
-        "jwt", "jwt",
+        "jwt",
+        "jwt",
         r"\beyJ[A-Za-z0-9_\-]{5,}\.eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]*",
-        category="secret", confidence=0.95, min_length=20,
+        category="secret",
+        confidence=0.95,
+        min_length=20,
         description="JSON Web Tokens",
     ),
     Detector(
-        "url_credentials", "password",
+        "url_credentials",
+        "password",
         r"\b[a-zA-Z][a-zA-Z0-9+.\-]{1,20}://[^\s:/@\"'<>]*:([^\s@/\"'<>]+)@",
-        category="secret", confidence=0.95, group=1, min_length=10,
+        category="secret",
+        confidence=0.95,
+        group=1,
+        min_length=10,
         validator=_secret_value,
         description="Password in the userinfo part of a URL",
     ),
     Detector(
-        "url_userinfo", "url_username",
+        "url_userinfo",
+        "url_username",
         r"\b[a-zA-Z][a-zA-Z0-9+.\-]{1,20}://([^\s:/@\"'<>]+)@",
-        category="pii", confidence=0.9, group=1, min_length=8,
+        category="pii",
+        confidence=0.9,
+        group=1,
+        min_length=8,
         description="User name in the userinfo part of a URL (no password)",
     ),
     Detector(
-        "connection_string_secret", "password",
+        "connection_string_secret",
+        "password",
         r"(?i:(?:password|pwd|accountkey|sharedaccesskey|sharedsecret|clientsecret)\s*=\s*)"
         r"([^;\s\"']+)",
-        category="secret", confidence=0.95, group=1, min_length=6,
+        category="secret",
+        confidence=0.95,
+        group=1,
+        min_length=6,
         validator=_secret_value,
         description="Secret parts of key=value;... connection strings",
     ),
     Detector(
-        "aws_secret_access_key", "aws_secret_access_key",
+        "aws_secret_access_key",
+        "aws_secret_access_key",
         r"(?i:aws.{0,20}?(?:secret|sk).{0,20}?[\"'\s:=]+)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])",
-        category="secret", confidence=0.95, group=1, min_length=40,
+        category="secret",
+        confidence=0.95,
+        group=1,
+        min_length=40,
         description="AWS secret access keys next to an aws_secret_* label",
     ),
     Detector(
-        "secret_assignment", "secret_value",
+        "secret_assignment",
+        "secret_value",
         r"(?i:\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|apikey|"
         r"access[_-]?token|auth[_-]?token|refresh[_-]?token|bearer|token|private[_-]?key|"
         r"secret[_-]?key|passphrase)\b[\"']?\s*[:=]\s*[\"']?)([^\s\"',;}{]{4,})",
-        category="secret", confidence=0.85, group=1, min_length=8,
+        category="secret",
+        confidence=0.85,
+        group=1,
+        min_length=8,
         validator=_secret_value,
         description="A password, token or API key assigned a value inside text",
     ),
     Detector(
-        "authorization_header", "secret_value",
+        "authorization_header",
+        "secret_value",
         r"(?i:\b(?:bearer|basic)\s+)([A-Za-z0-9\-._~+/]{16,}=*)",
-        category="secret", confidence=0.9, group=1, min_length=20,
+        category="secret",
+        confidence=0.9,
+        group=1,
+        min_length=20,
         description="HTTP Authorization header credentials",
     ),
     Detector(
-        "github_token", "api_token",
+        "github_token",
+        "api_token",
         r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})\b",
-        category="secret", confidence=0.99, min_length=30,
+        category="secret",
+        confidence=0.99,
+        min_length=30,
     ),
     Detector(
-        "slack_token", "api_token", r"\bxox[abposr]-[A-Za-z0-9\-]{10,}\b",
-        category="secret", confidence=0.99, min_length=15,
+        "slack_token",
+        "api_token",
+        r"\bxox[abposr]-[A-Za-z0-9\-]{10,}\b",
+        category="secret",
+        confidence=0.99,
+        min_length=15,
     ),
     Detector(
-        "google_api_key", "api_token", r"\bAIza[0-9A-Za-z_\-]{35}\b",
-        category="secret", confidence=0.99, min_length=39,
+        "google_api_key",
+        "api_token",
+        r"\bAIza[0-9A-Za-z_\-]{35}\b",
+        category="secret",
+        confidence=0.99,
+        min_length=39,
     ),
     Detector(
-        "stripe_key", "api_token", r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{16,}\b",
-        category="secret", confidence=0.99, min_length=24,
+        "stripe_key",
+        "api_token",
+        r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{16,}\b",
+        category="secret",
+        confidence=0.99,
+        min_length=24,
     ),
     Detector(
-        "azure_sas_signature", "secret_value", r"(?i:\bsig=)([A-Za-z0-9%+/=]{20,})",
-        category="secret", confidence=0.95, group=1, min_length=24,
+        "azure_sas_signature",
+        "secret_value",
+        r"(?i:\bsig=)([A-Za-z0-9%+/=]{20,})",
+        category="secret",
+        confidence=0.95,
+        group=1,
+        min_length=24,
         description="Signature of an Azure shared access signature URL",
     ),
     Detector(
-        "azure_storage_key", "secret_value",
+        "azure_storage_key",
+        "secret_value",
         r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])",
-        category="secret", confidence=0.8, min_length=88,
+        category="secret",
+        confidence=0.8,
+        min_length=88,
         description="88-character base64 Azure storage account keys",
     ),
     # -- credentials / identifiers ----------------------------------------
     Detector(
-        "aws_access_key_id", "aws_access_key_id", r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
-        category="credential", confidence=0.99, min_length=20,
+        "aws_access_key_id",
+        "aws_access_key_id",
+        r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
+        category="credential",
+        confidence=0.99,
+        min_length=20,
         description="AWS access key IDs (long-term AKIA, temporary ASIA)",
     ),
     Detector(
-        "aws_unique_id", "aws_unique_id",
+        "aws_unique_id",
+        "aws_unique_id",
         r"\b(?:AIDA|AROA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16,17}\b",
-        category="identifier", confidence=0.95, min_length=20,
+        category="identifier",
+        confidence=0.95,
+        min_length=20,
         description="AWS IAM unique IDs (users, roles, groups...)",
     ),
     Detector(
-        "aws_org_id", "aws_org_id", r"\bo-[a-z0-9]{10,32}\b",
-        category="identifier", confidence=0.85, min_length=12,
+        "aws_org_id",
+        "aws_org_id",
+        r"\bo-[a-z0-9]{10,32}\b",
+        category="identifier",
+        confidence=0.85,
+        min_length=12,
         description="AWS Organizations organization ids",
     ),
     Detector(
-        "aws_ou_id", "aws_ou_id", r"\bou-[a-z0-9]{4,32}-[a-z0-9]{8,32}\b",
-        category="identifier", confidence=0.9, min_length=16,
+        "aws_ou_id",
+        "aws_ou_id",
+        r"\bou-[a-z0-9]{4,32}-[a-z0-9]{8,32}\b",
+        category="identifier",
+        confidence=0.9,
+        min_length=16,
         description="AWS Organizations organizational unit ids",
     ),
     Detector(
-        "aws_root_id", "aws_root_id", r"(?<![\w\-])r-[a-z0-9]{4,32}\b(?!-)",
-        category="identifier", confidence=0.7, min_length=6,
+        "aws_root_id",
+        "aws_root_id",
+        r"(?<![\w\-])r-[a-z0-9]{4,32}\b(?!-)",
+        category="identifier",
+        confidence=0.7,
+        min_length=6,
         description="AWS Organizations root ids",
     ),
     Detector(
-        "cloudg_iri", "cloudg_iri",
+        "cloudg_iri",
+        "cloudg_iri",
         r"(?:\bcmr:|https://cloudg\.io/resource/)[^\s\"'<>,;)\]}]+",
-        category="identifier", confidence=0.95, min_length=6,
+        category="identifier",
+        confidence=0.95,
+        min_length=6,
         description="cloudg ontology resource IRIs (assets, tags) embedding identifiers",
     ),
     Detector(
-        "aws_arn", "aws_arn",
+        "aws_arn",
+        "aws_arn",
         r"\barn:(?:aws|aws-cn|aws-us-gov|aws-iso(?:-[a-z])?):[a-zA-Z0-9\-]*:[a-z0-9\-]*:"
         rf"(?:\d{{12}}|aws)?:{_URL_STOP}+",
-        category="identifier", confidence=0.99, min_length=12,
+        category="identifier",
+        confidence=0.99,
+        min_length=12,
     ),
     Detector(
-        "azure_resource_id", "azure_resource_id",
+        "azure_resource_id",
+        "azure_resource_id",
         rf"(?i:/subscriptions/{_GUID}(?:/[^\s/\"'<>,;?#]+)*)",
-        category="identifier", confidence=0.99, min_length=50,
+        category="identifier",
+        confidence=0.99,
+        min_length=50,
     ),
     Detector(
-        "gcp_resource_name", "gcp_resource_name",
+        "gcp_resource_name",
+        "gcp_resource_name",
         r"//[a-z0-9\-]+\.googleapis\.com/(?:[^\s/\"'<>,;?#]+/?)+"
         r"|\b(?:projects|organizations|folders)/(?:[a-z][a-z0-9\-]{4,28}[a-z0-9]|\d{6,20})"
         r"(?:/[^\s/\"'<>,;?#]+)*",
-        category="identifier", confidence=0.95, min_length=12,
+        category="identifier",
+        confidence=0.95,
+        min_length=12,
         description="GCP full resource names (//svc.googleapis.com/...) and relative names",
     ),
     Detector(
-        "azure_subscription_ref", "azure_subscription_id",
+        "azure_subscription_ref",
+        "azure_subscription_id",
         rf"(?i:(?:subscription|tenant)[_ ]?id[\"']?\s*[:=]\s*[\"']?)({_GUID})",
-        category="identifier", confidence=0.9, group=1, min_length=40,
+        category="identifier",
+        confidence=0.9,
+        group=1,
+        min_length=40,
     ),
     Detector(
-        "email", "email",
+        "email",
+        "email",
         r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?"
         r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,24}\b",
-        category="pii", confidence=0.95, min_length=6,
+        category="pii",
+        confidence=0.95,
+        min_length=6,
     ),
     # -- network ---------------------------------------------------------
     Detector(
-        "ipv6", "ip_address",
+        "ipv6",
+        "ip_address",
         r"(?<![0-9A-Fa-f:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:/\d{1,3})?"
         r"(?![0-9A-Fa-f:])",
-        category="network", confidence=0.9, validator=_ipv6_validator, min_length=2,
+        category="network",
+        confidence=0.9,
+        validator=_ipv6_validator,
+        min_length=2,
         description="IPv6 addresses and CIDRs (validated with ipaddress)",
     ),
     Detector(
-        "ipv4", "ip_address",
+        "ipv4",
+        "ip_address",
         rf"(?<![\d.]){_IPV4}(?:/(?:3[0-2]|[12]?\d))?(?!\.?\d)",
-        category="network", confidence=0.9, validator=classify_ip_text, min_length=7,
+        category="network",
+        confidence=0.9,
+        validator=classify_ip_text,
+        min_length=7,
         description="IPv4 addresses and CIDRs (validated with ipaddress)",
     ),
     Detector(
-        "mac_address", "mac_address", r"\b[0-9A-Fa-f]{2}(?:[:\-][0-9A-Fa-f]{2}){5}\b",
-        category="network", confidence=0.8, min_length=17,
+        "mac_address",
+        "mac_address",
+        r"\b[0-9A-Fa-f]{2}(?:[:\-][0-9A-Fa-f]{2}){5}\b",
+        category="network",
+        confidence=0.8,
+        min_length=17,
     ),
     Detector(
-        "hostname", "hostname",
+        "hostname",
+        "hostname",
         rf"(?i:\b(?:[a-z0-9](?:[a-z0-9\-]{{0,61}}[a-z0-9])?\.)+(?:{_TLDS})\b)(?![\-.]?\w)",
-        category="network", confidence=0.7, min_length=4,
+        category="network",
+        confidence=0.7,
+        min_length=4,
         description="Fully-qualified DNS names with a common TLD",
     ),
     Detector(
-        "aws_account_id", "aws_account_id",
+        "aws_account_id",
+        "aws_account_id",
         r"(?<![A-Za-z0-9_.\-/])\d{12}(?![A-Za-z0-9_\-]|\.\d)",
-        category="identifier", confidence=0.7, validator=_valid_account, min_length=12,
+        category="identifier",
+        confidence=0.7,
+        validator=_valid_account,
+        min_length=12,
         description="Bare 12-digit numbers (AWS account IDs)",
     ),
     # -- low-confidence / opt-in -----------------------------------------
     Detector(
-        "timestamp", "timestamp",
+        "timestamp",
+        "timestamp",
         r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+\-]\d{2}:?\d{2})?",
-        category="temporal", confidence=0.9, min_length=16,
+        category="temporal",
+        confidence=0.9,
+        min_length=16,
     ),
     Detector(
-        "uuid", "uuid", rf"\b{_GUID}\b", category="identifier", confidence=0.6, min_length=36,
+        "uuid",
+        "uuid",
+        rf"\b{_GUID}\b",
+        category="identifier",
+        confidence=0.6,
+        min_length=36,
         description="Generic UUIDs (opt in only: cloudg's own asset IDs are UUIDs)",
     ),
     Detector(
-        "high_entropy_secret", "secret_value",
+        "high_entropy_secret",
+        "secret_value",
         r"(?<![A-Za-z0-9+/_\-])[A-Za-z0-9+/_\-]{32,}={0,2}(?![A-Za-z0-9+/=_\-])",
-        category="secret", confidence=0.5, validator=looks_like_secret, min_length=32,
+        category="secret",
+        confidence=0.5,
+        validator=looks_like_secret,
+        min_length=32,
         description="Opaque high-entropy tokens (mixed case + digits, entropy >= 4 bits/char)",
     ),
 )
@@ -498,8 +638,14 @@ _HINTS: dict[str, tuple[str, ...]] = {
     "aws_ou_id": ("ou-",),
     "aws_root_id": ("r-",),
     "cloudg_iri": ("cmr:", "cloudg.io/resource/"),
-    "connection_string_secret": ("password", "pwd", "accountkey", "sharedaccesskey",
-                                 "sharedsecret", "clientsecret"),
+    "connection_string_secret": (
+        "password",
+        "pwd",
+        "accountkey",
+        "sharedaccesskey",
+        "sharedsecret",
+        "clientsecret",
+    ),
     "aws_secret_access_key": ("aws",),
     "secret_assignment": ("pass", "pwd", "secret", "key", "token", "bearer"),
     "authorization_header": ("bearer", "basic"),
@@ -617,67 +763,161 @@ _ASSET_SIBLINGS = frozenset(
 )
 #: Keys of AWS Organizations structures (accounts, OUs, the organization).
 _ORG_SIBLINGS = frozenset(
-    {"parent_id", "ou_path", "feature_set", "management_account_id", "ous", "joined_method",
-     "master_account_id", "organization_id"}
+    {
+        "parent_id",
+        "ou_path",
+        "feature_set",
+        "management_account_id",
+        "ous",
+        "joined_method",
+        "master_account_id",
+        "organization_id",
+    }
 )
 
 BUILTIN_KEY_RULES: tuple[KeyRule, ...] = (
     KeyRule(
-        "sensitive_key", "sensitive_field", SENSITIVE_KEY_PATTERN, category="secret",
-        exclude=SAFE_KEY_PATTERN, subtree=True, scalars=True,
+        "sensitive_key",
+        "sensitive_field",
+        SENSITIVE_KEY_PATTERN,
+        category="secret",
+        exclude=SAFE_KEY_PATTERN,
+        subtree=True,
+        scalars=True,
     ),
-    KeyRule("account_id_key", "cloud_account",
-            r"(?:^|_)(?:account|accounts|account_id|account_ids|owner_id|owner_account_id)"
-            r"(?:_affected)?$|^accounts?_affected$",
-            category="identifier", defer=True),
-    KeyRule("account_map_key", "cloud_account",
-            r"^(?:by_account(?:_pair|_region|_id)?|services_by_account(?:_region)?|"
-            r"\w+_by_account|account_pairs)$",
-            category="identifier", defer=True, map_keys=True),
-    KeyRule("org_id_key", "resource_ref",
-            r"^(?:organization_id|organisation_id|org_id|root_id|ou_id|ou_ids|"
-            r"parent_ou_id)$", category="identifier", defer=True),
-    KeyRule("subscription_key", "azure_subscription_id",
-            r"^(?:azure_)?subscription(?:_id)?$", category="identifier", defer=True),
-    KeyRule("tenant_key", "azure_tenant_id", r"^(?:azure_)?tenant(?:_id)?$",
-            category="identifier", defer=True),
-    KeyRule("gcp_project_key", "gcp_project_id", r"^(?:gcp_)?project(?:_id)?$",
-            category="identifier", defer=True),
-    KeyRule("gcp_project_number_key", "gcp_project_number", r"^project_number$",
-            category="identifier", scalars=True, defer=True),
-    KeyRule("resource_name_key", "resource_name",
-            r"^(?:resource_name|display_name|bucket_name|function_name|instance_name|"
-            r"cluster_name|db_name|database_name|computer_name|vm_name|role_name|user_name|"
-            r"username|group_name|key_name|table_name|queue_name|topic_name|repository_name|"
-            r"asset_name|source_name|target_name|resource_names|asset_names|account_name|"
-            r"ou_name|ou_path|ou_names|org_name|organization_name|subject|object)$",
-            category="identifier", defer=True),
-    KeyRule("resource_ref_key", "resource_ref",
-            r"^(?:ref|refs|asset_ref|asset_refs|asset_id|asset_ids|resource_id|resource_ids|"
-            r"resource|asset|source|target|source_id|target_id|source_ref|target_ref|"
-            r"node|node_id|nodes|from|to|start|end|via|members|neighbors|neighbours|path|"
-            r"parent_id|parent|parent_ids|child_id|child_ids|children|dependency_id|"
-            r"dependency_ids|dependent_id|dependent_ids|subject_id|object_id|entry|entry_id|"
-            r"exit|candidate|candidates)$",
-            category="identifier", defer=True),
-    KeyRule("dataset_key", "dataset_name",
-            r"^(?:dataset|dataset_name|datasets|active_dataset|base|base_dataset|"
-            r"target_dataset)$", category="identifier", defer=True),
-    KeyRule("dataset_listing_name_key", "dataset_name", r"^name$", category="identifier",
-            requires_sibling=frozenset({"loaded_at", "compliance_results"}), defer=True),
-    KeyRule("asset_name_key", "resource_name", r"^name$", category="identifier",
-            requires_sibling=_ASSET_SIBLINGS, defer=True),
-    KeyRule("asset_id_key", "resource_ref", r"^id$", category="identifier",
-            requires_sibling=_ASSET_SIBLINGS | _ORG_SIBLINGS, defer=True),
-    KeyRule("org_name_key", "resource_name", r"^name$", category="identifier",
-            requires_sibling=_ORG_SIBLINGS, defer=True),
-    KeyRule("rag_chunk_id_key", "rag_chunk_id", r"^(?:chunk_id|chunk_ids)$",
-            category="identifier"),
-    KeyRule("rag_content_key", "rag_content", r"^content$", category="identifier",
-            requires_sibling=frozenset({"chunk_type", "chunk_id"})),
-    KeyRule("hostname_key", "hostname",
-            r"^(?:hostname|host_name|dns_name|fqdn|private_dns_name|public_dns_name|"
-            r"domain_name|endpoint_address)$", category="network", defer=True),
+    KeyRule(
+        "account_id_key",
+        "cloud_account",
+        r"(?:^|_)(?:account|accounts|account_id|account_ids|owner_id|owner_account_id)"
+        r"(?:_affected)?$|^accounts?_affected$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "account_map_key",
+        "cloud_account",
+        r"^(?:by_account(?:_pair|_region|_id)?|services_by_account(?:_region)?|"
+        r"\w+_by_account|account_pairs)$",
+        category="identifier",
+        defer=True,
+        map_keys=True,
+    ),
+    KeyRule(
+        "org_id_key",
+        "resource_ref",
+        r"^(?:organization_id|organisation_id|org_id|root_id|ou_id|ou_ids|"
+        r"parent_ou_id)$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "subscription_key",
+        "azure_subscription_id",
+        r"^(?:azure_)?subscription(?:_id)?$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "tenant_key",
+        "azure_tenant_id",
+        r"^(?:azure_)?tenant(?:_id)?$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "gcp_project_key",
+        "gcp_project_id",
+        r"^(?:gcp_)?project(?:_id)?$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "gcp_project_number_key",
+        "gcp_project_number",
+        r"^project_number$",
+        category="identifier",
+        scalars=True,
+        defer=True,
+    ),
+    KeyRule(
+        "resource_name_key",
+        "resource_name",
+        r"^(?:resource_name|display_name|bucket_name|function_name|instance_name|"
+        r"cluster_name|db_name|database_name|computer_name|vm_name|role_name|user_name|"
+        r"username|group_name|key_name|table_name|queue_name|topic_name|repository_name|"
+        r"asset_name|source_name|target_name|resource_names|asset_names|account_name|"
+        r"ou_name|ou_path|ou_names|org_name|organization_name|subject|object)$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "resource_ref_key",
+        "resource_ref",
+        r"^(?:ref|refs|asset_ref|asset_refs|asset_id|asset_ids|resource_id|resource_ids|"
+        r"resource|asset|source|target|source_id|target_id|source_ref|target_ref|"
+        r"node|node_id|nodes|from|to|start|end|via|members|neighbors|neighbours|path|"
+        r"parent_id|parent|parent_ids|child_id|child_ids|children|dependency_id|"
+        r"dependency_ids|dependent_id|dependent_ids|subject_id|object_id|entry|entry_id|"
+        r"exit|candidate|candidates)$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "dataset_key",
+        "dataset_name",
+        r"^(?:dataset|dataset_name|datasets|active_dataset|base|base_dataset|"
+        r"target_dataset)$",
+        category="identifier",
+        defer=True,
+    ),
+    KeyRule(
+        "dataset_listing_name_key",
+        "dataset_name",
+        r"^name$",
+        category="identifier",
+        requires_sibling=frozenset({"loaded_at", "compliance_results"}),
+        defer=True,
+    ),
+    KeyRule(
+        "asset_name_key",
+        "resource_name",
+        r"^name$",
+        category="identifier",
+        requires_sibling=_ASSET_SIBLINGS,
+        defer=True,
+    ),
+    KeyRule(
+        "asset_id_key",
+        "resource_ref",
+        r"^id$",
+        category="identifier",
+        requires_sibling=_ASSET_SIBLINGS | _ORG_SIBLINGS,
+        defer=True,
+    ),
+    KeyRule(
+        "org_name_key",
+        "resource_name",
+        r"^name$",
+        category="identifier",
+        requires_sibling=_ORG_SIBLINGS,
+        defer=True,
+    ),
+    KeyRule("rag_chunk_id_key", "rag_chunk_id", r"^(?:chunk_id|chunk_ids)$", category="identifier"),
+    KeyRule(
+        "rag_content_key",
+        "rag_content",
+        r"^content$",
+        category="identifier",
+        requires_sibling=frozenset({"chunk_type", "chunk_id"}),
+    ),
+    KeyRule(
+        "hostname_key",
+        "hostname",
+        r"^(?:hostname|host_name|dns_name|fqdn|private_dns_name|public_dns_name|"
+        r"domain_name|endpoint_address)$",
+        category="network",
+        defer=True,
+    ),
 )
 
 _GUID_RE = re.compile(rf"^{_GUID}$")
@@ -729,8 +969,9 @@ SHAPED_ENTITIES = {"cloud_account": account_entity, "resource_ref": ref_entity}
 
 #: Keys that hold tag / label maps (``{"Owner": "alice"}``) or lists of
 #: ``{"Key": ..., "Value": ...}`` pairs.
-TAG_CONTAINER_KEYS = frozenset({"tags", "labels", "tag", "resource_tags", "user_labels",
-                                "tag_set", "tag_list"})
+TAG_CONTAINER_KEYS = frozenset(
+    {"tags", "labels", "tag", "resource_tags", "user_labels", "tag_set", "tag_list"}
+)
 #: Tag keys whose values name a person.
 PERSON_TAG_PATTERN = (
     r"(?:^|_)(?:owner|owners|created_by|createdby|creator|contact|email|maintainer|author|"
@@ -806,8 +1047,9 @@ class CompiledScanner:
                         entity = verdict
                 if det.confidence < min_confidence:
                     continue
-                em = EntityMatch(start, end, text[start:end], entity, det.name, det.category,
-                                 det.confidence)
+                em = EntityMatch(
+                    start, end, text[start:end], entity, det.name, det.category, det.confidence
+                )
                 cands.append((m.start(), prio, m.end(), em))
         if not cands:
             return []
@@ -939,8 +1181,16 @@ class DetectorRegistry:
 # Config -> Detector
 # ---------------------------------------------------------------------------
 
-_FLAG_NAMES = {"i": re.I, "ignorecase": re.I, "m": re.M, "multiline": re.M, "s": re.S,
-               "dotall": re.S, "x": re.X, "verbose": re.X}
+_FLAG_NAMES = {
+    "i": re.I,
+    "ignorecase": re.I,
+    "m": re.M,
+    "multiline": re.M,
+    "s": re.S,
+    "dotall": re.S,
+    "x": re.X,
+    "verbose": re.X,
+}
 
 
 def make_validator(spec: Any) -> Validator | None:
@@ -969,8 +1219,11 @@ def detector_from_config(spec: dict[str, Any]) -> Detector:
     flags = 0
     raw_flags = spec.get("flags") or []
     if isinstance(raw_flags, str):
-        raw_flags = [raw_flags] if len(raw_flags) > 1 and raw_flags.lower() in _FLAG_NAMES \
+        raw_flags = (
+            [raw_flags]
+            if len(raw_flags) > 1 and raw_flags.lower() in _FLAG_NAMES
             else list(raw_flags)
+        )
     for f in raw_flags:
         flags |= _FLAG_NAMES[str(f).lower()]
     if spec.get("ignore_case"):

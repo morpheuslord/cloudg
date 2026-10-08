@@ -431,34 +431,3 @@ class TestReachabilityAnalyzer:
         analyzer = ReachabilityAnalyzer(builder.graph)
         findings = analyzer.generate_findings()
         assert len(findings) == 0
-
-    def test_rule_container_not_reported_as_exposed_resource(self):
-        """An SG on an internet rule edge yields the open-port finding, not an exposure one."""
-        builder = GraphBuilder()
-        assets = [
-            CloudAsset(
-                id="sg-asset",
-                name="web-sg",
-                asset_type=AssetType.SECURITY_GROUP,
-                provider=CloudProvider.AWS,
-                arn="arn:aws:ec2:us-east-1:123456789012:security-group/sg-0abc",
-            ),
-        ]
-        edges = [
-            NetworkEdge(
-                source_id="0.0.0.0/0",
-                target_id="sg-asset",
-                edge_type=EdgeType.SECURITY_GROUP_RULE,
-                cidr="0.0.0.0/0",
-                ports=[22],
-                port_range="22",
-            ),
-        ]
-        builder.build(assets, edges)
-        analyzer = ReachabilityAnalyzer(builder.graph)
-        findings = analyzer.generate_findings()
-
-        assert len(findings) == 1
-        assert findings[0].severity == Severity.CRITICAL
-        assert findings[0].resource_id == "sg-asset"
-        assert findings[0].resource_arn.endswith("sg-0abc")

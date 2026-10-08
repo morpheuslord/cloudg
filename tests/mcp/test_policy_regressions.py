@@ -35,9 +35,16 @@ from cloudg.mcp.transforms.detectors import account_entity
 ANALYST = Principal(id="ann", roles={"analyst"})
 LEAD = Principal(id="lee", roles={"lead"})
 COLLECTOR = Principal(id="svc", roles={"collector"})
-STRICT_MAP = {"identifier": "pseudonymize", "uuid": "keep", "network": "pseudonymize",
-              "special_ip": "keep", "special_cidr": "keep", "pii": "pseudonymize",
-              "free_text": "pseudonymize", "secret": "redact"}
+STRICT_MAP = {
+    "identifier": "pseudonymize",
+    "uuid": "keep",
+    "network": "pseudonymize",
+    "special_ip": "keep",
+    "special_cidr": "keep",
+    "pii": "pseudonymize",
+    "free_text": "pseudonymize",
+    "secret": "redact",
+}
 
 
 def make(workspace, policy):
@@ -64,10 +71,10 @@ async def test_soc_analyst_aliases_and_pseudonyms(workspace):
     text = res.content[0].text
     assert "i-0web1" not in text and "awsaccount" not in text and "111111111111" not in text
     # alias passed back resolves to the real account
-    by_alias = await layer.call_tool("find_assets", {"account_id": "prod-payments"},
-                                     principal=ANALYST)
-    by_real = await layer.call_tool("find_assets", {"account_id": "111111111111"},
-                                    principal=LEAD)
+    by_alias = await layer.call_tool(
+        "find_assets", {"account_id": "prod-payments"}, principal=ANALYST
+    )
+    by_real = await layer.call_tool("find_assets", {"account_id": "111111111111"}, principal=LEAD)
     assert by_alias.structured["total"] == by_real.structured["total"] > 0
     # the aliased, pseudonymised ARN resolves to the same asset
     again = await layer.call_tool("get_asset", {"ref": a["arn"]}, principal=ANALYST)
@@ -78,10 +85,12 @@ async def test_soc_analyst_aliases_and_pseudonyms(workspace):
 
 
 def test_aliases_moved_after_redaction():
-    specs = [{"type": "alias", "id": "a", "options": {}},
-             {"type": "sanitize", "id": "s", "options": {}},
-             {"type": "redact", "id": "r", "options": {}},
-             {"type": "project", "id": "p", "options": {}}]
+    specs = [
+        {"type": "alias", "id": "a", "options": {}},
+        {"type": "sanitize", "id": "s", "options": {}},
+        {"type": "redact", "id": "r", "options": {}},
+        {"type": "project", "id": "p", "options": {}},
+    ]
     assert [s["id"] for s in _aliases_after_redaction(specs)] == ["s", "r", "a", "p"]
     no_redact = [specs[0], specs[1]]
     assert _aliases_after_redaction(no_redact) == no_redact
@@ -144,10 +153,18 @@ def test_reference_keys_defer_to_detectors():
     vault = TokenVault("k")
     red = Redactor(STRICT_MAP)
     arn = "arn:aws:iam::123456789012:role/app-role"
-    out = red.apply({"source": "0.0.0.0/0", "target": arn, "asset_name": "web-1",
-                     "source_name": "web-1", "ref": "10.0.1.5", "datasets": ["prod", "dev"],
-                     "nodes": ["a-1", {"id": "x", "arn": arn}]},
-                    TransformContext(vault=vault))
+    out = red.apply(
+        {
+            "source": "0.0.0.0/0",
+            "target": arn,
+            "asset_name": "web-1",
+            "source_name": "web-1",
+            "ref": "10.0.1.5",
+            "datasets": ["prod", "dev"],
+            "nodes": ["a-1", {"id": "x", "arn": arn}],
+        },
+        TransformContext(vault=vault),
+    )
     assert out["source"] == "0.0.0.0/0"  # special CIDR keeps its own treatment
     assert out["target"] == vault.tokenize(arn, "aws_arn")  # an ARN pseudonym, not res-
     assert out["asset_name"] == out["source_name"] == vault.tokenize("web-1", "resource_name")
@@ -159,19 +176,31 @@ def test_reference_keys_defer_to_detectors():
 def test_name_mentions_in_free_text():
     vault = TokenVault("k")
     red = Redactor(STRICT_MAP)
-    out = red.apply({"nodes": [{"name": "web-1", "arn": "x"}], "summary": "web-1 -> db-main",
-                     "other": {"name": "db-main", "provider": "aws"}, "single": "web-1",
-                     "type": "web-1", "tags": {"Team": "web-1"}},
-                    TransformContext(vault=vault))
-    tok_web, tok_db = vault.lookup("web-1", "resource_name"), vault.lookup("db-main",
-                                                                          "resource_name")
+    out = red.apply(
+        {
+            "nodes": [{"name": "web-1", "arn": "x"}],
+            "summary": "web-1 -> db-main",
+            "other": {"name": "db-main", "provider": "aws"},
+            "single": "web-1",
+            "type": "web-1",
+            "tags": {"Team": "web-1"},
+        },
+        TransformContext(vault=vault),
+    )
+    tok_web, tok_db = (
+        vault.lookup("web-1", "resource_name"),
+        vault.lookup("db-main", "resource_name"),
+    )
     assert out["summary"] == f"{tok_web} -> {tok_db}"
     assert out["single"] == tok_web  # exact whole-value mentions are replaced too
     assert out["type"] == "web-1"  # vocabulary keys are left alone
     assert out["tags"]["Team"].startswith("tag-")  # tag values keep their own token
-    assert Redactor(STRICT_MAP, name_mentions=False).apply(
-        {"n": {"name": "web-1", "arn": "x"}, "s": "web-1 -> x"},
-        TransformContext(vault=vault))["s"] == "web-1 -> x"
+    assert (
+        Redactor(STRICT_MAP, name_mentions=False).apply(
+            {"n": {"name": "web-1", "arn": "x"}, "s": "web-1 -> x"}, TransformContext(vault=vault)
+        )["s"]
+        == "web-1 -> x"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,15 +210,17 @@ def test_name_mentions_in_free_text():
 
 async def test_strict_completions_pseudonymised_and_reversible(workspace):
     layer = make(workspace, "strict")
-    refs = await layer.complete({"type": "ref/resource", "uri": "cloudg://assets/{+ref}"},
-                                {"name": "ref", "value": "web"})
+    refs = await layer.complete(
+        {"type": "ref/resource", "uri": "cloudg://assets/{+ref}"}, {"name": "ref", "value": "web"}
+    )
     assert refs["values"] and all(v.startswith(("res-", "arn:")) for v in refs["values"])
     assert "web-1" not in refs["values"]
     contents = await layer.read_resource(f"cloudg://assets/{refs['values'][0]}")
     assert json.loads(contents[0].text)["id"].startswith("res-")
-    ds = await layer.complete({"type": "ref/resource",
-                               "uri": "cloudg://datasets/{dataset}/summary"},
-                              {"name": "dataset", "value": ""})
+    ds = await layer.complete(
+        {"type": "ref/resource", "uri": "cloudg://datasets/{dataset}/summary"},
+        {"name": "dataset", "value": ""},
+    )
     assert ds["values"] and ds["values"][0].startswith("ds-")
     summary = await layer.read_resource(f"cloudg://datasets/{ds['values'][0]}/summary")
     assert json.loads(summary[0].text)["dataset"] == ds["values"][0]
@@ -214,8 +245,11 @@ async def test_privacy_status_and_policy_resource_readable(workspace, profile):
     assert any(s["applies_to"] == "secret" for s in strategies)
     if profile == "standard":
         cred = next(s for s in strategies if s["applies_to"] == "credential")
-        assert cred == {"applies_to": "credential", "strategy": "mask",
-                        "options": {"keep_first": 4, "keep_last": 4}}
+        assert cred == {
+            "applies_to": "credential",
+            "strategy": "mask",
+            "options": {"keep_first": 4, "keep_last": 4},
+        }
     det = await layer.call_tool("list_detectors", {})
     assert "REDACTED" not in det.content[0].text
 
@@ -225,8 +259,12 @@ async def test_reveal_output_not_redacted(workspace):
     a = (await layer.call_tool("get_asset", {"ref": "web-1"}, principal=ANALYST)).structured
     rev = await layer.call_tool("reveal_token", {"token": a["id"]}, principal=LEAD)
     assert not rev.is_error, rev.content[0].text
-    assert rev.structured == {"pseudonym": a["id"], "found": True, "value": "web-1",
-                              "entity_type": "resource_name"}
+    assert rev.structured == {
+        "pseudonym": a["id"],
+        "found": True,
+        "value": "web-1",
+        "entity_type": "resource_name",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +291,7 @@ def test_audit_size_zero_disables_ring_buffer():
 
 def test_save_vault_and_exit_hook(tmp_path):
     path = tmp_path / "v.json"
-    p = Policy.load({"extends": "strict", "name": "s",
-                     "vault": {"key": "k", "path": str(path)}})
+    p = Policy.load({"extends": "strict", "name": "s", "vault": {"key": "k", "path": str(path)}})
     ctx = TransformContext(vault=p.vault)
     p.output_pipeline(tool(), None).apply({"arn": "arn:aws:s3:::bucket-a"}, ctx)
     assert not path.exists()  # no autosave
@@ -293,8 +330,10 @@ def test_policy_config_extends_is_resolved():
     p = Policy.load(PolicyConfig(name="mine", extends="strict"))
     assert p.name == "mine" and p.extends_chain == ["standard", "strict"]
     assert not p.is_allowed(tool("m", caps=[Capability.CLOUD_ACCESS]), None)
-    assert [t.name for t in p.output_pipeline(tool(), None).transforms][:2] == \
-        ["sanitize", "redact"]
+    assert [t.name for t in p.output_pipeline(tool(), None).transforms][:2] == [
+        "sanitize",
+        "redact",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +349,15 @@ def test_soc_collector_gets_live_tools(workspace):
 
 
 def test_rate_limit_rejection_refunds_earlier_buckets():
-    p = Policy.load({"name": "rl", "rate_limits": [
-        {"tools": ["*"], "rate": 10, "per": "hour", "scope": "principal"},
-        {"tools": ["hot"], "rate": 1, "per": "hour", "scope": "principal_tool"}]})
+    p = Policy.load(
+        {
+            "name": "rl",
+            "rate_limits": [
+                {"tools": ["*"], "rate": 10, "per": "hour", "scope": "principal"},
+                {"tools": ["hot"], "rate": 1, "per": "hour", "scope": "principal_tool"},
+            ],
+        }
+    )
     p.check_call(tool("hot"), None, {})
     for _ in range(5):
         with pytest.raises(RateLimitedError):
@@ -324,8 +369,12 @@ def test_rate_limit_rejection_refunds_earlier_buckets():
 
 
 def test_completions_have_their_own_rate_limit_kind():
-    p = Policy.load({"name": "rl", "rate_limits": [{"rate": 1, "per": "hour", "kinds": ["tool"],
-                                                     "tools": ["*"]}]})
+    p = Policy.load(
+        {
+            "name": "rl",
+            "rate_limits": [{"rate": 1, "per": "hour", "kinds": ["tool"], "tools": ["*"]}],
+        }
+    )
     prompt = PromptSpec(name="p", handler=lambda ctx: "")
     for _ in range(3):
         p.check_call(prompt, None, {"__completion__": "x"})  # "tool" does not cover completions
@@ -363,8 +412,14 @@ async def test_standard_dataset_summary_counts_not_redacted(workspace):
 
 def test_enum_keys_exempt_but_real_secret_keys_still_redacted():
     red = Redactor({"secret": "redact"})
-    out = red.apply({"assets_by_type": {"SECRET": 3, "KMS_KEY": 2, "ACCESS_KEY": 1},
-                     "secret": "hunter2", "Secret": "x1"}, TransformContext())
+    out = red.apply(
+        {
+            "assets_by_type": {"SECRET": 3, "KMS_KEY": 2, "ACCESS_KEY": 1},
+            "secret": "hunter2",
+            "Secret": "x1",
+        },
+        TransformContext(),
+    )
     assert out["assets_by_type"] == {"SECRET": 3, "KMS_KEY": 2, "ACCESS_KEY": 1}
     assert out["secret"].startswith("[REDACTED") and out["Secret"].startswith("[REDACTED")
 
@@ -373,8 +428,11 @@ def test_enum_keys_exempt_but_real_secret_keys_still_redacted():
     "value, entity, pattern",
     [
         ("123456789012", "aws_account_id", r"\d{12}"),
-        ("1b2c3d4e-1111-2222-3333-444455556666", "azure_subscription_id",
-         r"[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"),
+        (
+            "1b2c3d4e-1111-2222-3333-444455556666",
+            "azure_subscription_id",
+            r"[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        ),
         ("acme-prod-1", "gcp_project_id", r"proj-[0-9a-f]{8}"),
         ("Corp Tenant", "cloud_account", r"acct-[0-9a-f]{10}"),
     ],
@@ -385,8 +443,9 @@ def test_account_id_entity_from_shape(value, entity, pattern):
     out = Redactor(STRICT_MAP).apply({"account_id": value}, TransformContext(vault=vault))
     assert re.fullmatch(pattern, out["account_id"]), out
     assert "awsaccount" not in out["account_id"]
-    back = Depseudonymizer(vault).apply({"account_id": out["account_id"]},
-                                        TransformContext(vault=vault))
+    back = Depseudonymizer(vault).apply(
+        {"account_id": out["account_id"]}, TransformContext(vault=vault)
+    )
     assert back == {"account_id": value}
 
 
@@ -414,11 +473,28 @@ async def test_reveal_reverses_aliases_and_tokens_together(workspace):
 
 async def test_strict_round3_tools_leak_no_identifiers(workspace):
     layer = make(workspace, "strict")
-    real = ("web-1", "app-role", "Workloads", "shared-services", "o-sample", "ou-work",
-            "r-root", "111111111111", "222222222222", "sample-org", "web-team")
-    calls = [("organization_topology", {}), ("depends_on", {"ref": "web-1"}),
-             ("blast_radius", {"ref": "web-1"}), ("ontology_neighbourhood", {"ref": "web-1"}),
-             ("rag_chunks", {}), ("cross_account_edges", {}), ("security_coverage", {})]
+    real = (
+        "web-1",
+        "app-role",
+        "Workloads",
+        "shared-services",
+        "o-sample",
+        "ou-work",
+        "r-root",
+        "111111111111",
+        "222222222222",
+        "sample-org",
+        "web-team",
+    )
+    calls = [
+        ("organization_topology", {}),
+        ("depends_on", {"ref": "web-1"}),
+        ("blast_radius", {"ref": "web-1"}),
+        ("ontology_neighbourhood", {"ref": "web-1"}),
+        ("rag_chunks", {}),
+        ("cross_account_edges", {}),
+        ("security_coverage", {}),
+    ]
     for name, args in calls:
         layer.policy.reset_rate_limits()
         res = await layer.call_tool(name, args)
@@ -429,24 +505,32 @@ async def test_strict_round3_tools_leak_no_identifiers(workspace):
 
 
 def test_org_detectors_and_formats():
-    found = {m.entity for m in DEFAULT_REGISTRY.scan(
-        "org o-a1b2c3d4e5 ou ou-ab12-cdef5678 root r-ab12")}
+    found = {
+        m.entity for m in DEFAULT_REGISTRY.scan("org o-a1b2c3d4e5 ou ou-ab12-cdef5678 root r-ab12")
+    }
     assert {"aws_org_id", "aws_ou_id", "aws_root_id"} <= found
     vault = TokenVault("k")
     assert re.fullmatch(r"o-[0-9a-f]{10}", vault.tokenize("o-a1b2c3d4e5", "aws_org_id"))
-    assert re.fullmatch(r"ou-[0-9a-f]{4}-[0-9a-f]{8}",
-                        vault.tokenize("ou-ab12-cdef5678", "aws_ou_id"))
+    assert re.fullmatch(
+        r"ou-[0-9a-f]{4}-[0-9a-f]{8}", vault.tokenize("ou-ab12-cdef5678", "aws_ou_id")
+    )
 
 
 def test_iri_and_chunk_id_tokens_match_plain_ids():
     vault = TokenVault("k")
     red = Redactor(STRICT_MAP)
-    out = red.apply({"asset": {"id": "web-1", "name": "web-1", "type": "EC2"},
-                     "subject_id": "cmr:web-1", "object_id": "cmr:tag_owner_web-team",
-                     "env_iri": "cmr:tag_env_prod", "finding": "cmr:finding_f1",
-                     "chunk_id": "entity::web-1",
-                     "uuid_id": {"id": "9f86d081-884c-4d63-9a2b-1c5e3f0a7b21", "arn": "x"}},
-                    TransformContext(vault=vault))
+    out = red.apply(
+        {
+            "asset": {"id": "web-1", "name": "web-1", "type": "EC2"},
+            "subject_id": "cmr:web-1",
+            "object_id": "cmr:tag_owner_web-team",
+            "env_iri": "cmr:tag_env_prod",
+            "finding": "cmr:finding_f1",
+            "chunk_id": "entity::web-1",
+            "uuid_id": {"id": "9f86d081-884c-4d63-9a2b-1c5e3f0a7b21", "arn": "x"},
+        },
+        TransformContext(vault=vault),
+    )
     tok = out["asset"]["id"]
     assert tok.startswith("res-") and out["asset"]["name"] == tok
     assert out["subject_id"] == f"cmr:{tok}" and out["chunk_id"] == f"entity::{tok}"
@@ -458,11 +542,15 @@ def test_iri_and_chunk_id_tokens_match_plain_ids():
 def test_account_keys_and_maps_ignore_placeholder_heuristic():
     vault = TokenVault("k")
     out = Redactor(STRICT_MAP).apply(
-        {"accounts_affected": ["111111111111"], "management_account_id": "111111111111",
-         "by_account_pair": {"111111111111 -> 222222222222": 2},
-         "services_by_account_region": {"111111111111": {"us-east-1": {"guardduty": True}}},
-         "items": ["111111111111/us-east-1: security hub disabled"]},
-        TransformContext(vault=vault))
+        {
+            "accounts_affected": ["111111111111"],
+            "management_account_id": "111111111111",
+            "by_account_pair": {"111111111111 -> 222222222222": 2},
+            "services_by_account_region": {"111111111111": {"us-east-1": {"guardduty": True}}},
+            "items": ["111111111111/us-east-1: security hub disabled"],
+        },
+        TransformContext(vault=vault),
+    )
     acct = vault.lookup("111111111111", "aws_account_id")
     other = vault.lookup("222222222222", "aws_account_id")
     assert out["accounts_affected"] == [acct] and out["management_account_id"] == acct
@@ -473,11 +561,15 @@ def test_account_keys_and_maps_ignore_placeholder_heuristic():
 
 def test_rag_content_lines():
     vault = TokenVault("k")
-    content = ("Resource: sample-org\nType: ORGANIZATION\nAccount: 111111111111\n"
-               'Tags: {"Owner": "alice", "env": "prod"}\n\nRelations (1):\n'
-               "  → CONTAINS: Workloads\n  • web-1 (EC2)")
-    out = Redactor(STRICT_MAP).apply({"chunk_id": "entity::org", "chunk_type": "entity",
-                                      "content": content}, TransformContext(vault=vault))
+    content = (
+        "Resource: sample-org\nType: ORGANIZATION\nAccount: 111111111111\n"
+        'Tags: {"Owner": "alice", "env": "prod"}\n\nRelations (1):\n'
+        "  → CONTAINS: Workloads\n  • web-1 (EC2)"
+    )
+    out = Redactor(STRICT_MAP).apply(
+        {"chunk_id": "entity::org", "chunk_type": "entity", "content": content},
+        TransformContext(vault=vault),
+    )
     text = out["content"]
     for value in ("sample-org", "111111111111", "alice", "Workloads", "web-1"):
         assert value not in text, value
@@ -491,11 +583,18 @@ def test_generic_pipeline_uses_alias_ordering():
 
 
 def test_custom_key_rule_can_defer():
-    red = Redactor({"identifier": "pseudonymize", "network": "pseudonymize",
-                    "special_cidr": "keep"},
-                   extra_key_rules=[{"name": "peer", "entity": "resource_name",
-                                     "pattern": "^peer$", "category": "identifier",
-                                     "defer": True}])
+    red = Redactor(
+        {"identifier": "pseudonymize", "network": "pseudonymize", "special_cidr": "keep"},
+        extra_key_rules=[
+            {
+                "name": "peer",
+                "entity": "resource_name",
+                "pattern": "^peer$",
+                "category": "identifier",
+                "defer": True,
+            }
+        ],
+    )
     vault = TokenVault("k")
     out = red.apply({"peer": "0.0.0.0/0", "x": {"peer": "web-1"}}, TransformContext(vault=vault))
     assert out["peer"] == "0.0.0.0/0" and out["x"]["peer"].startswith("res-")

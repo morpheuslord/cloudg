@@ -295,11 +295,13 @@ def resolve_extends(
         if not cand.is_absolute() and base_dir is not None:
             cand = base_dir / cand
         if not cand.is_file():
-            raise ValueError(f"Unknown policy to extend: {ref!r} (profiles: "
-                             f"{', '.join(available_profiles())})")
+            raise ValueError(
+                f"Unknown policy to extend: {ref!r} (profiles: {', '.join(available_profiles())})"
+            )
         parent_path = cand
-    parent = resolve_extends(_read_file(parent_path), base_dir=parent_path.parent,
-                             _seen=(*_seen, ref))
+    parent = resolve_extends(
+        _read_file(parent_path), base_dir=parent_path.parent, _seen=(*_seen, ref)
+    )
     merged = merge_policy_dicts(parent, data)
     parent_name = parent.get("name", ref)
     merged["_chain"] = [*parent.get("_chain", []), parent_name]
@@ -455,18 +457,24 @@ class _Rule(_CompiledAccess):
         ):
             return False
         if spec is None:
-            return not (self.names or self.categories or self.tags or self.kinds
-                        or self.sensitivity or self.capabilities)
+            return not (
+                self.names
+                or self.categories
+                or self.tags
+                or self.kinds
+                or self.sensitivity
+                or self.capabilities
+            )
         if self.names is not None and not self.names.match(*_idents(spec)):
             return False
-        if self.categories is not None and not self.categories.match(
-            getattr(spec, "category", "")
-        ):
+        if self.categories is not None and not self.categories.match(getattr(spec, "category", "")):
             return False
         if self.tags and not (self.tags & set(getattr(spec, "tags", ()) or ())):
             return False
-        if self.kinds and kind not in self.kinds and not (
-            kind == "resource_template" and "resource" in self.kinds
+        if (
+            self.kinds
+            and kind not in self.kinds
+            and not (kind == "resource_template" and "resource" in self.kinds)
         ):
             return False
         if self.sensitivity and _sens(spec) not in self.sensitivity:
@@ -559,14 +567,18 @@ class Policy:
         self.source = source
         self.extends_chain = chain
         vc = config.vault
-        self.vault = vault if vault is not None else TokenVault(
-            key=vc.key.get_secret_value() if vc.key else None,
-            scope=vc.scope,
-            ttl_seconds=vc.ttl_seconds,
-            path=vc.path,
-            autosave=vc.autosave,
-            encrypt=vc.encrypt,
-            key_env=vc.key_env,
+        self.vault = (
+            vault
+            if vault is not None
+            else TokenVault(
+                key=vc.key.get_secret_value() if vc.key else None,
+                scope=vc.scope,
+                ttl_seconds=vc.ttl_seconds,
+                path=vc.path,
+                autosave=vc.autosave,
+                encrypt=vc.encrypt,
+                key_env=vc.key_env,
+            )
         )
         if self.vault.path is not None:
             _register_exit_save(self.vault)
@@ -594,8 +606,9 @@ class Policy:
         self.registry: DetectorRegistry = DEFAULT_REGISTRY
         if config.detectors or config.disabled_detectors:
             reg = DEFAULT_REGISTRY.with_custom(config.detectors)
-            self.registry = reg.disable(config.disabled_detectors) \
-                if config.disabled_detectors else reg
+            self.registry = (
+                reg.disable(config.disabled_detectors) if config.disabled_detectors else reg
+            )
         # Validate transform specs eagerly so bad policies fail at load time
         for spec in [*config.transforms, *config.input_transforms]:
             self._build(normalize_transform_spec(spec))
@@ -641,14 +654,17 @@ class Policy:
     def from_profile(cls, name: str, *, vault: TokenVault | None = None) -> "Policy":
         path = _profile_path(name)
         if path is None:
-            raise ValueError(f"Unknown policy profile {name!r}; available: "
-                             f"{', '.join(available_profiles())}")
-        return cls(_read_file(path), vault=vault, source=f"profile:{path.stem}",
-                   base_dir=path.parent)
+            raise ValueError(
+                f"Unknown policy profile {name!r}; available: {', '.join(available_profiles())}"
+            )
+        return cls(
+            _read_file(path), vault=vault, source=f"profile:{path.stem}", base_dir=path.parent
+        )
 
     @classmethod
-    def from_file(cls, path: str | os.PathLike[str], *, vault: TokenVault | None = None
-                  ) -> "Policy":
+    def from_file(
+        cls, path: str | os.PathLike[str], *, vault: TokenVault | None = None
+    ) -> "Policy":
         p = Path(path).expanduser()
         if not p.is_file():
             raise FileNotFoundError(f"Policy file not found: {p}")
@@ -668,8 +684,9 @@ class Policy:
         data["vault"] = self.config.vault.model_dump(mode="python")
         if self.config.vault.key:
             data["vault"]["key"] = self.config.vault.key.get_secret_value()
-        derived = Policy(merge_policy_dicts(data, overrides), vault=self.vault,
-                         source=f"derived:{self.name}")
+        derived = Policy(
+            merge_policy_dicts(data, overrides), vault=self.vault, source=f"derived:{self.name}"
+        )
         derived.extends_chain = [*self.extends_chain, self.name]
         return derived
 
@@ -725,11 +742,15 @@ class Policy:
                 return False, f"category '{cat}' denied by rule '{r.name}'"
             hit = caps & r.deny_caps
             if hit:
-                return False, (f"capability '{sorted(c.value for c in hit)[0]}' denied by rule "
-                               f"'{r.name}'")
+                return False, (
+                    f"capability '{sorted(c.value for c in hit)[0]}' denied by rule '{r.name}'"
+                )
         limits = [r.max_sensitivity for r in rules if r.max_sensitivity is not None]
-        limit = (max(limits, key=lambda s: SENSITIVITY_ORDER[Sensitivity(s)]) if limits
-                 else self._base.max_sensitivity)
+        limit = (
+            max(limits, key=lambda s: SENSITIVITY_ORDER[Sensitivity(s)])
+            if limits
+            else self._base.max_sensitivity
+        )
         if limit is not None and SENSITIVITY_ORDER[sens] > SENSITIVITY_ORDER[Sensitivity(limit)]:
             allowed = Sensitivity(limit).value
             return False, f"sensitivity '{sens.value}' exceeds the allowed '{allowed}'"
@@ -761,8 +782,9 @@ class Policy:
             return True
         return self.decide(spec, principal)[0]
 
-    def check_call(self, spec: Any, principal: Any, arguments: dict[str, Any] | None = None
-                   ) -> None:
+    def check_call(
+        self, spec: Any, principal: Any, arguments: dict[str, Any] | None = None
+    ) -> None:
         """Raise :class:`AccessDeniedError` / :class:`RateLimitedError`."""
         principal = self._principal(principal)
         allowed, reason = self.decide(spec, principal)
@@ -788,8 +810,12 @@ class Policy:
             self.counters["reveal"] += 1
             audit_logger.warning(
                 "REVEAL principal=%s roles=%s %s=%s args=%s policy=%s",
-                getattr(principal, "id", "?"), sorted(getattr(principal, "roles", ()) or ()),
-                kind, name, self._arg_fingerprint(arguments), self.name,
+                getattr(principal, "id", "?"),
+                sorted(getattr(principal, "roles", ()) or ()),
+                kind,
+                name,
+                self._arg_fingerprint(arguments),
+                self.name,
             )
             self._audit("allowed", kind, name, principal, arguments, "reveal", force=True)
         else:
@@ -840,8 +866,11 @@ class Policy:
                     raise RateLimitedError(
                         f"Rate limit exceeded for {kind} '{name}' ({rl.rate:g}/{rl.per}); "
                         f"retry in {retry:.1f}s",
-                        data={"retry_after": round(retry, 2), "limit": f"{rl.rate:g}/{rl.per}",
-                              "scope": rl.scope},
+                        data={
+                            "retry_after": round(retry, 2),
+                            "limit": f"{rl.rate:g}/{rl.per}",
+                            "scope": rl.scope,
+                        },
                     )
                 taken.append(b)
             for b in taken:
@@ -867,8 +896,17 @@ class Policy:
             out[str(k)] = self.vault.hash_value(blob, length=12, entity_type="audit")
         return out
 
-    def _audit(self, decision: str, kind: str, name: str, principal: Any,
-               arguments: dict[str, Any] | None, reason: str, *, force: bool = False) -> None:
+    def _audit(
+        self,
+        decision: str,
+        kind: str,
+        name: str,
+        principal: Any,
+        arguments: dict[str, Any] | None,
+        reason: str,
+        *,
+        force: bool = False,
+    ) -> None:
         if not (self.config.audit or force or decision != "allowed"):
             return
         entry = {
@@ -885,11 +923,13 @@ class Policy:
             if self.audit_log.maxlen != 0:
                 self.audit_log.append(entry)
         if self.config.audit or decision != "allowed":
-            audit_logger.info("%s %s %s principal=%s %s", decision, kind, name,
-                              entry["principal"], reason)
+            audit_logger.info(
+                "%s %s %s principal=%s %s", decision, kind, name, entry["principal"], reason
+            )
 
-    def record_rejection(self, spec: Any, principal: Any, arguments: dict[str, Any] | None,
-                         exc: BaseException) -> None:
+    def record_rejection(
+        self, spec: Any, principal: Any, arguments: dict[str, Any] | None, exc: BaseException
+    ) -> None:
         """Called by the layer when the input pipeline refused a call that
         :meth:`check_call` had already allowed (secrets in arguments...).
         The matching "allowed" audit entry is amended to "rejected", or a
@@ -903,8 +943,12 @@ class Policy:
         pid = str(getattr(principal, "id", "anonymous"))
         with self._lock:
             for entry in reversed(self.audit_log):
-                if (entry["decision"] == "allowed" and entry["name"] == name
-                        and entry["principal"] == pid and entry["arguments"] == fp):
+                if (
+                    entry["decision"] == "allowed"
+                    and entry["name"] == name
+                    and entry["principal"] == pid
+                    and entry["arguments"] == fp
+                ):
                     entry["decision"] = "rejected"
                     entry["reason"] = reason
                     break
@@ -913,14 +957,22 @@ class Policy:
                 return
         audit_logger.info("rejected %s %s principal=%s %s", kind, name, pid, reason)
 
-    def record_hidden(self, kind: str, name: str, principal: Any,
-                      arguments: dict[str, Any] | None = None) -> None:
+    def record_hidden(
+        self, kind: str, name: str, principal: Any, arguments: dict[str, Any] | None = None
+    ) -> None:
         """Called by the layer when a caller asks for a primitive that is
         unknown or hidden by this policy (it answers "not found")."""
         principal = self._principal(principal)
         self.counters["hidden"] += 1
-        self._audit("not_found", str(kind), str(name)[:200], principal, arguments,
-                    "unknown or hidden by policy", force=True)
+        self._audit(
+            "not_found",
+            str(kind),
+            str(name)[:200],
+            principal,
+            arguments,
+            "unknown or hidden by policy",
+            force=True,
+        )
 
     # ------------------------------------------------------------------
     # Vault persistence
@@ -954,9 +1006,12 @@ class Policy:
                     spec2 = copy.deepcopy(spec)
                     spec2["options"].setdefault("disabled_detectors", [])
                     spec2["options"]["disabled_detectors"] += self.config.disabled_detectors
-                    hit = build_transform(spec2, vault=self.vault,
-                                          custom_detectors=self.config.detectors,
-                                          profile=self.name)
+                    hit = build_transform(
+                        spec2,
+                        vault=self.vault,
+                        custom_detectors=self.config.detectors,
+                        profile=self.name,
+                    )
                 self._built[key] = hit
             return hit
 
@@ -1045,8 +1100,9 @@ class Policy:
         skip = {canonical_transform_name(x) for x in hints.get("skip_input", ()) or ()}
         if hints.get("input_guard") is False:
             skip.add("guard_secrets")
-        transforms: list[Any] = [self._build(s) for s in specs
-                                 if s["type"] not in skip and s["id"] not in skip]
+        transforms: list[Any] = [
+            self._build(s) for s in specs if s["type"] not in skip and s["id"] not in skip
+        ]
         out = self.output_pipeline(spec, principal)
         aliases: list[AliasMap] = []
         reversible = False
@@ -1061,8 +1117,11 @@ class Policy:
             elif isinstance(t, UntrustedTextGuard) and t.on_suspicious == "fence":
                 fenced = True
         wants = reversible or aliases or fenced
-        if wants and hints.get("depseudonymize", True) is not False \
-                and "depseudonymize" not in skip:
+        if (
+            wants
+            and hints.get("depseudonymize", True) is not False
+            and "depseudonymize" not in skip
+        ):
             transforms.append(Depseudonymizer(self.vault, aliases=aliases, strip_fences=True))
         pipeline = Pipeline(transforms) if transforms else IDENTITY
         with self._lock:
@@ -1077,10 +1136,18 @@ class Policy:
         from cloudg.mcp.transforms.base import TransformContext
 
         principal = self._principal(principal)
-        pipeline = self.output_pipeline(spec, principal) if spec is not None else \
-            self._generic_pipeline(principal)
-        ctx = TransformContext(principal=principal, spec=spec, kind=spec_kind(spec) if spec
-                               else "tool", direction="output", vault=self.vault)
+        pipeline = (
+            self.output_pipeline(spec, principal)
+            if spec is not None
+            else self._generic_pipeline(principal)
+        )
+        ctx = TransformContext(
+            principal=principal,
+            spec=spec,
+            kind=spec_kind(spec) if spec else "tool",
+            direction="output",
+            vault=self.vault,
+        )
         return pipeline.apply(value, ctx), ctx.report
 
     def _generic_pipeline(self, principal: Any) -> Pipeline:
@@ -1105,8 +1172,11 @@ class Policy:
             doc[k] = [_scrub(normalize_transform_spec(s)) for s in getattr(cfg, k)]
         doc["transform_options"] = _scrub(doc.get("transform_options", {}))
         vault_cfg = cfg.vault.model_dump(mode="json", exclude={"key"})
-        doc["vault"] = {**vault_cfg, **self.vault.stats(), "key_configured": cfg.vault.key
-                        is not None}
+        doc["vault"] = {
+            **vault_cfg,
+            **self.vault.stats(),
+            "key_configured": cfg.vault.key is not None,
+        }
         doc["loaded_from"] = self.source
         doc["extends_chain"] = self.extends_chain
         doc["effective_denied_capabilities"] = sorted(c.value for c in self._base.deny_caps)
@@ -1125,9 +1195,16 @@ def _scrub(value: Any) -> Any:
     """Hide secret-looking option values (``key: ...``) in descriptions;
     strategy tables (``strategies: {secret: redact}``) are left alone."""
     if isinstance(value, dict):
-        return {k: (v if k == "strategies" else
-                    "***" if isinstance(k, str) and _SECRET_OPTION.search(k)
-                    and isinstance(v, str) else _scrub(v)) for k, v in value.items()}
+        return {
+            k: (
+                v
+                if k == "strategies"
+                else "***"
+                if isinstance(k, str) and _SECRET_OPTION.search(k) and isinstance(v, str)
+                else _scrub(v)
+            )
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         return [_scrub(v) for v in value]
     return value
@@ -1154,8 +1231,14 @@ def strategy_list(strategies: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _strategy_lists(value: Any) -> Any:
     if isinstance(value, dict):
-        return {k: (strategy_list(v) if k == "strategies" and isinstance(v, dict)
-                    else _strategy_lists(v)) for k, v in value.items()}
+        return {
+            k: (
+                strategy_list(v)
+                if k == "strategies" and isinstance(v, dict)
+                else _strategy_lists(v)
+            )
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         return [_strategy_lists(v) for v in value]
     return value

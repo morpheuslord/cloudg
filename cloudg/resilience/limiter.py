@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import math
 import threading
 import time
@@ -56,6 +57,8 @@ __all__ = [
     "Slot",
     "TokenBucket",
 ]
+
+logger = logging.getLogger(__name__)
 
 #: Multiplicative decrease applied to a scope's rate on throttling
 DECREASE_FACTOR = 0.5
@@ -409,8 +412,8 @@ class Bulkhead:
         for loop, fut in waiters:
             try:
                 loop.call_soon_threadsafe(_resolve, fut)
-            except RuntimeError:  # loop closed
-                pass
+            except RuntimeError:  # loop closed: nobody is left to wake there
+                logger.debug("Bulkhead waiter on a closed event loop dropped")
 
     @contextlib.asynccontextmanager
     async def hold(self) -> AsyncIterator[None]:
@@ -464,8 +467,9 @@ class Slot:
     def __del__(self) -> None:
         try:
             self.release()
-        except Exception:  # pragma: no cover - interpreter shutdown
-            pass
+        except Exception as exc:  # pragma: no cover - interpreter shutdown
+            # A finalizer must not raise; the bulkhead dies with the process anyway
+            logger.debug("Bulkhead slot not released during finalization: %r", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -603,8 +607,8 @@ class RateLimiter:
         if self._on_event is not None:
             try:
                 self._on_event(event, scope, value)
-            except Exception:  # telemetry never breaks a call
-                pass
+            except Exception as exc:  # telemetry never breaks a call
+                logger.debug("Rate limiter telemetry hook failed for %s: %r", scope, exc)
 
     async def acquire(self, scope: Scope, *, sleep: Callable[[float], Any] | None = None) -> float:
         """Wait (asynchronously) for a token; returns the time waited."""

@@ -1,7 +1,7 @@
 """Semantic ontology engine for cloud infrastructure.
 
 Builds an RDF/OWL knowledge graph from CloudG assets, edges, and findings
-using rdflib. Provides ~60 typed semantic relations across 7 domain groups,
+using rdflib. Provides 64 typed semantic relations across 7 domain groups,
 SPARQL query interface, and multi-format export (Turtle, JSON-LD, RDF/XML).
 
 The ontology is designed to be RAG-ready: every triple carries rich metadata
@@ -26,6 +26,7 @@ from cloudg.graph.ontology_rules import (
     get_relations_for_group,
     infer_asset_relations,
     infer_relations,
+    iter_asset_relations,
 )
 from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
@@ -46,6 +47,7 @@ __all__ = [
     "get_relations_for_group",
     "infer_asset_relations",
     "infer_relations",
+    "iter_asset_relations",
 ]
 
 logger = logging.getLogger(__name__)
@@ -351,16 +353,15 @@ class CloudOntology:
         for edge in edges:
             self._add_edge(edge, assets_by_id)
 
-        # Add inferred asset-level relations
-        for asset in assets:
-            for rel_type, target_id in infer_asset_relations(asset, assets):
-                src_uri = CMR[asset.id]
-                tgt_uri = (
-                    CMR[target_id]
-                    if not target_id.startswith("tag:")
-                    else CMR[target_id.replace(":", "_")]
-                )
-                self._graph.add((src_uri, CMP[rel_type.value], tgt_uri))
+        # Add inferred asset-level relations (KMS key index built once)
+        for asset, rel_type, target_id in iter_asset_relations(assets):
+            src_uri = CMR[asset.id]
+            tgt_uri = (
+                CMR[target_id]
+                if not target_id.startswith("tag:")
+                else CMR[target_id.replace(":", "_")]
+            )
+            self._graph.add((src_uri, CMP[rel_type.value], tgt_uri))
 
         # Add findings, attached to the asset they resolve to
         if findings:
@@ -436,8 +437,9 @@ class CloudOntology:
         """Add a Finding as an OWL individual with relations.
 
         The affected resource is the asset ``index`` resolves the finding
-        to (by ID, ARN, unique name or unique ARN tail), falling back to
-        the raw ``resource_id`` when nothing matches.
+        to (by ID, ARN, unique name, unique ARN tail or unique ARN
+        resource-part tail, see :meth:`AssetIndex.resolve_finding`),
+        falling back to the raw ``resource_id`` when nothing matches.
         """
         uri = CMR[f"finding_{finding.id}"]
         self._graph.add((uri, RDF.type, CM["SecurityFinding"]))

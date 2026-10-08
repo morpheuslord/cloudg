@@ -21,7 +21,7 @@ import hashlib
 import json
 import re
 from enum import Enum
-from typing import Annotated, Any, Iterable, Sequence, TypeVar
+from typing import Annotated, Any, Callable, Iterable, Sequence, TypeVar
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,9 +32,47 @@ from cloudg.schema.models import CloudAsset, Finding, NetworkEdge, Severity
 
 T = TypeVar("T")
 E = TypeVar("E", bound=Enum)
+F = TypeVar("F", bound=Callable[..., Any])
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
+
+
+class Catalog:
+    """Records tool / resource / prompt declarations made at import time
+    and replays them onto a :class:`~cloudg.mcp.core.Registry`.
+
+    Catalog modules declare their handlers as module-level functions with
+    ``@CATALOG.tool(...)`` (same arguments as :meth:`Registry.tool`) and
+    their ``register(reg)`` is just ``CATALOG.register(reg)``. Declaration
+    order is registration order.
+    """
+
+    def __init__(self) -> None:
+        self._specs: list[tuple[str, tuple[Any, ...], dict[str, Any], Callable[..., Any]]] = []
+
+    def _record(self, kind: str, *args: Any, **kwargs: Any) -> Callable[[F], F]:
+        def deco(fn: F) -> F:
+            self._specs.append((kind, args, kwargs, fn))
+            return fn
+
+        return deco
+
+    def tool(self, *args: Any, **kwargs: Any) -> Callable[[F], F]:
+        return self._record("tool", *args, **kwargs)
+
+    def resource(self, *args: Any, **kwargs: Any) -> Callable[[F], F]:
+        return self._record("resource", *args, **kwargs)
+
+    def resource_template(self, *args: Any, **kwargs: Any) -> Callable[[F], F]:
+        return self._record("resource_template", *args, **kwargs)
+
+    def prompt(self, *args: Any, **kwargs: Any) -> Callable[[F], F]:
+        return self._record("prompt", *args, **kwargs)
+
+    def register(self, reg: Any) -> None:
+        for kind, args, kwargs, fn in self._specs:
+            getattr(reg, kind)(*args, **kwargs)(fn)
 
 DatasetArg = Annotated[
     str, Field(description="Dataset name (see list_datasets). Empty = the active dataset.")
@@ -191,18 +229,19 @@ def finding_brief(ds: Dataset, f: Finding) -> dict[str, Any]:
 def parse_enum(value: str, enum: type[E], label: str) -> E:
     """Case-insensitive enum lookup with a helpful error."""
     v = (value or "").strip().upper().replace("-", "_").replace(" ", "_")
-    try:
-        return enum(v)
-    except ValueError:
-        pass
-    for m in enum:
-        if m.name == v:
-            return m
+    for attr in ("value", "name"):
+        for m in enum:
+            if getattr(m, attr) == v:
+                return m
     names = [m.value for m in enum]
     close = difflib.get_close_matches(v, names, n=3, cutoff=0.5)
     hint = f" Did you mean {', '.join(close)}?" if close else ""
     shown = ", ".join(names) if len(names) <= 30 else ", ".join(names[:30]) + ", ..."
-    raise InvalidArgumentsError(f"Unknown {label} {value!r}.{hint} Valid values: {shown}")
+    # The value itself goes in data, not in the text (see cloudg.mcp.state.base)
+    raise InvalidArgumentsError(
+        f"Unknown {label}.{hint} Valid values: {shown}",
+        data={"value": value, "valid": names, "close_matches": close},
+    )
 
 
 def parse_enums(values: Sequence[str] | None, enum: type[E], label: str) -> set[E]:
@@ -237,8 +276,16 @@ def project(item: dict[str, Any], fields: list[str] | None) -> dict[str, Any]:
 
 
 def fingerprint(ds: Dataset | None, **params: Any) -> str:
+    """Hash of the query and the dataset state a cursor belongs to: name,
+    version and the per-load instance id, so a dataset replaced under the
+    same name (version back to 0) rejects the old cursors."""
     raw = json.dumps(
-        {"ds": ds.name if ds else None, "v": ds.version if ds else None, **params},
+        {
+            "ds": ds.name if ds else None,
+            "v": ds.version if ds else None,
+            "i": getattr(ds, "instance_id", None) if ds else None,
+            **params,
+        },
         sort_keys=True,
         default=str,
     )

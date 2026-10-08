@@ -43,7 +43,7 @@ from cloudg.collectors.gcp_assets import (
 )
 from cloudg.coverage import CollectionCoverage, ServiceStatus
 from cloudg.resilience.errors import ErrorKind, classify, describe_error, is_throttle
-from cloudg.resilience.gcp import RetryCounter, gcp_scope, paced
+from cloudg.resilience.gcp import RetryCounter, gcp_retry, gcp_scope, paced
 from cloudg.resilience.governor import get_governor
 from cloudg.inventory.catalogs import asset_type_map, load_catalog
 from cloudg.schema.models import (
@@ -94,8 +94,6 @@ def _retry(scope: Any = None, counter: Any = None) -> Any:
     at ratelimit.gcp.max_backoff_seconds (60), overall deadline_seconds
     (900), at most max_retries consecutive retries, retry budget); retried
     errors feed cloudg's adaptive rate limiter for ``scope``."""
-    from cloudg.resilience.gcp import gcp_retry
-
     return gcp_retry(scope, counter=counter)
 
 
@@ -302,12 +300,16 @@ class GCPCollector(BaseCollector):
             self._scope,
             error,
         )
+        return await self._collect_from_search(error, start)
+
+    async def _collect_from_search(self, error: Exception, start: float) -> list[dict[str, Any]]:
+        """Summary records from SearchAllResources after ListAssets failed with ``error``."""
         search_start = time.time()
         found, search_error = await asyncio.to_thread(self._search_resources)
+        self._record(
+            "gcp_list_assets", ServiceStatus.FAILED, error=describe_error(error), start=start
+        )
         if search_error is not None and not found:
-            self._record(
-                "gcp_list_assets", ServiceStatus.FAILED, error=describe_error(error), start=start
-            )
             self._record(
                 "gcp_search_resources",
                 ServiceStatus.FAILED,
@@ -319,9 +321,6 @@ class GCPCollector(BaseCollector):
                 f"ListAssets: {describe_error(error)}; "
                 f"SearchAllResources: {describe_error(search_error)}"
             )
-        self._record(
-            "gcp_list_assets", ServiceStatus.FAILED, error=describe_error(error), start=start
-        )
         self._record(
             "gcp_search_resources",
             ServiceStatus.PARTIAL,
@@ -338,16 +337,8 @@ class GCPCollector(BaseCollector):
 
     def _learn_projects(self, records: list[dict[str, Any]]) -> None:
         for rec in records:
-            data = rec.get("data") or {}
             if rec["asset_type"] == "cloudresourcemanager.googleapis.com/Project":
-                number = _num(data.get("projectNumber"))
-                if not number and str(data.get("name", "")).startswith("projects/"):
-                    number = data["name"].split("/", 1)[1]
-                if not number:
-                    number = rec["name"].rsplit("/", 1)[-1]
-                pid = data.get("projectId")
-                if number and pid:
-                    self._number_to_id.setdefault(number, pid)
+                self._learn_project_asset(rec)
         for rec in records:
             number = self._ancestor_number(rec)
             if not number or number in self._number_to_id:
@@ -360,6 +351,18 @@ class GCPCollector(BaseCollector):
             if len(numbers) == 1:
                 self._number_to_id.setdefault(numbers.pop(), self._project_id)
         self._id_to_number = {v: k for k, v in self._number_to_id.items()}
+
+    def _learn_project_asset(self, rec: dict[str, Any]) -> None:
+        """Project number -> id from a cloudresourcemanager Project asset."""
+        data = rec.get("data") or {}
+        number = _num(data.get("projectNumber"))
+        if not number and str(data.get("name", "")).startswith("projects/"):
+            number = data["name"].split("/", 1)[1]
+        if not number:
+            number = rec["name"].rsplit("/", 1)[-1]
+        pid = data.get("projectId")
+        if number and pid:
+            self._number_to_id.setdefault(number, pid)
 
     @staticmethod
     def _ancestor_number(rec: dict[str, Any]) -> str | None:

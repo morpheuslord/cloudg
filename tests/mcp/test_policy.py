@@ -43,17 +43,32 @@ from cloudg.mcp.transforms import (
 ARN = "arn:aws:ec2:us-east-1:123456789012:instance/i-0abc1234def567890"
 
 
-def tool(name="get_asset", *, category="inventory", caps=(Capability.READ_STATE,),
-         sensitivity=Sensitivity.CONFIDENTIAL, tags=(), hints=None) -> ToolSpec:
-    return ToolSpec(name=name, handler=lambda ctx: None, category=category,
-                    capabilities=set(caps), sensitivity=sensitivity, tags=set(tags),
-                    transform_hints=dict(hints or {}))
+def tool(
+    name="get_asset",
+    *,
+    category="inventory",
+    caps=(Capability.READ_STATE,),
+    sensitivity=Sensitivity.CONFIDENTIAL,
+    tags=(),
+    hints=None,
+) -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        handler=lambda ctx: None,
+        category=category,
+        capabilities=set(caps),
+        sensitivity=sensitivity,
+        tags=set(tags),
+        transform_hints=dict(hints or {}),
+    )
 
 
-def resource(uri="cloudg://workspace", sensitivity=Sensitivity.INTERNAL,
-             category="inventory") -> ResourceSpec:
-    return ResourceSpec(name="ws", handler=lambda ctx: None, uri=uri, sensitivity=sensitivity,
-                        category=category)
+def resource(
+    uri="cloudg://workspace", sensitivity=Sensitivity.INTERNAL, category="inventory"
+) -> ResourceSpec:
+    return ResourceSpec(
+        name="ws", handler=lambda ctx: None, uri=uri, sensitivity=sensitivity, category=category
+    )
 
 
 LOCAL = Principal.local()
@@ -61,8 +76,7 @@ ADMIN = Principal(id="root", roles={"admin"})
 
 
 def run(pipeline, value, policy, principal=LOCAL, spec=None, direction="output"):
-    ctx = TransformContext(principal=principal, spec=spec, vault=policy.vault,
-                           direction=direction)
+    ctx = TransformContext(principal=principal, spec=spec, vault=policy.vault, direction=direction)
     return pipeline.apply(value, ctx), ctx.report
 
 
@@ -72,8 +86,9 @@ def run(pipeline, value, policy, principal=LOCAL, spec=None, direction="output")
 
 
 def test_profiles_are_packaged():
-    assert {"open", "standard", "strict", "read_only", "airgapped", "audit",
-            "soc-analyst"} <= set(available_profiles())
+    assert {"open", "standard", "strict", "read_only", "airgapped", "audit", "soc-analyst"} <= set(
+        available_profiles()
+    )
     for name in available_profiles():
         p = Policy.load(name)
         assert p.name == name
@@ -145,14 +160,25 @@ def test_extends_merge_semantics(tmp_path):
 
 def test_merge_policy_dicts_unit():
     out = merge_policy_dicts(
-        {"deny_capabilities": ["exec"], "vault": {"scope": "global"}, "transforms": ["a"],
-         "rate_limits": [{"rate": 1}]},
-        {"deny_capabilities": ["exec", "write_fs"], "vault": {"ttl_seconds": 5},
-         "transforms": ["b"], "rate_limits": [{"rate": 2}]},
+        {
+            "deny_capabilities": ["exec"],
+            "vault": {"scope": "global"},
+            "transforms": ["a"],
+            "rate_limits": [{"rate": 1}],
+        },
+        {
+            "deny_capabilities": ["exec", "write_fs"],
+            "vault": {"ttl_seconds": 5},
+            "transforms": ["b"],
+            "rate_limits": [{"rate": 2}],
+        },
     )
-    assert out == {"deny_capabilities": ["exec", "write_fs"],
-                   "vault": {"scope": "global", "ttl_seconds": 5}, "transforms": ["b"],
-                   "rate_limits": [{"rate": 1}, {"rate": 2}]}
+    assert out == {
+        "deny_capabilities": ["exec", "write_fs"],
+        "vault": {"scope": "global", "ttl_seconds": 5},
+        "transforms": ["b"],
+        "rate_limits": [{"rate": 1}, {"rate": 2}],
+    }
 
 
 def test_policy_level_allow_capabilities_undenies():
@@ -236,14 +262,16 @@ def test_capability_profiles(profile, denied):
 
 
 def test_allow_and_deny_lists_with_globs_and_negation():
-    p = Policy.load({
-        "name": "lists",
-        "allow_tools": ["find_*", "get_*", "!get_secret*"],
-        "deny_resources": ["cloudg://raw/*"],
-        "deny_prompts": ["dangerous"],
-        "deny_categories": ["live"],
-        "allow_categories": ["inventory", "graph", "live"],
-    })
+    p = Policy.load(
+        {
+            "name": "lists",
+            "allow_tools": ["find_*", "get_*", "!get_secret*"],
+            "deny_resources": ["cloudg://raw/*"],
+            "deny_prompts": ["dangerous"],
+            "deny_categories": ["live"],
+            "allow_categories": ["inventory", "graph", "live"],
+        }
+    )
     assert p.is_allowed(tool("find_assets"), LOCAL)
     assert not p.is_allowed(tool("get_secret_value"), LOCAL)
     assert not p.is_allowed(tool("list_x"), LOCAL)
@@ -252,8 +280,12 @@ def test_allow_and_deny_lists_with_globs_and_negation():
     assert not p.is_allowed(resource("cloudg://raw/1"), LOCAL)
     assert p.is_allowed(resource("cloudg://workspace"), LOCAL)
     assert not p.is_allowed(resource("cloudg://workspace", category="general"), LOCAL)
-    tmpl = ResourceTemplateSpec(name="raw", handler=lambda ctx, x: None,
-                                uri_template="cloudg://raw/{x}", category="inventory")
+    tmpl = ResourceTemplateSpec(
+        name="raw",
+        handler=lambda ctx, x: None,
+        uri_template="cloudg://raw/{x}",
+        category="inventory",
+    )
     assert not p.is_allowed(tmpl, LOCAL)
     prompt = PromptSpec(name="dangerous", handler=lambda ctx: "", category="graph")
     assert not p.is_allowed(prompt, LOCAL)
@@ -261,21 +293,27 @@ def test_allow_and_deny_lists_with_globs_and_negation():
 
 
 def test_role_rules_grant_and_deny():
-    p = Policy.load({
-        "name": "roles",
-        "deny_capabilities": ["cloud_access"],
-        "max_sensitivity": "internal",
-        "roles": {
-            "collector": {"allow_capabilities": ["cloud_access"]},
-            "analyst": {"max_sensitivity": "confidential", "deny_tools": ["export_*"]},
-            "intern": {"deny_categories": ["findings"]},
-        },
-        "rules": [
-            {"name": "no-tag-x", "match": {"tags": ["x"]}, "deny_tools": ["*"]},
-            {"name": "bob-only", "match": {"principals": ["bob"]}, "allow_tools": ["special"],
-             "max_sensitivity": "restricted"},
-        ],
-    })
+    p = Policy.load(
+        {
+            "name": "roles",
+            "deny_capabilities": ["cloud_access"],
+            "max_sensitivity": "internal",
+            "roles": {
+                "collector": {"allow_capabilities": ["cloud_access"]},
+                "analyst": {"max_sensitivity": "confidential", "deny_tools": ["export_*"]},
+                "intern": {"deny_categories": ["findings"]},
+            },
+            "rules": [
+                {"name": "no-tag-x", "match": {"tags": ["x"]}, "deny_tools": ["*"]},
+                {
+                    "name": "bob-only",
+                    "match": {"principals": ["bob"]},
+                    "allow_tools": ["special"],
+                    "max_sensitivity": "restricted",
+                },
+            ],
+        }
+    )
     live = tool("map_inventory", caps=[Capability.CLOUD_ACCESS], sensitivity=Sensitivity.INTERNAL)
     assert not p.is_allowed(live, LOCAL)
     assert p.is_allowed(live, Principal(id="c", roles={"collector"}))
@@ -293,20 +331,30 @@ def test_role_rules_grant_and_deny():
 
 
 def test_rule_match_kinds_sensitivity_capabilities():
-    p = Policy.load({
-        "name": "m",
-        "rules": [
-            {"name": "no-restricted-resources",
-             "match": {"kinds": ["resource"], "sensitivity": ["restricted"]},
-             "deny_resources": ["*"]},
-            {"name": "no-exec-for-guests", "match": {"roles": ["guest"],
-                                                      "capabilities": ["exec"]},
-             "deny_tools": ["*"]},
-        ],
-    })
+    p = Policy.load(
+        {
+            "name": "m",
+            "rules": [
+                {
+                    "name": "no-restricted-resources",
+                    "match": {"kinds": ["resource"], "sensitivity": ["restricted"]},
+                    "deny_resources": ["*"],
+                },
+                {
+                    "name": "no-exec-for-guests",
+                    "match": {"roles": ["guest"], "capabilities": ["exec"]},
+                    "deny_tools": ["*"],
+                },
+            ],
+        }
+    )
     assert not p.is_allowed(resource(sensitivity=Sensitivity.RESTRICTED), LOCAL)
-    tmpl = ResourceTemplateSpec(name="t", handler=lambda ctx, x: None, uri_template="u://{x}",
-                                sensitivity=Sensitivity.RESTRICTED)
+    tmpl = ResourceTemplateSpec(
+        name="t",
+        handler=lambda ctx, x: None,
+        uri_template="u://{x}",
+        sensitivity=Sensitivity.RESTRICTED,
+    )
     assert not p.is_allowed(tmpl, LOCAL)
     assert p.is_allowed(resource(), LOCAL)
     guest = Principal(id="g", roles={"guest"})
@@ -352,8 +400,14 @@ def test_denials_audited_even_without_audit_flag():
 
 
 def test_rate_limit_token_bucket(monkeypatch):
-    p = Policy.load({"name": "rl", "rate_limits": [
-        {"tools": ["hot*"], "rate": 2, "per": "minute", "scope": "principal_tool"}]})
+    p = Policy.load(
+        {
+            "name": "rl",
+            "rate_limits": [
+                {"tools": ["hot*"], "rate": 2, "per": "minute", "scope": "principal_tool"}
+            ],
+        }
+    )
     t = tool("hot_tool")
     p.check_call(t, LOCAL, {})
     p.check_call(t, LOCAL, {})
@@ -372,13 +426,18 @@ def test_rate_limit_token_bucket(monkeypatch):
     p.reset_rate_limits()
 
 
-@pytest.mark.parametrize("scope, second_ok", [("tool", False), ("principal", False),
-                                              ("global", False), ("principal_tool", True)])
+@pytest.mark.parametrize(
+    "scope, second_ok",
+    [("tool", False), ("principal", False), ("global", False), ("principal_tool", True)],
+)
 def test_rate_limit_scopes(scope, second_ok):
     p = Policy.load({"name": "rl", "rate_limits": [{"rate": 1, "per": "hour", "scope": scope}]})
     p.check_call(tool("a"), Principal(id="x"), {})
-    other = (tool("b"), Principal(id="x")) if scope in ("principal", "principal_tool") \
+    other = (
+        (tool("b"), Principal(id="x"))
+        if scope in ("principal", "principal_tool")
         else (tool("a"), Principal(id="y"))
+    )
     if scope == "global":
         other = (tool("b"), Principal(id="y"))
     if second_ok:
@@ -389,8 +448,18 @@ def test_rate_limit_scopes(scope, second_ok):
 
 
 def test_role_rate_limits_and_burst():
-    p = Policy.load({"name": "rl", "roles": {"lead": {"rate_limits": [
-        {"tools": ["reveal_token"], "rate": 1, "per": "day", "burst": 2}]}}})
+    p = Policy.load(
+        {
+            "name": "rl",
+            "roles": {
+                "lead": {
+                    "rate_limits": [
+                        {"tools": ["reveal_token"], "rate": 1, "per": "day", "burst": 2}
+                    ]
+                }
+            },
+        }
+    )
     lead = Principal(id="l", roles={"lead"})
     t = tool("reveal_token")
     p.check_call(t, lead, {})
@@ -410,12 +479,17 @@ def test_standard_pipeline_shape_and_effects():
     p = Policy.load("standard")
     out_pl = p.output_pipeline(tool(), LOCAL)
     assert [t.name for t in out_pl.transforms] == ["sanitize", "redact", "project", "annotate"]
-    data = {"asset": {"arn": ARN, "account_id": "123456789012", "raw_data": {"x": 1},
-                      "metadata": {"password": "hunter2", "ip": "10.0.0.1"}}}
+    data = {
+        "asset": {
+            "arn": ARN,
+            "account_id": "123456789012",
+            "raw_data": {"x": 1},
+            "metadata": {"password": "hunter2", "ip": "10.0.0.1"},
+        }
+    }
     out, report = run(out_pl, data, p, spec=tool())
     assert out["asset"]["arn"] == ARN and out["asset"]["account_id"] == "123456789012"
-    assert out["asset"]["metadata"] == {"password": "[REDACTED:sensitive_field]",
-                                        "ip": "10.0.0.1"}
+    assert out["asset"]["metadata"] == {"password": "[REDACTED:sensitive_field]", "ip": "10.0.0.1"}
     assert "raw_data" not in out["asset"]
     assert report["annotations"]["provenance"]["policy"] == "standard"
     in_pl = p.input_pipeline(tool(), LOCAL)
@@ -437,9 +511,16 @@ def test_pipelines_are_cached_per_spec_and_roles():
 def test_strict_roundtrip_through_pipelines():
     p = Policy.load("strict")
     t = tool()
-    data = {"asset": {"arn": ARN, "name": "web-1", "asset_type": "ec2",
-                      "account_id": "123456789012", "ip": "10.0.1.5",
-                      "tags": {"Owner": "alice@corp.com", "env": "prod"}}}
+    data = {
+        "asset": {
+            "arn": ARN,
+            "name": "web-1",
+            "asset_type": "ec2",
+            "account_id": "123456789012",
+            "ip": "10.0.1.5",
+            "tags": {"Owner": "alice@corp.com", "env": "prod"},
+        }
+    }
     out, report = run(p.output_pipeline(t, LOCAL), data, p, spec=t)
     a = out["asset"]
     assert a["arn"] != ARN and a["account_id"] != "123456789012" and a["ip"] != "10.0.1.5"
@@ -464,37 +545,47 @@ def test_shared_vault_and_principal_scope():
     a, _ = run(scoped.output_pipeline(t, LOCAL), ARN, scoped, principal=Principal(id="a"))
     b, _ = run(scoped.output_pipeline(t, LOCAL), ARN, scoped, principal=Principal(id="b"))
     assert a != b
-    back_b, _ = run(scoped.input_pipeline(t, LOCAL), {"x": a}, scoped,
-                    principal=Principal(id="b"), direction="input")
+    back_b, _ = run(
+        scoped.input_pipeline(t, LOCAL),
+        {"x": a},
+        scoped,
+        principal=Principal(id="b"),
+        direction="input",
+    )
     assert back_b == {"x": a}  # b cannot reverse a's pseudonym
 
 
 def test_transform_hints():
     p = Policy.load("strict")
-    skip_all = tool("preview", hints={"skip": ["*"], "depseudonymize": False,
-                                       "input_guard": False})
+    skip_all = tool("preview", hints={"skip": ["*"], "depseudonymize": False, "input_guard": False})
     assert p.output_pipeline(skip_all, LOCAL) is IDENTITY
     assert p.input_pipeline(skip_all, LOCAL) is IDENTITY
     no_proj = tool("big", hints={"skip": ["projection"]})
     assert "project" not in [t.name for t in p.output_pipeline(no_proj, LOCAL).transforms]
     no_pseudo = tool("reveal", hints={"pseudonymize": False})
-    red = next(t for t in p.output_pipeline(no_pseudo, LOCAL).transforms
-               if isinstance(t, Redactor))
+    red = next(t for t in p.output_pipeline(no_pseudo, LOCAL).transforms if isinstance(t, Redactor))
     assert not red.reversible
     out, _ = run(p.output_pipeline(no_pseudo, LOCAL), ARN, p)
     assert out == ARN
     proj = tool("p", hints={"projection": {"max_list": 1}})
     pr = next(t for t in p.output_pipeline(proj, LOCAL).transforms if isinstance(t, Projection))
     assert pr.max_list == 1
-    extra = tool("e", hints={"transforms": [{"type": "rename_keys",
-                                             "options": {"renames": {"a": "b"}}}]})
+    extra = tool(
+        "e", hints={"transforms": [{"type": "rename_keys", "options": {"renames": {"a": "b"}}}]}
+    )
     assert p.output_pipeline(extra, LOCAL).transforms[-1].name == "rename_keys"
 
 
 def test_hints_ignored_when_policy_disallows():
     p = Policy.load({"extends": "strict", "honor_hints": False})
-    t = tool("x", hints={"skip": ["*"], "pseudonymize": False,
-                         "transforms": [{"type": "rename_keys", "options": {"renames": {}}}]})
+    t = tool(
+        "x",
+        hints={
+            "skip": ["*"],
+            "pseudonymize": False,
+            "transforms": [{"type": "rename_keys", "options": {"renames": {}}}],
+        },
+    )
     names = [x.name for x in p.output_pipeline(t, LOCAL).transforms]
     assert names[:2] == ["sanitize", "redact"] and names[-1] == "rename_keys"
     red = p.output_pipeline(t, LOCAL).transforms[1]
@@ -502,30 +593,48 @@ def test_hints_ignored_when_policy_disallows():
 
 
 def test_rule_transforms_modes_and_options():
-    p = Policy.load({
-        "name": "t",
-        "transforms": ["sanitize", {"type": "redact", "options": {"strategies": {
-            "secret": "redact"}}}],
-        "rules": [
-            {"name": "pseudo-for-analysts", "match": {"roles": ["analyst"]},
-             "transform_options": {"redact": {"strategies": {"aws_arn": "pseudonymize"}}}},
-            {"name": "findings-extra", "match": {"categories": ["findings"]},
-             "transforms": ["annotate"]},
-            {"name": "replace-for-raw", "match": {"names": ["raw_*"]},
-             "transforms": [{"type": "project", "options": {"max_list": 1}}],
-             "transforms_mode": "replace"},
-            {"name": "prepend", "match": {"names": ["pre"]}, "transforms_mode": "prepend",
-             "transforms": [{"type": "alias", "options": {"aliases": {"a": "b"}}}]},
-        ],
-    })
+    p = Policy.load(
+        {
+            "name": "t",
+            "transforms": [
+                "sanitize",
+                {"type": "redact", "options": {"strategies": {"secret": "redact"}}},
+            ],
+            "rules": [
+                {
+                    "name": "pseudo-for-analysts",
+                    "match": {"roles": ["analyst"]},
+                    "transform_options": {"redact": {"strategies": {"aws_arn": "pseudonymize"}}},
+                },
+                {
+                    "name": "findings-extra",
+                    "match": {"categories": ["findings"]},
+                    "transforms": ["annotate"],
+                },
+                {
+                    "name": "replace-for-raw",
+                    "match": {"names": ["raw_*"]},
+                    "transforms": [{"type": "project", "options": {"max_list": 1}}],
+                    "transforms_mode": "replace",
+                },
+                {
+                    "name": "prepend",
+                    "match": {"names": ["pre"]},
+                    "transforms_mode": "prepend",
+                    "transforms": [{"type": "alias", "options": {"aliases": {"a": "b"}}}],
+                },
+            ],
+        }
+    )
     analyst = Principal(id="a", roles={"analyst"})
     red = p.output_pipeline(tool(), analyst).transforms[1]
     assert red.strategies["aws_arn"].kind == "pseudonymize"
     assert red.strategies["secret"].kind == "redact"
     plain = p.output_pipeline(tool(), LOCAL).transforms[1]
     assert "aws_arn" not in plain.strategies
-    assert [t.name for t in p.output_pipeline(tool("f", category="findings"), LOCAL).transforms] \
-        == ["sanitize", "redact", "annotate"]
+    assert [
+        t.name for t in p.output_pipeline(tool("f", category="findings"), LOCAL).transforms
+    ] == ["sanitize", "redact", "annotate"]
     assert [t.name for t in p.output_pipeline(tool("raw_x"), LOCAL).transforms] == ["project"]
     pre = p.output_pipeline(tool("pre"), LOCAL)
     # aliases always run after redaction, whatever the rule's mode
@@ -538,13 +647,21 @@ def test_rule_transforms_modes_and_options():
 
 
 def test_custom_detectors_from_policy():
-    p = Policy.load({
-        "name": "custom-det",
-        "detectors": [{"name": "employee_id", "entity": "employee_id", "category": "pii",
-                       "pattern": r"\bEMP-\d{6}\b"}],
-        "transforms": [{"type": "redact", "options": {"strategies": {"employee_id": "hash"}}}],
-        "disabled_detectors": ["email"],
-    })
+    p = Policy.load(
+        {
+            "name": "custom-det",
+            "detectors": [
+                {
+                    "name": "employee_id",
+                    "entity": "employee_id",
+                    "category": "pii",
+                    "pattern": r"\bEMP-\d{6}\b",
+                }
+            ],
+            "transforms": [{"type": "redact", "options": {"strategies": {"employee_id": "hash"}}}],
+            "disabled_detectors": ["email"],
+        }
+    )
     out, report = run(p.output_pipeline(tool(), LOCAL), "by EMP-123456 a@b.com", p)
     assert "EMP-123456" not in out and out.startswith("by employee_id:")
     assert "a@b.com" in out
@@ -552,11 +669,19 @@ def test_custom_detectors_from_policy():
 
 
 def test_input_pipeline_without_reversible_output():
-    p = Policy.load({"name": "plain", "transforms": [
-        {"type": "redact", "options": {"strategies": {"secret": "redact"}}}]})
+    p = Policy.load(
+        {
+            "name": "plain",
+            "transforms": [{"type": "redact", "options": {"strategies": {"secret": "redact"}}}],
+        }
+    )
     assert p.input_pipeline(tool(), LOCAL) is IDENTITY
-    p2 = Policy.load({"name": "sanitize-flag", "transforms": [
-        {"type": "sanitize", "options": {"on_suspicious": "flag"}}]})
+    p2 = Policy.load(
+        {
+            "name": "sanitize-flag",
+            "transforms": [{"type": "sanitize", "options": {"on_suspicious": "flag"}}],
+        }
+    )
     assert p2.input_pipeline(tool(), LOCAL) is IDENTITY
     p3 = Policy.load({"name": "fence", "transforms": ["sanitize"]})
     assert isinstance(p3.output_pipeline(tool(), LOCAL).transforms[0], UntrustedTextGuard)
@@ -582,23 +707,29 @@ def test_soc_analyst_example_roles():
     assert p.is_allowed(live, collector)
     reveal = tool("reveal_token", caps=[Capability.REVEAL], sensitivity=Sensitivity.RESTRICTED)
     assert p.is_allowed(reveal, lead) and not p.is_allowed(reveal, analyst)
-    assert not p.is_allowed(tool("export_report", category="export",
-                                 caps=[Capability.WRITE_FS]), analyst)
+    assert not p.is_allowed(
+        tool("export_report", category="export", caps=[Capability.WRITE_FS]), analyst
+    )
     findings = tool("list_findings", category="findings")
     ann = [t for t in p.output_pipeline(findings, analyst).transforms if t.name == "annotate"]
     assert ann and ann[0].label_findings
     # account alias shown, and reversed on input
-    out, _ = run(p.output_pipeline(tool(), lead), {"account": "111111111111"}, p,
-                 principal=lead)
+    out, _ = run(p.output_pipeline(tool(), lead), {"account": "111111111111"}, p, principal=lead)
     assert out == {"account": "prod-payments"}
-    back, _ = run(p.input_pipeline(tool(), lead), {"account": "prod-payments"}, p,
-                  principal=lead, direction="input")
+    back, _ = run(
+        p.input_pipeline(tool(), lead),
+        {"account": "prod-payments"},
+        p,
+        principal=lead,
+        direction="input",
+    )
     assert back == {"account": "111111111111"}
 
 
 def test_check_call_completion_kind_and_unknown_spec():
-    p = Policy.load({"name": "c", "rate_limits": [{"rate": 1, "per": "hour",
-                                                    "kinds": ["completion"]}]})
+    p = Policy.load(
+        {"name": "c", "rate_limits": [{"rate": 1, "per": "hour", "kinds": ["completion"]}]}
+    )
     prompt = PromptSpec(name="p", handler=lambda ctx: "")
     p.check_call(prompt, LOCAL, {"__completion__": "arg"})
     with pytest.raises(RateLimitedError):
@@ -609,8 +740,11 @@ def test_check_call_completion_kind_and_unknown_spec():
 
 def test_vault_persistence_via_policy(tmp_path):
     path = tmp_path / "vault.json"
-    cfg = {"extends": "strict", "name": "persist",
-           "vault": {"key": "persist-key", "path": str(path), "autosave": True}}
+    cfg = {
+        "extends": "strict",
+        "name": "persist",
+        "vault": {"key": "persist-key", "path": str(path), "autosave": True},
+    }
     p = Policy.load(cfg)
     out, _ = run(p.output_pipeline(tool(), LOCAL), {"arn": ARN}, p)
     assert path.exists()  # autosaved after new pseudonyms were issued

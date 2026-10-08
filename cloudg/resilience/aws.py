@@ -192,6 +192,25 @@ class _Hooks:
         self.gov.record_retry(scope)
         return True
 
+    def _throttled_retry(
+        self,
+        response: Any = None,
+        caught_exception: Any = None,
+        attempts: Any = None,
+        request_dict: Any = None,
+        **_: Any,
+    ) -> Scope | None:
+        """needs-retry feedback shared by the sync and async hooks.
+
+        Records the attempt's outcome and charges the retry budget; returns
+        the scope when botocore will retry a throttled call (the retry then
+        needs a limiter token), else None.
+        """
+        scope, kind, err = self._feedback(response, caught_exception, request_dict)
+        if scope is None or not self._retry_allowed(scope, kind, err, attempts):
+            return None
+        return scope if kind is ErrorKind.THROTTLED else None
+
     @staticmethod
     def _release(context: Any) -> None:
         if isinstance(context, dict):
@@ -252,18 +271,10 @@ class _AsyncHooks(_Hooks):
                 bulkhead.release()
         return None
 
-    async def needs_retry(
-        self,
-        response: Any = None,
-        caught_exception: Any = None,
-        attempts: Any = None,
-        request_dict: Any = None,
-        **_: Any,
-    ) -> None:
-        scope, kind, err = self._feedback(response, caught_exception, request_dict)
-        if scope is not None and self._retry_allowed(scope, kind, err, attempts):
-            if kind is ErrorKind.THROTTLED:
-                await self.gov.limiter.acquire(scope)  # the retry needs a token too
+    async def needs_retry(self, **kwargs: Any) -> None:
+        scope = self._throttled_retry(**kwargs)
+        if scope is not None:
+            await self.gov.limiter.acquire(scope)  # the retry needs a token too
         return None
 
 
@@ -290,18 +301,10 @@ class _SyncHooks(_Hooks):
                     bulkhead.release()
         return None
 
-    def needs_retry(
-        self,
-        response: Any = None,
-        caught_exception: Any = None,
-        attempts: Any = None,
-        request_dict: Any = None,
-        **_: Any,
-    ) -> None:
-        scope, kind, err = self._feedback(response, caught_exception, request_dict)
-        if scope is not None and self._retry_allowed(scope, kind, err, attempts):
-            if kind is ErrorKind.THROTTLED:
-                self._acquire(scope)
+    def needs_retry(self, **kwargs: Any) -> None:
+        scope = self._throttled_retry(**kwargs)
+        if scope is not None:
+            self._acquire(scope)  # the retry needs a token too
         return None
 
 

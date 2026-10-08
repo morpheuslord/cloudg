@@ -17,7 +17,9 @@ import random
 from functools import wraps
 from typing import Any, Callable, Type
 
-from cloudg.resilience import (  # noqa: F401 (re-exported for callers of cloudg.retry)
+# RetryPolicy, Scope and the call_with_resilience pair are re-exported for
+# callers of cloudg.retry (listed in __all__)
+from cloudg.resilience import (
     ErrorKind,
     RetryPolicy,
     Scope,
@@ -26,6 +28,19 @@ from cloudg.resilience import (  # noqa: F401 (re-exported for callers of cloudg
     classify,
     retry_after,
 )
+
+__all__ = [
+    "AWS_RETRYABLE_CODES",
+    "ErrorKind",
+    "RETRYABLE_EXCEPTIONS",
+    "RetryPolicy",
+    "Scope",
+    "call_with_resilience",
+    "call_with_resilience_sync",
+    "classify",
+    "retry_after",
+    "with_retry",
+]
 
 logger = logging.getLogger(__name__)
 
