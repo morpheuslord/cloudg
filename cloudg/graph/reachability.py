@@ -44,7 +44,6 @@ from typing import Any, Iterator
 import networkx as nx
 
 from cloudg.graph.ports import edge_port_ranges, port_in_ranges
-from cloudg.schema.models import AssetType, Finding, Severity
 from cloudg.schema.models import AssetType, EdgeType, Finding, Severity
 
 logger = logging.getLogger(__name__)
