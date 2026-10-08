@@ -2,6 +2,16 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## Unreleased
+
+Behaviour changes in `cloudg.graph.ontology_rules`, which is public API through `cloudg.graph.ontology`. Embedders that store ontology triples or query them with SPARQL should read this section.
+
+Changed:
+
+- `ENCRYPTED_BY_KMS` now links an encrypted asset to its key: `orders-db ENCRYPTED_BY_KMS <key>`. Before, `infer_relations()` added it to every edge whose target had `encryption` or `storage_encrypted` plus a `kms_key_id` in its metadata, so `CloudOntology` wrote triples with the edge's source as the subject and the encrypted asset as the object, such as `ec2-1 ENCRYPTED_BY_KMS rds-1` or `subnet-private ENCRYPTED_BY_KMS orders-db`. The relation now comes from `infer_asset_relations()` for the encrypted asset itself. Its `kms_key_id` is matched against the collected `KMS_KEY` assets by asset id, ARN, bare key id, alias name or alias ARN. If no collected key matches, the object is the raw `kms_key_id` string. `infer_relations()` no longer returns `ENCRYPTED_BY_KMS` unless the edge declares it as its `relationship` (the linker's `REFERENCES` edges still do). The RAG export, which builds its chunks from `infer_relations()`, loses the wrong per-edge entries.
+- Containment inferred from `vpc_id` metadata points from the VPC to its members. Before, `infer_asset_relations()` returned `(VPC_CONTAINS_SUBNET, vpc)` for a subnet and `(SUBNET_CONTAINS_INSTANCE, vpc)` for anything else in the VPC, which gave `subnet VPC_CONTAINS_SUBNET vpc` and `instance SUBNET_CONTAINS_INSTANCE vpc`: the wrong direction, and a subnet relation whose object was a VPC. Now a VPC or VNet asset returns `(VPC_CONTAINS_SUBNET, subnet)` for each subnet and `(CONTAINS, member)` for every other asset with the same `vpc_id`, and member assets return no containment. The return shape of `infer_asset_relations()` is unchanged: the asset passed in is still the subject of every tuple. If several VPC or VNet assets share a `vpc_id`, the first one in the list claims the members. `CloudOntology.query_asset_neighbourhood()` with `hops > 1` follows these relations forward, so a walk from a VPC now reaches its members, and a walk from an instance no longer reaches the VPC through them.
+- New `RelationType.CONTAINS` in the `CONTAINMENT` group, for containment that has no more specific relation.
+
 ## 0.5.3 (2026-10-04)
 
 A security fix release for CodeQL's "incomplete URL substring sanitization" alerts (`py/incomplete-url-substring-sanitization`).

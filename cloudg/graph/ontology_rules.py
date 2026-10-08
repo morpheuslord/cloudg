@@ -1,6 +1,6 @@
 """Relation taxonomy and inference rules for the cloud ontology.
 
-Defines the ~62 typed semantic relations across 7 domain groups and the
+Defines the ~63 typed semantic relations across 7 domain groups and the
 inference layer that derives them from raw CloudG edges and asset metadata.
 The OWL graph builder itself lives in :mod:`cloudg.graph.ontology`.
 """
@@ -18,7 +18,7 @@ from cloudg.schema.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Relation taxonomy — ~62 semantic relation types across 7 groups
+# Relation taxonomy: ~63 semantic relation types across 7 groups
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +55,8 @@ class RelationType(str, Enum):
     NAT_TRANSLATED = "NAT_TRANSLATED"
     DNS_RESOLVED = "DNS_RESOLVED"
 
-    # ── Containment (7) ──
+    # ── Containment (8) ──
+    CONTAINS = "CONTAINS"
     VPC_CONTAINS_SUBNET = "VPC_CONTAINS_SUBNET"
     SUBNET_CONTAINS_INSTANCE = "SUBNET_CONTAINS_INSTANCE"
     REGION_CONTAINS_VPC = "REGION_CONTAINS_VPC"
@@ -137,6 +138,7 @@ _GROUP_RANGES = {
         RelationType.DNS_RESOLVED,
     ],
     RelationGroup.CONTAINMENT: [
+        RelationType.CONTAINS,
         RelationType.VPC_CONTAINS_SUBNET,
         RelationType.SUBNET_CONTAINS_INSTANCE,
         RelationType.REGION_CONTAINS_VPC,
@@ -327,7 +329,11 @@ def _infer_policy_attachment_relations(
 def _infer_target_security_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer security relations from the target asset's metadata."""
+    """Infer security relations from the target asset's metadata.
+
+    KMS encryption is not inferred here: it describes the asset and its key,
+    not the edge, so it comes from :func:`infer_asset_relations`.
+    """
     tgt_asset = assets_by_id.get(edge.target_id)
     if not tgt_asset:
         return []
@@ -338,11 +344,6 @@ def _infer_target_security_relations(
         relations.append(RelationType.PROTECTED_BY_SG)
     elif edge.edge_type == EdgeType.NACL_RULE:
         relations.append(RelationType.PROTECTED_BY_NACL)
-
-    # KMS encryption (from metadata)
-    if tgt_asset.metadata.get("encryption") or tgt_asset.metadata.get("storage_encrypted"):
-        if tgt_asset.metadata.get("kms_key_id", ""):
-            relations.append(RelationType.ENCRYPTED_BY_KMS)
 
     return relations
 
@@ -448,22 +449,84 @@ def _infer_tag_relations(asset: CloudAsset) -> list[tuple[RelationType, str]]:
     return relations
 
 
+_NETWORK_TYPES = (AssetType.VPC, AssetType.VNET)
+
+
 def _infer_vpc_containment(
     asset: CloudAsset, all_assets: list[CloudAsset]
 ) -> list[tuple[RelationType, str]]:
-    """Infer VPC/Subnet containment from metadata."""
+    """Infer what a VPC or VNet contains from its members' ``vpc_id`` metadata.
+
+    The relations point from the network to the member, so they are produced
+    when ``asset`` is the VPC: ``vpc VPC_CONTAINS_SUBNET subnet`` for a subnet
+    and ``vpc CONTAINS member`` for anything else with the same ``vpc_id``
+    (instances, security groups, endpoints). For a member asset this returns
+    nothing. If several VPC / VNet assets share a ``vpc_id``, only the first
+    one in ``all_assets`` claims the members.
+    """
     vpc_id = asset.metadata.get("vpc_id")
-    if not vpc_id or asset.asset_type == AssetType.VPC:
+    if not vpc_id or asset.asset_type not in _NETWORK_TYPES:
         return []
+    owner = next(
+        (
+            o
+            for o in all_assets
+            if o.asset_type in _NETWORK_TYPES and o.metadata.get("vpc_id") == vpc_id
+        ),
+        None,
+    )
+    if owner is None or owner.id != asset.id:
+        return []
+    relations: list[tuple[RelationType, str]] = []
     for other in all_assets:
-        if (
-            other.asset_type in (AssetType.VPC, AssetType.VNET)
-            and other.metadata.get("vpc_id") == vpc_id
-        ):
-            if asset.asset_type == AssetType.SUBNET:
-                return [(RelationType.VPC_CONTAINS_SUBNET, other.id)]
-            return [(RelationType.SUBNET_CONTAINS_INSTANCE, other.id)]
-    return []
+        if other.asset_type in _NETWORK_TYPES or other.metadata.get("vpc_id") != vpc_id:
+            continue
+        if other.asset_type == AssetType.SUBNET:
+            relations.append((RelationType.VPC_CONTAINS_SUBNET, other.id))
+        else:
+            relations.append((RelationType.CONTAINS, other.id))
+    return relations
+
+
+def _kms_key_identifiers(key: CloudAsset) -> set[str]:
+    """Every string a ``kms_key_id`` reference may use for this key."""
+    names = {key.id, key.name}
+    if key.arn:
+        names.add(key.arn)
+        names.add(key.arn.rsplit("/", 1)[-1])  # bare key id
+    names.update(a for a in key.metadata.get("aliases") or [] if isinstance(a, str))
+    return names
+
+
+def _resolve_kms_key(ref: str, all_assets: list[CloudAsset]) -> str:
+    """Asset id of the KMS key ``ref`` names, or ``ref`` itself if not collected.
+
+    ``ref`` may be the key's asset id, ARN, bare key id, alias name
+    (``alias/app``) or alias ARN.
+    """
+    for other in all_assets:
+        if other.asset_type == AssetType.KMS_KEY and ref in _kms_key_identifiers(other):
+            return other.id
+    return ref
+
+
+def _infer_kms_encryption(
+    asset: CloudAsset, all_assets: list[CloudAsset]
+) -> list[tuple[RelationType, str]]:
+    """Infer ``asset ENCRYPTED_BY_KMS key`` for an asset encrypted with a named key.
+
+    The asset needs ``encryption`` or ``storage_encrypted`` set in its
+    metadata and a ``kms_key_id``. The key reference is resolved to the
+    collected KMS key asset when there is one; otherwise the raw reference
+    is the object.
+    """
+    md = asset.metadata
+    kms_ref = md.get("kms_key_id")
+    if not kms_ref or not isinstance(kms_ref, str):
+        return []
+    if not (md.get("encryption") or md.get("storage_encrypted")):
+        return []
+    return [(RelationType.ENCRYPTED_BY_KMS, _resolve_kms_key(kms_ref, all_assets))]
 
 
 def _infer_metadata_relations(asset: CloudAsset) -> list[tuple[RelationType, str]]:
@@ -494,10 +557,14 @@ def infer_asset_relations(
 ) -> list[tuple[RelationType, str]]:
     """Infer additional semantic relations from asset metadata alone.
 
-    Returns list of (RelationType, target_asset_id) tuples.
+    Returns a list of ``(RelationType, object_id)`` tuples. ``asset`` is
+    always the subject, so each tuple reads ``asset REL object``. Relations
+    that point at an asset from elsewhere (a VPC containing it) are returned
+    when that other asset is passed in instead.
     """
     relations: list[tuple[RelationType, str]] = []
     relations.extend(_infer_tag_relations(asset))
     relations.extend(_infer_vpc_containment(asset, all_assets))
+    relations.extend(_infer_kms_encryption(asset, all_assets))
     relations.extend(_infer_metadata_relations(asset))
     return relations

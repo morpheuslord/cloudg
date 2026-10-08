@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 from cloudg.graph.ontology import (
+    CMP,
+    CMR,
     CloudOntology,
     RelationGroup,
     RelationType,
@@ -387,3 +389,182 @@ class TestCloudOntology:
         assert stats["total_triples"] > 0
         assert stats["classes_used"] > 0
         assert stats["individuals"] > 0
+
+
+# ── Triple direction: KMS encryption and VPC containment ──
+
+
+def _kms_key(key_id: str = "1234abcd-12ab-34cd-56ef-1234567890ab", **md) -> CloudAsset:
+    return CloudAsset(
+        arn=f"arn:aws:kms:us-east-1:123456789012:key/{key_id}",
+        name=key_id,
+        asset_type=AssetType.KMS_KEY,
+        provider=CloudProvider.AWS,
+        region="us-east-1",
+        account_id="123456789012",
+        metadata=md,
+    )
+
+
+def _encrypted_db(kms_key_id: str, **md) -> CloudAsset:
+    return CloudAsset(
+        id="orders-db",
+        name="orders-db",
+        asset_type=AssetType.RDS_INSTANCE,
+        provider=CloudProvider.AWS,
+        region="us-east-1",
+        account_id="123456789012",
+        metadata={"storage_encrypted": True, "kms_key_id": kms_key_id, **md},
+    )
+
+
+def _triples(onto: CloudOntology, rel: RelationType) -> set[tuple[str, str]]:
+    prefix = str(CMR)
+    return {
+        (str(s).removeprefix(prefix), str(o).removeprefix(prefix))
+        for s, o in onto.graph.subject_objects(CMP[rel.value])
+    }
+
+
+class TestKmsEncryptionDirection:
+    """ENCRYPTED_BY_KMS links the encrypted asset to its key, never an edge's source."""
+
+    def test_edge_into_encrypted_asset_has_no_kms_relation(self):
+        assets_by_id = {a.id: a for a in _make_assets()}
+        edge = NetworkEdge(
+            source_id="ec2-1",
+            target_id="rds-1",
+            edge_type=EdgeType.SECURITY_GROUP_RULE,
+            ports=[3306],
+            protocol="TCP",
+            cidr="10.0.0.0/8",
+            direction="ingress",
+        )
+        assert RelationType.ENCRYPTED_BY_KMS not in infer_relations(edge, assets_by_id)
+
+    def test_containment_edge_into_encrypted_asset_has_no_kms_relation(self):
+        subnet = CloudAsset(
+            id="subnet-private",
+            name="subnet-private",
+            asset_type=AssetType.SUBNET,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+        )
+        db = _encrypted_db("kms-1")
+        edge = NetworkEdge(
+            source_id="subnet-private", target_id="orders-db", edge_type=EdgeType.CONTAINS
+        )
+        rels = infer_relations(edge, {subnet.id: subnet, db.id: db})
+        assert RelationType.ENCRYPTED_BY_KMS not in rels
+
+    def test_asset_relation_points_at_key_asset(self):
+        assets = _make_assets()
+        rds = next(a for a in assets if a.id == "rds-1")
+        assert (RelationType.ENCRYPTED_BY_KMS, "kms-1") in infer_asset_relations(rds, assets)
+
+    def test_key_resolved_by_arn_key_id_and_alias(self):
+        key = _kms_key(aliases=["alias/orders", "arn:aws:kms:us-east-1:123456789012:alias/orders"])
+        for ref in (
+            key.arn,
+            "1234abcd-12ab-34cd-56ef-1234567890ab",
+            "alias/orders",
+            "arn:aws:kms:us-east-1:123456789012:alias/orders",
+        ):
+            db = _encrypted_db(ref)
+            rels = infer_asset_relations(db, [db, key])
+            assert rels == [(RelationType.ENCRYPTED_BY_KMS, key.id)], ref
+
+    def test_uncollected_key_keeps_raw_reference(self):
+        ref = "arn:aws:kms:us-east-1:123456789012:key/not-collected"
+        db = _encrypted_db(ref)
+        assert infer_asset_relations(db, [db, _kms_key()]) == [(RelationType.ENCRYPTED_BY_KMS, ref)]
+
+    def test_unencrypted_asset_with_key_id_has_no_relation(self):
+        db = _encrypted_db("kms-1", storage_encrypted=False)
+        assert infer_asset_relations(db, [db]) == []
+
+    def test_build_emits_only_asset_to_key_triples(self):
+        subnet = CloudAsset(
+            id="subnet-private",
+            name="subnet-private",
+            asset_type=AssetType.SUBNET,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+        )
+        assets = [*_make_assets(), subnet, _encrypted_db("kms-1")]
+        edges = [
+            *_make_edges(),
+            NetworkEdge(
+                source_id="subnet-private", target_id="orders-db", edge_type=EdgeType.CONTAINS
+            ),
+        ]
+        onto = CloudOntology()
+        onto.build(assets, edges)
+        assert _triples(onto, RelationType.ENCRYPTED_BY_KMS) == {
+            ("rds-1", "kms-1"),
+            ("orders-db", "kms-1"),
+        }
+
+
+class TestVpcContainmentDirection:
+    """Metadata containment runs from the VPC to its members."""
+
+    def test_contains_is_a_containment_relation(self):
+        assert get_relation_group(RelationType.CONTAINS) == RelationGroup.CONTAINMENT
+
+    def test_member_assets_emit_no_containment(self):
+        assets = _make_assets()
+        containment = set(get_relations_for_group(RelationGroup.CONTAINMENT))
+        for asset in assets:
+            if asset.asset_type == AssetType.VPC:
+                continue
+            rels = infer_asset_relations(asset, assets)
+            assert not [r for r, _ in rels if r in containment], asset.id
+
+    def test_vpc_emits_subnet_and_member_relations(self):
+        assets = _make_assets()
+        vpc = assets[0]
+        group = set(get_relations_for_group(RelationGroup.CONTAINMENT))
+        containment = {(r, o) for r, o in infer_asset_relations(vpc, assets) if r in group}
+        assert containment == {
+            (RelationType.VPC_CONTAINS_SUBNET, "subnet-1"),
+            (RelationType.CONTAINS, "ec2-1"),
+            (RelationType.CONTAINS, "sg-1"),
+        }
+
+    def test_build_emits_vpc_as_subject(self):
+        onto = CloudOntology()
+        onto.build(_make_assets(), _make_edges())
+        assert _triples(onto, RelationType.VPC_CONTAINS_SUBNET) == {("vpc-1", "subnet-1")}
+        assert _triples(onto, RelationType.CONTAINS) == {("vpc-1", "ec2-1"), ("vpc-1", "sg-1")}
+        assert _triples(onto, RelationType.SUBNET_CONTAINS_INSTANCE) == set()
+
+    def test_duplicate_vpc_records_claim_members_once(self):
+        assets = _make_assets()
+        dup = assets[0].model_copy(update={"id": "vpc-1-dup", "tags": {}})
+        assets.append(dup)
+        assert infer_asset_relations(dup, assets) == []
+        rels = infer_asset_relations(assets[0], assets)
+        assert (RelationType.CONTAINS, "vpc-1-dup") not in rels
+
+    def test_vnet_contains_subnet(self):
+        vnet = CloudAsset(
+            id="vnet-1",
+            name="hub",
+            asset_type=AssetType.VNET,
+            provider=CloudProvider.AZURE,
+            region="westeurope",
+            metadata={"vpc_id": "vnet-1"},
+        )
+        subnet = CloudAsset(
+            id="vnet-1-default",
+            name="default",
+            asset_type=AssetType.SUBNET,
+            provider=CloudProvider.AZURE,
+            region="westeurope",
+            metadata={"vpc_id": "vnet-1"},
+        )
+        assert infer_asset_relations(vnet, [vnet, subnet]) == [
+            (RelationType.VPC_CONTAINS_SUBNET, "vnet-1-default")
+        ]
+        assert infer_asset_relations(subnet, [vnet, subnet]) == []
