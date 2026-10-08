@@ -1,6 +1,6 @@
 """Relation taxonomy and inference rules for the cloud ontology.
 
-Defines the ~62 typed semantic relations across 7 domain groups and the
+Defines the ~63 typed semantic relations across 7 domain groups and the
 inference layer that derives them from raw CloudG edges and asset metadata.
 The OWL graph builder itself lives in :mod:`cloudg.graph.ontology`.
 """
@@ -18,7 +18,7 @@ from cloudg.schema.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Relation taxonomy — ~62 semantic relation types across 7 groups
+# Relation taxonomy: ~63 semantic relation types across 7 groups
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +55,8 @@ class RelationType(str, Enum):
     NAT_TRANSLATED = "NAT_TRANSLATED"
     DNS_RESOLVED = "DNS_RESOLVED"
 
-    # ── Containment (7) ──
+    # ── Containment (8) ──
+    CONTAINS = "CONTAINS"
     VPC_CONTAINS_SUBNET = "VPC_CONTAINS_SUBNET"
     SUBNET_CONTAINS_INSTANCE = "SUBNET_CONTAINS_INSTANCE"
     REGION_CONTAINS_VPC = "REGION_CONTAINS_VPC"
@@ -137,6 +138,7 @@ _GROUP_RANGES = {
         RelationType.DNS_RESOLVED,
     ],
     RelationGroup.CONTAINMENT: [
+        RelationType.CONTAINS,
         RelationType.VPC_CONTAINS_SUBNET,
         RelationType.SUBNET_CONTAINS_INSTANCE,
         RelationType.REGION_CONTAINS_VPC,
@@ -272,26 +274,40 @@ def _infer_sg_rule_relations(
     return relations
 
 
+_CLUSTER_TYPES = {
+    AssetType.ECS_CLUSTER,
+    AssetType.EKS_CLUSTER,
+    AssetType.AKS_CLUSTER,
+    AssetType.GKE_CLUSTER,
+    AssetType.K8S_NAMESPACE,
+}
+_ORG_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT}
+
+
 def _infer_containment_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer containment sub-type from connected asset types."""
+    """Infer the containment sub-type from the source and target asset types.
+
+    A specific relation is used only when both ends match it: VPC / VNet to
+    subnet, subnet to placed resource, cluster or namespace to workload,
+    organization or OU to account. Anything else (organization to OU,
+    account to VPC, VNet to VM, resource group to resource, unresolved
+    endpoints) is plain ``CONTAINS``.
+    """
     src = assets_by_id.get(edge.source_id)
     tgt = assets_by_id.get(edge.target_id)
     if not (src and tgt):
-        return []
+        return [RelationType.CONTAINS]
     if src.asset_type in (AssetType.VPC, AssetType.VNET) and tgt.asset_type == AssetType.SUBNET:
         return [RelationType.VPC_CONTAINS_SUBNET]
     if src.asset_type == AssetType.SUBNET:
         return [RelationType.SUBNET_CONTAINS_INSTANCE]
-    if src.asset_type in (
-        AssetType.ECS_CLUSTER,
-        AssetType.EKS_CLUSTER,
-        AssetType.AKS_CLUSTER,
-        AssetType.GKE_CLUSTER,
-    ):
+    if src.asset_type in _CLUSTER_TYPES:
         return [RelationType.CLUSTER_CONTAINS_SERVICE]
-    return [RelationType.VPC_CONTAINS_SUBNET]  # generic containment
+    if src.asset_type in _ORG_TYPES and tgt.asset_type == AssetType.CLOUD_ACCOUNT:
+        return [RelationType.ORG_CONTAINS_ACCOUNT]
+    return [RelationType.CONTAINS]
 
 
 def _infer_iam_trust_relations(
@@ -324,20 +340,42 @@ def _infer_policy_attachment_relations(
     return [rel] if rel else []
 
 
+# Filter asset type -> relation for "resource ATTACHED_TO filter" edges
+_FILTER_TARGET_RELATIONS: dict[AssetType, RelationType] = {
+    AssetType.SECURITY_GROUP: RelationType.PROTECTED_BY_SG,
+    AssetType.NSG: RelationType.PROTECTED_BY_SG,
+    AssetType.NACL: RelationType.PROTECTED_BY_NACL,
+}
+
+
+def _infer_attachment_relations(
+    edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
+) -> list[RelationType]:
+    """Infer the relation for an ATTACHED_TO edge from the target type.
+
+    A resource attached to a security group, NSG or NACL is protected by
+    it (``resource PROTECTED_BY_SG group``). Other attachments (ENI to
+    instance, disk to VM, gateway to VPC) are dependencies.
+    """
+    tgt = assets_by_id.get(edge.target_id)
+    rel = _FILTER_TARGET_RELATIONS.get(tgt.asset_type) if tgt else None
+    return [rel] if rel else [RelationType.DEPENDS_ON]
+
+
 def _infer_target_security_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer security relations from the target asset's metadata."""
+    """Infer security relations from the target asset's metadata.
+
+    Rule edges (``SECURITY_GROUP_RULE``, ``NACL_RULE``) point from the
+    traffic source to the filter, so they never yield ``PROTECTED_BY_SG`` /
+    ``PROTECTED_BY_NACL``: those relations come from ATTACHED_TO edges,
+    whose source is the protected resource.
+    """
     tgt_asset = assets_by_id.get(edge.target_id)
     if not tgt_asset:
         return []
     relations: list[RelationType] = []
-
-    # SG protection
-    if edge.edge_type == EdgeType.SECURITY_GROUP_RULE:
-        relations.append(RelationType.PROTECTED_BY_SG)
-    elif edge.edge_type == EdgeType.NACL_RULE:
-        relations.append(RelationType.PROTECTED_BY_NACL)
 
     # KMS encryption (from metadata)
     if tgt_asset.metadata.get("encryption") or tgt_asset.metadata.get("storage_encrypted"):
@@ -355,6 +393,7 @@ _EDGE_RELATION_RULES: dict[
     EdgeType.CONTAINS: _infer_containment_relations,
     EdgeType.IAM_TRUST: _infer_iam_trust_relations,
     EdgeType.IAM_POLICY_ATTACHMENT: _infer_policy_attachment_relations,
+    EdgeType.ATTACHED_TO: _infer_attachment_relations,
 }
 
 # EdgeType → fixed relations for simple edge types
@@ -377,12 +416,12 @@ _SIMPLE_EDGE_RELATIONS: dict[EdgeType, list[RelationType]] = {
     EdgeType.MANAGES: [RelationType.OWNED_BY],
     EdgeType.GOVERNS: [RelationType.COMPLIANCE_GOVERNS],
     EdgeType.REFERENCES: [RelationType.DEPENDS_ON],
-    EdgeType.ATTACHED_TO: [RelationType.DEPENDS_ON],
 }
 
-# Edge types whose default relation is only used when the edge carries no
-# explicit ``relationship`` of its own.
+# Edge types whose default (or inferred) relation is only used when the edge
+# carries no explicit ``relationship`` of its own.
 _TYPED_EDGE_TYPES = {
+    EdgeType.CONTAINS,
     EdgeType.INVOKES,
     EdgeType.USES_IMAGE,
     EdgeType.ASSUMES_ROLE,
@@ -412,9 +451,11 @@ def infer_relations(edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]) -> l
 
     # --- Network / containment / IAM relations by edge type ---
     rule = _EDGE_RELATION_RULES.get(edge.edge_type)
-    if rule:
+    if relations and edge.edge_type in _TYPED_EDGE_TYPES:
+        pass  # the declared relationship replaces the default
+    elif rule:
         relations.extend(r for r in rule(edge, assets_by_id) if r not in relations)
-    elif not (relations and edge.edge_type in _TYPED_EDGE_TYPES):
+    else:
         relations.extend(
             r for r in _SIMPLE_EDGE_RELATIONS.get(edge.edge_type, []) if r not in relations
         )
