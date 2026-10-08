@@ -289,3 +289,96 @@ class TestExportAll:
         assert index["total_chunks"] > 0
         assert index["entity_chunks"] == len(_make_assets())
         assert "chunk_ids" in index
+
+
+# ── Finding → asset resolution ──
+
+_RDS_ARN = "arn:aws:rds:us-east-1:111:db:prod-db"
+
+
+def _assets_with_arns() -> list[CloudAsset]:
+    assets = _make_assets()
+    for a in assets:
+        if a.id == "rds-1":
+            a.arn = _RDS_ARN
+    return assets
+
+
+def _scanner_finding(resource_id: str, resource_arn: str | None = None) -> Finding:
+    return Finding(
+        resource_id=resource_id,
+        resource_arn=resource_arn,
+        severity=Severity.CRITICAL,
+        title=f"finding on {resource_id}",
+        description="scanner output",
+        source_tool="prowler",
+        compliance_frameworks=["CIS"],
+    )
+
+
+def _entity(chunks: list[RAGChunk], asset_id: str) -> RAGChunk:
+    return next(c for c in chunks if c.chunk_id == f"entity::{asset_id}")
+
+
+class TestFindingResolution:
+    """Findings attach to the asset by id, ARN or unique name, not raw resource_id."""
+
+    def test_arn_resource_id_counts_on_entity(self):
+        exporter = RAGExporter()
+        chunks = exporter.export_entity_chunks(
+            _assets_with_arns(), _make_edges(), [_scanner_finding(_RDS_ARN, _RDS_ARN)]
+        )
+        rds = _entity(chunks, "rds-1")
+        assert rds.metadata["finding_count"] == 1
+        assert rds.metadata["severity_max"] == "CRITICAL"
+        assert rds.metadata["compliance_frameworks"] == ["CIS"]
+
+    def test_arn_only_in_resource_arn(self):
+        exporter = RAGExporter()
+        chunks = exporter.export_entity_chunks(
+            _assets_with_arns(), _make_edges(), [_scanner_finding("db-label", _RDS_ARN)]
+        )
+        assert _entity(chunks, "rds-1").metadata["finding_count"] == 1
+
+    def test_unique_name_counts_on_entity(self):
+        exporter = RAGExporter()
+        chunks = exporter.export_entity_chunks(
+            _assets_with_arns(), _make_edges(), [_scanner_finding("prod-db")]
+        )
+        assert _entity(chunks, "rds-1").metadata["finding_count"] == 1
+
+    def test_ambiguous_name_not_attached(self):
+        assets = _assets_with_arns()
+        assets.append(
+            CloudAsset(
+                id="rds-2",
+                name="prod-db",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
+                region="eu-west-1",
+            )
+        )
+        exporter = RAGExporter()
+        chunks = exporter.export_entity_chunks(assets, _make_edges(), [_scanner_finding("prod-db")])
+        assert _entity(chunks, "rds-1").metadata["finding_count"] == 0
+        assert _entity(chunks, "rds-2").metadata["finding_count"] == 0
+
+    def test_community_counts_arn_finding(self):
+        from cloudg.graph.builder import GraphBuilder
+
+        assets = _assets_with_arns()
+        graph = GraphBuilder().build(assets, _make_edges())
+        exporter = RAGExporter()
+        chunks = exporter.export_community_chunks(graph, findings=[_scanner_finding(_RDS_ARN)])
+        assert sum(c.metadata["finding_count"] for c in chunks) == 1
+
+    def test_community_counts_arn_finding_with_assets(self):
+        from cloudg.graph.builder import GraphBuilder
+
+        assets = _assets_with_arns()
+        graph = GraphBuilder().build(assets, _make_edges())
+        exporter = RAGExporter()
+        chunks = exporter.export_community_chunks(
+            graph, {a.id: a for a in assets}, [_scanner_finding("prod-db")]
+        )
+        assert sum(c.metadata["finding_count"] for c in chunks) == 1
