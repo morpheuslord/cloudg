@@ -145,7 +145,9 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         sg_assets = [a for a in assets if a.asset_type == AssetType.SECURITY_GROUP]
 
         for sg in sg_assets:
-            sg_id = sg.metadata.get("group_id", sg.id)
+            # Endpoint is the SG asset's id (like Azure NSG rule edges) so the
+            # edge attaches to the SECURITY_GROUP node; the CIDR side stays external.
+            sg_id = sg.id
 
             # Ingress rules
             for rule in sg.metadata.get("ingress_rules", []):

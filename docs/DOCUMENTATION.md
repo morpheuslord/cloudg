@@ -428,7 +428,7 @@ Directed edge between two asset IDs (`source_id`, `target_id`); direction always
 | Field | Type | Notes |
 |---|---|---|
 | `id` | `str` | auto UUID |
-| `source_id`, `target_id` | `str` | asset IDs; network rule edges can use a CIDR or native security group ID as an endpoint |
+| `source_id`, `target_id` | `str` | asset IDs; the far side of a network rule edge can be a CIDR (or an Azure service tag) instead of an asset ID |
 | `edge_type` | `EdgeType` | coarse class, below |
 | `relationship` | `str \| None` | fine-grained ontology relation (`TRIGGERED_BY`, `RUNS_ON`, `CROSS_ACCOUNT_TRUST`, `ENCRYPTED_BY_KMS`, ...) |
 | `properties` | `dict[str, Any]` | relation detail: trust conditions, granted actions, EKS access policies, notification events, `cross_account`, `external_reference`, `hierarchy` |

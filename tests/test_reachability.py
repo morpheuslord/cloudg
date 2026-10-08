@@ -603,10 +603,15 @@ class TestFindingIds:
         assert len({f.id for f in first}) == len(first)
 
     def test_ids_hash_rule_and_asset(self):
-        assets = [_asset("sg", T.SECURITY_GROUP), _asset("db", T.RDS_INSTANCE)]
+        assets = [
+            _asset("sg", T.SECURITY_GROUP),
+            _asset("db", T.RDS_INSTANCE),
+            _asset("vm", T.EC2),
+        ]
         edges = [
             _edge(INTERNET, "sg", E.SECURITY_GROUP_RULE, cidr=INTERNET, port_range="22"),
             _edge("db", "sg", E.ATTACHED_TO),
+            _edge("vm", "sg", E.ATTACHED_TO),
         ]
         by_title = {f.title: f for f in _analyzer(assets, edges).generate_findings()}
 
@@ -614,8 +619,10 @@ class TestFindingIds:
         assert db.severity == Severity.CRITICAL
         assert db.id == finding_id(RULE_SENSITIVE_EXPOSURE, "db")
 
-        sg = by_title["Unexpected internet-exposed resource: sg"]
-        assert sg.id == finding_id(RULE_UNEXPECTED_EXPOSURE, "sg")
+        vm = by_title["Unexpected internet-exposed resource: vm"]
+        assert vm.id == finding_id(RULE_UNEXPECTED_EXPOSURE, "vm")
+        # The group itself is a rule container: only its open-port finding is reported
+        assert "Unexpected internet-exposed resource: sg" not in by_title
 
         ssh = by_title["Security group allows SSH (port 22) from 0.0.0.0/0"]
         assert ssh.id == finding_id(f"{RULE_OPEN_PORT}:22", f"{INTERNET}->sg")
