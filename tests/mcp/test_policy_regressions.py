@@ -160,12 +160,15 @@ def test_name_mentions_in_free_text():
     vault = TokenVault("k")
     red = Redactor(STRICT_MAP)
     out = red.apply({"nodes": [{"name": "web-1", "arn": "x"}], "summary": "web-1 -> db-main",
-                     "other": {"name": "db-main", "provider": "aws"}, "single": "web-1"},
+                     "other": {"name": "db-main", "provider": "aws"}, "single": "web-1",
+                     "type": "web-1", "tags": {"Team": "web-1"}},
                     TransformContext(vault=vault))
     tok_web, tok_db = vault.lookup("web-1", "resource_name"), vault.lookup("db-main",
                                                                           "resource_name")
     assert out["summary"] == f"{tok_web} -> {tok_db}"
-    assert out["single"] == "web-1"  # single tokens are not rewritten by the mention pass
+    assert out["single"] == tok_web  # exact whole-value mentions are replaced too
+    assert out["type"] == "web-1"  # vocabulary keys are left alone
+    assert out["tags"]["Team"].startswith("tag-")  # tag values keep their own token
     assert Redactor(STRICT_MAP, name_mentions=False).apply(
         {"n": {"name": "web-1", "arn": "x"}, "s": "web-1 -> x"},
         TransformContext(vault=vault))["s"] == "web-1 -> x"
@@ -402,3 +405,97 @@ async def test_reveal_reverses_aliases_and_tokens_together(workspace):
     assert acct.structured["value"] == "111111111111"
     with pytest.raises(NotFoundError):
         await layer.call_tool("reveal_token", {"token": seen["arn"]}, principal=ann)
+
+
+# ---------------------------------------------------------------------------
+# Round 3: organizations, dependency ids, ontology IRIs, RAG chunks, accounts
+# ---------------------------------------------------------------------------
+
+
+async def test_strict_round3_tools_leak_no_identifiers(workspace):
+    layer = make(workspace, "strict")
+    real = ("web-1", "app-role", "Workloads", "shared-services", "o-sample", "ou-work",
+            "r-root", "111111111111", "222222222222", "sample-org", "web-team")
+    calls = [("organization_topology", {}), ("depends_on", {"ref": "web-1"}),
+             ("blast_radius", {"ref": "web-1"}), ("ontology_neighbourhood", {"ref": "web-1"}),
+             ("rag_chunks", {}), ("cross_account_edges", {}), ("security_coverage", {})]
+    for name, args in calls:
+        layer.policy.reset_rate_limits()
+        res = await layer.call_tool(name, args)
+        assert not res.is_error, (name, res.content[0].text)
+        text = res.content[0].text
+        for value in real:
+            assert value not in text, (name, value)
+
+
+def test_org_detectors_and_formats():
+    found = {m.entity for m in DEFAULT_REGISTRY.scan(
+        "org o-a1b2c3d4e5 ou ou-ab12-cdef5678 root r-ab12")}
+    assert {"aws_org_id", "aws_ou_id", "aws_root_id"} <= found
+    vault = TokenVault("k")
+    assert re.fullmatch(r"o-[0-9a-f]{10}", vault.tokenize("o-a1b2c3d4e5", "aws_org_id"))
+    assert re.fullmatch(r"ou-[0-9a-f]{4}-[0-9a-f]{8}",
+                        vault.tokenize("ou-ab12-cdef5678", "aws_ou_id"))
+
+
+def test_iri_and_chunk_id_tokens_match_plain_ids():
+    vault = TokenVault("k")
+    red = Redactor(STRICT_MAP)
+    out = red.apply({"asset": {"id": "web-1", "name": "web-1", "type": "EC2"},
+                     "subject_id": "cmr:web-1", "object_id": "cmr:tag_owner_web-team",
+                     "env_iri": "cmr:tag_env_prod", "finding": "cmr:finding_f1",
+                     "chunk_id": "entity::web-1",
+                     "uuid_id": {"id": "9f86d081-884c-4d63-9a2b-1c5e3f0a7b21", "arn": "x"}},
+                    TransformContext(vault=vault))
+    tok = out["asset"]["id"]
+    assert tok.startswith("res-") and out["asset"]["name"] == tok
+    assert out["subject_id"] == f"cmr:{tok}" and out["chunk_id"] == f"entity::{tok}"
+    assert out["object_id"] == f"cmr:tag_owner_{vault.lookup('web-team', 'person')}"
+    assert out["env_iri"] == "cmr:tag_env_prod" and out["finding"] == "cmr:finding_f1"
+    assert out["uuid_id"]["id"] == "9f86d081-884c-4d63-9a2b-1c5e3f0a7b21"  # random ids kept
+
+
+def test_account_keys_and_maps_ignore_placeholder_heuristic():
+    vault = TokenVault("k")
+    out = Redactor(STRICT_MAP).apply(
+        {"accounts_affected": ["111111111111"], "management_account_id": "111111111111",
+         "by_account_pair": {"111111111111 -> 222222222222": 2},
+         "services_by_account_region": {"111111111111": {"us-east-1": {"guardduty": True}}},
+         "items": ["111111111111/us-east-1: security hub disabled"]},
+        TransformContext(vault=vault))
+    acct = vault.lookup("111111111111", "aws_account_id")
+    other = vault.lookup("222222222222", "aws_account_id")
+    assert out["accounts_affected"] == [acct] and out["management_account_id"] == acct
+    assert out["by_account_pair"] == {f"{acct} -> {other}": 2}
+    assert list(out["services_by_account_region"]) == [acct]
+    assert out["items"] == [f"{acct}/us-east-1: security hub disabled"]
+
+
+def test_rag_content_lines():
+    vault = TokenVault("k")
+    content = ("Resource: sample-org\nType: ORGANIZATION\nAccount: 111111111111\n"
+               'Tags: {"Owner": "alice", "env": "prod"}\n\nRelations (1):\n'
+               "  → CONTAINS: Workloads\n  • web-1 (EC2)")
+    out = Redactor(STRICT_MAP).apply({"chunk_id": "entity::org", "chunk_type": "entity",
+                                      "content": content}, TransformContext(vault=vault))
+    text = out["content"]
+    for value in ("sample-org", "111111111111", "alice", "Workloads", "web-1"):
+        assert value not in text, value
+    assert "Type: ORGANIZATION" in text and '"env": "prod"' in text
+
+
+def test_generic_pipeline_uses_alias_ordering():
+    p = Policy.load("soc-analyst")
+    names = [t.name for t in p._generic_pipeline(ANALYST).transforms]
+    assert names.index("substitute") > names.index("redact")
+
+
+def test_custom_key_rule_can_defer():
+    red = Redactor({"identifier": "pseudonymize", "network": "pseudonymize",
+                    "special_cidr": "keep"},
+                   extra_key_rules=[{"name": "peer", "entity": "resource_name",
+                                     "pattern": "^peer$", "category": "identifier",
+                                     "defer": True}])
+    vault = TokenVault("k")
+    out = red.apply({"peer": "0.0.0.0/0", "x": {"peer": "web-1"}}, TransformContext(vault=vault))
+    assert out["peer"] == "0.0.0.0/0" and out["x"]["peer"].startswith("res-")

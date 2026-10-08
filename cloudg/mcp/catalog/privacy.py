@@ -67,8 +67,11 @@ def detector_table(policy: Any, principal: Any = None, category: str | None = No
         }
         if red is not None:
             row["strategy"] = red.resolve(_chain(d.entity) + (d.name, d.category)).kind
-            refined = {e: red.resolve(_chain(e) + (d.entity, d.name, d.category)).kind
-                       for e, p in ENTITY_PARENTS.items() if p == d.entity}
+            # a list, so entity names are values rather than keys that key
+            # rules (account, name...) would act on
+            refined = [{"entity": e, "strategy": red.resolve(
+                _chain(e) + (d.entity, d.name, d.category)).kind}
+                for e, p in ENTITY_PARENTS.items() if p == d.entity]
             if refined:
                 row["refined"] = refined
             row["active"] = d.name in red.active_detectors

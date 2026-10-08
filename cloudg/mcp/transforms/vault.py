@@ -592,6 +592,11 @@ class TokenVault:
             "aws_access_key_id": self._fmt_akid,
             "aws_unique_id": self._fmt_akid,
             "cloudg_uri": self._fmt_cloudg_uri,
+            "cloudg_iri": self._fmt_cloudg_iri,
+            "rag_chunk_id": self._fmt_chunk_id,
+            "aws_org_id": self._fmt_org_id,
+            "aws_ou_id": self._fmt_org_id,
+            "aws_root_id": self._fmt_org_id,
         }
         for name in ("ip_address", "private_ip", "public_ip", "special_ip", "cidr",
                      "private_cidr", "public_cidr", "special_cidr"):
@@ -796,7 +801,9 @@ class TokenVault:
         m = re.match(r"^(cloudg://assets/)(.+?)(/neighbors|/findings|/)?$", value)
         if m:
             ref = m.group(2)
-            tok = self._sub(ref, self._ref_entity(ref), ns)
+            tok = self._ref_token(ref, ns)
+            if tok == ref:
+                return value
             out = f"{m.group(1)}{tok}{m.group(3) or ''}"
         else:
             m = re.match(r"^(cloudg://datasets/)([^/]+)(/.*)?$", value)
@@ -804,6 +811,71 @@ class TokenVault:
                 return value
             out = f"{m.group(1)}{self._sub(m.group(2), 'dataset_name', ns)}{m.group(3) or ''}"
         return out + (f"#{attempt}" if attempt else "")
+
+    def _fmt_org_id(self, value: str, ns: str, attempt: int) -> str:
+        """``o-``, ``ou-`` and ``r-`` ids keep their prefix; every other
+        hyphen-separated part becomes random hex of the same length."""
+        prefix, _, rest = value.partition("-")
+        if not rest:
+            return self._fmt_generic(value, ns, attempt, "aws_org_id")
+        h = self._hex(ns, "aws_org_id", value, attempt, max(len(rest), 8) + 8)
+        parts, pos = [], 0
+        for part in rest.split("-"):
+            n = max(len(part), 4)
+            parts.append(h[pos:pos + n])
+            pos += n
+        return f"{prefix}-{'-'.join(parts)}"
+
+    def _ref_token(self, ref: str, ns: str) -> str:
+        from cloudg.mcp.transforms.detectors import ref_entity
+
+        structured = self._ref_entity(ref)
+        if structured != "resource_name":  # ARN, Azure id, GCP name, IP
+            return self._sub(ref, structured, ns)
+        entity = ref_entity(ref)
+        if entity == "uuid":
+            return ref  # cloudg's own random ids are kept
+        return self._sub(ref, entity, ns)
+
+    def _fmt_cloudg_iri(self, value: str, ns: str, attempt: int) -> str:
+        """Ontology resource IRIs (``cmr:<asset id>``, ``cmr:tag_<key>_<value>``):
+        the identifier part gets the same token the plain value gets
+        elsewhere; finding and compliance IRIs are kept."""
+        from cloudg.mcp.transforms.detectors import PERSON_TAG_PATTERN, normalize_key
+        from cloudg.mcp.transforms.redaction import DEFAULT_TAG_KEY_ALLOWLIST
+
+        prefix = "cmr:" if value.startswith("cmr:") else "https://cloudg.io/resource/"
+        local = value[len(prefix):]
+        if not local or local.startswith(("finding_", "compliance_")):
+            return value
+        if local.startswith("tag_"):
+            rest = local[4:]
+            key = next((k for k in sorted(DEFAULT_TAG_KEY_ALLOWLIST, key=len, reverse=True)
+                        if rest.lower().startswith(k + "_")), None)
+            if key is not None:
+                return value
+            tkey, sep, tval = rest.partition("_")
+            if not sep or not tval:
+                return f"{prefix}tag_{self._sub(rest, 'tag_value', ns)}"
+            person = re.search(PERSON_TAG_PATTERN, normalize_key(tkey))
+            tok = self._sub(tval, "person" if person else "tag_value", ns)
+            out = f"{prefix}tag_{tkey}_{tok}"
+        else:
+            out = prefix + self._ref_token(local, ns)
+            if out == value:
+                return value
+        return out + (f"#{attempt}" if attempt else "")
+
+    def _fmt_chunk_id(self, value: str, ns: str, attempt: int) -> str:
+        """RAG chunk ids: ``entity::<asset id>`` gets the asset id's token;
+        ``community::`` / ``relation_group::`` ids are kept."""
+        kind, sep, ref = value.partition("::")
+        if not sep or kind != "entity" or not ref:
+            return value
+        tok = self._ref_token(ref, ns)
+        if tok == ref:
+            return value
+        return f"{kind}::{tok}" + (f"#{attempt}" if attempt else "")
 
     def _fmt_mac(self, value: str, ns: str, attempt: int) -> str:
         sep = "-" if "-" in value else ":"

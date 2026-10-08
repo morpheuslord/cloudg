@@ -362,7 +362,7 @@ async def test_list_detectors_and_resources():
     by_name = {d["name"]: d for d in det["detectors"]}
     assert by_name["aws_arn"]["strategy"] == "pseudonymize" and by_name["aws_arn"]["active"]
     assert by_name["jwt"]["strategy"] == "redact"
-    assert by_name["ipv4"]["refined"]["special_ip"] == "keep"
+    assert {"entity": "special_ip", "strategy": "keep"} in by_name["ipv4"]["refined"]
     assert any(r["name"] == "sensitive_key" for r in det["key_rules"])
     only = (await layer.call_tool("list_detectors", {"category": "secret"})).structured
     assert {d["category"] for d in only["detectors"]} == {"secret"}

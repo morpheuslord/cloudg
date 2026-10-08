@@ -1084,15 +1084,10 @@ class Policy:
         return pipeline.apply(value, ctx), ctx.report
 
     def _generic_pipeline(self, principal: Any) -> Pipeline:
-        specs = [normalize_transform_spec(s) for s in self.config.transforms]
-        opts = self.config.transform_options
-        for r in self._rules:
-            if r.applies(None, principal, "tool"):
-                opts = _deep_merge(opts, r.cfg.transform_options)
-        for s in specs:
-            over = opts.get(s["type"]) or opts.get(s["id"])
-            if over:
-                s["options"] = _deep_merge(s["options"], over)
+        """The pipeline for data not tied to one primitive (preview without a
+        tool, privacy_status, list_detectors): assembled exactly like a
+        tool's pipeline (rules, options, alias ordering), minus spec hints."""
+        specs, _ = self._output_specs(None, principal)
         return Pipeline([self._build(s) for s in specs]) if specs else IDENTITY
 
     # ------------------------------------------------------------------

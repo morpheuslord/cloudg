@@ -35,6 +35,7 @@ The input is never mutated; counts land in ``ctx.report`` as
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -334,8 +335,33 @@ _ENUM_KEYS: frozenset[str] | None = None
 #: Entities whose real values are also replaced in free text of the same
 #: payload (``"summary": "web-1 -> sg-app"``) once a key rule pseudonymised
 #: them elsewhere.
-_NAME_ENTITIES = frozenset({"resource_name", "dataset_name"})
+_NO_MENTION_ENTITIES = frozenset({"sensitive_field", "tag_value", "person", "rag_chunk_id"})
 _NAME_PASS_LIMIT = 5000
+#: Keys whose values are vocabulary, never names (left alone by the mention pass).
+_ENUMISH_KEYS = frozenset({
+    "type", "asset_type", "resource_type", "provider", "region", "status", "severity",
+    "predicate", "edge_type", "relationship", "kind", "chunk_type", "metric", "mode",
+    "format", "category", "direction", "protocol", "max_severity", "severity_max",
+    "relation_group", "feature_set", "env", "environment", "stage", "tier", "strategy",
+    "applies_to", "entity", "entity_type", "decision",
+})
+_RAG_FIELD_RE = re.compile(r"^(Resource|Account|Tags): ?(.*)$")
+_RAG_REL_RE = re.compile(r"^(\s+[\u2192\u2190] [A-Z0-9_]+: )(.+)$")
+_RAG_MEMBER_RE = re.compile(r"^(\s+\u2022 )(.+?)( \([A-Z0-9_]+\))$")
+_RAG_TRIPLE_RE = re.compile(r"^(\s+)(.+?) \u2192 ([A-Z0-9_]+) \u2192 (.+?)( \(.*\))?$")
+_ASSET_TYPE_NAMES: frozenset[str] | None = None
+
+
+def _asset_type_names() -> frozenset[str]:
+    global _ASSET_TYPE_NAMES
+    if _ASSET_TYPE_NAMES is None:
+        try:
+            from cloudg.schema.models import AssetType
+
+            _ASSET_TYPE_NAMES = frozenset({t.value for t in AssetType} | {t.name for t in AssetType})
+        except Exception:  # pragma: no cover
+            _ASSET_TYPE_NAMES = frozenset()
+    return _ASSET_TYPE_NAMES
 
 
 def _enum_keys() -> frozenset[str]:
@@ -439,7 +465,7 @@ class _Run:
             for candidate in rules:
                 if candidate.requires_sibling:
                     if siblings is None:
-                        siblings = frozenset(self.norm(str(x))[0] for x in value)
+                        siblings = self.siblings(value)
                     if not (candidate.requires_sibling & siblings):
                         continue
                 rule = candidate
@@ -455,12 +481,23 @@ class _Run:
             out[new_k] = res
         return out
 
+    def siblings(self, value: dict[Any, Any]) -> frozenset[str]:
+        """Normalised keys of a dict, plus ``asset_type`` when its ``type``
+        value is a cloudg asset type (``{"id", "name", "type": "EC2"}``)."""
+        keys = {self.norm(str(x))[0] for x in value}
+        t = value.get("type")
+        if isinstance(t, str) and "asset_type" not in keys and t in _asset_type_names():
+            keys.add("asset_type")
+        return frozenset(keys)
+
     # -- key rules ---------------------------------------------------------
 
     def apply_rule(self, rule: KeyRule, value: Any) -> Any:
         if isinstance(value, str):
             if not value:
                 return value
+            if rule.entity == "rag_content":
+                return self.rag_content(value)
             return self.rule_str(rule, value)
         strat = self.r._rule_strategy(rule)
         if isinstance(value, bool) or value is None:
@@ -476,6 +513,16 @@ class _Run:
                 self.bump("drop", rule.entity)
                 return DROP
             return self.walk_forced(value, rule.entity, strat)
+        if rule.map_keys and isinstance(value, dict):
+            out_map: dict[Any, Any] = {}
+            for k, v in value.items():
+                nk = self.rule_str(rule, k) if isinstance(k, str) and k else k
+                if nk is DROP:
+                    continue
+                res = self.walk(v, ())
+                if res is not DROP:
+                    out_map[nk] = res
+            return out_map
         if rule.defer and isinstance(value, (list, tuple)):
             out = []
             for item in value:
@@ -489,6 +536,11 @@ class _Run:
     def rule_str(self, rule: KeyRule, value: str) -> Any:
         """A string under a key rule: detectors first for ``defer`` rules,
         then the rule's (possibly shape-chosen) entity."""
+        if rule.entity == "cloud_account" and " -> " in value:
+            parts = [self.rule_str(rule, p) for p in value.split(" -> ")]
+            if any(p is DROP for p in parts):
+                return DROP
+            return " -> ".join(str(p) for p in parts)
         if rule.defer and self.whole_entity(value):
             return self.scan_str(value)
         entity = rule.entity
@@ -499,10 +551,57 @@ class _Run:
         else:
             strat = self.r._rule_strategy(rule)
         out = self.whole(value, entity, strat)
-        if (strat.kind == "pseudonymize" and entity in _NAME_ENTITIES and isinstance(out, str)
-                and out != value and len(value) >= 3):
+        if (strat.kind == "pseudonymize" and isinstance(out, str) and out != value
+                and len(value) >= 3 and entity not in _NO_MENTION_ENTITIES):
             self.issued[value] = out
         return out
+
+    def rag_content(self, text: str) -> str:
+        """Entity / community / relation-group text of a RAG chunk: the
+        structured lines (``Resource:``, ``Account:``, ``Tags:``, relation and
+        member lines, triples) are pseudonymised field by field; any other
+        line is scanned like free text."""
+        rules = {r.name: r for r in self.r.key_rules}
+        name_rule = rules.get("resource_name_key")
+        acct_rule = rules.get("account_id_key")
+        out_lines = []
+        for line in text.split("\n"):
+            m = _RAG_FIELD_RE.match(line)
+            if m:
+                label, val = m.group(1), m.group(2)
+                if label == "Resource" and name_rule and val:
+                    out_lines.append(f"Resource: {self.rule_str(name_rule, val)}")
+                    continue
+                if label == "Account" and acct_rule and val:
+                    out_lines.append(f"Account: {self.rule_str(acct_rule, val)}")
+                    continue
+                if label == "Tags" and val.startswith("{"):
+                    try:
+                        tags = json.loads(val)
+                    except ValueError:
+                        tags = None
+                    if isinstance(tags, dict):
+                        out_lines.append(f"Tags: {json.dumps(self.walk_tags(tags))}")
+                        continue
+            m = _RAG_REL_RE.match(line)
+            if m and name_rule:
+                out_lines.append(f"{m.group(1)}{self.rule_str(name_rule, m.group(2))}")
+                continue
+            m = _RAG_MEMBER_RE.match(line)
+            if m and name_rule:
+                out_lines.append(f"{m.group(1)}{self.rule_str(name_rule, m.group(2))}"
+                                 f"{m.group(3)}")
+                continue
+            m = _RAG_TRIPLE_RE.match(line)
+            if m and name_rule:
+                subj = self.rule_str(name_rule, m.group(2))
+                obj = self.rule_str(name_rule, m.group(4))
+                rest = self.scan_str(m.group(5)) if m.group(5) else ""
+                out_lines.append(f"{m.group(1)}{subj} \u2192 {m.group(3)} \u2192 {obj}{rest}")
+                continue
+            res = self.scan_str(line)
+            out_lines.append(line if res is DROP else str(res))
+        return "\n".join(out_lines)
 
     def whole_entity(self, value: str) -> bool:
         """Does one active detector match the entire value? Its refined
@@ -520,14 +619,17 @@ class _Run:
         return hit
 
     def name_pass(self, value: Any) -> Any:
-        """Replace pseudonymised names inside free text (strings containing
-        whitespace, ``->`` or commas) elsewhere in the same payload."""
+        """Replace values pseudonymised through key rules where they appear
+        elsewhere in the same payload: inside free text (strings with
+        whitespace, ``->`` or commas), and as exact whole values (a one-node
+        path summary). Tag values and enum-like keys (``type``, ``status``...)
+        are left alone."""
         if not self.issued or len(self.issued) > _NAME_PASS_LIMIT:
             return value
-        names = sorted(self.issued, key=len, reverse=True)
-        rx = re.compile(r"(?<![\w.\-/:@])(?:" + "|".join(re.escape(n) for n in names)
-                        + r")(?![\w\-/:@]|\.\w)")
         table = self.issued
+        names = sorted(table, key=len, reverse=True)
+        rx = re.compile(r"(?<![\w.\-/:@])(?:" + "|".join(re.escape(n) for n in names)
+                        + r")(?![\w\-@]|\.\w)")
         count = 0
 
         def sub(m: re.Match[str]) -> str:
@@ -535,23 +637,37 @@ class _Run:
             count += 1
             return table[m.group(0)]
 
-        def fix(text: str) -> str:
-            if " " not in text and "," not in text and "->" not in text:
+        def fix(text: str, key: str | None) -> str:
+            if key is not None and key in _ENUMISH_KEYS:
+                return text
+            hit = table.get(text)
+            if hit is not None:
+                nonlocal count
+                count += 1
+                return hit
+            if " " not in text and "," not in text and "->" not in text and "\n" not in text:
                 return text
             return rx.sub(sub, text)
 
-        def walk(v: Any) -> Any:
+        def walk(v: Any, key: str | None) -> Any:
             if isinstance(v, str):
-                return fix(v)
+                return fix(v, key)
             if isinstance(v, dict):
-                return {k: (v2 if k in self.r.skip_keys else walk(v2)) for k, v2 in v.items()}
+                out = {}
+                for k, v2 in v.items():
+                    nk = self.norm(k)[0] if isinstance(k, str) else ""
+                    if k in self.r.skip_keys or nk in TAG_CONTAINER_KEYS:
+                        out[k] = v2
+                    else:
+                        out[k] = walk(v2, nk)
+                return out
             if isinstance(v, list):
-                return [walk(x) for x in v]
+                return [walk(x, key) for x in v]
             return v
 
-        out = walk(value)
+        out = walk(value, None)
         if count:
-            self.bump("pseudonymize", "resource_name_mention", count)
+            self.bump("pseudonymize", "identifier_mention", count)
         return out
 
     def counted(self, strat: Strategy, entity: str, value: Any) -> Any:
@@ -793,6 +909,9 @@ def _key_rule_from_config(spec: dict[str, Any]) -> KeyRule:
         requires_sibling=frozenset(spec.get("requires_sibling", ())),
         subtree=bool(spec.get("subtree", False)),
         scalars=bool(spec.get("scalars", False)),
+        defer=bool(spec.get("defer", False)),
+        map_keys=bool(spec.get("map_keys", False)),
+        confidence=float(spec.get("confidence", 0.9)),
     )
 
 
