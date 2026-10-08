@@ -7,7 +7,7 @@ CLI group in :mod:`cloudg.cli` via ``cli.add_command(run)``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import click
 
@@ -26,10 +26,6 @@ from cloudg.cli_run_helpers import (
     _scanner_phase,
     _terraform_phase,
 )
-
-if TYPE_CHECKING:
-    from cloudg.config import CloudGConfig
-
 
 @click.command()
 @click.option(

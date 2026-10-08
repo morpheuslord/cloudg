@@ -45,7 +45,9 @@ class ExtendedServiceCollectorsMixin:
         _aio_config: Any
         coverage: CollectionCoverage
 
-        def _get_aio_session(self) -> Any: ...
+        def _get_aio_session(self) -> Any:
+            # Provided by AsyncAWSCollector; this stub only types the mixin
+            raise NotImplementedError
 
     async def _collect_ecs(self) -> list[CloudAsset]:
         """Collect ECS clusters and services."""
