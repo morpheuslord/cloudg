@@ -389,6 +389,160 @@ class TestCloudOntology:
         assert stats["individuals"] > 0
 
 
+
+# ── Containment and filter relation accuracy ──
+
+
+def _typed(aid: str, asset_type: AssetType) -> CloudAsset:
+    return CloudAsset(id=aid, name=aid, asset_type=asset_type, provider=CloudProvider.AWS)
+
+
+def _rels(source: CloudAsset | str, target: CloudAsset | str, edge_type: EdgeType, **kw) -> set:
+    assets = [a for a in (source, target) if isinstance(a, CloudAsset)]
+    edge = NetworkEdge(
+        source_id=source.id if isinstance(source, CloudAsset) else source,
+        target_id=target.id if isinstance(target, CloudAsset) else target,
+        edge_type=edge_type,
+        **kw,
+    )
+    return set(infer_relations(edge, {a.id: a for a in assets}))
+
+
+class TestContainmentRelations:
+    """CONTAINS edges get a relation that matches both endpoint types."""
+
+    def test_specific_relations(self):
+        R = RelationType
+        T = AssetType
+        cases = [
+            (T.VPC, T.SUBNET, R.VPC_CONTAINS_SUBNET),
+            (T.VNET, T.SUBNET, R.VPC_CONTAINS_SUBNET),
+            (T.SUBNET, T.EC2, R.SUBNET_CONTAINS_INSTANCE),
+            (T.EKS_CLUSTER, T.K8S_NAMESPACE, R.CLUSTER_CONTAINS_SERVICE),
+            (T.K8S_NAMESPACE, T.K8S_WORKLOAD, R.CLUSTER_CONTAINS_SERVICE),
+            (T.ORGANIZATION, T.CLOUD_ACCOUNT, R.ORG_CONTAINS_ACCOUNT),
+            (T.ORG_UNIT, T.CLOUD_ACCOUNT, R.ORG_CONTAINS_ACCOUNT),
+        ]
+        for src_type, tgt_type, expected in cases:
+            rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+            assert rels == {expected}, (src_type, tgt_type, rels)
+
+    def test_generic_containment_is_plain_contains(self):
+        T = AssetType
+        cases = [
+            (T.ORGANIZATION, T.ORG_UNIT),
+            (T.ORG_UNIT, T.ORG_UNIT),
+            (T.CLOUD_ACCOUNT, T.VPC),
+            (T.VNET, T.VIRTUAL_MACHINE),
+            (T.VPC, T.INTERNET_GATEWAY),
+            (T.RESOURCE_GROUP, T.KEY_VAULT),
+        ]
+        for src_type, tgt_type in cases:
+            rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+            assert rels == {RelationType.CONTAINS}, (src_type, tgt_type, rels)
+
+    def test_unresolved_endpoint_is_plain_contains(self):
+        rels = _rels("subnet-unmapped", _typed("vm", AssetType.EC2), EdgeType.CONTAINS)
+        assert rels == {RelationType.CONTAINS}
+
+    def test_declared_relationship_replaces_inference(self):
+        rels = _rels(
+            "subnet-unmapped",
+            _typed("vm", AssetType.EC2),
+            EdgeType.CONTAINS,
+            relationship="SUBNET_CONTAINS_INSTANCE",
+        )
+        assert rels == {RelationType.SUBNET_CONTAINS_INSTANCE}
+
+    def test_contains_is_a_containment_relation(self):
+        assert get_relation_group(RelationType.CONTAINS) == RelationGroup.CONTAINMENT
+
+
+class TestFilterRelations:
+    """PROTECTED_BY_SG / PROTECTED_BY_NACL point from the protected resource."""
+
+    def test_internet_sg_rule_is_not_protected_by_sg(self):
+        rels = _rels(
+            "0.0.0.0/0",
+            _typed("sg-web", AssetType.SECURITY_GROUP),
+            EdgeType.SECURITY_GROUP_RULE,
+            cidr="0.0.0.0/0",
+            ports=[443],
+            direction="ingress",
+        )
+        assert RelationType.PROTECTED_BY_SG not in rels
+        assert {RelationType.INGRESS_ALLOWED, RelationType.INTERNET_REACHABLE} <= rels
+
+    def test_group_to_group_rule_is_not_protected_by_sg(self):
+        rels = _rels(
+            _typed("sg-app", AssetType.SECURITY_GROUP),
+            _typed("sg-db", AssetType.SECURITY_GROUP),
+            EdgeType.SECURITY_GROUP_RULE,
+            ports=[5432],
+        )
+        assert RelationType.PROTECTED_BY_SG not in rels
+
+    def test_nacl_rule_is_not_protected_by_nacl(self):
+        rels = _rels(
+            "0.0.0.0/0", _typed("acl", AssetType.NACL), EdgeType.NACL_RULE, cidr="0.0.0.0/0"
+        )
+        assert RelationType.PROTECTED_BY_NACL not in rels
+
+    def test_attachment_to_filter(self):
+        T = AssetType
+        R = RelationType
+        for filter_type, expected in [
+            (T.SECURITY_GROUP, R.PROTECTED_BY_SG),
+            (T.NSG, R.PROTECTED_BY_SG),
+            (T.NACL, R.PROTECTED_BY_NACL),
+        ]:
+            rels = _rels(_typed("vm", T.EC2), _typed("f", filter_type), EdgeType.ATTACHED_TO)
+            assert rels == {expected}, filter_type
+
+    def test_other_attachments_are_dependencies(self):
+        rels = _rels(
+            _typed("disk", AssetType.EBS_VOLUME), _typed("vm", AssetType.EC2), EdgeType.ATTACHED_TO
+        )
+        assert rels == {RelationType.DEPENDS_ON}
+
+    def test_declared_attachment_relationship_wins(self):
+        rels = _rels(
+            _typed("vpn", AssetType.VPN_GATEWAY),
+            _typed("tgw", AssetType.TRANSIT_GATEWAY),
+            EdgeType.ATTACHED_TO,
+            relationship="TRANSIT_ROUTED",
+        )
+        assert rels == {RelationType.TRANSIT_ROUTED}
+
+    def test_ontology_triples(self):
+        """End to end: the RDF graph carries the corrected triples."""
+        from cloudg.graph.ontology import CMP, CMR
+
+        assets = [
+            _typed("org", AssetType.ORGANIZATION),
+            _typed("ou", AssetType.ORG_UNIT),
+            _typed("alb", AssetType.LOAD_BALANCER),
+            _typed("sg-web", AssetType.SECURITY_GROUP),
+        ]
+        edges = [
+            NetworkEdge(source_id="org", target_id="ou", edge_type=EdgeType.CONTAINS),
+            NetworkEdge(
+                source_id="0.0.0.0/0",
+                target_id="sg-web",
+                edge_type=EdgeType.SECURITY_GROUP_RULE,
+                cidr="0.0.0.0/0",
+                ports=[443],
+            ),
+            NetworkEdge(source_id="alb", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO),
+        ]
+        g = CloudOntology().build(assets, edges)
+
+        assert (CMR["org"], CMP["CONTAINS"], CMR["ou"]) in g
+        assert (CMR["org"], CMP["VPC_CONTAINS_SUBNET"], CMR["ou"]) not in g
+        assert (CMR["0.0.0.0/0"], CMP["PROTECTED_BY_SG"], CMR["sg-web"]) not in g
+        assert (CMR["alb"], CMP["PROTECTED_BY_SG"], CMR["sg-web"]) in g
+
+
 # ── Finding → asset resolution ──
 
 _RDS_ARN = "arn:aws:rds:us-east-1:123456789012:db:prod-db"
