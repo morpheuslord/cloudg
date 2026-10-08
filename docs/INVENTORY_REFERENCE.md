@@ -300,9 +300,10 @@ trust statement), `external_id_required`, `actions`, `access_policies` (EKS acce
 
 The AWS collector's own `collect_edges()` adds two kinds of edges before linking:
 
-- `SECURITY_GROUP_RULE`, one per rule and CIDR. **The endpoints are the security group's native
-  ID and the CIDR string**, not asset UUIDs: ingress edges go `cidr → sg-…`, egress edges
-  `sg-… → cidr`. `ports`, `port_range`, `protocol`, `cidr` and `direction` are filled.
+- `SECURITY_GROUP_RULE`, one per rule and CIDR, between the CIDR string and the security
+  group asset's `id`: ingress edges go `cidr → <sg asset id>`, egress edges
+  `<sg asset id> → cidr`. The native group ID stays in the asset's `metadata.group_id` and
+  `arn`. `ports`, `port_range`, `protocol`, `cidr` and `direction` are filled.
 - `CONTAINS` VPC → subnet, between asset UUIDs.
 
 The Azure collector's `collect_edges()` adds `SECURITY_GROUP_RULE` edges for NSG inbound rules,
@@ -314,8 +315,10 @@ The GCP collector adds one edge per internet ingress entry from `0.0.0.0/0` to t
 `INTERNET_EXPOSED` for exposure found through IAM, external IPs or load balancers, and
 `SECURITY_GROUP_RULE` for firewall rules, with `ports` / `protocol` from the firewall evaluation.
 
-Consumers that join edges to assets must therefore expect a few endpoints that are not asset
-IDs. The graph exports turn them into nodes with `is_external: true`
+The security group / NSG side of a rule edge is always an asset `id`; the other side is
+deliberately external. Consumers that join edges to assets must therefore expect a few endpoints
+that are not asset IDs: CIDRs, Azure service tags and `*`, and the resource ID of an application
+security group that was not collected. The graph exports turn them into nodes with `is_external: true`
 ([section 15](#15-inventory-graphjson)), and `DependencyGraph` ignores edges whose endpoints
 are not assets.
 
@@ -323,7 +326,7 @@ are not assets.
 {
   "id": "8cbfec40-e9a8-4546-bf1f-2f47d542b8b3",
   "source_id": "0.0.0.0/0",
-  "target_id": "sg-05c9fb72915768cb5",
+  "target_id": "6f0d2c8e-3b1a-4f57-9c2e-8a41d7e5b903",
   "edge_type": "SECURITY_GROUP_RULE",
   "ports": [443],
   "port_range": "443",
@@ -1024,7 +1027,7 @@ Consumed by `docs/viewer.html` and any D3 / vis.js / Cytoscape front end.
 | `arn` | `str` | Identifier, `""` when none. |
 | `account_id` | `str` | Account, `""` when none. |
 | `is_internet_exposed` | `bool` | From the asset. |
-| `is_external` | `bool` | `true` for nodes created from non-asset endpoints (`0.0.0.0/0`, the native security group IDs of rule edges). External *accounts* are real assets and have `is_external: false`; check `type == "CLOUD_ACCOUNT"` and the map's `metadata.external` for those. |
+| `is_external` | `bool` | `true` for nodes created from non-asset endpoints (`0.0.0.0/0` and other CIDRs, Azure service tags). External *accounts* are real assets and have `is_external: false`; check `type == "CLOUD_ACCOUNT"` and the map's `metadata.external` for those. |
 
 `links[]`:
 
