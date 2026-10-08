@@ -4,7 +4,7 @@ Notable changes per release. Patch releases are folded into the major entry they
 
 ## Unreleased
 
-Behaviour changes in public API: `cloudg.graph.reachability`, `cloudg.graph.ontology_rules`, the ontology and RAG exporters, and `cloudg.inventory.dependencies`. Embedders that store reachability findings or query the ontology should read this section.
+Behaviour changes in public API: `cloudg.graph.builder`, `cloudg.graph.reachability`, `cloudg.graph.ontology_rules`, the ontology and RAG exporters, and `cloudg.inventory.dependencies`. Embedders that store reachability findings or query the ontology should read this section.
 
 Changed:
 
@@ -22,6 +22,12 @@ Changed:
 
 Fixed:
 
+- `GraphBuilder` lost rules that shared a source and target. The graph is an `nx.DiGraph`, which holds one edge per pair, so the second `NetworkEdge` for a pair overwrote the first one's attributes. A security group with ingress rules from `0.0.0.0/0` for port 22 and port 443 ended up with a single edge for 443, and `ReachabilityAnalyzer` never reported SSH open to the internet. An ICMP rule from `0.0.0.0/0` listed after the SSH rule hid it the same way. AWS security groups, Azure NSG rules and GCP firewall rules all produce such pairs. `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` edges on the same pair are now merged into one graph edge when their CIDR and direction match:
+  - `port_range` lists the ports of every merged rule, comma-separated and without repeats: rules for 22 and 443 give `"22,443"`.
+  - Rules for different protocols are merged too, and `protocol` lists each one once (`"TCP,ICMP"`). ICMP, ESP, AH, GRE and IPIP rules add no ports, because the numbers AWS stores for ICMP are a type and code, and Azure writes `"*"` for an ICMP rule. A TCP, UDP or all-protocol filter rule with no ports (GCP writes these) adds `0-65535`. With mixed protocols the ports are a union: the edge shows which ports are open from the source, not which protocol each port is open for. Sensitive-port findings never looked at the protocol, so they come out the same as if each rule had its own edge.
+  - `description` joins the rules' descriptions with `"; "`.
+  - Rules whose CIDR or direction differ, and edges of any other type, still replace the earlier edge on the pair.
+- `graph.number_of_edges()` and the edge lists in `to_d3_json()`, `to_cytoscape_json()` and GraphML exports shrink by the number of merged rules, and a merged edge's `port_range`, `protocol` and `description` can hold comma- or semicolon-separated lists. Open-port finding ids still hash the source, target and port, so a finding that was reported before keeps its id.
 - The ontology and RAG exporters attached findings to assets by raw `Finding.resource_id` only. Findings whose `resource_id` is an ARN or a display name, which is common in scanner output, left a dangling resource node (for example `cmr:arn:aws:rds:...`) with no `FINDING_AFFECTS` edge to the real asset, and RAG entity and community chunks reported a `finding_count` of 0 for it. Both exporters now resolve a finding's asset by ID, then ARN (from `resource_id` or `resource_arn`), then unique name, then unique ARN tail, and fall back to the raw `resource_id` only when nothing matches. Ambiguous names never match.
 - The matching rules live in a new `cloudg.inventory.dependencies.AssetIndex`, which `DependencyGraph.find` now uses too. Its behaviour is unchanged apart from building the lookup tables once instead of scanning every asset on each call, and an empty reference now returns `None`.
 
@@ -121,7 +127,7 @@ Fixed (pre-release hardening, folded in before publish):
 - install.sh no longer uses `A && B || C` as if-then-else anywhere; every step is an explicit if/else, with a `pip_tool` helper for the repeated pip installs.
 - Dockerfile pins parliament to 1.6.4.
 - Codacy complexity findings: the long CLI commands (`run`, `scan`, `ingest`), the engine phases (`scan`, `analyze`, `run_pipeline`), the SVG/HTML renderers, the ontology relation inference, the RAG exporters, credentials, registry discovery and the Prowler/IAM-linter scanners were split into focused helpers; behavior is unchanged and the CLI `run` command no longer takes 27 named parameters.
-- Codacy file-length findings: the four oversized modules were split along their natural seams, with every import path preserved — the CLI helpers moved to `cli_helpers.py` / `cli_run_helpers.py` and the `run` command to `cli_commands.py`; the AWS per-service collectors moved to `aws_services.py` / `aws_services_extended.py` mixins; the ontology relation-inference layer moved to `ontology_rules.py` (re-exported from `ontology`); the SVG hierarchical layout moved to `svg_layout.py`. The SVG output is byte-identical and the whole suite passes unchanged.
+- Codacy file-length findings: the four oversized modules were split along their natural seams, with every import path preserved. The CLI helpers moved to `cli_helpers.py` / `cli_run_helpers.py` and the `run` command to `cli_commands.py`; the AWS per-service collectors moved to `aws_services.py` / `aws_services_extended.py` mixins; the ontology relation-inference layer moved to `ontology_rules.py` (re-exported from `ontology`); the SVG hierarchical layout moved to `svg_layout.py`. The SVG output is byte-identical and the whole suite passes unchanged.
 
 ## 0.4.1 (2026-09-29)
 

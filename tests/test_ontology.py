@@ -389,7 +389,6 @@ class TestCloudOntology:
         assert stats["individuals"] > 0
 
 
-
 # ── Containment and filter relation accuracy ──
 
 
