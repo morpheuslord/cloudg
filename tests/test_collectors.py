@@ -361,3 +361,26 @@ class TestAsyncAWSCollector:
         graph = GraphBuilder().build(assets, edges)
         assert sg_native_id not in graph
         assert graph.nodes[sg.id]["asset_type"] == AssetType.SECURITY_GROUP.value
+
+    def test_open_sg_exposes_attached_instance(self, boto3_session):
+        """With linker edges, exposure flows from an open SG to the instance using it."""
+        from cloudg.graph.builder import GraphBuilder
+        from cloudg.graph.reachability import ReachabilityAnalyzer
+        from cloudg.inventory.linker import RelationshipLinker
+
+        self._setup_ec2(boto3_session)
+
+        collector = AsyncAWSCollector(
+            session=boto3_session, region="us-east-1", account_id="123456789012"
+        )
+        assets = asyncio.run(collector.collect())
+        edges = asyncio.run(collector.collect_edges())
+        edges += RelationshipLinker(assets).link()
+
+        sg = next(a for a in assets if a.name == "test-sg")
+        instance = next(a for a in assets if a.name == "test-instance")
+        graph = GraphBuilder().build(assets, edges)
+        exposed = ReachabilityAnalyzer(graph).find_internet_exposed()
+
+        assert sg.id in exposed
+        assert instance.id in exposed

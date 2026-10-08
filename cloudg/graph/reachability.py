@@ -1,13 +1,49 @@
-"""BFS-based network reachability analysis."""
+"""BFS-based network reachability analysis.
+
+Internet exposure follows network-flow edges only. Starting from the
+internet sources (``0.0.0.0/0``, ``::/0`` and edges that carry an internet
+CIDR), the walk moves along an edge only when traffic can travel that way:
+
+- ``INTERNET_EXPOSED``, ``LOAD_BALANCER_TARGET``, ``ROUTE`` and ``PEERING``:
+  source to target, as the edge points.
+- ``SECURITY_GROUP_RULE`` and ``NACL_RULE``: source to target for ingress
+  rules. Egress rules (``direction == "egress"``) point from a group to the
+  destination it may send to and carry no inbound traffic.
+- ``ATTACHED_TO``: reversed when the target is a traffic filter (security
+  group, NSG, NACL, or any edge declaring ``PROTECTED_BY_SG`` /
+  ``PROTECTED_BY_NACL``), since traffic admitted by a group reaches the
+  resources attached to it. Forward when the source is a network interface
+  or public IP, which hand their traffic to the resource they are attached
+  to. Other attachments (disks, route tables, VNet integration, gateways
+  attached to a VPC) are not traffic paths.
+- ``CONTAINS``: parent to child when the parent is a VPC, VNet or subnet,
+  so traffic admitted into a network reaches what is placed in it.
+  Hierarchy containment (organization, OU, account, cluster, namespace,
+  resource group) is not traversed.
+
+Identity edges (``GRANTS_ACCESS``, ``ASSUMES_ROLE``, ``IAM_TRUST``,
+``IAM_POLICY_ATTACHMENT``) and the other typed inventory edges
+(``INVOKES``, ``REFERENCES``, ``LOGS_TO`` and so on) never make a resource
+internet-exposed: a role granted access to a database does not open a
+network path to it. Those edges still count for
+:meth:`ReachabilityAnalyzer.compute_blast_radius`, which models what a
+compromised resource can reach, identity included.
+
+The walk is an over-approximation: it does not intersect ports across
+hops, and a rule whose source is another group or a workload is followed
+like any other ingress rule.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+import uuid
+from collections import deque
+from typing import Any, Iterator
 
 import networkx as nx
 
-from cloudg.schema.models import AssetType, Finding, Severity
+from cloudg.schema.models import AssetType, EdgeType, Finding, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +86,70 @@ RULE_CONTAINER_TYPES = {
     AssetType.NSG,
 }
 
+# Source / CIDR values that stand for the whole internet. Azure NSG rules
+# use the service tags ``Internet``, ``Any`` and ``*`` instead of a CIDR.
+INTERNET_CIDRS = frozenset({"0.0.0.0/0", "::/0"})
+_INTERNET_EDGE_CIDRS = frozenset({"0.0.0.0/0", "::/0", "*", "internet", "any"})
+
+# Edges that carry traffic from source to target as they point
+_FORWARD_FLOW_EDGES = frozenset(
+    {
+        EdgeType.INTERNET_EXPOSED.value,
+        EdgeType.LOAD_BALANCER_TARGET.value,
+        EdgeType.ROUTE.value,
+        EdgeType.PEERING.value,
+    }
+)
+
+# Filter rules: followed source to target unless they are egress rules
+_RULE_EDGES = frozenset({EdgeType.SECURITY_GROUP_RULE.value, EdgeType.NACL_RULE.value})
+
+# ATTACHED_TO targets that filter traffic for the resource attached to them
+_TRAFFIC_FILTER_TYPES = frozenset(
+    {AssetType.SECURITY_GROUP.value, AssetType.NSG.value, AssetType.NACL.value}
+)
+_FILTER_RELATIONSHIPS = frozenset({"PROTECTED_BY_SG", "PROTECTED_BY_NACL"})
+
+# ATTACHED_TO sources that pass their traffic on to the resource they attach to
+_INTERFACE_TYPES = frozenset({AssetType.NETWORK_INTERFACE.value, AssetType.ELASTIC_IP.value})
+
+# CONTAINS parents whose containment is network placement
+_NETWORK_PLACEMENT_TYPES = frozenset(
+    {AssetType.VPC.value, AssetType.VNET.value, AssetType.SUBNET.value}
+)
+
+# Namespace for deterministic finding ids (uuid5 of rule + asset)
+_FINDING_ID_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "https://github.com/morpheuslord/cloudg/reachability"
+)
+
+# Rule names hashed into the finding ids
+RULE_SENSITIVE_EXPOSURE = "internet-exposed-sensitive-asset"
+RULE_UNEXPECTED_EXPOSURE = "internet-exposed-unexpected-asset"
+RULE_OPEN_PORT = "internet-open-sensitive-port"
+
+
+def finding_id(rule: str, asset: str) -> str:
+    """Deterministic finding id: a UUID5 hash of the rule and the asset key.
+
+    The same rule firing on the same asset gets the same id on every run,
+    so reachability findings can be deduplicated and tracked across scans.
+    """
+    return str(uuid.uuid5(_FINDING_ID_NAMESPACE, f"{rule}|{asset}"))
+
+
+def _is_egress(edge_data: dict[str, Any]) -> bool:
+    """Whether a graph edge is an egress filter rule."""
+    return str(edge_data.get("direction") or "").lower() == "egress"
+
 
 class ReachabilityAnalyzer:
     """Analyses network reachability via BFS on the infrastructure graph.
 
-    1. Find all nodes reachable from 0.0.0.0/0 → "internet-exposed"
-    2. From each exposed node, BFS to find internally-reachable resources → "blast radius"
+    1. Find all nodes reachable from the internet over network-flow edges
+       ("internet-exposed"); see the module docstring for the traversal rules.
+    2. From any node, BFS over every edge type to find what it can reach
+       ("blast radius").
     3. Cross-reference with asset type to generate severity-scored findings.
     """
 
@@ -63,38 +157,67 @@ class ReachabilityAnalyzer:
         self._graph = graph
 
     def find_internet_exposed(self) -> set[str]:
-        """Find all nodes reachable from internet-facing entry points (0.0.0.0/0).
+        """Find all nodes reachable from the internet over network-flow edges.
+
+        Entry points are nodes named ``0.0.0.0/0`` or ``::/0`` and the source
+        of every non-egress edge whose CIDR stands for the internet. The walk
+        follows only the network-flow hops described in the module docstring,
+        so resources reached only through IAM or other non-network edges are
+        not reported.
 
         Returns:
             Set of node IDs that are internet-exposed.
         """
-        internet_nodes = set()
-
-        # Find all nodes that represent internet CIDR sources
-        for node_id, data in self._graph.nodes(data=True):
-            name = data.get("name", node_id)
-            if name in ("0.0.0.0/0", "::/0") or data.get("is_external"):
-                internet_nodes.add(node_id)
-
-        # Also find edges with internet CIDRs
-        for source, target, data in self._graph.edges(data=True):
-            cidr = data.get("cidr", "")
-            if cidr in ("0.0.0.0/0", "::/0"):
-                internet_nodes.add(source)
-
-        # BFS from all internet entry points
         exposed: set[str] = set()
-        for entry_point in internet_nodes:
-            reachable = nx.descendants(self._graph, entry_point)
-            exposed.update(reachable)
+        queue = deque(self._internet_entry_points())
+        seen = set(queue)
+        while queue:
+            node_id = queue.popleft()
+            for nxt in self._flow_successors(node_id):
+                exposed.add(nxt)
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
 
         # Mark nodes in graph
         for node_id in exposed:
-            if node_id in self._graph:
-                self._graph.nodes[node_id]["is_internet_exposed"] = True
+            self._graph.nodes[node_id]["is_internet_exposed"] = True
 
         logger.info("Found %d internet-exposed nodes", len(exposed))
         return exposed
+
+    def _internet_entry_points(self) -> set[str]:
+        """Nodes that represent the internet as a traffic source."""
+        entry_points = {
+            node_id
+            for node_id, data in self._graph.nodes(data=True)
+            if data.get("name", node_id) in INTERNET_CIDRS
+        }
+        for source, _target, data in self._graph.edges(data=True):
+            if str(data.get("cidr") or "").lower() in _INTERNET_EDGE_CIDRS and not _is_egress(data):
+                entry_points.add(source)
+        return entry_points
+
+    def _flow_successors(self, node_id: str) -> Iterator[str]:
+        """Nodes that traffic arriving at ``node_id`` can travel on to."""
+        node_type = self._graph.nodes[node_id].get("asset_type", "")
+        for _source, target, data in self._graph.out_edges(node_id, data=True):
+            edge_type = data.get("edge_type", "")
+            if (
+                edge_type in _FORWARD_FLOW_EDGES
+                or (edge_type in _RULE_EDGES and not _is_egress(data))
+                or (edge_type == EdgeType.ATTACHED_TO.value and node_type in _INTERFACE_TYPES)
+                or (edge_type == EdgeType.CONTAINS.value and node_type in _NETWORK_PLACEMENT_TYPES)
+            ):
+                yield target
+        # Traffic admitted by a security group / NSG / NACL reaches the
+        # resources attached to it: walk those ATTACHED_TO edges backwards.
+        is_filter = node_type in _TRAFFIC_FILTER_TYPES
+        for source, _target, data in self._graph.in_edges(node_id, data=True):
+            if data.get("edge_type") == EdgeType.ATTACHED_TO.value and (
+                is_filter or data.get("relationship") in _FILTER_RELATIONSHIPS
+            ):
+                yield source
 
     def compute_blast_radius(self, node_id: str) -> dict[str, Any]:
         """Compute blast radius: all nodes reachable from a given node.
@@ -146,8 +269,8 @@ class ReachabilityAnalyzer:
         """
         findings: list[Finding] = []
 
-        # Findings for internet-exposed resources
-        for node_id in self.find_internet_exposed():
+        # Findings for internet-exposed resources, in a stable order
+        for node_id in sorted(self.find_internet_exposed()):
             finding = self._exposure_finding(node_id)
             if finding:
                 findings.append(finding)
@@ -185,6 +308,7 @@ class ReachabilityAnalyzer:
         """Critical finding for an internet-exposed sensitive data store."""
         name = node_data.get("name", node_id)
         return Finding(
+            id=finding_id(RULE_SENSITIVE_EXPOSURE, node_id),
             resource_id=node_id,
             resource_arn=node_data.get("arn", ""),
             severity=Severity.CRITICAL,
@@ -210,6 +334,7 @@ class ReachabilityAnalyzer:
         """High finding for an unexpectedly internet-exposed resource."""
         name = node_data.get("name", node_id)
         return Finding(
+            id=finding_id(RULE_UNEXPECTED_EXPOSURE, node_id),
             resource_id=node_id,
             resource_arn=node_data.get("arn", ""),
             severity=Severity.HIGH,
@@ -248,6 +373,8 @@ class ReachabilityAnalyzer:
         """Critical finding for one sensitive port open from 0.0.0.0/0."""
         target_data = self._graph.nodes.get(target, {})
         return Finding(
+            # One finding per rule edge and port: the asset key is the edge
+            id=finding_id(f"{RULE_OPEN_PORT}:{port}", f"{source}->{target}"),
             resource_id=target,
             resource_arn=target_data.get("arn", ""),
             severity=Severity.CRITICAL,

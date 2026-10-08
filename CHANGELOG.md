@@ -4,10 +4,37 @@ Notable changes per release. Patch releases are folded into the major entry they
 
 ## Unreleased
 
+Behaviour changes in public API: `cloudg.graph.reachability`, `cloudg.graph.ontology_rules`, the ontology and RAG exporters, and `cloudg.inventory.dependencies`. Embedders that store reachability findings or query the ontology should read this section.
+
+Changed:
+
+- `ReachabilityAnalyzer.find_internet_exposed()` walks network-flow edges only, so `generate_findings()` no longer reports resources that are reachable only through an IAM grant. Before, the walk followed every edge type out of an internet-exposed node, including `GRANTS_ACCESS`, `ASSUMES_ROLE`, `IAM_TRUST` and `IAM_POLICY_ATTACHMENT`, and produced findings such as a CRITICAL "Internet-exposed RDS_INSTANCE" for a database whose only link to the internet was a role granted access to it. The rules, documented in the module docstring:
+  - `INTERNET_EXPOSED`, `LOAD_BALANCER_TARGET`, `ROUTE` and `PEERING` are followed source to target.
+  - `SECURITY_GROUP_RULE` and `NACL_RULE` are followed source to target, except egress rules (`direction: "egress"`).
+  - `ATTACHED_TO` is followed backwards when the target is a security group, NSG or NACL, or the edge declares `PROTECTED_BY_SG` / `PROTECTED_BY_NACL` (traffic a group admits reaches the resources attached to it), and forwards when the source is a `NETWORK_INTERFACE` or `ELASTIC_IP`. Other attachments are not followed.
+  - `CONTAINS` is followed only from a `VPC`, `VNET` or `SUBNET`. Organization, account, cluster and namespace containment is not.
+  - `INVOKES`, `REFERENCES`, `USES_IMAGE`, `LOGS_TO`, `PROTECTS`, `MONITORS`, `MANAGES` and `GOVERNS` are not followed. A Lambda function behind a public API Gateway (an `INVOKES` edge) is therefore no longer reported as internet-exposed by this analysis.
+  - `compute_blast_radius()` is unchanged and still follows every edge type.
+- Internet entry points are nodes named `0.0.0.0/0` or `::/0` and the source of any non-egress edge whose CIDR is `0.0.0.0/0`, `::/0` or an Azure service tag for the internet (`Internet`, `Any`, `*`). Before, every external placeholder node counted as an entry point, including private CIDRs such as `10.0.0.0/8` and unresolved references, and a security group with an egress rule to `0.0.0.0/0` became an entry point itself.
+- Reachability finding ids are deterministic: a UUID5 hash of the rule and the asset (`cloudg.graph.reachability.finding_id(rule, asset)`) instead of a random `uuid4`. The same exposure gets the same id on every run. Exposure findings key on the node id, open-port findings on the rule edge and port. `generate_findings()` also returns exposure findings in a stable order.
+- Ontology: `CONTAINS` edges get a relation that matches both endpoint types: `VPC_CONTAINS_SUBNET` (VPC or VNet to subnet), `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE` (cluster or Kubernetes namespace to workload) and `ORG_CONTAINS_ACCOUNT` (organization or OU to account). Every other containment (organization to OU, account to VPC, VNet to VM, resource group to resource, unresolved endpoints) uses the new generic `RelationType.CONTAINS` in the `CONTAINMENT` group. Before, these fell back to `VPC_CONTAINS_SUBNET` and produced triples such as `sample-org VPC_CONTAINS_SUBNET Workloads`. A relationship declared on a `CONTAINS` edge now replaces the inferred one instead of being added to it.
+- Ontology: `SECURITY_GROUP_RULE` and `NACL_RULE` edges no longer yield `PROTECTED_BY_SG` / `PROTECTED_BY_NACL`. Those edges point from the traffic source to the group, so they produced triples such as `0.0.0.0/0 PROTECTED_BY_SG sg-web`. The protection relations now come from `ATTACHED_TO` edges whose target is a security group or NSG (`PROTECTED_BY_SG`) or a NACL (`PROTECTED_BY_NACL`), giving `web-alb PROTECTED_BY_SG sg-web`. Other `ATTACHED_TO` edges without a declared relationship stay `DEPENDS_ON`.
+
 Fixed:
 
-- AWS `SECURITY_GROUP_RULE` edges from `collect_edges()` now use the security group asset's `id` as the security group endpoint instead of the native `sg-…` ID, as Azure NSG rule edges already did. The graph exports no longer contain a disconnected `EXTERNAL` node per security group, and sensitive-port findings carry the security group's asset ID and ARN. The CIDR endpoint is unchanged.
+- The ontology and RAG exporters attached findings to assets by raw `Finding.resource_id` only. Findings whose `resource_id` is an ARN or a display name, which is common in scanner output, left a dangling resource node (for example `cmr:arn:aws:rds:...`) with no `FINDING_AFFECTS` edge to the real asset, and RAG entity and community chunks reported a `finding_count` of 0 for it. Both exporters now resolve a finding's asset by ID, then ARN (from `resource_id` or `resource_arn`), then unique name, then unique ARN tail, and fall back to the raw `resource_id` only when nothing matches. Ambiguous names never match.
+- The matching rules live in a new `cloudg.inventory.dependencies.AssetIndex`, which `DependencyGraph.find` now uses too. Its behaviour is unchanged apart from building the lookup tables once instead of scanning every asset on each call, and an empty reference now returns `None`.
+- AWS `SECURITY_GROUP_RULE` edges from `collect_edges()` now use the security group asset's `id` as the security group endpoint instead of the native `sg-…` ID, as Azure NSG rule edges already did. The graph exports no longer contain a disconnected `EXTERNAL` node per security group, and sensitive-port findings carry the security group's asset ID and ARN (their deterministic ids change once, since the rule edge key now holds the asset ID). The internet-exposure walk now continues from an open security group to the resources attached to it, so an instance behind a group that admits `0.0.0.0/0` is reported as internet-exposed; before, the walk stopped at the native-ID placeholder. The CIDR endpoint is unchanged.
 - Reachability analysis no longer reports security groups and NSGs themselves as "unexpected internet-exposed resources"; their open rules are still reported by the sensitive-port findings.
+
+## 0.5.3 (2026-10-04)
+
+A security fix release for CodeQL's "incomplete URL substring sanitization" alerts (`py/incomplete-url-substring-sanitization`).
+
+Security:
+
+- The GCP relation extractors decided a resource's API service by testing whether a string started with a host-like literal. The affected checks were the CMEK scan skip for `cloudkms.googleapis.com/` asset types, service-account detection on `//iam.googleapis.com/` names, and the `//sqladmin.googleapis.com/` and `//container.googleapis.com/` name normalisation. They now parse the service out of the name with anchored regular expressions, through the new helpers `api_service()` and `asset_type_service()` in `cloudg.inventory.gcp_relations.names`. Behaviour is unchanged; the new code was checked against the previous implementation on about 92,000 generated inputs with no differences.
+- Test assertions that checked a host-like literal against a list with `in` now use set comparison, so the scanner no longer reads them as URL checks.
 
 ## 0.5.2 (2026-10-04)
 

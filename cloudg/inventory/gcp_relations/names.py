@@ -38,6 +38,10 @@ _API_URL_RE = re.compile(
 )
 _BARE_API_RE = re.compile(r"^([a-z0-9-]+)\.googleapis\.com/(.+)$")
 _KEY_VERSION_RE = re.compile(r"/cryptoKeyVersions/[^/]+$")
+# API service of a full resource name ("//<svc>.googleapis.com/...") or of an
+# asset type ("<svc>.googleapis.com/Type"), anchored at the start
+_FULL_NAME_SERVICE_RE = re.compile(r"^//([a-z0-9-]+)\.googleapis\.com/")
+_ASSET_TYPE_SERVICE_RE = re.compile(r"^([a-z0-9-]+)\.googleapis\.com/")
 _CRYPTO_KEY_RE = re.compile(
     r"(projects/[^/\s\"']+/locations/[^/\s\"']+/keyRings/[^/\s\"']+/cryptoKeys/[^/\s\"']+)"
 )
@@ -161,13 +165,26 @@ def _bare_api_full_name(service: str, rest: str) -> str:
     return f"//{svc}.googleapis.com/{rest}"
 
 
+def api_service(name: Any) -> str | None:
+    """API service of a full resource name: ``//compute.googleapis.com/...`` -> ``compute``."""
+    m = _FULL_NAME_SERVICE_RE.match(name) if isinstance(name, str) else None
+    return m.group(1) if m else None
+
+
+def asset_type_service(asset_type: Any) -> str | None:
+    """API service of a CAI asset type: ``cloudkms.googleapis.com/CryptoKey`` -> ``cloudkms``."""
+    m = _ASSET_TYPE_SERVICE_RE.match(asset_type) if isinstance(asset_type, str) else None
+    return m.group(1) if m else None
+
+
 def _canonical_full_name(out: str) -> str:
     """Drop query/fragment and key versions; fold service aliases."""
     out = out.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     out = _KEY_VERSION_RE.sub("", out)
-    if out.startswith("//sqladmin.googleapis.com/"):
-        out = "//cloudsql.googleapis.com/" + out[len("//sqladmin.googleapis.com/") :]
-    if out.startswith("//container.googleapis.com/"):
+    service = api_service(out)
+    if service == "sqladmin":
+        out = "//cloudsql.googleapis.com/" + relative_name(out)
+    elif service == "container":
         out = out.replace("/zones/", "/locations/")
     return out
 

@@ -660,7 +660,7 @@ class TestEdgeAndResolver:
         for key in ("status", "domain_name", "origins", "web_acl_id", "viewer_protocol_policy"):
             assert key in cf_asset.metadata, key
         assert cf_asset.metadata["viewer_protocol_policy"] == "redirect-to-https"
-        assert "www.example.com" in cf_asset.metadata["aliases"]
+        assert {"www.example.com"} <= set(cf_asset.metadata["aliases"])
         assert "s3cr3t" not in json.dumps(cf_asset.model_dump(mode="json"))
         bucket, logs_bucket, alb_asset = (
             by_arn["arn:aws:s3:::site-assets"],
@@ -986,7 +986,7 @@ class TestFakeClientCollectors:
         accel = _one(assets, AssetType.GLOBAL_ACCELERATOR)
         assert accel.is_internet_exposed and accel.region == "global"
         assert accel.metadata["ip_addresses"] == ["75.2.0.1", "99.83.0.1"]
-        assert "a1234.awsglobalaccelerator.com" in accel.metadata["aliases"]
+        assert {"a1234.awsglobalaccelerator.com"} <= set(accel.metadata["aliases"])
         alb_asset = next(a for a in assets if a.arn == alb)
         assert _edge(edges, accel, alb_asset, EdgeType.LOAD_BALANCER_TARGET)
         assert ("list_custom_routing_accelerators", {}) in ga.calls

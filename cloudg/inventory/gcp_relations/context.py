@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from cloudg.inventory.aws_services._base import rel
-from cloudg.inventory.gcp_relations.names import kms_refs, sa_email, sa_ref
+from cloudg.inventory.gcp_relations.names import asset_type_service, kms_refs, sa_email, sa_ref
 from cloudg.schema.models import CloudAsset, EdgeType
 
 logger = logging.getLogger(__package__)
@@ -124,7 +124,7 @@ def extract(ctx: GCPContext) -> Extracted:
         except Exception as exc:  # one malformed resource must not stop the sweep
             logger.debug("GCP extractor failed for %s: %s", ctx.name, exc, exc_info=True)
             out.metadata["extraction_error"] = f"{type(exc).__name__}: {exc}"
-    if ctx.asset_type.startswith("cloudkms.googleapis.com/"):
+    if asset_type_service(ctx.asset_type) == "cloudkms":
         return out
     keys = kms_refs(ctx.data)
     if keys:

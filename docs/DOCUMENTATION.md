@@ -685,7 +685,7 @@ Modules the pipeline uses internally that are equally useful standalone:
 | Module | Class | What it does from code |
 |---|---|---|
 | `cloudg.graph.builder` | `GraphBuilder` | `build(assets, edges)` → NetworkX DiGraph; `find_attack_paths(src, dst)`, `find_lateral_movement_paths()`, `compute_centrality()` for blast-radius scoring; `to_d3_json()`, `to_cytoscape_json()`, `save_graphml()` / `load_graphml()` |
-| `cloudg.graph.reachability` | `ReachabilityAnalyzer` | BFS from the internet node over a built graph; `generate_findings()` returns exposure findings |
+| `cloudg.graph.reachability` | `ReachabilityAnalyzer`, `finding_id` | BFS from the internet over network-flow edges only (security group / NACL ingress rules, routes, peering, load balancer targets, filter attachments, VPC and subnet placement; never IAM edges); `generate_findings()` returns exposure findings with deterministic ids; `compute_blast_radius(node)` follows every edge type |
 | `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers ~62 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
 | `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
 | `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |

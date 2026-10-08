@@ -744,7 +744,7 @@ class TestDeepServiceCollectors:
         assert _edge(edges, bucket, queue, EdgeType.INVOKES)  # S3 notification
         assert _edge(edges, role, queue, EdgeType.GRANTS_ACCESS)  # inline policy grant
         assert role.metadata["trusted_external_accounts"] == ["999999999999"]
-        assert "lambda.amazonaws.com" in role.metadata["trusted_services"]
+        assert {"lambda.amazonaws.com"} <= set(role.metadata["trusted_services"])
 
     def test_disabled_security_services_are_visible(self, aws_credentials):
         session = boto3.Session(region_name="us-east-1")
