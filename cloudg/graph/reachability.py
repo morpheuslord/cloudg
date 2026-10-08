@@ -43,6 +43,8 @@ from typing import Any, Iterator
 
 import networkx as nx
 
+from cloudg.graph.ports import edge_port_ranges, port_in_ranges
+from cloudg.schema.models import AssetType, Finding, Severity
 from cloudg.schema.models import AssetType, EdgeType, Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -345,18 +347,27 @@ class ReachabilityAnalyzer:
         )
 
     def _sensitive_port_findings(self) -> list[Finding]:
-        """Findings for sensitive ports open to the internet on edges."""
+        """Findings for sensitive ports open to the internet on edges.
+
+        Ports are compared as numbers against the ranges parsed from the
+        edge's ``port_range`` and ``protocol`` (see :mod:`cloudg.graph.ports`),
+        plus any ``ports`` list on the edge. Egress rules are skipped: they
+        point from a group to the internet and open nothing inbound. Each
+        edge yields at most one finding per sensitive port.
+        """
         findings: list[Finding] = []
         for source, target, data in self._graph.edges(data=True):
             cidr = data.get("cidr", "")
             if cidr not in ("0.0.0.0/0", "::/0"):
                 continue
+            if str(data.get("direction") or "").lower() == "egress":
+                continue
 
-            ports = data.get("ports", [])
-            port_range = data.get("port_range", "")
+            ports = data.get("ports") or []
+            ranges = edge_port_ranges(data)
 
             for port, service in SENSITIVE_PORTS.items():
-                if port in ports or str(port) in port_range:
+                if port in ports or port_in_ranges(port, ranges):
                     findings.append(self._open_port_finding(source, target, cidr, port, service))
         return findings
 
