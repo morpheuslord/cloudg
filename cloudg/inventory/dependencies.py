@@ -31,7 +31,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from cloudg.schema.models import AssetType, CloudAsset, EdgeType, NetworkEdge
+from cloudg.schema.models import AssetType, CloudAsset, EdgeType, Finding, NetworkEdge
 
 DEPENDENCY_DIRECTION: dict[str, str] = {
     EdgeType.REFERENCES.value: "forward",
@@ -61,6 +61,63 @@ _HIERARCHY_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT, AssetType.CLOUD_
 _STRUCTURAL_EDGES = {EdgeType.CONTAINS.value, EdgeType.PEERING.value}
 
 
+class AssetIndex:
+    """Resolve asset references to asset IDs.
+
+    A reference is tried, in order, as an internal ID, an ARN / resource
+    ID (first asset wins), a unique name and finally a unique ARN tail
+    (the part after the last ``/``). Names and tails shared by several
+    assets are ambiguous and never match. The tables are built once, so
+    resolving every finding of a scan stays linear.
+    """
+
+    def __init__(self, assets: Iterable[CloudAsset] = ()) -> None:
+        self._ids: set[str] = set()
+        self._arns: dict[str, str] = {}
+        self._names: dict[str, set[str]] = {}
+        self._tails: dict[str, set[str]] = {}
+        for a in assets:
+            self.add(a.id, a.arn, a.name)
+
+    def add(self, asset_id: str, arn: str | None = None, name: str | None = None) -> None:
+        """Index one asset by its ID, ARN, name and ARN tail."""
+        self._ids.add(asset_id)
+        if arn:
+            self._arns.setdefault(arn, asset_id)
+            self._tails.setdefault(arn.rsplit("/", 1)[-1], set()).add(asset_id)
+        if name:
+            self._names.setdefault(name, set()).add(asset_id)
+
+    def _lookup(self, refs: Iterable[str | None]) -> str | None:
+        candidates = [r for r in refs if r]
+        for ref in candidates:
+            if ref in self._ids:
+                return ref
+        for ref in candidates:
+            if ref in self._arns:
+                return self._arns[ref]
+        for table in (self._names, self._tails):
+            for ref in candidates:
+                matches = table.get(ref)
+                if matches and len(matches) == 1:
+                    return next(iter(matches))
+        return None
+
+    def resolve(self, ref: str | None) -> str | None:
+        """ID of the asset ``ref`` names, or ``None`` if unknown or ambiguous."""
+        return self._lookup((ref,))
+
+    def resolve_finding(self, finding: Finding) -> str | None:
+        """ID of the asset a finding affects.
+
+        Scanner output often puts an ARN or a display name in
+        ``resource_id``, so both ``resource_id`` and ``resource_arn`` are
+        tried at every tier: ID first, then ARN, then unique name, then
+        unique ARN tail.
+        """
+        return self._lookup((finding.resource_id, finding.resource_arn))
+
+
 @dataclass
 class DependencyLink:
     """One hop in a dependency walk."""
@@ -82,6 +139,7 @@ class DependencyGraph:
         include_hierarchy: bool = False,
     ) -> None:
         self.assets = {a.id: a for a in assets}
+        self._index: AssetIndex | None = None
         self._needs: dict[str, list[tuple[str, NetworkEdge]]] = {}
         self._needed_by: dict[str, list[tuple[str, NetworkEdge]]] = {}
         for e in edges:
@@ -108,17 +166,12 @@ class DependencyGraph:
     # ------------------------------------------------------------------
 
     def find(self, ref: str) -> CloudAsset | None:
-        """Find an asset by internal ID, ARN / resource ID, or unique name."""
-        if ref in self.assets:
-            return self.assets[ref]
-        by_arn = [a for a in self.assets.values() if a.arn == ref]
-        if by_arn:
-            return by_arn[0]
-        by_name = [a for a in self.assets.values() if a.name == ref]
-        if len(by_name) == 1:
-            return by_name[0]
-        tail = [a for a in self.assets.values() if a.arn and a.arn.rsplit("/", 1)[-1] == ref]
-        return tail[0] if len(tail) == 1 else None
+        """Find an asset by internal ID, ARN / resource ID, unique name or
+        unique ARN tail (see :class:`AssetIndex`)."""
+        if self._index is None:
+            self._index = AssetIndex(self.assets.values())
+        asset_id = self._index.resolve(ref)
+        return self.assets[asset_id] if asset_id else None
 
     # ------------------------------------------------------------------
     # Walks

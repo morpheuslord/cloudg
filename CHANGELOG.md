@@ -4,7 +4,7 @@ Notable changes per release. Patch releases are folded into the major entry they
 
 ## Unreleased
 
-Behaviour changes in `cloudg.graph.reachability` and `cloudg.graph.ontology_rules`. Both modules are public API; embedders that store reachability findings or query the ontology should read this section.
+Behaviour changes in public API: `cloudg.graph.reachability`, `cloudg.graph.ontology_rules`, the ontology and RAG exporters, and `cloudg.inventory.dependencies`. Embedders that store reachability findings or query the ontology should read this section.
 
 Changed:
 
@@ -19,6 +19,11 @@ Changed:
 - Reachability finding ids are deterministic: a UUID5 hash of the rule and the asset (`cloudg.graph.reachability.finding_id(rule, asset)`) instead of a random `uuid4`. The same exposure gets the same id on every run. Exposure findings key on the node id, open-port findings on the rule edge and port. `generate_findings()` also returns exposure findings in a stable order.
 - Ontology: `CONTAINS` edges get a relation that matches both endpoint types: `VPC_CONTAINS_SUBNET` (VPC or VNet to subnet), `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE` (cluster or Kubernetes namespace to workload) and `ORG_CONTAINS_ACCOUNT` (organization or OU to account). Every other containment (organization to OU, account to VPC, VNet to VM, resource group to resource, unresolved endpoints) uses the new generic `RelationType.CONTAINS` in the `CONTAINMENT` group. Before, these fell back to `VPC_CONTAINS_SUBNET` and produced triples such as `sample-org VPC_CONTAINS_SUBNET Workloads`. A relationship declared on a `CONTAINS` edge now replaces the inferred one instead of being added to it.
 - Ontology: `SECURITY_GROUP_RULE` and `NACL_RULE` edges no longer yield `PROTECTED_BY_SG` / `PROTECTED_BY_NACL`. Those edges point from the traffic source to the group, so they produced triples such as `0.0.0.0/0 PROTECTED_BY_SG sg-web`. The protection relations now come from `ATTACHED_TO` edges whose target is a security group or NSG (`PROTECTED_BY_SG`) or a NACL (`PROTECTED_BY_NACL`), giving `web-alb PROTECTED_BY_SG sg-web`. Other `ATTACHED_TO` edges without a declared relationship stay `DEPENDS_ON`.
+
+Fixed:
+
+- The ontology and RAG exporters attached findings to assets by raw `Finding.resource_id` only. Findings whose `resource_id` is an ARN or a display name, which is common in scanner output, left a dangling resource node (for example `cmr:arn:aws:rds:...`) with no `FINDING_AFFECTS` edge to the real asset, and RAG entity and community chunks reported a `finding_count` of 0 for it. Both exporters now resolve a finding's asset by ID, then ARN (from `resource_id` or `resource_arn`), then unique name, then unique ARN tail, and fall back to the raw `resource_id` only when nothing matches. Ambiguous names never match.
+- The matching rules live in a new `cloudg.inventory.dependencies.AssetIndex`, which `DependencyGraph.find` now uses too. Its behaviour is unchanged apart from building the lookup tables once instead of scanning every asset on each call, and an empty reference now returns `None`.
 
 ## 0.5.3 (2026-10-04)
 

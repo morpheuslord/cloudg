@@ -27,6 +27,7 @@ from cloudg.graph.ontology_rules import (
     infer_asset_relations,
     infer_relations,
 )
+from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -361,10 +362,11 @@ class CloudOntology:
                 )
                 self._graph.add((src_uri, CMP[rel_type.value], tgt_uri))
 
-        # Add findings
+        # Add findings, attached to the asset they resolve to
         if findings:
+            index = AssetIndex(assets_by_id.values())
             for finding in findings:
-                self._add_finding(finding)
+                self._add_finding(finding, index)
 
         logger.info("Ontology built: %d triples", len(self._graph))
         return self._graph
@@ -430,8 +432,13 @@ class CloudOntology:
             if edge.protocol:
                 self._graph.add((stmt, CMP["hasProtocol"], Literal(edge.protocol)))
 
-    def _add_finding(self, finding: Finding) -> None:
-        """Add a Finding as an OWL individual with relations."""
+    def _add_finding(self, finding: Finding, index: AssetIndex | None = None) -> None:
+        """Add a Finding as an OWL individual with relations.
+
+        The affected resource is the asset ``index`` resolves the finding
+        to (by ID, ARN, unique name or unique ARN tail), falling back to
+        the raw ``resource_id`` when nothing matches.
+        """
         uri = CMR[f"finding_{finding.id}"]
         self._graph.add((uri, RDF.type, CM["SecurityFinding"]))
         self._graph.add((uri, CMP["hasName"], Literal(finding.title)))
@@ -439,7 +446,8 @@ class CloudOntology:
         self._graph.add((uri, CMP["hasRiskScore"], Literal(finding.risk_score, datatype=XSD.float)))
 
         # Link to affected resource
-        resource_uri = CMR[finding.resource_id]
+        asset_id = index.resolve_finding(finding) if index else None
+        resource_uri = CMR[asset_id or finding.resource_id]
         self._graph.add((uri, CMP[RelationType.FINDING_AFFECTS.value], resource_uri))
 
         # Link to compliance frameworks
