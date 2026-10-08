@@ -387,3 +387,107 @@ class TestCloudOntology:
         assert stats["total_triples"] > 0
         assert stats["classes_used"] > 0
         assert stats["individuals"] > 0
+
+
+# ── Finding → asset resolution ──
+
+_RDS_ARN = "arn:aws:rds:us-east-1:123456789012:db:prod-db"
+
+
+def _assets_with_arns() -> list[CloudAsset]:
+    assets = _make_assets()
+    for a in assets:
+        if a.id == "rds-1":
+            a.arn = _RDS_ARN
+        elif a.id == "ec2-1":
+            a.arn = "arn:aws:ec2:us-east-1:123456789012:instance/i-0abc"
+    return assets
+
+
+def _scanner_finding(resource_id: str, resource_arn: str | None = None) -> Finding:
+    return Finding(
+        resource_id=resource_id,
+        resource_arn=resource_arn,
+        severity=Severity.HIGH,
+        title=f"finding on {resource_id}",
+        description="scanner output",
+        source_tool="prowler",
+        compliance_frameworks=["CIS"],
+    )
+
+
+def _affected(onto: CloudOntology, finding: Finding) -> list[str]:
+    sparql = f"""
+    SELECT ?res WHERE {{
+        cmr:finding_{finding.id} cmp:{RelationType.FINDING_AFFECTS.value} ?res .
+    }}
+    """
+    return [r["res"] for r in onto.query(sparql)]
+
+
+class TestFindingResolution:
+    """Findings attach to the asset by id, ARN or unique name, not raw resource_id."""
+
+    def test_arn_resource_id_links_asset(self):
+        finding = _scanner_finding(_RDS_ARN, _RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+        # No dangling node named after the ARN
+        assert not any("arn:aws:rds" in str(s) for s in onto.graph.subjects())
+
+    def test_arn_only_in_resource_arn(self):
+        finding = _scanner_finding("prod-db-scanner-label", _RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+
+    def test_unique_name_links_asset(self):
+        finding = _scanner_finding("prod-db")
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+
+    def test_neighbourhood_includes_arn_finding(self):
+        finding = _scanner_finding(_RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        rows = onto.query_asset_neighbourhood("rds-1")
+        assert any(
+            r["predicate"].endswith(RelationType.FINDING_AFFECTS.value)
+            and r["neighbour"].endswith(f"finding_{finding.id}")
+            for r in rows
+        )
+
+    def test_compliance_governs_resolved_asset(self):
+        finding = _scanner_finding(_RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        sparql = f"""
+        SELECT ?res WHERE {{
+            cmr:compliance_CIS cmp:{RelationType.COMPLIANCE_GOVERNS.value} ?res .
+        }}
+        """
+        assert [r["res"] for r in onto.query(sparql)] == ["https://cloudg.io/resource/rds-1"]
+
+    def test_ambiguous_name_falls_back_to_raw_id(self):
+        assets = _assets_with_arns()
+        assets.append(
+            CloudAsset(
+                id="rds-2",
+                name="prod-db",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
+                region="eu-west-1",
+            )
+        )
+        finding = _scanner_finding("prod-db")
+        onto = CloudOntology()
+        onto.build(assets, _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/prod-db"]
+
+    def test_internal_id_still_links(self):
+        finding = _scanner_finding("ec2-1")
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/ec2-1"]

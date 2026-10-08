@@ -2,6 +2,13 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## Unreleased
+
+Fixed:
+
+- The ontology and RAG exporters attached findings to assets by raw `Finding.resource_id` only. Findings whose `resource_id` is an ARN or a display name, which is common in scanner output, left a dangling resource node (for example `cmr:arn:aws:rds:...`) with no `FINDING_AFFECTS` edge to the real asset, and RAG entity and community chunks reported a `finding_count` of 0 for it. Both exporters now resolve a finding's asset by ID, then ARN (from `resource_id` or `resource_arn`), then unique name, then unique ARN tail, and fall back to the raw `resource_id` only when nothing matches. Ambiguous names never match.
+- The matching rules live in a new `cloudg.inventory.dependencies.AssetIndex`, which `DependencyGraph.find` now uses too. Its behaviour is unchanged apart from building the lookup tables once instead of scanning every asset on each call, and an empty reference now returns `None`.
+
 ## 0.5.3 (2026-10-04)
 
 A security fix release for CodeQL's "incomplete URL substring sanitization" alerts (`py/incomplete-url-substring-sanitization`).
