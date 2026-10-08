@@ -22,6 +22,7 @@ from cloudg.graph.ontology import (
     get_relation_group,
     infer_relations,
 )
+from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
     CloudAsset,
     Finding,
@@ -109,13 +110,39 @@ _SEVERITY_ORDER = {
 _SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "NONE": 5}
 
 
-def _index_findings(findings: list[Finding] | None) -> dict[str, list[Finding]]:
-    """Group findings by resource_id."""
+def _index_findings(
+    findings: list[Finding] | None, index: AssetIndex | None = None
+) -> dict[str, list[Finding]]:
+    """Group findings by the asset ID they resolve to.
+
+    ``index`` matches a finding by ID, ARN, unique name or unique ARN
+    tail; findings it cannot place stay keyed by their raw resource_id.
+    """
     findings_by_resource: dict[str, list[Finding]] = defaultdict(list)
     if findings:
         for f in findings:
-            findings_by_resource[f.resource_id].append(f)
+            asset_id = index.resolve_finding(f) if index else None
+            findings_by_resource[asset_id or f.resource_id].append(f)
     return findings_by_resource
+
+
+def _graph_index(
+    graph: nx.DiGraph, assets_by_id: dict[str, CloudAsset] | None = None
+) -> AssetIndex:
+    """Asset index over a graph's nodes, plus any known assets.
+
+    External placeholder nodes are indexed by ID only: their name is
+    the ID itself and says nothing about which asset a finding targets.
+    """
+    index = AssetIndex()
+    for node_id, data in graph.nodes(data=True):
+        if data.get("is_external"):
+            index.add(node_id)
+        else:
+            index.add(node_id, data.get("arn"), data.get("name"))
+    for asset in (assets_by_id or {}).values():
+        index.add(asset.id, asset.arn, asset.name)
+    return index
 
 
 def _entity_header_lines(asset: CloudAsset) -> list[str]:
@@ -334,7 +361,7 @@ class RAGExporter:
     ) -> list[RAGChunk]:
         """Generate one chunk per cloud asset with 1-hop neighbourhood."""
         assets_by_id = {a.id: a for a in assets}
-        findings_by_resource = _index_findings(findings)
+        findings_by_resource = _index_findings(findings, AssetIndex(assets_by_id.values()))
 
         # Build adjacency from edges
         outgoing: dict[str, list[NetworkEdge]] = defaultdict(list)
@@ -421,7 +448,7 @@ class RAGExporter:
         for node_id, comm_id in partition.items():
             communities[comm_id].append(node_id)
 
-        findings_by_resource = _index_findings(findings)
+        findings_by_resource = _index_findings(findings, _graph_index(graph, assets_by_id))
 
         chunks = [
             self._build_community_chunk(graph, comm_id, members, findings_by_resource)

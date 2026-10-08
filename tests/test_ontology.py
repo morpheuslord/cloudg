@@ -391,6 +391,263 @@ class TestCloudOntology:
         assert stats["individuals"] > 0
 
 
+# ── Containment and filter relation accuracy ──
+
+
+def _typed(aid: str, asset_type: AssetType) -> CloudAsset:
+    return CloudAsset(id=aid, name=aid, asset_type=asset_type, provider=CloudProvider.AWS)
+
+
+def _rels(source: CloudAsset | str, target: CloudAsset | str, edge_type: EdgeType, **kw) -> set:
+    assets = [a for a in (source, target) if isinstance(a, CloudAsset)]
+    edge = NetworkEdge(
+        source_id=source.id if isinstance(source, CloudAsset) else source,
+        target_id=target.id if isinstance(target, CloudAsset) else target,
+        edge_type=edge_type,
+        **kw,
+    )
+    return set(infer_relations(edge, {a.id: a for a in assets}))
+
+
+class TestContainmentRelations:
+    """CONTAINS edges get a relation that matches both endpoint types."""
+
+    def test_specific_relations(self):
+        R = RelationType
+        T = AssetType
+        cases = [
+            (T.VPC, T.SUBNET, R.VPC_CONTAINS_SUBNET),
+            (T.VNET, T.SUBNET, R.VPC_CONTAINS_SUBNET),
+            (T.SUBNET, T.EC2, R.SUBNET_CONTAINS_INSTANCE),
+            (T.EKS_CLUSTER, T.K8S_NAMESPACE, R.CLUSTER_CONTAINS_SERVICE),
+            (T.K8S_NAMESPACE, T.K8S_WORKLOAD, R.CLUSTER_CONTAINS_SERVICE),
+            (T.ORGANIZATION, T.CLOUD_ACCOUNT, R.ORG_CONTAINS_ACCOUNT),
+            (T.ORG_UNIT, T.CLOUD_ACCOUNT, R.ORG_CONTAINS_ACCOUNT),
+        ]
+        for src_type, tgt_type, expected in cases:
+            rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+            assert rels == {expected}, (src_type, tgt_type, rels)
+
+    def test_generic_containment_is_plain_contains(self):
+        T = AssetType
+        cases = [
+            (T.ORGANIZATION, T.ORG_UNIT),
+            (T.ORG_UNIT, T.ORG_UNIT),
+            (T.CLOUD_ACCOUNT, T.VPC),
+            (T.VNET, T.VIRTUAL_MACHINE),
+            (T.VPC, T.INTERNET_GATEWAY),
+            (T.RESOURCE_GROUP, T.KEY_VAULT),
+        ]
+        for src_type, tgt_type in cases:
+            rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+            assert rels == {RelationType.CONTAINS}, (src_type, tgt_type, rels)
+
+    def test_unresolved_endpoint_is_plain_contains(self):
+        rels = _rels("subnet-unmapped", _typed("vm", AssetType.EC2), EdgeType.CONTAINS)
+        assert rels == {RelationType.CONTAINS}
+
+    def test_declared_relationship_replaces_inference(self):
+        rels = _rels(
+            "subnet-unmapped",
+            _typed("vm", AssetType.EC2),
+            EdgeType.CONTAINS,
+            relationship="SUBNET_CONTAINS_INSTANCE",
+        )
+        assert rels == {RelationType.SUBNET_CONTAINS_INSTANCE}
+
+    def test_contains_is_a_containment_relation(self):
+        assert get_relation_group(RelationType.CONTAINS) == RelationGroup.CONTAINMENT
+
+
+class TestFilterRelations:
+    """PROTECTED_BY_SG / PROTECTED_BY_NACL point from the protected resource."""
+
+    def test_internet_sg_rule_is_not_protected_by_sg(self):
+        rels = _rels(
+            "0.0.0.0/0",
+            _typed("sg-web", AssetType.SECURITY_GROUP),
+            EdgeType.SECURITY_GROUP_RULE,
+            cidr="0.0.0.0/0",
+            ports=[443],
+            direction="ingress",
+        )
+        assert RelationType.PROTECTED_BY_SG not in rels
+        assert {RelationType.INGRESS_ALLOWED, RelationType.INTERNET_REACHABLE} <= rels
+
+    def test_group_to_group_rule_is_not_protected_by_sg(self):
+        rels = _rels(
+            _typed("sg-app", AssetType.SECURITY_GROUP),
+            _typed("sg-db", AssetType.SECURITY_GROUP),
+            EdgeType.SECURITY_GROUP_RULE,
+            ports=[5432],
+        )
+        assert RelationType.PROTECTED_BY_SG not in rels
+
+    def test_nacl_rule_is_not_protected_by_nacl(self):
+        rels = _rels(
+            "0.0.0.0/0", _typed("acl", AssetType.NACL), EdgeType.NACL_RULE, cidr="0.0.0.0/0"
+        )
+        assert RelationType.PROTECTED_BY_NACL not in rels
+
+    def test_attachment_to_filter(self):
+        T = AssetType
+        R = RelationType
+        for filter_type, expected in [
+            (T.SECURITY_GROUP, R.PROTECTED_BY_SG),
+            (T.NSG, R.PROTECTED_BY_SG),
+            (T.NACL, R.PROTECTED_BY_NACL),
+        ]:
+            rels = _rels(_typed("vm", T.EC2), _typed("f", filter_type), EdgeType.ATTACHED_TO)
+            assert rels == {expected}, filter_type
+
+    def test_other_attachments_are_dependencies(self):
+        rels = _rels(
+            _typed("disk", AssetType.EBS_VOLUME), _typed("vm", AssetType.EC2), EdgeType.ATTACHED_TO
+        )
+        assert rels == {RelationType.DEPENDS_ON}
+
+    def test_declared_attachment_relationship_wins(self):
+        rels = _rels(
+            _typed("vpn", AssetType.VPN_GATEWAY),
+            _typed("tgw", AssetType.TRANSIT_GATEWAY),
+            EdgeType.ATTACHED_TO,
+            relationship="TRANSIT_ROUTED",
+        )
+        assert rels == {RelationType.TRANSIT_ROUTED}
+
+    def test_ontology_triples(self):
+        """End to end: the RDF graph carries the corrected triples."""
+        from cloudg.graph.ontology import CMP, CMR
+
+        assets = [
+            _typed("org", AssetType.ORGANIZATION),
+            _typed("ou", AssetType.ORG_UNIT),
+            _typed("alb", AssetType.LOAD_BALANCER),
+            _typed("sg-web", AssetType.SECURITY_GROUP),
+        ]
+        edges = [
+            NetworkEdge(source_id="org", target_id="ou", edge_type=EdgeType.CONTAINS),
+            NetworkEdge(
+                source_id="0.0.0.0/0",
+                target_id="sg-web",
+                edge_type=EdgeType.SECURITY_GROUP_RULE,
+                cidr="0.0.0.0/0",
+                ports=[443],
+            ),
+            NetworkEdge(source_id="alb", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO),
+        ]
+        g = CloudOntology().build(assets, edges)
+
+        assert (CMR["org"], CMP["CONTAINS"], CMR["ou"]) in g
+        assert (CMR["org"], CMP["VPC_CONTAINS_SUBNET"], CMR["ou"]) not in g
+        assert (CMR["0.0.0.0/0"], CMP["PROTECTED_BY_SG"], CMR["sg-web"]) not in g
+        assert (CMR["alb"], CMP["PROTECTED_BY_SG"], CMR["sg-web"]) in g
+
+
+# ── Finding → asset resolution ──
+
+_RDS_ARN = "arn:aws:rds:us-east-1:123456789012:db:prod-db"
+
+
+def _assets_with_arns() -> list[CloudAsset]:
+    assets = _make_assets()
+    for a in assets:
+        if a.id == "rds-1":
+            a.arn = _RDS_ARN
+        elif a.id == "ec2-1":
+            a.arn = "arn:aws:ec2:us-east-1:123456789012:instance/i-0abc"
+    return assets
+
+
+def _scanner_finding(resource_id: str, resource_arn: str | None = None) -> Finding:
+    return Finding(
+        resource_id=resource_id,
+        resource_arn=resource_arn,
+        severity=Severity.HIGH,
+        title=f"finding on {resource_id}",
+        description="scanner output",
+        source_tool="prowler",
+        compliance_frameworks=["CIS"],
+    )
+
+
+def _affected(onto: CloudOntology, finding: Finding) -> list[str]:
+    sparql = f"""
+    SELECT ?res WHERE {{
+        cmr:finding_{finding.id} cmp:{RelationType.FINDING_AFFECTS.value} ?res .
+    }}
+    """
+    return [r["res"] for r in onto.query(sparql)]
+
+
+class TestFindingResolution:
+    """Findings attach to the asset by id, ARN or unique name, not raw resource_id."""
+
+    def test_arn_resource_id_links_asset(self):
+        finding = _scanner_finding(_RDS_ARN, _RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+        # No dangling node named after the ARN
+        assert not any("arn:aws:rds" in str(s) for s in onto.graph.subjects())
+
+    def test_arn_only_in_resource_arn(self):
+        finding = _scanner_finding("prod-db-scanner-label", _RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+
+    def test_unique_name_links_asset(self):
+        finding = _scanner_finding("prod-db")
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/rds-1"]
+
+    def test_neighbourhood_includes_arn_finding(self):
+        finding = _scanner_finding(_RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        rows = onto.query_asset_neighbourhood("rds-1")
+        assert any(
+            r["predicate"].endswith(RelationType.FINDING_AFFECTS.value)
+            and r["neighbour"].endswith(f"finding_{finding.id}")
+            for r in rows
+        )
+
+    def test_compliance_governs_resolved_asset(self):
+        finding = _scanner_finding(_RDS_ARN)
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        sparql = f"""
+        SELECT ?res WHERE {{
+            cmr:compliance_CIS cmp:{RelationType.COMPLIANCE_GOVERNS.value} ?res .
+        }}
+        """
+        assert [r["res"] for r in onto.query(sparql)] == ["https://cloudg.io/resource/rds-1"]
+
+    def test_ambiguous_name_falls_back_to_raw_id(self):
+        assets = _assets_with_arns()
+        assets.append(
+            CloudAsset(
+                id="rds-2",
+                name="prod-db",
+                asset_type=AssetType.RDS_INSTANCE,
+                provider=CloudProvider.AWS,
+                region="eu-west-1",
+            )
+        )
+        finding = _scanner_finding("prod-db")
+        onto = CloudOntology()
+        onto.build(assets, _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/prod-db"]
+
+    def test_internal_id_still_links(self):
+        finding = _scanner_finding("ec2-1")
+        onto = CloudOntology()
+        onto.build(_assets_with_arns(), _make_edges(), [finding])
+        assert _affected(onto, finding) == ["https://cloudg.io/resource/ec2-1"]
+
+
 # ── Triple direction: KMS encryption and VPC containment ──
 
 
@@ -508,9 +765,6 @@ class TestKmsEncryptionDirection:
 
 class TestVpcContainmentDirection:
     """Metadata containment runs from the VPC to its members."""
-
-    def test_contains_is_a_containment_relation(self):
-        assert get_relation_group(RelationType.CONTAINS) == RelationGroup.CONTAINMENT
 
     def test_member_assets_emit_no_containment(self):
         assets = _make_assets()
