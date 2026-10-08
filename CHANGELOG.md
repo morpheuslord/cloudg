@@ -6,6 +6,15 @@ Notable changes per release. Patch releases are folded into the major entry they
 
 Two additions. cloudg is now a Model Context Protocol server, so AI agents can query an inventory map, its graph, findings, compliance and ontology under an access and privacy policy. And every cloud API call now goes through a shared rate limiter that slows down when a provider throttles, so an organization-wide map (or an agent asking for one too often) no longer fails or hammers the APIs.
 
+A behaviour change in `cloudg.graph.reachability`, which is public API. Embedders that store or count reachability findings will see different open-port findings for the same estate.
+
+Fixed:
+
+- `ReachabilityAnalyzer` decided whether a sensitive port was open with a substring test on the edge's `port_range` string. A rule open on `0-65535`, which is how the AWS collector writes protocol `-1` (all traffic), produced no SSH or RDP finding, and neither did an Azure NSG rule with `*` or a comma list such as `443,3380-3390`. The same test reported port 22 for `2200-2300` and port 3389 for `33890`. The string is now parsed into numeric ranges by the new `cloudg.graph.ports` module (`parse_port_ranges()`, `edge_port_ranges()`, `port_in_ranges()`) and each of the 11 ports in `SENSITIVE_PORTS` is tested against those ranges. The module reads `a-b`, single ports, comma lists and `*`. An empty `port_range` on a `SECURITY_GROUP_RULE` or `NACL_RULE` edge means every port when the protocol is `ALL` / `-1` / `*` / `Any`, or TCP, UDP or SCTP (a GCP firewall protocol with no ports listed). On other edge types an empty string still opens nothing, so a GCP `INTERNET_EXPOSED` edge for a public bucket gets no port findings. ICMP, ICMPv6, ESP, AH, GRE and IPIP rules open no ports; for ICMP the numbers AWS stores in the port fields are a type and code.
+- Egress rules (`direction: "egress"`) no longer produce open-port findings. They point from a group to `0.0.0.0/0` and admit nothing inbound. Before this change they were checked like ingress rules and only escaped because the default AWS egress string `0-65535` contains none of the sensitive port numbers as a substring; with numeric matching every security group's default egress rule would otherwise report all 11 ports.
+
+Expect more open-port findings on estates with all-traffic or wide-range ingress rules from `0.0.0.0/0`, and fewer on rules whose range only looked like a sensitive port. An edge still yields at most one finding per port, however many of its ranges overlap that port. The analyzer also reads a `ports` list from a graph edge when one is present, as before; `GraphBuilder` still does not copy `NetworkEdge.ports` onto the graph, since the collectors cap that list at 100 entries and GraphML export cannot store lists.
+=======
 Behaviour changes in public API: `cloudg.graph.reachability`, `cloudg.graph.ontology_rules`, the ontology and RAG exporters, and `cloudg.inventory.dependencies`. Embedders that store reachability findings or query the ontology should read this section.
 
 Added:
