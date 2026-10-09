@@ -1,10 +1,10 @@
 # ═══════════════════════════════════════════════════════════════════
-# CloudG — Multi-stage Dockerfile optimized for rapid prototyping
+# CloudG: multi-stage Dockerfile optimized for rapid prototyping
 # ═══════════════════════════════════════════════════════════════════
 # Layer strategy (fastest → slowest to change):
-#   1. scanners  — Prowler, Checkov, Trivy (rarely changes, cached)
-#   2. deps      — Python dependencies from pyproject.toml (changes with deps)
-#   3. app       — Source code + templates (changes every edit, <5s rebuild)
+#   1. scanners: Prowler, Checkov, Trivy (rarely changes, cached)
+#   2. deps: Python dependencies from pyproject.toml (changes with deps)
+#   3. app: source code + templates (changes every edit, <5s rebuild)
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Stage 1: Security Scanners (heavy, rarely changes) ──
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Parliament (IAM linting) — installed globally
+# Parliament (IAM linting), installed globally
 RUN pip install --no-cache-dir parliament==1.6.4
 
 # Prowler in isolated venv
@@ -27,7 +27,7 @@ RUN python -m venv /opt/prowler && \
 RUN python -m venv /opt/checkov && \
     /opt/checkov/bin/pip install --no-cache-dir checkov
 
-# Trivy CLI binary — detect architecture and install correct binary
+# Trivy CLI binary: detect architecture and install the correct binary
 RUN ARCH=$(dpkg --print-architecture) && \
     echo "Installing Trivy for architecture: ${ARCH}" && \
     curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin && \
@@ -43,16 +43,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# uv — fast dependency resolution and installs
+# uv: fast dependency resolution and installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy ONLY the dependency file — this layer is cached until deps change
+# Copy ONLY the dependency file: this layer is cached until deps change
 COPY pyproject.toml ./
 RUN uv pip install --system --no-cache -r pyproject.toml \
     --extra aws --extra azure --extra gcp
 
 
-# ── Stage 3: Application (changes every code edit — instant rebuild) ──
+# ── Stage 3: Application (changes every code edit, instant rebuild) ──
 FROM python:3.12-slim
 
 LABEL maintainer="CloudG Team"
@@ -60,7 +60,7 @@ LABEL description="Cloud Infrastructure Mapping & Security Intelligence Agent"
 
 WORKDIR /app
 
-# System utils — including libffi for C-extensions used by checkov/prowler
+# System utils, including libffi for C-extensions used by checkov/prowler
 RUN apt-get update && apt-get install -y --no-install-recommends \
     graphviz libffi8 && \
     rm -rf /var/lib/apt/lists/*
@@ -91,13 +91,15 @@ RUN pip install --no-cache-dir parliament==1.6.4
 
 # ── Everything below here rebuilds on every code change (fast) ──
 
-# Copy source code last — only this layer busts cache on code edits
+# Copy source code last: only this layer busts cache on code edits
 # (templates, rules and policies ship inside the cloudg package)
 COPY --from=deps /usr/local/bin/uv /usr/local/bin/uv
 COPY cloudg/ ./cloudg/
 COPY pyproject.toml README.md ./
-# The package readme rendered on PyPI; hatchling refuses to build without it
-COPY docs/DOCUMENTATION.md ./docs/DOCUMENTATION.md
+# The package readme rendered on PyPI, and the inventory reference the MCP
+# cloudg://docs resources serve: pyproject force-includes both into the
+# wheel, so hatchling refuses to build without either of them
+COPY docs/DOCUMENTATION.md docs/INVENTORY_REFERENCE.md ./docs/
 
 # Install cloudg package (no-deps since deps are already installed from stage 2)
 RUN uv pip install --system --no-cache --no-deps .
