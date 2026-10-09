@@ -27,9 +27,6 @@ from cloudg.mcp.core import InvalidArgumentsError
 QUERY_DEADLINE_S = 60.0
 
 _FORBIDDEN_NODES = {"ServiceGraphPattern"}
-_STRING_LIT = re.compile(
-    r"(\"\"\".*?\"\"\"|'''.*?'''|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')", re.S
-)
 _COMMENT = re.compile(r"#[^\n]*")
 _UPDATE_KEYWORDS = frozenset(
     {"INSERT", "DELETE", "LOAD", "CLEAR", "DROP", "CREATE", "ADD", "MOVE", "COPY", "WITH"}
@@ -96,12 +93,58 @@ def _walk(node: Any) -> Any:
             yield from _walk(v)
 
 
+def _literal_end(query: str, start: int, unterminated: set[str]) -> int:
+    """End of the string literal opening at ``start``, or -1 when none
+    does. ``unterminated`` remembers the quote forms already known to have
+    no closing quote further on, so no stretch of the query is scanned
+    twice for the same form."""
+    quote = query[start]
+    triple = quote * 3
+    if query.startswith(triple, start) and triple not in unterminated:
+        close = query.find(triple, start + 3)
+        if close >= 0:
+            return close + 3
+        unterminated.add(triple)
+    if quote in unterminated:
+        return -1
+    pos = start + 1
+    while pos < len(query):
+        char = query[pos]
+        if char == "\\":
+            pos += 2
+        elif char == quote:
+            return pos + 1
+        else:
+            pos += 1
+    unterminated.add(quote)
+    return -1
+
+
+def _blank_strings(query: str) -> str:
+    """``query`` with every SPARQL string literal (``"..."``, ``'...'`` and
+    their triple-quoted forms) replaced by ``""``, in linear time. A regular
+    expression doing the same backtracks quadratically on a query full of
+    unterminated quotes."""
+    out: list[str] = []
+    pos = 0
+    unterminated: set[str] = set()
+    while pos < len(query):
+        end = _literal_end(query, pos, unterminated) if query[pos] in "\"'" else -1
+        if end < 0:
+            out.append(query[pos])
+            pos += 1
+        else:
+            out.append('""')
+            pos = end
+    return "".join(out)
+
+
 def prepare_readonly(query: str) -> Any:
     """Parse a SPARQL query and refuse anything that is not a local,
     read-only SELECT / ASK / CONSTRUCT / DESCRIBE."""
     from rdflib.plugins.sparql import prepareQuery
 
-    stripped = _COMMENT.sub(" ", _STRING_LIT.sub('""', query))
+    stripped = _COMMENT.sub(" ", _blank_strings(query))
     if first_keyword(stripped) in _UPDATE_KEYWORDS:
         raise InvalidArgumentsError(
             "Only read-only queries are allowed (SELECT, ASK, "

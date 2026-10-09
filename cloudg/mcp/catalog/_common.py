@@ -16,6 +16,7 @@ Conventions every catalog tool follows so an agent can rely on them:
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import hashlib
 import json
@@ -34,6 +35,16 @@ T = TypeVar("T")
 E = TypeVar("E", bound=Enum)
 F = TypeVar("F", bound=Callable[..., Any])
 
+#: Dataset summary keys every headline view (live run results, prompt
+#: overviews) shows, in display order.
+SUMMARY_CORE_KEYS = (
+    "open_findings",
+    "severity_breakdown",
+    "accounts",
+    "regions",
+    "internet_exposed",
+    "cross_account_edges",
+)
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
 
@@ -251,6 +262,21 @@ def parse_enums(values: Sequence[str] | None, enum: type[E], label: str) -> set[
 
 def parse_severity(value: str) -> Severity:
     return parse_enum(value, Severity, "severity")
+
+
+class ArgsFilter:
+    """Base for the frozen dataclass filters the list tools build from
+    their arguments (FindingFilter, AssetFilter)."""
+
+    @classmethod
+    def from_args(cls: type[T], args: dict[str, Any]) -> T:
+        """Build from a tool's arguments (``locals()``): the matching keys."""
+        names = (f.name for f in dataclasses.fields(cls))  # type: ignore[arg-type]
+        return cls(**{name: args[name] for name in names if name in args})
+
+    def key(self) -> dict[str, Any]:
+        """The filter as a dict, for cursor fingerprints."""
+        return dataclasses.asdict(self)  # type: ignore[call-overload]
 
 
 def check_fields(fields: Sequence[str] | None, allowed: Sequence[str]) -> list[str] | None:

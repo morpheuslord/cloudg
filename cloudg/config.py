@@ -140,6 +140,24 @@ class AzureConfig(BaseModel):
     )
 
 
+# High-churn Cloud Asset Inventory types the GCP collector skips by default
+# (GCPConfig.skip_asset_types; cloudg.collectors.gcp.DEFAULT_SKIP_ASSET_TYPES)
+GCP_DEFAULT_SKIP_ASSET_TYPES: tuple[str, ...] = (
+    "k8s.io/Pod",
+    "k8s.io/Node",
+    "k8s.io/Event",
+    "events.k8s.io/Event",
+    "k8s.io/Endpoints",
+    "discovery.k8s.io/EndpointSlice",
+    "apps.k8s.io/ReplicaSet",
+    "apps.k8s.io/ControllerRevision",
+    "run.googleapis.com/Revision",
+    "cloudkms.googleapis.com/CryptoKeyVersion",
+    "secretmanager.googleapis.com/SecretVersion",
+    "serviceusage.googleapis.com/Service",
+)
+
+
 class GCPConfig(BaseModel):
     """GCP-specific configuration.
 
@@ -170,20 +188,7 @@ class GCPConfig(BaseModel):
         "organization / project force either mode.",
     )
     skip_asset_types: list[str] = Field(
-        default_factory=lambda: [
-            "k8s.io/Pod",
-            "k8s.io/Node",
-            "k8s.io/Event",
-            "events.k8s.io/Event",
-            "k8s.io/Endpoints",
-            "discovery.k8s.io/EndpointSlice",
-            "apps.k8s.io/ReplicaSet",
-            "apps.k8s.io/ControllerRevision",
-            "run.googleapis.com/Revision",
-            "cloudkms.googleapis.com/CryptoKeyVersion",
-            "secretmanager.googleapis.com/SecretVersion",
-            "serviceusage.googleapis.com/Service",
-        ],
+        default_factory=lambda: list(GCP_DEFAULT_SKIP_ASSET_TYPES),
         description="Cloud Asset Inventory types left out of the map (high-churn objects)",
     )
     asset_page_size: int = Field(default=1000, ge=1, le=1000)

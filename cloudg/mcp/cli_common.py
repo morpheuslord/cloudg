@@ -21,82 +21,87 @@ AUTH_TOKENS_ENV = "CLOUDG_MCP_AUTH_TOKENS"
 # ---------------------------------------------------------------------------
 
 
+# Options that shape the layer, shared by every command. ``click.option``
+# builds a fresh ``Option`` each time a decorator is applied, so one tuple
+# can decorate several commands.
+_LAYER_OPTIONS = (
+    click.option(
+        "-c",
+        "--config",
+        "config_path",
+        default=None,
+        help="cloudg config.yaml (defaults to the parent command's config).",
+    ),
+    click.option(
+        "--policy",
+        default=None,
+        envvar="CLOUDG_MCP_POLICY",
+        show_envvar=True,
+        help="Policy profile name, or a YAML/JSON policy file.",
+    ),
+    click.option(
+        "--dataset",
+        "datasets",
+        multiple=True,
+        metavar="[NAME=]PATH",
+        help="Preload a dataset (findings.json, inventory-map.json...). Repeatable.",
+    ),
+    click.option("--prefix", default="", help="Prefix for tool and prompt names."),
+    click.option(
+        "--include-category",
+        "include_categories",
+        multiple=True,
+        help="Only expose these categories. Repeatable.",
+    ),
+    click.option(
+        "--exclude-category",
+        "exclude_categories",
+        multiple=True,
+        help="Hide these categories. Repeatable.",
+    ),
+    click.option(
+        "--include-tool",
+        "include_tools",
+        multiple=True,
+        help="Only expose these tools. Repeatable.",
+    ),
+    click.option(
+        "--exclude-tool", "exclude_tools", multiple=True, help="Hide these tools. Repeatable."
+    ),
+    click.option(
+        "--read-only",
+        is_flag=True,
+        help="Drop tools that write files, call cloud APIs, run scanners or are destructive.",
+    ),
+    click.option(
+        "--audit-log",
+        type=click.Path(dir_okay=False),
+        default=None,
+        envvar="CLOUDG_MCP_AUDIT_LOG",
+        show_envvar=True,
+        help="Append a JSONL audit trail (argument values are hashed).",
+    ),
+    click.option(
+        "--timeout",
+        type=float,
+        default=300.0,
+        show_default=True,
+        help="Per-call timeout in seconds.",
+    ),
+    click.option(
+        "--registry",
+        "registry_ref",
+        default=None,
+        metavar="MODULE:ATTR",
+        help="Serve a custom Registry (or a zero-argument factory returning one) "
+        "instead of the built-in catalog.",
+    ),
+)
+
+
 def _layer_options(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Options that shape the layer (shared by every command)."""
-    options = [
-        click.option(
-            "-c",
-            "--config",
-            "config_path",
-            default=None,
-            help="cloudg config.yaml (defaults to the parent command's config).",
-        ),
-        click.option(
-            "--policy",
-            default=None,
-            envvar="CLOUDG_MCP_POLICY",
-            show_envvar=True,
-            help="Policy profile name, or a YAML/JSON policy file.",
-        ),
-        click.option(
-            "--dataset",
-            "datasets",
-            multiple=True,
-            metavar="[NAME=]PATH",
-            help="Preload a dataset (findings.json, inventory-map.json...). Repeatable.",
-        ),
-        click.option("--prefix", default="", help="Prefix for tool and prompt names."),
-        click.option(
-            "--include-category",
-            "include_categories",
-            multiple=True,
-            help="Only expose these categories. Repeatable.",
-        ),
-        click.option(
-            "--exclude-category",
-            "exclude_categories",
-            multiple=True,
-            help="Hide these categories. Repeatable.",
-        ),
-        click.option(
-            "--include-tool",
-            "include_tools",
-            multiple=True,
-            help="Only expose these tools. Repeatable.",
-        ),
-        click.option(
-            "--exclude-tool", "exclude_tools", multiple=True, help="Hide these tools. Repeatable."
-        ),
-        click.option(
-            "--read-only",
-            is_flag=True,
-            help="Drop tools that write files, call cloud APIs, run scanners or are destructive.",
-        ),
-        click.option(
-            "--audit-log",
-            type=click.Path(dir_okay=False),
-            default=None,
-            envvar="CLOUDG_MCP_AUDIT_LOG",
-            show_envvar=True,
-            help="Append a JSONL audit trail (argument values are hashed).",
-        ),
-        click.option(
-            "--timeout",
-            type=float,
-            default=300.0,
-            show_default=True,
-            help="Per-call timeout in seconds.",
-        ),
-        click.option(
-            "--registry",
-            "registry_ref",
-            default=None,
-            metavar="MODULE:ATTR",
-            help="Serve a custom Registry (or a zero-argument factory returning one) "
-            "instead of the built-in catalog.",
-        ),
-    ]
-    for option in reversed(options):
+    for option in reversed(_LAYER_OPTIONS):
         fn = option(fn)
     return fn
 
@@ -150,7 +155,7 @@ def _load_registry(ref: str | None) -> Any:
     module_name, attrs = _parse_registry_ref(ref)
     try:
         # trusted operator input, validated by _parse_registry_ref above
-        obj: Any = importlib.import_module(module_name)  # nosemgrep
+        obj: Any = importlib.import_module(module_name)  # nosemgrep - validated operator input
         for part in attrs:
             obj = getattr(obj, part)
     except (ImportError, AttributeError) as exc:

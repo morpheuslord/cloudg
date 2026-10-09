@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from cloudg.mcp.catalog._common import SUMMARY_CORE_KEYS
 from cloudg.mcp.core import AccessDeniedError, InvalidArgumentsError, RateLimitedError
 from cloudg.mcp.state import Dataset
 from cloudg.resilience import stats_scope
@@ -159,12 +160,7 @@ def _land(
                 "total_assets",
                 "total_edges",
                 "total_findings",
-                "open_findings",
-                "severity_breakdown",
-                "accounts",
-                "regions",
-                "internet_exposed",
-                "cross_account_edges",
+                *SUMMARY_CORE_KEYS,
                 "assets_by_type",
                 "providers",
             )
@@ -425,7 +421,7 @@ class LiveRun:
     replace: bool
     call: Callable[[Any], Awaitable[Any]]
     build: Callable[[Any], Dataset]
-    extra: Callable[[Any, Any, Dataset], dict[str, Any]]
+    extra_fields: Callable[[Any, Any, Dataset], dict[str, Any]]
     note: str = ""
 
 
@@ -442,7 +438,7 @@ async def run_live(ctx: Any, cfg: Any, run: LiveRun) -> dict[str, Any]:
     if throttling:
         ds.metadata["throttling"] = throttling
     await _done(ctx, run.total)
-    return _land(ctx, ds, run.tool, run.started, run.extra(result, engine, ds), run.replace)
+    return _land(ctx, ds, run.tool, run.started, run.extra_fields(result, engine, ds), run.replace)
 
 
 def engine_errors(engine: Any) -> list[str]:

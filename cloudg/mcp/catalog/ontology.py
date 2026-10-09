@@ -47,19 +47,6 @@ FORMAT_MIME = {
     "xml": "application/rdf+xml",
     "nt": "application/n-triples",
 }
-_DATA_PROPS = {
-    "hasName",
-    "hasARN",
-    "hasRegion",
-    "hasProvider",
-    "hasAccountId",
-    "hasCIDR",
-    "hasPort",
-    "hasProtocol",
-    "hasSeverity",
-    "hasRiskScore",
-    "isInternetExposed",
-}
 
 
 def _ontology(ctx: Any, ds: Any) -> Any:
@@ -79,16 +66,18 @@ def _neighbour_edges(g: Any, node: Any) -> list[tuple[Any, Any, Any, Any]]:
     """(subject, predicate, object, other end) of every relation at ``node``."""
     from rdflib import URIRef
 
-    from cloudg.graph.ontology import CMP
+    # the schema's data properties are literals, not relations
+    from cloudg.graph.ontology import _DATA_PROPERTIES, CMP
 
     cmp_ns = str(CMP)
+    data_props = frozenset(_DATA_PROPERTIES)
     edges = [(node, p, o, o) for p, o in g.predicate_objects(node)]
     edges += [(s, p, node, s) for s, p in g.subject_predicates(node)]
     return [
         (s, p, o, other)
         for s, p, o, other in edges
         if str(p).startswith(cmp_ns)
-        and str(p)[len(cmp_ns) :] not in _DATA_PROPS
+        and str(p)[len(cmp_ns) :] not in data_props
         and isinstance(other, URIRef)
     ]
 

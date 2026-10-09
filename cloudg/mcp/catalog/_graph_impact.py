@@ -30,6 +30,8 @@ from cloudg.mcp.catalog._common import (
     ws_dataset,
 )
 from cloudg.mcp.catalog._graph import (
+    GRAPH_RO,
+    edge_type_values,
     CROWN_JEWELS,
     Walk,
     bfs,
@@ -39,25 +41,18 @@ from cloudg.mcp.catalog._graph import (
 )
 from cloudg.mcp.core import Sensitivity
 from cloudg.mcp.state import Dataset
-from cloudg.schema.models import AssetType, EdgeType
+from cloudg.schema.models import AssetType
 
-CATEGORY = "graph"
 
 GraphFormat = Literal["d3", "cytoscape", "graphml"]
 Metric = Literal["degree", "in_degree", "out_degree", "betweenness"]
 DepthArg = Annotated[int, Field(ge=1, le=15)]
 DepLimit = Annotated[int, Field(ge=1, le=500)]
 
-_RO = dict(read_only=True, idempotent=True, open_world=False, category=CATEGORY)
-
 CATALOG = Catalog()
 
 
-def _edge_types(values: list[str] | None) -> set[str]:
-    return {t.value for t in parse_enums(values, EdgeType, "edge type")}
-
-
-@CATALOG.tool(title="Blast radius", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Blast radius", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def blast_radius(
     ctx: Any,
     ref: RefArg,
@@ -114,7 +109,7 @@ def _dependency_result(
     title="Depends on",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(DependencyOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def depends_on(
     ctx: Any,
@@ -135,7 +130,7 @@ def depends_on(
     title="Dependents",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(DependencyOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def dependents(
     ctx: Any,
@@ -151,7 +146,7 @@ def dependents(
     )
 
 
-@CATALOG.tool(title="Dependency tree", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Dependency tree", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def dependency_tree(
     ctx: Any,
     ref: RefArg,
@@ -180,7 +175,7 @@ def dependency_tree(
     return out
 
 
-@CATALOG.tool(title="Shared dependencies", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Shared dependencies", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def shared_dependencies(
     ctx: Any, top: Annotated[int, Field(ge=1, le=200)] = 25, dataset: DatasetArg = ""
 ) -> dict:
@@ -192,7 +187,7 @@ def shared_dependencies(
     return {"dataset": ds.name, "items": items, "returned": len(items)}
 
 
-@CATALOG.tool(title="Largest blast radius", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Largest blast radius", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def largest_blast_radius(
     ctx: Any, top: Annotated[int, Field(ge=1, le=100)] = 15, dataset: DatasetArg = ""
 ) -> dict:
@@ -204,7 +199,7 @@ def largest_blast_radius(
     return {"dataset": ds.name, "items": items, "returned": len(items)}
 
 
-@CATALOG.tool(title="Cross-account edges", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Cross-account edges", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def cross_account_edges(
     ctx: Any,
     account_id: Annotated[str, Field(description="Only edges touching this account.")] = "",
@@ -222,7 +217,7 @@ def cross_account_edges(
     from cloudg.inventory.dependencies import cross_account_edges as _xa
 
     ds = ws_dataset(ctx, dataset)
-    types = _edge_types(edge_types)
+    types = edge_type_values(edge_types)
     rows = [
         r
         for r in ds.cached("cross_account", lambda: _xa(ds.assets, ds.edges))
@@ -252,7 +247,7 @@ def _centrality(g: nx.DiGraph, metric: str) -> dict[str, float]:
     return nx.betweenness_centrality(g, k=k, seed=7)
 
 
-@CATALOG.tool(title="Most central assets", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Most central assets", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def centrality_top(
     ctx: Any,
     metric: Metric = "degree",
@@ -323,7 +318,7 @@ def _render_subgraph(ds: Dataset, keep: list[str], types: set[str] | None, fmt: 
 
 # RESTRICTED: the GraphML form is one opaque string the privacy layer can
 # only scan as free text, so strict ceilings hide the whole tool.
-@CATALOG.tool(title="Export sub-graph", sensitivity=Sensitivity.RESTRICTED, **_RO)
+@CATALOG.tool(title="Export sub-graph", sensitivity=Sensitivity.RESTRICTED, **GRAPH_RO)
 def subgraph_export(
     ctx: Any,
     seeds: Annotated[
@@ -340,7 +335,7 @@ def subgraph_export(
     visualisation or handing to another tool. Use the
     cloudg://graph/{format} resources for the whole graph."""
     ds = ws_dataset(ctx, dataset)
-    types = _edge_types(edge_types) or None
+    types = edge_type_values(edge_types) or None
     keep, truncated = _subgraph_nodes(ds, seeds, Walk("both", types, depth, max_nodes))
     sub, data = _render_subgraph(ds, keep, types, format)
     return {
@@ -353,7 +348,7 @@ def subgraph_export(
     }
 
 
-@CATALOG.tool(title="Security service coverage", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Security service coverage", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def security_coverage(
     ctx: Any, limit: Annotated[int, Field(ge=1, le=500)] = 50, dataset: DatasetArg = ""
 ) -> dict:
@@ -375,7 +370,7 @@ def security_coverage(
     return out
 
 
-@CATALOG.tool(title="Graph statistics", sensitivity=Sensitivity.INTERNAL, **_RO)
+@CATALOG.tool(title="Graph statistics", sensitivity=Sensitivity.INTERNAL, **GRAPH_RO)
 def graph_stats(ctx: Any, dataset: DatasetArg = "") -> dict:
     """Shape of the relationship graph: nodes (assets vs placeholders),
     edges by type and relationship, connected components, the largest

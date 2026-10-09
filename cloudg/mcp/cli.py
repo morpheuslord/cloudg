@@ -304,26 +304,23 @@ def resources_cmd(
     for col in ("URI / template", "Name", "Category", "Sensitivity", "MIME", "Description"):
         table.add_column(col, overflow="fold")
     for r in resources:
-        meta = r.get("_meta", {})
-        table.add_row(
-            r["uri"],
-            r["name"],
-            str(meta.get("cloudg/category", "")),
-            str(meta.get("cloudg/sensitivity", "")),
-            r.get("mimeType", ""),
-            _first_line(r.get("description")),
-        )
+        _add_resource_row(table, r["uri"], r)
     for r in templates:
-        meta = r.get("_meta", {})
-        table.add_row(
-            r["uriTemplate"],
-            r["name"],
-            str(meta.get("cloudg/category", "")),
-            str(meta.get("cloudg/sensitivity", "")),
-            r.get("mimeType", ""),
-            _first_line(r.get("description")),
-        )
+        _add_resource_row(table, r["uriTemplate"], r)
     _stdout_console().print(table)
+
+
+def _add_resource_row(table: Any, uri: str, record: dict[str, Any]) -> None:
+    """One ``cloudg mcp resources`` table row for a resource or template."""
+    meta = record.get("_meta", {})
+    table.add_row(
+        uri,
+        record["name"],
+        str(meta.get("cloudg/category", "")),
+        str(meta.get("cloudg/sensitivity", "")),
+        record.get("mimeType", ""),
+        _first_line(record.get("description")),
+    )
 
 
 @mcp_group.command("prompts")

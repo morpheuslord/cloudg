@@ -4,11 +4,11 @@ keys, metadata truncation and the organization topology views."""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 from cloudg.inventory.mapper_result import _service_of
-from cloudg.mcp.catalog._common import parse_enum, parse_enums, parse_severity
+from cloudg.mcp.catalog._common import ArgsFilter, parse_enum, parse_enums, parse_severity
 from cloudg.mcp.state import SEVERITY_RANK, Dataset
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
 
@@ -18,7 +18,7 @@ Predicate = Callable[[CloudAsset], bool]
 
 
 @dataclass(frozen=True)
-class AssetFilter:
+class AssetFilter(ArgsFilter):
     """The filters find_assets / count_assets accept (empty = no filter)."""
 
     query: str = ""
@@ -30,15 +30,6 @@ class AssetFilter:
     internet_exposed: bool | None = None
     has_findings: bool | None = None
     min_severity: str = ""
-
-    @classmethod
-    def from_args(cls, args: dict[str, Any]) -> "AssetFilter":
-        """Build from a tool's arguments (``locals()``): the matching keys."""
-        return cls(**{f.name: args[f.name] for f in fields(cls) if f.name in args})
-
-    def key(self) -> dict[str, Any]:
-        """The filter as a dict, for cursor fingerprints."""
-        return asdict(self)
 
 
 def _tag_predicate(tag: str) -> Predicate:

@@ -4,10 +4,16 @@ ranking, compliance merging and report ingestion."""
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from cloudg.mcp.catalog._common import asset_brief, finding_brief, parse_enums, parse_severity
+from cloudg.mcp.catalog._common import (
+    ArgsFilter,
+    asset_brief,
+    finding_brief,
+    parse_enums,
+    parse_severity,
+)
 from cloudg.mcp.core import InvalidArgumentsError
 from cloudg.mcp.state import SEVERITY_RANK, Dataset, check_prowler_input
 from cloudg.schema.models import ComplianceResult, ComplianceStatus, Finding, Severity
@@ -16,7 +22,7 @@ FindingPredicate = Callable[[Finding], bool]
 
 
 @dataclass(frozen=True)
-class FindingFilter:
+class FindingFilter(ArgsFilter):
     """The filters list_findings accepts (empty = no filter)."""
 
     severities: Sequence[str] | None = None
@@ -26,15 +32,6 @@ class FindingFilter:
     resource: str = ""
     query: str = ""
     include_suppressed: bool = False
-
-    @classmethod
-    def from_args(cls, args: dict[str, Any]) -> "FindingFilter":
-        """Build from a tool's arguments (``locals()``): the matching keys."""
-        return cls(**{f.name: args[f.name] for f in fields(cls) if f.name in args})
-
-    def key(self) -> dict[str, Any]:
-        """The filter as a dict, for cursor fingerprints."""
-        return asdict(self)
 
 
 def _predicates(flt: FindingFilter) -> list[FindingPredicate]:

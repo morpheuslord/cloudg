@@ -153,54 +153,8 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         for sg in sg_assets:
             # Endpoint is the SG asset's id (like Azure NSG rule edges) so the
             # edge attaches to the SECURITY_GROUP node; the CIDR side stays external.
-            sg_id = sg.id
-
-            # Ingress rules
-            for rule in sg.metadata.get("ingress_rules", []):
-                for ip_range in rule.get("IpRanges", []):
-                    cidr = ip_range.get("CidrIp", "")
-                    from_port = rule.get("FromPort", 0)
-                    to_port = rule.get("ToPort", 65535)
-                    protocol = rule.get("IpProtocol", "-1")
-
-                    port_range = (
-                        f"{from_port}-{to_port}" if from_port != to_port else str(from_port)
-                    )
-
-                    # Cap port list to avoid OOM on wide ranges (e.g., 0-65535)
-                    port_count = min(to_port - from_port + 1, 100)
-                    edges.append(
-                        NetworkEdge(
-                            source_id=cidr,
-                            target_id=sg_id,
-                            edge_type=EdgeType.SECURITY_GROUP_RULE,
-                            ports=list(range(from_port, from_port + port_count)),
-                            port_range=port_range,
-                            protocol="ALL" if protocol == "-1" else protocol.upper(),
-                            cidr=cidr,
-                            direction="ingress",
-                        )
-                    )
-
-            # Egress rules
-            for rule in sg.metadata.get("egress_rules", []):
-                for ip_range in rule.get("IpRanges", []):
-                    cidr = ip_range.get("CidrIp", "")
-                    from_port = rule.get("FromPort", 0)
-                    to_port = rule.get("ToPort", 65535)
-                    protocol = rule.get("IpProtocol", "-1")
-
-                    edges.append(
-                        NetworkEdge(
-                            source_id=sg_id,
-                            target_id=cidr,
-                            edge_type=EdgeType.SECURITY_GROUP_RULE,
-                            port_range=f"{from_port}-{to_port}",
-                            protocol="ALL" if protocol == "-1" else protocol.upper(),
-                            cidr=cidr,
-                            direction="egress",
-                        )
-                    )
+            edges.extend(_sg_ingress_edges(sg.id, sg.metadata.get("ingress_rules", [])))
+            edges.extend(_sg_egress_edges(sg.id, sg.metadata.get("egress_rules", [])))
 
         return edges
 
@@ -328,3 +282,57 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         all_edges = sg_edges + containment_edges
         logger.info("Collected %d AWS edges", len(all_edges))
         return all_edges
+
+
+def _sg_rule_ports(rule: dict[str, Any]) -> tuple[int, int, str]:
+    """Return (from port, to port, protocol label) for one security group rule."""
+    from_port = rule.get("FromPort", 0)
+    to_port = rule.get("ToPort", 65535)
+    protocol = rule.get("IpProtocol", "-1")
+    return from_port, to_port, "ALL" if protocol == "-1" else protocol.upper()
+
+
+def _sg_ingress_edges(sg_id: str, rules: list[dict[str, Any]]) -> list[NetworkEdge]:
+    """Edges from each ingress rule's CIDR ranges into the security group."""
+    edges: list[NetworkEdge] = []
+    for rule in rules:
+        for ip_range in rule.get("IpRanges", []):
+            cidr = ip_range.get("CidrIp", "")
+            from_port, to_port, protocol = _sg_rule_ports(rule)
+            port_range = f"{from_port}-{to_port}" if from_port != to_port else str(from_port)
+            # Cap port list to avoid OOM on wide ranges (e.g., 0-65535)
+            port_count = min(to_port - from_port + 1, 100)
+            edges.append(
+                NetworkEdge(
+                    source_id=cidr,
+                    target_id=sg_id,
+                    edge_type=EdgeType.SECURITY_GROUP_RULE,
+                    ports=list(range(from_port, from_port + port_count)),
+                    port_range=port_range,
+                    protocol=protocol,
+                    cidr=cidr,
+                    direction="ingress",
+                )
+            )
+    return edges
+
+
+def _sg_egress_edges(sg_id: str, rules: list[dict[str, Any]]) -> list[NetworkEdge]:
+    """Edges from the security group out to each egress rule's CIDR ranges."""
+    edges: list[NetworkEdge] = []
+    for rule in rules:
+        for ip_range in rule.get("IpRanges", []):
+            cidr = ip_range.get("CidrIp", "")
+            from_port, to_port, protocol = _sg_rule_ports(rule)
+            edges.append(
+                NetworkEdge(
+                    source_id=sg_id,
+                    target_id=cidr,
+                    edge_type=EdgeType.SECURITY_GROUP_RULE,
+                    port_range=f"{from_port}-{to_port}",
+                    protocol=protocol,
+                    cidr=cidr,
+                    direction="egress",
+                )
+            )
+    return edges

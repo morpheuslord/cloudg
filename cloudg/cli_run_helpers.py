@@ -350,27 +350,12 @@ def _collect_scanner_results(
             ui.task_failed(progress, task_id, f"{scanner_name} failed: {exc}")
 
 
-def _scanner_phase(
-    cfg: CloudGConfig,
-    scanner_list: list[str],
-    profile: str | None,
-    iac_dir: str | None,
-    resolved_images: list[str],
-    tf_dir: str | None,
-    assets: list[Any],
-    output_dir: Path,
-) -> tuple[list[Any], list[Any]]:
-    """Phase 3: run all enabled scanners in parallel.
+def _resolve_scan_iac_dirs(cfg: CloudGConfig, iac_dir: str | None, tf_dir: str | None) -> list[str]:
+    """Resolve IaC scan targets: CLI flag, then config, then the Terraform recreation.
 
-    Returns (scanner findings, IAM linter findings).
+    There is no fallback to ".": scanning the directory cloudg runs from is
+    not a scan of the cloud, and its zero findings look like a clean result.
     """
-    import concurrent.futures
-
-    ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
-
-    # ── Resolve IaC scan targets: CLI flag → config → Terraform recreation ──
-    # No fallback to "." — scanning the directory cloudg runs from is not a
-    # scan of the cloud, and its zero findings look like a clean result.
     from cloudg.api import resolve_iac_dirs
 
     resolved_iac_dirs, iac_source = resolve_iac_dirs(iac_dir, cfg.scanners.iac_directories, tf_dir)
@@ -379,6 +364,20 @@ def _scanner_phase(
             "IaC scanners target the Terraform recreation of the live "
             f"infrastructure ({resolved_iac_dirs[0]})"
         )
+    return resolved_iac_dirs
+
+
+def _run_scanners_parallel(
+    cfg: CloudGConfig,
+    scanner_list: list[str],
+    profile: str | None,
+    resolved_iac_dirs: list[str],
+    resolved_images: list[str],
+    assets: list[Any],
+    output_dir: Path,
+) -> tuple[list[Any], list[Any]]:
+    """Submit every enabled scanner to a thread pool and gather their findings."""
+    import concurrent.futures
 
     scanner_findings: list[Any] = []
     iam_findings: list[Any] = []
@@ -402,6 +401,27 @@ def _scanner_phase(
             )
 
     return scanner_findings, iam_findings
+
+
+def _scanner_phase(
+    cfg: CloudGConfig,
+    scanner_list: list[str],
+    profile: str | None,
+    iac_dir: str | None,
+    resolved_images: list[str],
+    tf_dir: str | None,
+    assets: list[Any],
+    output_dir: Path,
+) -> tuple[list[Any], list[Any]]:
+    """Phase 3: run all enabled scanners in parallel.
+
+    Returns (scanner findings, IAM linter findings).
+    """
+    ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
+    resolved_iac_dirs = _resolve_scan_iac_dirs(cfg, iac_dir, tf_dir)
+    return _run_scanners_parallel(
+        cfg, scanner_list, profile, resolved_iac_dirs, resolved_images, assets, output_dir
+    )
 
 
 def _ontology_phase(

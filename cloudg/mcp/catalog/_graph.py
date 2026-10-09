@@ -18,7 +18,7 @@ from typing import Any, Iterable
 import networkx as nx
 
 from cloudg.graph.ports import edge_port_ranges, is_egress, is_internet_source, port_in_ranges
-from cloudg.mcp.catalog._common import asset_brief, node_brief
+from cloudg.mcp.catalog._common import asset_brief, node_brief, parse_enums
 from cloudg.mcp.core import InvalidArgumentsError
 from cloudg.mcp.state import Dataset
 from cloudg.schema.models import AssetType, EdgeType, NetworkEdge
@@ -50,6 +50,10 @@ IDENTITY_EDGES = {
 }
 SENSITIVE_PORTS = {22, 3389, 3306, 5432, 1433, 27017, 6379, 9200, 5601, 8080, 8443}
 
+CATEGORY = "graph"
+#: Tool options shared by every read-only graph tool.
+GRAPH_RO = dict(read_only=True, idempotent=True, open_world=False, category=CATEGORY)
+
 # Virtual node standing for "the internet" when a tool is asked for
 # source='internet': linked to every internet entry point of the dataset.
 INTERNET = "__internet__"
@@ -69,6 +73,11 @@ _COMPACT_KEYS = (
 # ---------------------------------------------------------------------------
 # Edges
 # ---------------------------------------------------------------------------
+
+
+def edge_type_values(values: list[str] | None) -> set[str]:
+    """The EdgeType values named in a tool's ``edge_types`` argument."""
+    return {t.value for t in parse_enums(values, EdgeType, "edge type")}
 
 
 def edge_data(e: NetworkEdge) -> dict[str, Any]:

@@ -276,15 +276,10 @@ class RelationshipLinker(RuleLinksMixin, IdentifierIndex):
             target = self.resolve(value, asset)
             if not target or target == asset.id:
                 continue
-            if (asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys:
+            if self._linked_either_way(asset.id, target):
                 continue
-            self._add(
-                edges,
-                asset.id,
-                target,
-                EdgeType.REFERENCES,
-                f"{asset.name} references {value}",
-            )
+            description = f"{asset.name} references {value}"
+            self._add(edges, asset.id, target, EdgeType.REFERENCES, description)
 
     # ------------------------------------------------------------------
     # Main interface

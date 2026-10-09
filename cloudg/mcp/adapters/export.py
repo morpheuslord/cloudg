@@ -82,63 +82,100 @@ class ExportedDefinitions:
         }
 
 
-def export_definitions(
-    layer: "CloudGMCPLayer", principal: Principal | None = None
-) -> ExportedDefinitions:
-    """Snapshot the layer's definitions for ``principal`` (default: local
-    user) and build per-method handlers."""
-    default = principal or Principal.local()
+class _Handlers:
+    """Per-method MCP handlers bound to one layer; a handler called without
+    a principal acts as ``default``."""
 
-    def who(p: Principal | None) -> Principal:
-        return p or default
+    def __init__(self, layer: "CloudGMCPLayer", default: Principal) -> None:
+        self.layer = layer
+        self.default = default
 
-    async def tools_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        return {"tools": layer.tools_wire(who(principal))}
+    def who(self, principal: Principal | None) -> Principal:
+        return principal or self.default
 
-    async def tools_call(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        result = await layer.call_tool(
-            params["name"], params.get("arguments") or {}, principal=who(principal)
+    async def tools_list(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        return {"tools": self.layer.tools_wire(self.who(principal))}
+
+    async def tools_call(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        result = await self.layer.call_tool(
+            params["name"], params.get("arguments") or {}, principal=self.who(principal)
         )
         return result.to_wire()
 
-    async def resources_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        return {"resources": layer.resources_wire(who(principal))}
+    async def resources_list(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        return {"resources": self.layer.resources_wire(self.who(principal))}
 
-    async def templates_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        return {"resourceTemplates": layer.resource_templates_wire(who(principal))}
+    async def templates_list(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        return {"resourceTemplates": self.layer.resource_templates_wire(self.who(principal))}
 
-    async def resources_read(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        contents = await layer.read_resource(params["uri"], principal=who(principal))
+    async def resources_read(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        contents = await self.layer.read_resource(params["uri"], principal=self.who(principal))
         return {"contents": [c.to_wire() for c in contents]}
 
-    async def prompts_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        return {"prompts": layer.prompts_wire(who(principal))}
+    async def prompts_list(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        return {"prompts": self.layer.prompts_wire(self.who(principal))}
 
-    async def prompts_get(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
-        result = await layer.get_prompt(
-            params["name"], params.get("arguments") or {}, principal=who(principal)
+    async def prompts_get(
+        self, params: dict[str, Any], *, principal: Principal | None = None
+    ) -> dict:
+        result = await self.layer.get_prompt(
+            params["name"], params.get("arguments") or {}, principal=self.who(principal)
         )
         return result.to_wire()
 
-    async def complete(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
+    async def complete(self, params: dict[str, Any], *, principal: Principal | None = None) -> dict:
         ctx = params.get("context") or {}
-        completion = await layer.complete(
+        completion = await self.layer.complete(
             params["ref"],
             params["argument"],
-            principal=who(principal),
+            principal=self.who(principal),
             context_arguments=ctx.get("arguments"),
         )
         return {"completion": completion}
 
-    tools = layer.tools_wire(default)
+    def by_method(self) -> dict[str, Handler]:
+        return {
+            "tools/list": self.tools_list,
+            "tools/call": self.tools_call,
+            "resources/list": self.resources_list,
+            "resources/templates/list": self.templates_list,
+            "resources/read": self.resources_read,
+            "prompts/list": self.prompts_list,
+            "prompts/get": self.prompts_get,
+            "completion/complete": self.complete,
+        }
 
-    def make_tool_fn(name: str) -> Callable[..., Awaitable[dict[str, Any]]]:
+    def tool_function(self, name: str) -> Callable[..., Awaitable[dict[str, Any]]]:
+        """``async fn(**arguments)`` calling tool ``name`` as ``default``."""
+        layer, default = self.layer, self.default
+
         async def call(**arguments: Any) -> dict[str, Any]:
             return (await layer.call_tool(name, arguments, principal=default)).to_wire()
 
         call.__name__ = name
         return call
 
+
+def export_definitions(
+    layer: "CloudGMCPLayer", principal: Principal | None = None
+) -> ExportedDefinitions:
+    """Snapshot the layer's definitions for ``principal`` (default: local
+    user) and build per-method handlers."""
+    default = principal or Principal.local()
+    handlers = _Handlers(layer, default)
+    tools = layer.tools_wire(default)
     return ExportedDefinitions(
         server={
             "name": layer.name,
@@ -149,17 +186,8 @@ def export_definitions(
         resources=layer.resources_wire(default),
         resource_templates=layer.resource_templates_wire(default),
         prompts=layer.prompts_wire(default),
-        handlers={
-            "tools/list": tools_list,
-            "tools/call": tools_call,
-            "resources/list": resources_list,
-            "resources/templates/list": templates_list,
-            "resources/read": resources_read,
-            "prompts/list": prompts_list,
-            "prompts/get": prompts_get,
-            "completion/complete": complete,
-        },
-        tool_functions={t["name"]: make_tool_fn(t["name"]) for t in tools},
+        handlers=handlers.by_method(),
+        tool_functions={t["name"]: handlers.tool_function(t["name"]) for t in tools},
     )
 
 

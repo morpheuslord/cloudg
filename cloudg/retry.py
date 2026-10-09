@@ -91,6 +91,64 @@ def _is_retryable(
     return is_provider_answer(exc) and classify_strict(exc) is ErrorKind.THROTTLED
 
 
+def _backoff_delay(
+    exc: Exception, attempt: int, base_delay: float, max_delay: float, backoff_factor: float
+) -> float:
+    """Seconds to wait before retry ``attempt`` of :func:`with_retry`."""
+    # Exponential backoff with full jitter
+    delay = min(max_delay, base_delay * (backoff_factor ** (attempt - 1)))
+    jitter = _jitter_rng.uniform(0, delay)
+    # Never retry sooner than the server asked (capped at max_delay)
+    return max(jitter, min(retry_after(exc) or 0.0, max_delay))
+
+
+def _retry_decorator(
+    max_attempts: int,
+    base_delay: float,
+    max_delay: float,
+    backoff_factor: float,
+    retry_exceptions: tuple[Type[Exception], ...],
+    aws_codes: set[str],
+) -> Callable:
+    """Build the decorator :func:`with_retry` returns."""
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exception: Exception | None = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as exc:
+                    last_exception = exc
+                    if attempt == max_attempts or not _is_retryable(
+                        exc, retry_exceptions, aws_codes
+                    ):
+                        raise
+
+                    actual_delay = _backoff_delay(
+                        exc, attempt, base_delay, max_delay, backoff_factor
+                    )
+                    logger.warning(
+                        "Retry %d/%d for %s after %.1fs (error: %s)",
+                        attempt,
+                        max_attempts,
+                        func.__name__,
+                        actual_delay,
+                        str(exc)[:200],
+                    )
+                    await asyncio.sleep(actual_delay)
+
+            # Should not reach here, but just in case
+            if last_exception:
+                raise last_exception
+
+        return wrapper
+
+    return decorator
+
+
 def with_retry(
     max_attempts: int = 5,
     base_delay: float = 1.0,
@@ -112,44 +170,11 @@ def with_retry(
     Returns:
         Decorated async function.
     """
-    retry_exceptions = retryable_exceptions or RETRYABLE_EXCEPTIONS
-    aws_codes = retryable_aws_codes or AWS_RETRYABLE_CODES
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            last_exception: Exception | None = None
-
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as exc:
-                    last_exception = exc
-                    if attempt == max_attempts or not _is_retryable(
-                        exc, retry_exceptions, aws_codes
-                    ):
-                        raise
-
-                    # Exponential backoff with full jitter
-                    delay = min(max_delay, base_delay * (backoff_factor ** (attempt - 1)))
-                    jitter = _jitter_rng.uniform(0, delay)
-                    # Never retry sooner than the server asked (capped at max_delay)
-                    actual_delay = max(jitter, min(retry_after(exc) or 0.0, max_delay))
-
-                    logger.warning(
-                        "Retry %d/%d for %s after %.1fs (error: %s)",
-                        attempt,
-                        max_attempts,
-                        func.__name__,
-                        actual_delay,
-                        str(exc)[:200],
-                    )
-                    await asyncio.sleep(actual_delay)
-
-            # Should not reach here, but just in case
-            if last_exception:
-                raise last_exception
-
-        return wrapper
-
-    return decorator
+    return _retry_decorator(
+        max_attempts,
+        base_delay,
+        max_delay,
+        backoff_factor,
+        retryable_exceptions or RETRYABLE_EXCEPTIONS,
+        retryable_aws_codes or AWS_RETRYABLE_CODES,
+    )

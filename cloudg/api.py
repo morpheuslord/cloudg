@@ -401,13 +401,13 @@ class CloudGEngine(ScannerRunsMixin):
         reports: dict[str, list[str | Path]],
         output_dir: str | Path = "./reports",
     ) -> PipelineResult:
-        """Run the cloudg pipeline on existing scanner outputs — no cloud
-        access and no scanner binaries needed.
+        """Run the cloudg pipeline on existing scanner outputs.
 
-        Phases: ingest -> normalise -> reports (JSON + HTML). Collection
-        does not run, so graph/ontology/Terraform outputs that need live
-        assets are empty; combine with `collect()` + `analyze()` when
-        cloud credentials are available.
+        Needs no cloud access and no scanner binaries. Phases: ingest,
+        normalise, reports (JSON + HTML). Collection does not run, so
+        graph/ontology/Terraform outputs that need live assets are empty;
+        combine with `collect()` + `analyze()` when cloud credentials are
+        available.
 
         Returns:
             PipelineResult with findings, scan_result, and report paths.
@@ -426,27 +426,10 @@ class CloudGEngine(ScannerRunsMixin):
             scan_result = self.normalise_findings(findings)
             all_findings = scan_result.findings
         except Exception as exc:
-            logger.error("Normalisation failed: %s", exc)
-            errors.append(f"normalisation: {exc}")
-            self._emit_error("normalisation", exc)
+            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
 
         self._emit_phase_start("reporting")
-        report_paths: dict[str, Path] = {}
-        if scan_result:
-            try:
-                from cloudg.renderers.json_export import JSONExporter
-
-                exporter = JSONExporter(output_dir=str(out))
-                report_paths["json"] = Path(exporter.export(scan_result))
-
-                from cloudg.renderers.html_report import HTMLReportGenerator
-
-                html_gen = HTMLReportGenerator(output_dir=str(out))
-                report_paths["html"] = Path(html_gen.generate(scan_result))
-            except Exception as exc:
-                logger.error("Report generation failed: %s", exc)
-                errors.append(f"reporting: {exc}")
-                self._emit_error("reporting", exc)
+        report_paths = self._write_reports(scan_result, out, errors) if scan_result else {}
 
         return PipelineResult(
             findings=all_findings,
@@ -455,6 +438,37 @@ class CloudGEngine(ScannerRunsMixin):
             duration_ms=int((time.time() - start) * 1000),
             errors=errors,
         )
+
+    def _record_phase_error(
+        self, phase: str, label: str, exc: Exception, errors: list[str]
+    ) -> None:
+        """Log a failed pipeline phase, keep it in ``errors`` and emit it."""
+        logger.error("%s: %s", label, exc)
+        errors.append(f"{phase}: {exc}")
+        self._emit_error(phase, exc)
+
+    def _write_reports(
+        self,
+        scan_result: ScanResult,
+        out: Path,
+        errors: list[str],
+        graph_json: dict[str, Any] | None = None,
+    ) -> dict[str, Path]:
+        """Write the JSON and HTML reports; a failure is recorded in ``errors``."""
+        report_paths: dict[str, Path] = {}
+        try:
+            from cloudg.renderers.json_export import JSONExporter
+
+            exporter = JSONExporter(output_dir=str(out))
+            report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
+
+            from cloudg.renderers.html_report import HTMLReportGenerator
+
+            html_gen = HTMLReportGenerator(output_dir=str(out))
+            report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+        except Exception as exc:
+            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+        return report_paths
 
     def run_from_reports_sync(
         self,
@@ -614,12 +628,9 @@ class CloudGEngine(ScannerRunsMixin):
     async def run_pipeline(self, output_dir: str | Path = "./reports") -> PipelineResult:
         """Run the complete CloudG pipeline.
 
-        Phases:
-        1. Collection (multi-provider, multi-region)
-        2. Scanning (reachability, IAM linting)
-        3. Analysis (ontology, RAG, Terraform)
-        4. Normalisation
-        5. Report generation
+        Phases: 1. collection (multi-provider, multi-region), 2. scanning
+        (reachability, IAM linting), 3. analysis (ontology, RAG, Terraform),
+        4. normalisation, 5. report generation.
 
         Returns:
             PipelineResult with all outputs.
@@ -651,19 +662,26 @@ class CloudGEngine(ScannerRunsMixin):
             edges=collection.edges,
             findings=all_findings,
             scan_result=scan_result,
-            graph_nodes=analysis.graph_nodes,
-            graph_edges=analysis.graph_edges,
-            ontology_triples=analysis.ontology_triples,
-            rag_chunks_path=analysis.rag_chunks_path,
-            terraform_paths=analysis.terraform_paths,
-            attack_paths=analysis.attack_paths,
-            providers_scanned=collection.providers_scanned,
-            regions_scanned=collection.regions_scanned,
-            coverage=collection.coverage,
             report_paths=report_paths,
             duration_ms=int((time.time() - start) * 1000),
             errors=errors,
+            **self._pipeline_outputs(collection, analysis),
         )
+
+    @staticmethod
+    def _pipeline_outputs(collection: CollectionResult, analysis: AnalysisResult) -> dict[str, Any]:
+        """Collection coverage and analysis outputs carried into a PipelineResult."""
+        return {
+            "graph_nodes": analysis.graph_nodes,
+            "graph_edges": analysis.graph_edges,
+            "ontology_triples": analysis.ontology_triples,
+            "rag_chunks_path": analysis.rag_chunks_path,
+            "terraform_paths": analysis.terraform_paths,
+            "attack_paths": analysis.attack_paths,
+            "providers_scanned": collection.providers_scanned,
+            "regions_scanned": collection.regions_scanned,
+            "coverage": collection.coverage,
+        }
 
     def _normalise_pipeline_findings(
         self,
@@ -689,9 +707,7 @@ class CloudGEngine(ScannerRunsMixin):
             scan_result.edges = collection.edges
             all_findings = scan_result.findings
         except Exception as exc:
-            logger.error("Normalisation failed: %s", exc)
-            errors.append(f"normalisation: {exc}")
-            self._emit_error("normalisation", exc)
+            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
         return scan_result, all_findings
 
     def _generate_pipeline_reports(
@@ -703,29 +719,18 @@ class CloudGEngine(ScannerRunsMixin):
     ) -> dict[str, Path]:
         """Generate JSON and HTML reports (with graph JSON) for the pipeline."""
         self._emit_phase_start("reporting")
-        report_paths: dict[str, Path] = {}
-        if scan_result:
-            try:
-                from cloudg.graph.builder import GraphBuilder
+        if not scan_result:
+            return {}
+        try:
+            from cloudg.graph.builder import GraphBuilder
 
-                builder = GraphBuilder()
-                builder.build(collection.assets, collection.edges)
-                graph_json = builder.to_d3_json()
-
-                from cloudg.renderers.json_export import JSONExporter
-
-                exporter = JSONExporter(output_dir=str(out))
-                report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
-
-                from cloudg.renderers.html_report import HTMLReportGenerator
-
-                html_gen = HTMLReportGenerator(output_dir=str(out))
-                report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
-            except Exception as exc:
-                logger.error("Report generation failed: %s", exc)
-                errors.append(f"reporting: {exc}")
-                self._emit_error("reporting", exc)
-        return report_paths
+            builder = GraphBuilder()
+            builder.build(collection.assets, collection.edges)
+            graph_json = builder.to_d3_json()
+        except Exception as exc:
+            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+            return {}
+        return self._write_reports(scan_result, out, errors, graph_json=graph_json)
 
     # ------------------------------------------------------------------
     # Sync wrapper

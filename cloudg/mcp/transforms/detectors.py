@@ -89,31 +89,24 @@ class CompiledScanner:
     singles: list[tuple[Detector, re.Pattern[str]]] = field(default_factory=list)
     min_length: int = 1
     _always: list[int] = field(default_factory=list)
-    _hinted: list[tuple[int, tuple[frozenset[str], tuple[str, ...]]]] = field(default_factory=list)
+    _hinted: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         for i, (det, _) in enumerate(self.singles):
             if det.hints:
-                chars = frozenset(h for h in det.hints if len(h) == 1)
-                multi = tuple(h for h in det.hints if len(h) > 1)
-                self._hinted.append((i, (chars, multi)))
+                self._hinted.append((i, det.hints))
             else:
                 self._always.append(i)
 
     def _select(self, text: str) -> list[int]:
         """Indexes of the detectors whose hints occur in ``text``, in
-        priority order. One-character hints are tested against the set of
-        characters of the text (one pass), longer ones as substrings."""
+        priority order."""
         if not self._hinted:
             return list(self._always)
         lower = text.lower()
-        present = set(lower)
         selected = list(self._always)
-        for i, (chars, multi) in self._hinted:
-            if chars and not chars.isdisjoint(present):
-                selected.append(i)
-                continue
-            for h in multi:
+        for i, hints in self._hinted:
+            for h in hints:
                 if h in lower:
                     selected.append(i)
                     break

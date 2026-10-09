@@ -237,7 +237,7 @@ async def map_inventory(ctx: Any, args: MapInventoryArgs) -> dict:
     ds_name = _name(ctx, args.name, "inventory", args.replace)
     await _admit(ctx, cfg, args.force, args.preflight)
 
-    def extra(result: Any, engine: Any, ds: Dataset) -> dict[str, Any]:
+    def extra_fields(result: Any, engine: Any, ds: Dataset) -> dict[str, Any]:
         cov = [c.to_summary() for c in ds.coverage]
         failures = [f for c in cov for f in c["failures"]][:20]
         return {"collection_failures": failures, "errors": engine_errors(engine)}
@@ -249,7 +249,7 @@ async def map_inventory(ctx: Any, args: MapInventoryArgs) -> dict:
         args.replace,
         call=lambda engine: engine.map_inventory(tagging_sweep=args.tagging_sweep),
         build=lambda result: Dataset.from_inventory(result, ds_name, source="live"),
-        extra=extra,
+        extra_fields=extra_fields,
         note="mapping inventory",
     )
     key = (args.regions, args.services, args.tagging_sweep)
@@ -289,7 +289,7 @@ async def collect_assets(
         replace,
         call=lambda engine: engine.collect(),
         build=lambda result: Dataset.from_collection(result, ds_name),
-        extra=lambda result, engine, ds: {"errors": engine_errors(engine)},
+        extra_fields=lambda result, engine, ds: {"errors": engine_errors(engine)},
     )
     return await _guarded(
         ctx, "collect", cfg, (regions,), live_scopes(cfg), force, lambda: run_live(ctx, cfg, run)
@@ -370,7 +370,7 @@ async def run_pipeline(
     out_dir = ctx.workspace.output_path(subdir)
     await _admit(ctx, cfg, force, preflight)
 
-    def extra(result: Any, engine: Any, ds: Dataset) -> dict[str, Any]:
+    def extra_fields(result: Any, engine: Any, ds: Dataset) -> dict[str, Any]:
         return {
             "report_paths": {k: str(v) for k, v in result.report_paths.items()},
             "attack_paths_found": len(result.attack_paths),
@@ -384,7 +384,7 @@ async def run_pipeline(
         replace,
         call=lambda engine: engine.run_pipeline(output_dir=out_dir),
         build=lambda result: Dataset.from_pipeline(result, ds_name),
-        extra=extra,
+        extra_fields=extra_fields,
     )
     return await _guarded(
         ctx,

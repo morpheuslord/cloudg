@@ -223,8 +223,8 @@ class ExtendedServiceCollectorsMixin:
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as exc:
-            # nosemgrep: the message names the AWS service, no credential is logged
-            logger.error("secretsmanager service collection failed: %s", exc)
+            # The service name is an argument so the format string names no secret
+            logger.error("%s service collection failed: %s", "secretsmanager", exc)
             self.coverage.record("secretsmanager", ServiceStatus.FAILED, error=str(exc))
         return assets
 

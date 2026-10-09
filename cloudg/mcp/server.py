@@ -23,8 +23,24 @@ optional static bearer tokens (``auth_tokens=["TOKEN:role1,role2", ...]``)
 map callers to principals with roles for the policy.
 
 :func:`create_layer_from_options` builds a layer from CLI-style options
-(policy, preloaded datasets, category filters, read-only mode, audit log,
-metrics) and is what ``cloudg mcp serve`` uses.
+and is what ``cloudg mcp serve`` uses. Its keyword arguments:
+
+* ``config`` / ``config_path``: cloudg configuration (or a ``config.yaml`` path).
+* ``policy``: policy object, profile name, file path or dict.
+* ``datasets``: files to preload, ``PATH`` or ``NAME=PATH``.
+* ``prefix``, ``include_categories``, ``exclude_categories``,
+  ``include_tools``, ``exclude_tools``: name prefix and catalog filters.
+* ``read_only``: drop tools that write files, call cloud APIs, run
+  scanners or are destructive.
+* ``audit_log``: JSONL audit file (see
+  :class:`~cloudg.mcp.middleware.AuditLogMiddleware`).
+* ``metrics``: count calls and expose ``cloudg://metrics``.
+* ``cache_ttl``: cache read-only idempotent tool results for N seconds.
+* ``max_concurrency``: cap concurrent tool calls.
+* ``registry``: serve this registry instead of the built-in catalog.
+* ``middleware``: extra middleware (innermost).
+* ``default_timeout``, ``workspace`` and any other keyword: passed to the
+  layer.
 """
 
 from __future__ import annotations
@@ -167,6 +183,16 @@ def _attach_middleware(layer: "CloudGMCPLayer", metrics_mw: Any, cache_mw: Any) 
             logger.debug("could not register cloudg://metrics", exc_info=True)
 
 
+def _select_registry(registry: Registry | None, read_only: bool) -> Registry:
+    """The registry to serve: ``registry`` or the built-in catalog, minus
+    the tools a read-only deployment drops."""
+    if registry is None:
+        from cloudg.mcp.catalog import default_registry
+
+        registry = default_registry()
+    return read_only_registry(registry) if read_only else registry
+
+
 def create_layer_from_options(
     *,
     config: Any = None,
@@ -189,28 +215,11 @@ def create_layer_from_options(
     workspace: Any = None,
     **layer_kwargs: Any,
 ) -> "CloudGMCPLayer":
-    """Build a :class:`CloudGMCPLayer` from CLI-style options.
-
-    Args:
-        config / config_path: cloudg configuration (or a ``config.yaml`` path).
-        policy: Policy object, profile name, file path or dict.
-        datasets: Files to preload, ``PATH`` or ``NAME=PATH``.
-        read_only: Drop tools that write files, call cloud APIs, run
-            scanners or are destructive.
-        audit_log: JSONL audit file (see :class:`~cloudg.mcp.middleware.AuditLogMiddleware`).
-        metrics: Count calls and expose ``cloudg://metrics``.
-        cache_ttl: Cache read-only idempotent tool results for N seconds.
-        max_concurrency: Cap concurrent tool calls.
-        middleware: Extra middleware (innermost).
-    """
+    """Build a :class:`CloudGMCPLayer` from CLI-style options (the
+    arguments are described in the module docstring)."""
     from cloudg.mcp.layer import CloudGMCPLayer, LayerOptions
 
-    if registry is None:
-        from cloudg.mcp.catalog import default_registry
-
-        registry = default_registry()
-    if read_only:
-        registry = read_only_registry(registry)
+    registry = _select_registry(registry, read_only)
     stack, metrics_mw, cache_mw = _middleware_stack(
         audit_log, metrics, max_concurrency, cache_ttl, middleware
     )

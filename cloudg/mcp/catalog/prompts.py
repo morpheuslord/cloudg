@@ -23,7 +23,13 @@ import json
 from typing import Any, Callable
 from urllib.parse import quote
 
-from cloudg.mcp.catalog._common import asset_brief, asset_uri, finding_uri, parse_severity
+from cloudg.mcp.catalog._common import (
+    SUMMARY_CORE_KEYS,
+    asset_brief,
+    asset_uri,
+    finding_uri,
+    parse_severity,
+)
 from cloudg.mcp.catalog.resources import (
     complete_asset,
     complete_dataset,
@@ -136,12 +142,7 @@ def _overview(ds: Dataset) -> dict[str, Any]:
         "providers",
         "total_assets",
         "total_edges",
-        "open_findings",
-        "severity_breakdown",
-        "accounts",
-        "regions",
-        "internet_exposed",
-        "cross_account_edges",
+        *SUMMARY_CORE_KEYS,
         "compliance_frameworks",
         "assets_by_type",
     )

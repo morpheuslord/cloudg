@@ -41,6 +41,7 @@ from cloudg.collectors.gcp_assets import (
     state_str,
     to_plain,
 )
+from cloudg.config import GCP_DEFAULT_SKIP_ASSET_TYPES
 from cloudg.coverage import CollectionCoverage, ServiceStatus
 from cloudg.resilience.errors import describe_error
 from cloudg.resilience.gcp import RetryCounter, gcp_retry, gcp_scope, paced
@@ -62,20 +63,7 @@ _GCP_ASSET_TYPE_MAP: dict[str, AssetType] = asset_type_map(
 )
 
 # High-churn types skipped unless configured otherwise (GCPConfig.skip_asset_types)
-DEFAULT_SKIP_ASSET_TYPES: tuple[str, ...] = (
-    "k8s.io/Pod",
-    "k8s.io/Node",
-    "k8s.io/Event",
-    "events.k8s.io/Event",
-    "k8s.io/Endpoints",
-    "discovery.k8s.io/EndpointSlice",
-    "apps.k8s.io/ReplicaSet",
-    "apps.k8s.io/ControllerRevision",
-    "run.googleapis.com/Revision",
-    "cloudkms.googleapis.com/CryptoKeyVersion",
-    "secretmanager.googleapis.com/SecretVersion",
-    "serviceusage.googleapis.com/Service",
-)
+DEFAULT_SKIP_ASSET_TYPES: tuple[str, ...] = GCP_DEFAULT_SKIP_ASSET_TYPES
 
 _RESOURCE_MANAGER = "//cloudresourcemanager.googleapis.com/"
 

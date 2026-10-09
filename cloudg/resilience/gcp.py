@@ -17,7 +17,7 @@ import re
 from typing import Any, Iterable, Iterator
 
 from cloudg.resilience.errors import ErrorKind, RetryBudgetExhaustedError, classify, retry_after
-from cloudg.resilience.governor import Governor, get_governor
+from cloudg.resilience.governor import Governor, RetrySettings, get_governor
 from cloudg.resilience.limiter import Scope
 
 __all__ = ["RetryCounter", "gcp_retry", "gcp_scope", "operation_name", "paced"]
@@ -53,6 +53,43 @@ class RetryCounter:
         self.count = 0
 
 
+def _report_gcp_retry(
+    exc: Exception,
+    scope: Scope | None,
+    gov: Governor,
+    settings: RetrySettings,
+    tally: RetryCounter,
+) -> None:
+    """``on_error`` body of :func:`gcp_retry`: report ``exc`` and spend a retry.
+
+    Raises RetryBudgetExhaustedError (chained to ``exc``) once ``settings.max_retries``
+    consecutive retries were made or the provider's retry budget is empty.
+    """
+    if scope is None:
+        return
+    kind = classify(exc)
+    if kind is ErrorKind.THROTTLED:
+        gov.on_throttle(scope, retry_after(exc), str(exc)[:300])
+    elif kind is ErrorKind.TRANSIENT:
+        gov.record_transient(scope, str(exc)[:300])
+    if not gov.provider_enabled("gcp"):
+        gov.record_retry(scope)
+        return
+    tally.count += 1
+    if tally.count > settings.max_retries:
+        raise RetryBudgetExhaustedError(
+            f"{scope.operation}: {settings.max_retries} consecutive retries exhausted: "
+            f"{str(exc)[:150]}",
+            scope=scope,
+        ) from exc
+    if not gov.try_retry(scope, tally.count):
+        raise RetryBudgetExhaustedError(
+            f"retry budget of gcp exhausted; not retrying {scope.operation}: {str(exc)[:150]}",
+            scope=scope,
+        ) from exc
+    gov.record_retry(scope)
+
+
 def gcp_retry(
     scope: Scope | None = None,
     *,
@@ -80,29 +117,7 @@ def gcp_retry(
     tally = counter if counter is not None else RetryCounter()
 
     def on_error(exc: Exception) -> None:
-        if scope is None:
-            return
-        kind = classify(exc)
-        if kind is ErrorKind.THROTTLED:
-            gov.on_throttle(scope, retry_after(exc), str(exc)[:300])
-        elif kind is ErrorKind.TRANSIENT:
-            gov.record_transient(scope, str(exc)[:300])
-        if not gov.provider_enabled("gcp"):
-            gov.record_retry(scope)
-            return
-        tally.count += 1
-        if tally.count > settings.max_retries:
-            raise RetryBudgetExhaustedError(
-                f"{scope.operation}: {settings.max_retries} consecutive retries exhausted: "
-                f"{str(exc)[:150]}",
-                scope=scope,
-            ) from exc
-        if not gov.try_retry(scope, tally.count):
-            raise RetryBudgetExhaustedError(
-                f"retry budget of gcp exhausted; not retrying {scope.operation}: {str(exc)[:150]}",
-                scope=scope,
-            ) from exc
-        gov.record_retry(scope)
+        _report_gcp_retry(exc, scope, gov, settings, tally)
 
     return retries.Retry(
         predicate=retries.if_exception_type(

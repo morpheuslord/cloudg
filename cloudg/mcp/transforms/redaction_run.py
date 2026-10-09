@@ -320,9 +320,10 @@ class _Run:
             if any(p is DROP for p in parts):
                 return DROP
             return " -> ".join(str(p) for p in parts)
+        matches = None
         if rule.defer:
-            matches = self.whole_entity_matches(value)
-            if matches is not None:
+            whole, matches = self.whole_entity_scan(value)
+            if whole:
                 return self.scan_str(value, matches)
         entity = rule.entity
         shaper = SHAPED_ENTITIES.get(entity)
@@ -331,7 +332,7 @@ class _Run:
             strat = self.r.resolve(_chain(entity, rule.entity) + (rule.name, rule.category))
         else:
             strat = self.r._rule_strategy(rule)
-        out = self.whole(value, entity, strat)
+        out = self.whole(value, entity, strat, matches)
         if (
             strat.kind == "pseudonymize"
             and isinstance(out, str)
@@ -342,25 +343,24 @@ class _Run:
             self.issued[value] = out
         return out
 
-    def whole_entity_matches(self, value: str) -> list[EntityMatch] | None:
-        """The detector matches of ``value`` when one active detector matches
-        the entire value (its refined strategy then applies even when that is
-        ``keep``: ``0.0.0.0/0`` under ``source`` stays as is), else ``None``.
-        Inactive detectors (a bare UUID when ``uuid: keep``) do not count, so
-        the rule's entity applies. The scan is done once and reused by
-        :meth:`scan_str`."""
+    def whole_entity_scan(self, value: str) -> tuple[bool, list[EntityMatch] | None]:
+        """Does one active detector match the entire value? Its refined
+        strategy then applies even when that is ``keep`` (``0.0.0.0/0`` under
+        ``source`` stays as is); inactive detectors (a bare UUID when
+        ``uuid: keep``) do not count, so the rule's entity applies. Also
+        returns the detector matches when this call scanned the value, so
+        :meth:`scan_str` does not scan it a second time (``None`` when the
+        answer came from the cache)."""
         r = self.r
         hit = r._full_cache.get(value)
-        if hit is False:
-            return None
-        if hit is True and (self.cache_key, value) in r._str_cache:
-            return []  # scan_str answers from its cache
+        if hit is not None:
+            return hit, None
         matches = r.scanner.scan(value, r.min_confidence)
         whole = any(m.start == 0 and m.end == len(value) for m in matches)
         if len(r._full_cache) > 100_000:
             r._full_cache.clear()
         r._full_cache[value] = whole
-        return matches if whole else None
+        return whole, matches
 
     # -- RAG chunk text ----------------------------------------------------
 
@@ -454,9 +454,11 @@ class _Run:
             return self.whole(str(value), entity, strat)
         return value
 
-    def whole(self, text: str, entity: str, strat: Strategy) -> Any:
+    def whole(
+        self, text: str, entity: str, strat: Strategy, matches: list[EntityMatch] | None = None
+    ) -> Any:
         if strat.kind == "keep":
-            return self.scan_str(text)
+            return self.scan_str(text, matches)
         out = self.r.replace(text, entity, strat, self.vault, self.ns)
         self.bump(strat.kind, entity)
         return out
@@ -516,7 +518,7 @@ class _Run:
 
     def scan_str(self, text: str, matches: list[EntityMatch] | None = None) -> Any:
         """Rewrite the entities found in ``text``. ``matches`` (from
-        :meth:`whole_entity_matches`) saves a second scan of the same text."""
+        :meth:`whole_entity_scan`) saves a second scan of the same text."""
         r = self.r
         scanner = r.scanner
         if len(text) < scanner.min_length or not scanner.detectors:
@@ -528,7 +530,7 @@ class _Run:
             for kind, entity in counts:
                 self.bump(kind, entity)
             return out
-        if matches is None or (not matches and text):
+        if matches is None:
             matches = scanner.scan(text, r.min_confidence)
         out, counts = self.rewrite(text, matches)
         if len(r._str_cache) >= r.cache_size:

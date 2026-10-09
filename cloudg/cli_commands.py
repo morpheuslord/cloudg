@@ -137,6 +137,31 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     _show_run_config(cfg, scanner_list, output_dir)
     resolved_images = _resolve_run_images(kwargs["images"], cfg)
 
+    products, tf_dir = _pre_scan_phases(cfg, kwargs, output_dir)
+
+    # Phase 3: Security Scanning (all scanners in parallel)
+    scanner_findings, iam_findings = _scanner_phase(
+        cfg,
+        scanner_list,
+        kwargs["profile"],
+        kwargs["iac_dir"],
+        resolved_images,
+        tf_dir,
+        products.assets,
+        output_dir,
+    )
+
+    # Phases 3b to 5: ontology, RAG update, normalisation, reports, summary
+    _post_scan_phases(cfg, kwargs, products, scanner_findings, iam_findings, output_dir)
+
+
+def _pre_scan_phases(
+    cfg: Any, kwargs: dict[str, Any], output_dir: Path
+) -> tuple[RunProducts, str | None]:
+    """Phases 1 to 2d of ``cloudg run``: collection, graph, RAG and Terraform.
+
+    Returns what those phases produced and the Terraform output directory.
+    """
     # Phase 1: Asset Collection (always uses multi-provider orchestrator)
     assets, edges, coverage_records = _collect_assets(cfg)
 
@@ -153,20 +178,7 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     # Phase 2d: Terraform Recreation
     tf_dir = _terraform_phase(cfg, kwargs["terraform"], assets, edges, output_dir)
 
-    # Phase 3: Security Scanning (all scanners in parallel)
-    scanner_findings, iam_findings = _scanner_phase(
-        cfg,
-        scanner_list,
-        kwargs["profile"],
-        kwargs["iac_dir"],
-        resolved_images,
-        tf_dir,
-        assets,
-        output_dir,
-    )
-
-    # Phases 3b to 5: ontology, RAG update, normalisation, reports, summary
     products = RunProducts(
         assets, edges, graph, graph_json, reachability_findings, coverage_records
     )
-    _post_scan_phases(cfg, kwargs, products, scanner_findings, iam_findings, output_dir)
+    return products, tf_dir

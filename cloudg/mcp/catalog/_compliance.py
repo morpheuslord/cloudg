@@ -15,7 +15,7 @@ from cloudg.schema.models import ComplianceResult, Finding
 
 logger = logging.getLogger("cloudg.mcp")
 
-_STATUS_KEY = {"FAIL": "controls_failing", "PASS": "controls_passing"}  # nosec B105
+_STATUS_KEY = {"FAIL": "controls_failing", "PASS": "controls_passing"}  # nosec B105 - status labels, not credentials
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

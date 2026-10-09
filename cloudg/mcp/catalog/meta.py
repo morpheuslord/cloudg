@@ -104,6 +104,19 @@ WORKFLOWS = {
 }
 
 
+# ``NAME = "VALUE"`` (optionally parenthesised) plus an optional trailing
+# comment. Each optional part starts with a distinct character, so the
+# match stays linear in the line length.
+_MEMBER_LINE = re.compile(r'([A-Z_0-9]+)\s*=\s*(?:\(\s*)?"[A-Z_0-9]+"(?:\s*\))?\s*(?:#(.*))?$')
+_SUPPRESSION_MARKERS = ("nosec", "nosemgrep")
+
+
+def _strip_suppression(note: str) -> str:
+    """``note`` without a trailing scanner suppression marker."""
+    cuts = [i for i in (note.find(m) for m in _SUPPRESSION_MARKERS) if i >= 0]
+    return (note[: min(cuts)] if cuts else note).strip().strip(" -#")
+
+
 @functools.lru_cache(maxsize=1)
 def enum_comments() -> dict[str, dict[str, str]]:
     """Section headings and inline comments of the AssetType / EdgeType
@@ -117,14 +130,12 @@ def enum_comments() -> dict[str, dict[str, str]]:
         section = "Other"
         for line in src.splitlines():
             s = line.strip()
-            m = re.match(r"^#\s*(.+)$", s)
-            if m and enum is AssetType:
-                section = m.group(1).strip()
+            if s.startswith("#") and s[1:].strip() and enum is AssetType:
+                section = s[1:].strip()
                 continue
-            m = re.match(r'^([A-Z_0-9]+)\s*=\s*\(?\s*"[A-Z_0-9]+"\s*\)?\s*(?:#\s*(.*))?$', s)
+            m = _MEMBER_LINE.match(s)
             if m:
-                name, note = m.group(1), (m.group(2) or "").strip()
-                note = re.sub(r"\s*nosec.*$|\s*nosemgrep.*$", "", note).strip(" -#")
+                name, note = m.group(1), _strip_suppression(m.group(2) or "")
                 if enum is AssetType:
                     out["family"][name] = section
                 if note:

@@ -53,6 +53,10 @@ class RuleLinksMixin:
     def _res(self, ref: Any, asset: CloudAsset) -> str | None:
         return self.resolve(ref, asset)
 
+    def _linked_either_way(self, a: str, b: str) -> bool:
+        """True when an edge already joins ``a`` and ``b`` in either direction."""
+        return (a, b) in self._pair_keys or (b, a) in self._pair_keys
+
     def _rule_security_groups(self, asset: CloudAsset, edges: list[NetworkEdge]) -> None:
         """Security-group / NSG attachment (EC2, ELB, ENI, Lambda, RDS, Azure NIC)."""
         md = asset.metadata
@@ -168,9 +172,7 @@ class RuleLinksMixin:
         md = asset.metadata
         for origin in md.get("origins", []) or []:
             target = self._origin_target(origin, asset)
-            if target and (
-                (asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys
-            ):
+            if target and self._linked_either_way(asset.id, target):
                 continue  # already linked by a declared (typed) relation
             self._add(
                 edges,

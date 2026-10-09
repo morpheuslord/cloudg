@@ -30,6 +30,24 @@ list-changed / resource-updated notifications; and every request goes
 through ``layer.call_tool`` / ``read_resource`` / ``get_prompt`` /
 ``complete`` so policies, transforms and middleware apply.
 
+Arguments of :func:`register_into`:
+
+* ``layer``: the cloudg layer.
+* ``server``: an MCP server object from the table above.
+* ``prefix``: name prefix for tools and prompts, e.g. ``"cloudg_"`` to
+  avoid collisions with the host's tools. It sets ``layer.prefix``: the
+  prefix belongs to the layer, so it also applies to every other server
+  this layer is (or was) mounted on. To expose the catalog under two
+  prefixes, mount two layers.
+* ``include``: subset of ``{"tools", "resources", "templates", "prompts",
+  "completions", "logging", "subscriptions"}`` to register (default: all).
+* ``principal_resolver``: ``fn(RequestInfo) -> Principal | None`` mapping
+  request facts (HTTP headers, OAuth access token, transport) to the
+  caller; defaults to
+  :func:`~cloudg.mcp.native.auth.default_principal_resolver`.
+* ``list_changed``: advertise ``listChanged`` on SDK servers so clients act
+  on change notifications.
+
 Without any MCP framework, :func:`export_definitions` gives the wire
 definitions plus async handlers, and :func:`build_server` creates a ready
 server object (SDK, fastmcp or the dependency-free native server).
@@ -98,6 +116,38 @@ def detect_server_kind(server: Any) -> str:
     )
 
 
+def _apply_prefix(layer: "CloudGMCPLayer", prefix: str | None) -> None:
+    """Set ``layer.prefix`` for :func:`register_into`, warning when that
+    replaces a different prefix already in use."""
+    if prefix is None:
+        return
+    if layer.prefix and prefix != layer.prefix:
+        logger.warning(
+            "register_into(prefix=%r) replaces this layer's prefix %r on every server "
+            "it is mounted on; use one layer per prefix",
+            prefix,
+            layer.prefix,
+        )
+    layer.set_prefix(prefix)
+
+
+def _install(kind: str, layer: "CloudGMCPLayer", server: Any, **kwargs: Any) -> Any:
+    """Run the adapter for a non-native server ``kind``; ``kwargs`` are
+    ``include``, ``principal_resolver`` and ``list_changed``."""
+    if kind == "fastmcp":
+        from cloudg.mcp.adapters.fastmcp import install
+
+        kwargs.pop("list_changed", None)
+        return install(layer, server, **kwargs)
+    if kind == "sdk-highlevel":
+        from cloudg.mcp.adapters.mcp_sdk import install as install_sdk
+
+        return install_sdk(layer, server, **kwargs)
+    from cloudg.mcp.adapters.lowlevel import install as install_lowlevel
+
+    return install_lowlevel(layer, server, **kwargs)
+
+
 def register_into(
     layer: "CloudGMCPLayer",
     server: Any,
@@ -109,55 +159,17 @@ def register_into(
 ) -> Any:
     """Register the layer's primitives into ``server`` and return the binding.
 
-    Args:
-        layer: The cloudg layer.
-        server: An MCP server object (see the module docstring).
-        prefix: Name prefix for tools and prompts, e.g. ``"cloudg_"`` to
-            avoid collisions with the host's tools. It sets ``layer.prefix``:
-            the prefix belongs to the layer, so it also applies to every
-            other server this layer is (or was) mounted on. To expose the
-            catalog under two prefixes, mount two layers.
-        include: Subset of ``{"tools", "resources", "templates", "prompts",
-            "completions", "logging", "subscriptions"}`` to register
-            (default: all).
-        principal_resolver: ``fn(RequestInfo) -> Principal | None`` mapping
-            request facts (HTTP headers, OAuth access token, transport) to
-            the caller; defaults to
-            :func:`~cloudg.mcp.native.auth.default_principal_resolver`.
-        list_changed: Advertise ``listChanged`` on SDK servers so clients
-            act on change notifications.
+    The arguments are described under "Arguments of register_into" in the
+    module docstring.
     """
-    if prefix is not None:
-        if layer.prefix and prefix != layer.prefix:
-            logger.warning(
-                "register_into(prefix=%r) replaces this layer's prefix %r on every server "
-                "it is mounted on; use one layer per prefix",
-                prefix,
-                layer.prefix,
-            )
-        layer.set_prefix(prefix)
+    _apply_prefix(layer, prefix)
     kind = detect_server_kind(server)
     if kind == "native":
         if server.layer is not layer:
             raise ValueError("A NativeMCPServer serves exactly one layer (its own)")
         return server
-    if kind == "fastmcp":
-        from cloudg.mcp.adapters.fastmcp import install
-
-        return install(layer, server, include=include, principal_resolver=principal_resolver)
-    if kind == "sdk-highlevel":
-        from cloudg.mcp.adapters.mcp_sdk import install as install_sdk
-
-        return install_sdk(
-            layer,
-            server,
-            include=include,
-            principal_resolver=principal_resolver,
-            list_changed=list_changed,
-        )
-    from cloudg.mcp.adapters.lowlevel import install as install_lowlevel
-
-    return install_lowlevel(
+    return _install(
+        kind,
         layer,
         server,
         include=include,

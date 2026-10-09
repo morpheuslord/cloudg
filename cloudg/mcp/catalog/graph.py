@@ -44,6 +44,8 @@ from cloudg.mcp.catalog._common import (
     ws_dataset,
 )
 from cloudg.mcp.catalog._graph import (
+    GRAPH_RO,
+    edge_type_values,
     CROWN_JEWELS,
     IDENTITY_EDGES,
     INTERNET,
@@ -68,7 +70,7 @@ from cloudg.mcp.catalog._graph import (
 )
 from cloudg.mcp.catalog._graph_impact import CATALOG as IMPACT_CATALOG
 from cloudg.mcp.core import Capability, Registry, Sensitivity
-from cloudg.schema.models import AssetType, EdgeType
+from cloudg.schema.models import AssetType
 
 __all__ = [
     "CATALOG",
@@ -79,7 +81,6 @@ __all__ = [
     "register",
 ]
 
-CATEGORY = "graph"
 R = Capability.READ_STATE
 
 Direction = Literal["out", "in", "both"]
@@ -118,20 +119,14 @@ class GetEdgesArgs(BaseModel):
     dataset: DatasetArg = ""
 
 
-_RO = dict(read_only=True, idempotent=True, open_world=False, category=CATEGORY)
-
 CATALOG = Catalog()
-
-
-def _edge_types(values: list[str] | None) -> set[str]:
-    return {t.value for t in parse_enums(values, EdgeType, "edge type")}
 
 
 @CATALOG.tool(
     title="Neighbors",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(NeighborsOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def neighbors(
     ctx: Any,
@@ -151,7 +146,7 @@ def neighbors(
     'GRANTS_ACCESS'], depth=2."""
     ds = ws_dataset(ctx, dataset)
     start = resolve_node(ds, ref)
-    walk = Walk(direction, _edge_types(edge_types) or None, depth, limit)
+    walk = Walk(direction, edge_type_values(edge_types) or None, depth, limit)
     nodes, edges, truncated = bfs(ds, start, walk)
     ctx.link(asset_uri(start) + "/neighbors", "neighbors")
     return {
@@ -169,7 +164,7 @@ def neighbors(
     title="Get edges",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(EdgePageOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def get_edges(ctx: Any, args: GetEdgesArgs) -> dict:
     """Search edges by endpoint, edge type, relationship, cross-account,
@@ -180,7 +175,7 @@ def get_edges(ctx: Any, args: GetEdgesArgs) -> dict:
     q = EdgeQuery(
         source=resolve_node(ds, args.source, virtual_internet=True) if args.source else None,
         target=resolve_node(ds, args.target) if args.target else None,
-        edge_types=_edge_types(args.edge_types),
+        edge_types=edge_type_values(args.edge_types),
         relationship=args.relationship,
         internet_only=args.internet_only,
         port=args.port,
@@ -197,7 +192,10 @@ def get_edges(ctx: Any, args: GetEdgesArgs) -> dict:
 
 
 @CATALOG.tool(
-    title="Find paths", sensitivity=Sensitivity.CONFIDENTIAL, output_schema=schema(PathsOut), **_RO
+    title="Find paths",
+    sensitivity=Sensitivity.CONFIDENTIAL,
+    output_schema=schema(PathsOut),
+    **GRAPH_RO,
 )
 def find_paths(
     ctx: Any,
@@ -248,7 +246,7 @@ def find_paths(
     title="Attack paths",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(PathsOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def attack_paths(
     ctx: Any,
@@ -301,7 +299,7 @@ def attack_paths(
     title="Lateral movement paths",
     sensitivity=Sensitivity.CONFIDENTIAL,
     output_schema=schema(PathsOut),
-    **_RO,
+    **GRAPH_RO,
 )
 def lateral_movement_paths(
     ctx: Any,
@@ -334,7 +332,7 @@ def lateral_movement_paths(
     }
 
 
-@CATALOG.tool(title="Internet exposure", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
+@CATALOG.tool(title="Internet exposure", sensitivity=Sensitivity.CONFIDENTIAL, **GRAPH_RO)
 def internet_exposure(
     ctx: Any,
     asset_types: list[str] | None = None,

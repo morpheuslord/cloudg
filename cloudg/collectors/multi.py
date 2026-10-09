@@ -368,22 +368,8 @@ class MultiAccountCollector:
                 coverage.record("azure_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
-            edges: list[NetworkEdge] = []
-            try:
-                edges = await collector.collect_edges()
-            except Exception as exc:
-                logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
-                coverage.record("azure_edges", ServiceStatus.FAILED, error=describe_error(exc))
-
-            duration_ms = int((time.time() - start) * 1000)
-            service_errors = dict(getattr(collector, "service_errors", None) or {})
-            for service, error in service_errors.items():
-                coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
-            coverage.record(
-                "azure_full",
-                ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
-                asset_count=len(assets),
-                duration_ms=duration_ms,
+            edges = await _azure_edges_and_coverage(
+                collector, len(assets), coverage, subscription_id, start
             )
             return assets, edges
 
@@ -412,20 +398,7 @@ class MultiAccountCollector:
         if not project_ids:
             project_ids = [None]
 
-        # Region resolution
-        gcp_regions = self._config.gcp.regions
-        if is_all_regions(gcp_regions):
-            logger.info("GCP: discovering all regions...")
-            try:
-                from cloudg.credentials import build_gcp_credentials
-
-                creds, default_project = build_gcp_credentials(self._config.gcp)
-                pid = project_ids[0] or default_project
-            except Exception:
-                creds, pid = None, None
-            gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
-
-        self._resolved_regions["gcp"] = gcp_regions
+        self._resolved_regions["gcp"] = await self._resolve_gcp_regions(project_ids[0])
 
         # Cloud Asset Inventory returns resources across ALL regions, so no
         # per-region iteration is needed.
@@ -442,6 +415,21 @@ class MultiAccountCollector:
             logger.info("GCP: scanning %d projects (all regions per project)", len(project_ids))
             tasks = [self._collect_gcp_single(pid) for pid in project_ids]
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    async def _resolve_gcp_regions(self, first_project_id: str | None) -> Any:
+        """Return the configured GCP regions, discovering them when set to all."""
+        gcp_regions = self._config.gcp.regions
+        if is_all_regions(gcp_regions):
+            logger.info("GCP: discovering all regions...")
+            try:
+                from cloudg.credentials import build_gcp_credentials
+
+                creds, default_project = build_gcp_credentials(self._config.gcp)
+                pid = first_project_id or default_project
+            except Exception:
+                creds, pid = None, None
+            gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
+        return gcp_regions
 
     async def _collect_gcp_single(
         self,
@@ -536,3 +524,35 @@ def _caller_account(session: Any) -> str | None:
     except Exception as exc:
         logger.debug("GetCallerIdentity failed: %s", exc)
         return "unknown"
+
+
+async def _azure_edges_and_coverage(
+    collector: Any,
+    asset_count: int,
+    coverage: CollectionCoverage,
+    subscription_id: str | None,
+    start: float,
+) -> list[NetworkEdge]:
+    """Collect one Azure subscription's edges and record its coverage.
+
+    An edge failure is recorded as ``azure_edges`` and never discards the
+    assets; per-service collector errors become ``azure_<service>`` entries.
+    """
+    edges: list[NetworkEdge] = []
+    try:
+        edges = await collector.collect_edges()
+    except Exception as exc:
+        logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
+        coverage.record("azure_edges", ServiceStatus.FAILED, error=describe_error(exc))
+
+    duration_ms = int((time.time() - start) * 1000)
+    service_errors = dict(getattr(collector, "service_errors", None) or {})
+    for service, error in service_errors.items():
+        coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
+    coverage.record(
+        "azure_full",
+        ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
+        asset_count=asset_count,
+        duration_ms=duration_ms,
+    )
+    return edges

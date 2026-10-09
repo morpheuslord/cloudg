@@ -211,17 +211,27 @@ def build_aws_session(
     _instrument_aws_session(session, None, region)
 
     # 5. Optional role assumption on top of the base credentials
-    target_role: str | None = None
-    if role_arn and not assumed_via_oidc:
-        target_role = role_arn
-    elif account_id and getattr(cfg, "role_name", None):
-        target_role = f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
-
+    target_role = _aws_target_role(cfg, role_arn, assumed_via_oidc, account_id)
     if target_role:
         session = _aws_assume_role(boto3, session, target_role, session_name, external_id, region)
         _instrument_aws_session(session, account_id, region)
 
     return session
+
+
+def _aws_target_role(
+    cfg: Any, role_arn: str | None, assumed_via_oidc: bool, account_id: str | None
+) -> str | None:
+    """The role to assume on top of the base session, if any.
+
+    An explicit ``role_arn`` wins unless OIDC federation already assumed it;
+    otherwise ``account_id`` plus ``cfg.role_name`` names a cross-account role.
+    """
+    if role_arn and not assumed_via_oidc:
+        return role_arn
+    if account_id and getattr(cfg, "role_name", None):
+        return f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
+    return None
 
 
 def _instrument_aws_session(session: Any, account_id: str | None, region: str) -> None:
