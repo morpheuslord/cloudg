@@ -16,10 +16,10 @@ AWS (build_aws_session):
 
 Azure (build_azure_credential):
     1. Workload identity federation (tenant_id + client_id +
-       federated_token_file — AKS / GitHub OIDC)
+       federated_token_file; AKS / GitHub OIDC)
     2. Service principal with client secret
     3. Service principal with client certificate
-    4. Managed identity (system- or user-assigned — inherited identity)
+    4. Managed identity (system- or user-assigned, inherited identity)
     5. DefaultAzureCredential chain (env, CLI, PowerShell, managed identity)
 
 GCP (build_gcp_credentials):
@@ -208,18 +208,49 @@ def build_aws_session(
     session, assumed_via_oidc = _aws_base_session(
         boto3, cfg, region, session_name, role_arn, token_file
     )
+    _instrument_aws_session(session, None, region)
 
     # 5. Optional role assumption on top of the base credentials
-    target_role: str | None = None
-    if role_arn and not assumed_via_oidc:
-        target_role = role_arn
-    elif account_id and getattr(cfg, "role_name", None):
-        target_role = f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
-
+    target_role = _aws_target_role(cfg, role_arn, assumed_via_oidc, account_id)
     if target_role:
         session = _aws_assume_role(boto3, session, target_role, session_name, external_id, region)
+        _instrument_aws_session(session, account_id, region)
 
     return session
+
+
+def _aws_target_role(
+    cfg: Any, role_arn: str | None, assumed_via_oidc: bool, account_id: str | None
+) -> str | None:
+    """The role to assume on top of the base session, if any.
+
+    An explicit ``role_arn`` wins unless OIDC federation already assumed it;
+    otherwise ``account_id`` plus ``cfg.role_name`` names a cross-account role.
+    """
+    if role_arn and not assumed_via_oidc:
+        return role_arn
+    if account_id and getattr(cfg, "role_name", None):
+        return f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
+    return None
+
+
+def _instrument_aws_session(session: Any, account_id: str | None, region: str) -> None:
+    """Route the session's (STS, Organizations, Control Tower, ...) calls
+    through cloudg's shared rate limiter / circuit breakers, with the
+    configured botocore retries as the default client config."""
+    try:
+        from botocore.config import Config
+
+        from cloudg.resilience.aws import botocore_retries, install_aws_hooks
+
+        install_aws_hooks(
+            session,
+            account_id=account_id,
+            region=region,
+            default_config=Config(retries=botocore_retries()),
+        )
+    except Exception as exc:  # instrumentation must never break authentication
+        logger.debug("AWS session instrumentation skipped: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -243,40 +274,9 @@ def build_azure_credential(cfg: Any) -> Any:
             "azure-identity is required for Azure. Install with: pip install cloudg[azure]"
         ) from exc
 
-    tenant_id = getattr(cfg, "tenant_id", None) or os.environ.get("AZURE_TENANT_ID")
-    client_id = getattr(cfg, "client_id", None) or os.environ.get("AZURE_CLIENT_ID")
-    client_secret = getattr(cfg, "client_secret", None) or os.environ.get("AZURE_CLIENT_SECRET")
-    certificate_path = getattr(cfg, "certificate_path", None)
-    federated_token_file = getattr(cfg, "federated_token_file", None) or os.environ.get(
-        "AZURE_FEDERATED_TOKEN_FILE"
-    )
-
-    # 1. Workload identity federation (AKS, GitHub Actions OIDC)
-    if tenant_id and client_id and federated_token_file:
-        logger.info("Azure auth: workload identity federation (client %s)", client_id)
-        return identity.WorkloadIdentityCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            token_file_path=federated_token_file,
-        )
-
-    # 2. Service principal with secret
-    if tenant_id and client_id and client_secret:
-        logger.info("Azure auth: service principal (client %s)", client_id)
-        return identity.ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-
-    # 3. Service principal with certificate
-    if tenant_id and client_id and certificate_path:
-        logger.info("Azure auth: service principal certificate (client %s)", client_id)
-        return identity.CertificateCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            certificate_path=certificate_path,
-        )
+    explicit = _azure_service_principal(identity, cfg)
+    if explicit is not None:
+        return explicit
 
     # 4. Managed identity (inherited from the VM / App Service / AKS node)
     if getattr(cfg, "use_managed_identity", False):
@@ -294,6 +294,54 @@ def build_azure_credential(cfg: Any) -> Any:
     return identity.DefaultAzureCredential()
 
 
+def _azure_setting(cfg: Any, name: str, env: str | None = None) -> Any:
+    """``cfg.<name>``, else the environment variable ``env``."""
+    value = getattr(cfg, name, None)
+    if not value and env:
+        value = os.environ.get(env)
+    return value
+
+
+def _azure_service_principal(identity: Any, cfg: Any) -> Any:
+    """Workload identity, secret or certificate credential of the configured
+    app registration (None when the settings for none of them are complete)."""
+    tenant_id = _azure_setting(cfg, "tenant_id", "AZURE_TENANT_ID")
+    client_id = _azure_setting(cfg, "client_id", "AZURE_CLIENT_ID")
+    if not (tenant_id and client_id):
+        return None
+    client_secret = _azure_setting(cfg, "client_secret", "AZURE_CLIENT_SECRET")
+    certificate_path = _azure_setting(cfg, "certificate_path")
+    federated_token_file = _azure_setting(cfg, "federated_token_file", "AZURE_FEDERATED_TOKEN_FILE")
+
+    # 1. Workload identity federation (AKS, GitHub Actions OIDC)
+    if federated_token_file:
+        logger.info("Azure auth: workload identity federation (client %s)", client_id)
+        return identity.WorkloadIdentityCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            token_file_path=federated_token_file,
+        )
+
+    # 2. Service principal with secret
+    if client_secret:
+        logger.info("Azure auth: service principal (client %s)", client_id)
+        return identity.ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+    # 3. Service principal with certificate
+    if certificate_path:
+        logger.info("Azure auth: service principal certificate (client %s)", client_id)
+        return identity.CertificateCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            certificate_path=certificate_path,
+        )
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # GCP
 # ─────────────────────────────────────────────────────────────────────
@@ -303,7 +351,7 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
     """Build google-auth credentials from a GCPConfig.
 
     Returns:
-        (credentials, default_project_id) — project may be None when the
+        (credentials, default_project_id); project may be None when the
         auth method carries no project (e.g. impersonation).
 
     Raises:
@@ -322,7 +370,7 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
 
     if credentials_file and getattr(cfg, "credentials_file", None):
         # 1. Explicit file: service account key OR workload identity
-        #    federation (external_account) config — load handles both.
+        #    federation (external_account) config; load handles both.
         logger.info("GCP auth: file-based identity (%s)", credentials_file)
         credentials, project = google.auth.load_credentials_from_file(
             credentials_file, scopes=_GCP_SCOPES

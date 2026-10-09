@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -225,7 +226,7 @@ def _submit_provider_scanners(
     profile: str | None,
     output_dir: Path,
 ) -> None:
-    """Submit Prowler and ScoutSuite — one instance per provider."""
+    """Submit Prowler and ScoutSuite, one instance per provider."""
     if "prowler" in scanner_list:
         for prov in cfg.providers:
             if prov in ("aws", "azure", "gcp"):
@@ -266,7 +267,7 @@ def _submit_checkov(
         return
     if not iac_dirs:
         ui.warn(
-            "Checkov: nothing to scan — pass --iac-dir, set "
+            "Checkov: nothing to scan; pass --iac-dir, set "
             "scanners.iac_directories, or enable --terraform to scan the "
             "recreated infrastructure"
         )
@@ -311,11 +312,11 @@ def _submit_trivy_and_iam(
                 iac_dirs,
             )
         else:
-            ui.warn("Trivy: nothing to scan — configure --images, --iac-dir, or enable --terraform")
+            ui.warn("Trivy: nothing to scan; configure --images, --iac-dir, or enable --terraform")
     else:
         ui.skip("Trivy: not enabled")
 
-    # IAM Linter — always runs internally to analyze collected assets
+    # IAM Linter: always runs internally to analyze collected assets
     if "iam" in scanner_list or assets:
         submit("IAM Linter", "IAM Lint", _scan_iam, assets)
 
@@ -338,7 +339,7 @@ def _collect_scanner_results(
                 iam_findings.extend(findings)
             else:
                 scanner_findings.extend(findings)
-            ui.task_done(progress, task_id, f"{scanner_name} — {len(findings)} findings")
+            ui.task_done(progress, task_id, f"{scanner_name}: {len(findings)} findings")
         except concurrent.futures.TimeoutError:
             ui.task_failed(
                 progress,
@@ -349,27 +350,12 @@ def _collect_scanner_results(
             ui.task_failed(progress, task_id, f"{scanner_name} failed: {exc}")
 
 
-def _scanner_phase(
-    cfg: CloudGConfig,
-    scanner_list: list[str],
-    profile: str | None,
-    iac_dir: str | None,
-    resolved_images: list[str],
-    tf_dir: str | None,
-    assets: list[Any],
-    output_dir: Path,
-) -> tuple[list[Any], list[Any]]:
-    """Phase 3: run all enabled scanners in parallel.
+def _resolve_scan_iac_dirs(cfg: CloudGConfig, iac_dir: str | None, tf_dir: str | None) -> list[str]:
+    """Resolve IaC scan targets: CLI flag, then config, then the Terraform recreation.
 
-    Returns (scanner findings, IAM linter findings).
+    There is no fallback to ".": scanning the directory cloudg runs from is
+    not a scan of the cloud, and its zero findings look like a clean result.
     """
-    import concurrent.futures
-
-    ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
-
-    # ── Resolve IaC scan targets: CLI flag → config → Terraform recreation ──
-    # No fallback to "." — scanning the directory cloudg runs from is not a
-    # scan of the cloud, and its zero findings look like a clean result.
     from cloudg.api import resolve_iac_dirs
 
     resolved_iac_dirs, iac_source = resolve_iac_dirs(iac_dir, cfg.scanners.iac_directories, tf_dir)
@@ -378,6 +364,20 @@ def _scanner_phase(
             "IaC scanners target the Terraform recreation of the live "
             f"infrastructure ({resolved_iac_dirs[0]})"
         )
+    return resolved_iac_dirs
+
+
+def _run_scanners_parallel(
+    cfg: CloudGConfig,
+    scanner_list: list[str],
+    profile: str | None,
+    resolved_iac_dirs: list[str],
+    resolved_images: list[str],
+    assets: list[Any],
+    output_dir: Path,
+) -> tuple[list[Any], list[Any]]:
+    """Submit every enabled scanner to a thread pool and gather their findings."""
+    import concurrent.futures
 
     scanner_findings: list[Any] = []
     iam_findings: list[Any] = []
@@ -401,6 +401,27 @@ def _scanner_phase(
             )
 
     return scanner_findings, iam_findings
+
+
+def _scanner_phase(
+    cfg: CloudGConfig,
+    scanner_list: list[str],
+    profile: str | None,
+    iac_dir: str | None,
+    resolved_images: list[str],
+    tf_dir: str | None,
+    assets: list[Any],
+    output_dir: Path,
+) -> tuple[list[Any], list[Any]]:
+    """Phase 3: run all enabled scanners in parallel.
+
+    Returns (scanner findings, IAM linter findings).
+    """
+    ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
+    resolved_iac_dirs = _resolve_scan_iac_dirs(cfg, iac_dir, tf_dir)
+    return _run_scanners_parallel(
+        cfg, scanner_list, profile, resolved_iac_dirs, resolved_images, assets, output_dir
+    )
 
 
 def _ontology_phase(
@@ -465,23 +486,32 @@ def _render_run_reports(
     ui.artifact("HTML", html_path)
 
 
+@dataclass
+class RunProducts:
+    """What the collection and graph phases of ``cloudg run`` produced."""
+
+    assets: list[Any]
+    edges: list[Any]
+    graph: Any
+    graph_json: dict[str, Any]
+    reachability_findings: list[Any]
+    coverage_records: list[Any] = field(default_factory=list)
+
+
 def _post_scan_phases(
     cfg: CloudGConfig,
     kwargs: dict[str, Any],
-    assets: list[Any],
-    edges: list[Any],
-    graph: Any,
-    graph_json: dict[str, Any],
-    reachability_findings: list[Any],
+    products: RunProducts,
     scanner_findings: list[Any],
     iam_findings: list[Any],
-    coverage_records: list[Any],
     output_dir: Path,
 ) -> None:
     """Run everything after the scanner phase: ontology, RAG update,
     normalisation, report rendering and the results summary."""
     from cloudg.normaliser import FindingsNormaliser
 
+    assets, edges = products.assets, products.edges
+    reachability_findings = products.reachability_findings
     # Combine all findings for downstream phases
     all_security_findings = scanner_findings + iam_findings + reachability_findings
     console.print()
@@ -493,7 +523,7 @@ def _post_scan_phases(
 
     # Also update RAG export with all findings
     if kwargs["rag_export"] and cfg.rag.enabled:
-        _update_rag_export(cfg, assets, edges, graph, all_security_findings, output_dir)
+        _update_rag_export(cfg, assets, edges, products.graph, all_security_findings, output_dir)
 
     # Phase 4: Normalise (with external rulesets)
     ui.phase("Phase 4 · Normalisation")
@@ -505,15 +535,15 @@ def _post_scan_phases(
     ui.success(f"[metric]{len(scan_result.findings)}[/] normalised findings")
 
     # Phase 5: Render
-    _render_run_reports(scan_result, graph_json, assets, edges, output_dir)
+    _render_run_reports(scan_result, products.graph_json, assets, edges, output_dir)
 
     # Summary
     ui.section("Results")
     ui.summary_table(scan_result.summary)
 
     # Coverage summary
-    if coverage_records:
-        ui.coverage_table(coverage_records)
+    if products.coverage_records:
+        ui.coverage_table(products.coverage_records)
 
     console.print()
     ui.success(f"All reports saved to [path]{output_dir}[/]")

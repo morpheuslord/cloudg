@@ -90,3 +90,42 @@ def skip_ddb_crc32_under_moto(monkeypatch):
     monkeypatch.setattr(retryhandler.AioCRC32Checker, "_check_response", _no_check)
     monkeypatch.setattr(special.AioRetryDDBChecksumError, "is_retryable", _not_retryable)
     yield
+
+
+@pytest.fixture(autouse=True)
+def fresh_resilience_governor(monkeypatch):
+    """Each test starts with full rate-limit buckets, closed circuit breakers
+    and empty throttle stats (the governor is process-wide state).
+
+    moto never throttles, and its fixtures (hundreds of default AMIs and
+    snapshots) would make the production per-service rates the bottleneck of
+    the suite, so the built-in limits are raised for tests. The hooks,
+    limiter, breakers and telemetry still run on every call; the resilience
+    tests restore the real defaults (``limiter.BUILTIN_LIMITS``).
+    """
+    try:
+        from dataclasses import replace
+
+        from cloudg.resilience import limiter, reset_governor
+    except ImportError:
+        yield
+        return
+
+    fast = 1_000_000.0
+    profile = {
+        provider: replace(
+            limits,
+            max_rps=fast,
+            burst=fast,
+            account_max_rps=fast if limits.account_max_rps else None,
+            account_burst=fast if limits.account_max_rps else None,
+            services={
+                name: replace(spec, rate=fast, burst=fast) for name, spec in limits.services.items()
+            },
+        )
+        for provider, limits in limiter.BUILTIN_LIMITS.items()
+    }
+    monkeypatch.setattr(limiter, "DEFAULT_LIMITS", profile)
+    reset_governor()
+    yield
+    reset_governor()

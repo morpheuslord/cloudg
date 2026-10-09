@@ -33,7 +33,7 @@ def parse_report(tool: str, path: str | Path) -> list[Finding]:
 
     Args:
         tool: One of ``prowler``, ``scoutsuite``, ``checkov``, ``trivy``.
-        path: The tool's native output — a report file or output directory.
+        path: The tool's native output: a report file or output directory.
 
     Returns:
         List of normalised Finding objects (empty when nothing parses).

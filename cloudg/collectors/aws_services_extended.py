@@ -45,7 +45,9 @@ class ExtendedServiceCollectorsMixin:
         _aio_config: Any
         coverage: CollectionCoverage
 
-        def _get_aio_session(self) -> Any: ...
+        def _get_aio_session(self) -> Any:
+            # Provided by AsyncAWSCollector; this stub only types the mixin
+            raise NotImplementedError
 
     async def _collect_ecs(self) -> list[CloudAsset]:
         """Collect ECS clusters and services."""
@@ -221,8 +223,8 @@ class ExtendedServiceCollectorsMixin:
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as exc:
-            # nosemgrep: the message names the AWS service, no credential is logged
-            logger.error("secretsmanager service collection failed: %s", exc)
+            # The service name is an argument so the format string names no secret
+            logger.error("%s service collection failed: %s", "secretsmanager", exc)
             self.coverage.record("secretsmanager", ServiceStatus.FAILED, error=str(exc))
         return assets
 

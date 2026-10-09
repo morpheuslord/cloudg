@@ -1,15 +1,24 @@
 """Relation taxonomy and inference rules for the cloud ontology.
 
-Defines the ~63 typed semantic relations across 7 domain groups and the
+Defines the 64 typed semantic relations across 7 domain groups and the
 inference layer that derives them from raw CloudG edges and asset metadata.
 The OWL graph builder itself lives in :mod:`cloudg.graph.ontology`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from enum import Enum
 from typing import Callable
 
+from cloudg.graph.ports import (
+    PortRange,
+    covers_all_ports,
+    edge_port_ranges,
+    is_internet_source,
+    port_in_ranges,
+)
+from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -18,7 +27,7 @@ from cloudg.schema.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Relation taxonomy: ~63 semantic relation types across 7 groups
+# Relation taxonomy: 64 semantic relation types across 7 groups
 # ---------------------------------------------------------------------------
 
 
@@ -37,7 +46,7 @@ class RelationGroup(str, Enum):
 class RelationType(str, Enum):
     """Fine-grained semantic relation types for cloud asset mapping."""
 
-    # ── Network (15) ──
+    # ── Network (16) ──
     INGRESS_ALLOWED = "INGRESS_ALLOWED"
     INGRESS_DENIED = "INGRESS_DENIED"
     EGRESS_ALLOWED = "EGRESS_ALLOWED"
@@ -226,27 +235,43 @@ _PORT_RELATIONS: dict[int, RelationType] = {
 }
 
 
+def _rule_port_ranges(edge: NetworkEdge) -> tuple[PortRange, ...]:
+    """The ports a rule edge opens, parsed as the reachability analysis does.
+
+    ``port_range`` and ``protocol`` go through
+    :func:`cloudg.graph.ports.edge_port_ranges`. An edge with no
+    ``port_range`` but a ``ports`` list uses that list instead.
+    """
+    if not (edge.port_range or "").strip() and edge.ports:
+        return tuple((p, p) for p in edge.ports)
+    return edge_port_ranges(
+        {
+            "edge_type": edge.edge_type.value,
+            "port_range": edge.port_range,
+            "protocol": edge.protocol,
+        }
+    )
+
+
 def _infer_port_relations(edge: NetworkEdge) -> list[RelationType]:
-    """Infer port-specific relations for a security-group rule."""
-    relations: list[RelationType] = []
-    ports = edge.ports or []
-    protocol = (edge.protocol or "").upper()
+    """Infer port-specific relations for a security-group rule.
 
-    if len(ports) == 1:
-        port_rel = _PORT_RELATIONS.get(ports[0])
-        relations.append(port_rel if port_rel else RelationType.PORT_RESTRICTED)
-    elif len(ports) > 1 and len(ports) <= 20:
-        # Specific port set (not wide open)
-        for p in ports:
-            port_rel = _PORT_RELATIONS.get(p)
-            if port_rel and port_rel not in relations:
-                relations.append(port_rel)
-        if not any(r in relations for r in _PORT_RELATIONS.values()):
-            relations.append(RelationType.PORT_RESTRICTED)
-    elif protocol == "ALL" or (edge.port_range and edge.port_range == "0-65535"):
-        relations.append(RelationType.ALL_TRAFFIC)
-
-    return relations
+    The rule's ports are parsed numerically (see :func:`_rule_port_ranges`),
+    so the relations agree with the sensitive-port findings: an all-ports
+    rule (``0-65535``, protocol ``ALL`` / ``-1`` / ``*``, Azure ``*`` with
+    ``Tcp``) is ``ALL_TRAFFIC``; otherwise each of 22, 80, 443 and 3389
+    inside the ranges gives its ``ONLY_*`` relation (AWS ``1-1024`` gives
+    ``ONLY_SSH``, ``ONLY_HTTP`` and ``ONLY_HTTPS``), and ports that include
+    none of them give ``PORT_RESTRICTED``. A rule with no ports (ICMP, or
+    no port data) gives nothing.
+    """
+    ranges = _rule_port_ranges(edge)
+    if not ranges:
+        return []
+    if covers_all_ports(ranges):
+        return [RelationType.ALL_TRAFFIC]
+    relations = [rel for port, rel in _PORT_RELATIONS.items() if port_in_ranges(port, ranges)]
+    return relations or [RelationType.PORT_RESTRICTED]
 
 
 def _infer_sg_rule_relations(
@@ -256,7 +281,7 @@ def _infer_sg_rule_relations(
     relations: list[RelationType] = []
     cidr = edge.cidr or ""
     direction = (edge.direction or "ingress").lower()
-    is_internet = cidr in ("0.0.0.0/0", "::/0")
+    is_internet = is_internet_source(cidr)
 
     if direction == "ingress":
         relations.append(RelationType.INGRESS_ALLOWED)
@@ -281,7 +306,57 @@ _CLUSTER_TYPES = {
     AssetType.GKE_CLUSTER,
     AssetType.K8S_NAMESPACE,
 }
+
+# What a cluster or namespace runs: the targets of CLUSTER_CONTAINS_SERVICE
+_CLUSTER_MEMBER_TYPES = {
+    AssetType.K8S_NAMESPACE,
+    AssetType.K8S_WORKLOAD,
+    AssetType.K8S_SERVICE,
+    AssetType.K8S_INGRESS,
+    AssetType.K8S_SERVICE_ACCOUNT,
+    AssetType.CONTAINER_SERVICE,
+    AssetType.TASK_DEFINITION,
+    AssetType.NODE_GROUP,
+    AssetType.FARGATE_PROFILE,
+    AssetType.CLUSTER_ADDON,
+    AssetType.CAPACITY_PROVIDER,
+}
+
+# Network structure and hierarchy: never the "instance" a subnet contains
+_NOT_SUBNET_MEMBER_TYPES = {
+    AssetType.VPC,
+    AssetType.VNET,
+    AssetType.SUBNET,
+    AssetType.ROUTE_TABLE,
+    AssetType.NACL,
+    AssetType.SECURITY_GROUP,
+    AssetType.NSG,
+    AssetType.INTERNET_GATEWAY,
+    AssetType.TRANSIT_GATEWAY,
+    AssetType.PEERING_CONNECTION,
+    AssetType.PREFIX_LIST,
+    AssetType.ROUTER,
+    AssetType.VPN_GATEWAY,
+    AssetType.CUSTOMER_GATEWAY,
+    AssetType.ORGANIZATION,
+    AssetType.ORG_UNIT,
+    AssetType.CLOUD_ACCOUNT,
+    AssetType.RESOURCE_GROUP,
+}
 _ORG_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT}
+
+
+def _specific_containment(src: AssetType, tgt: AssetType) -> RelationType | None:
+    """The containment sub-type whose two endpoint types match, if any."""
+    if src in (AssetType.VPC, AssetType.VNET) and tgt == AssetType.SUBNET:
+        return RelationType.VPC_CONTAINS_SUBNET
+    if src == AssetType.SUBNET and tgt not in _NOT_SUBNET_MEMBER_TYPES:
+        return RelationType.SUBNET_CONTAINS_INSTANCE
+    if src in _CLUSTER_TYPES and tgt in _CLUSTER_MEMBER_TYPES:
+        return RelationType.CLUSTER_CONTAINS_SERVICE
+    if src in _ORG_TYPES and tgt == AssetType.CLOUD_ACCOUNT:
+        return RelationType.ORG_CONTAINS_ACCOUNT
+    return None
 
 
 def _infer_containment_relations(
@@ -290,24 +365,18 @@ def _infer_containment_relations(
     """Infer the containment sub-type from the source and target asset types.
 
     A specific relation is used only when both ends match it: VPC / VNet to
-    subnet, subnet to placed resource, cluster or namespace to workload,
-    organization or OU to account. Anything else (organization to OU,
-    account to VPC, VNet to VM, resource group to resource, unresolved
-    endpoints) is plain ``CONTAINS``.
+    subnet, subnet to a resource placed in it (not another network
+    construct such as a route table, NACL or gateway), cluster or namespace
+    to a workload, service, namespace, node group or add-on, organization
+    or OU to account. Anything else (organization to OU, account to VPC,
+    VNet to VM, cluster to subnet, subnet to route table, resource group to
+    resource, unresolved endpoints) is plain ``CONTAINS``.
     """
     src = assets_by_id.get(edge.source_id)
     tgt = assets_by_id.get(edge.target_id)
     if not (src and tgt):
         return [RelationType.CONTAINS]
-    if src.asset_type in (AssetType.VPC, AssetType.VNET) and tgt.asset_type == AssetType.SUBNET:
-        return [RelationType.VPC_CONTAINS_SUBNET]
-    if src.asset_type == AssetType.SUBNET:
-        return [RelationType.SUBNET_CONTAINS_INSTANCE]
-    if src.asset_type in _CLUSTER_TYPES:
-        return [RelationType.CLUSTER_CONTAINS_SERVICE]
-    if src.asset_type in _ORG_TYPES and tgt.asset_type == AssetType.CLOUD_ACCOUNT:
-        return [RelationType.ORG_CONTAINS_ACCOUNT]
-    return [RelationType.CONTAINS]
+    return [_specific_containment(src.asset_type, tgt.asset_type) or RelationType.CONTAINS]
 
 
 def _infer_iam_trust_relations(
@@ -502,37 +571,39 @@ def _infer_vpc_containment(
     return relations
 
 
-def _kms_key_identifiers(key: CloudAsset) -> set[str]:
-    """Every string a ``kms_key_id`` reference may use for this key."""
-    names = {key.id, key.name}
+def _kms_key_aliases(key: CloudAsset) -> list[str]:
+    """Every string other than the ARN a ``kms_key_id`` reference may use."""
+    names = [key.name]
     if key.arn:
-        names.add(key.arn)
-        names.add(key.arn.rsplit("/", 1)[-1])  # bare key id
-    names.update(a for a in key.metadata.get("aliases") or [] if isinstance(a, str))
+        names.append(key.arn.rsplit("/", 1)[-1])  # bare key id
+    names.extend(a for a in key.metadata.get("aliases") or [] if isinstance(a, str))
     return names
 
 
-def _resolve_kms_key(ref: str, all_assets: list[CloudAsset]) -> str:
-    """Asset id of the KMS key ``ref`` names, or ``ref`` itself if not collected.
+def kms_key_index(assets: Iterable[CloudAsset]) -> AssetIndex:
+    """An :class:`AssetIndex` over the KMS keys in ``assets``.
 
-    ``ref`` may be the key's asset id, ARN, bare key id, alias name
-    (``alias/app``) or alias ARN.
+    A key is found by its asset id, ARN, name, bare key id, alias name
+    (``alias/app``) or alias ARN; when two keys share a reference the
+    first one wins. Build it once per inventory and pass it to
+    :func:`infer_asset_relations` (``kms_index=``).
     """
-    for other in all_assets:
-        if other.asset_type == AssetType.KMS_KEY and ref in _kms_key_identifiers(other):
-            return other.id
-    return ref
+    index = AssetIndex()
+    for key in assets:
+        if key.asset_type == AssetType.KMS_KEY:
+            index.add(key.id, key.arn, aliases=_kms_key_aliases(key))
+    return index
 
 
 def _infer_kms_encryption(
-    asset: CloudAsset, all_assets: list[CloudAsset]
+    asset: CloudAsset, kms_index: AssetIndex
 ) -> list[tuple[RelationType, str]]:
     """Infer ``asset ENCRYPTED_BY_KMS key`` for an asset encrypted with a named key.
 
     The asset needs ``encryption`` or ``storage_encrypted`` set in its
     metadata and a ``kms_key_id``. The key reference is resolved to the
-    collected KMS key asset when there is one; otherwise the raw reference
-    is the object.
+    collected KMS key asset through ``kms_index`` when there is one;
+    otherwise the raw reference is the object.
     """
     md = asset.metadata
     kms_ref = md.get("kms_key_id")
@@ -540,7 +611,8 @@ def _infer_kms_encryption(
         return []
     if not (md.get("encryption") or md.get("storage_encrypted")):
         return []
-    return [(RelationType.ENCRYPTED_BY_KMS, _resolve_kms_key(kms_ref, all_assets))]
+    key_id = kms_index.find(kms_ref, tails=False)
+    return [(RelationType.ENCRYPTED_BY_KMS, key_id or kms_ref)]
 
 
 def _infer_metadata_relations(asset: CloudAsset) -> list[tuple[RelationType, str]]:
@@ -567,7 +639,10 @@ def _infer_metadata_relations(asset: CloudAsset) -> list[tuple[RelationType, str
 
 
 def infer_asset_relations(
-    asset: CloudAsset, all_assets: list[CloudAsset]
+    asset: CloudAsset,
+    all_assets: list[CloudAsset],
+    *,
+    kms_index: AssetIndex | None = None,
 ) -> list[tuple[RelationType, str]]:
     """Infer additional semantic relations from asset metadata alone.
 
@@ -575,10 +650,32 @@ def infer_asset_relations(
     always the subject, so each tuple reads ``asset REL object``. Relations
     that point at an asset from elsewhere (a VPC containing it) are returned
     when that other asset is passed in instead.
+
+    ``kms_index`` is :func:`kms_key_index` of ``all_assets``. Pass it when
+    calling this for many assets of one inventory (or use
+    :func:`iter_asset_relations`); without it the index is rebuilt on every
+    call.
     """
+    if kms_index is None:
+        kms_index = kms_key_index(all_assets)
     relations: list[tuple[RelationType, str]] = []
     relations.extend(_infer_tag_relations(asset))
     relations.extend(_infer_vpc_containment(asset, all_assets))
-    relations.extend(_infer_kms_encryption(asset, all_assets))
+    relations.extend(_infer_kms_encryption(asset, kms_index))
     relations.extend(_infer_metadata_relations(asset))
     return relations
+
+
+def iter_asset_relations(
+    assets: list[CloudAsset],
+) -> Iterator[tuple[CloudAsset, RelationType, str]]:
+    """``(asset, relation, object_id)`` for every asset-level relation.
+
+    The asset-level relations of a whole inventory, the way the ontology
+    and the RAG export both add them: :func:`infer_asset_relations` for
+    each asset, with the KMS key index built once.
+    """
+    kms_index = kms_key_index(assets)
+    for asset in assets:
+        for rel_type, target_id in infer_asset_relations(asset, assets, kms_index=kms_index):
+            yield asset, rel_type, target_id

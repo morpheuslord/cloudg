@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────
-# NIST 800-53 Rev 5 — Control Family Mappings
+# NIST 800-53 Rev 5: Control Family Mappings
 # Source: NIST SP 800-53 Rev 5 (public domain, U.S. government)
 #
-# FALLBACK rulesets — used only for findings that arrive
+# FALLBACK rulesets: used only for findings that arrive
 # without scanner-native compliance control IDs.
 # ─────────────────────────────────────────────────────────────────
 
@@ -11,7 +11,7 @@ version: "Rev5"
 source: "NIST SP 800-53 Revision 5"
 
 controls:
-  # AC — Access Control
+  # AC: Access Control
   - id: "AC-2"
     title: "Account Management"
     patterns:
@@ -39,7 +39,7 @@ controls:
       - "Resource.*\\*"
     severity: HIGH
 
-  # AU — Audit and Accountability
+  # AU: Audit and Accountability
   - id: "AU-2"
     title: "Event Logging"
     patterns:
@@ -57,7 +57,7 @@ controls:
       - "alarm"
     severity: MEDIUM
 
-  # CM — Configuration Management
+  # CM: Configuration Management
   - id: "CM-6"
     title: "Configuration Settings"
     patterns:
@@ -66,7 +66,7 @@ controls:
       - "hardening"
     severity: MEDIUM
 
-  # IA — Identification and Authentication
+  # IA: Identification and Authentication
   - id: "IA-2"
     title: "Identification and Authentication"
     patterns:
@@ -84,7 +84,7 @@ controls:
       - "password.*expir"
     severity: MEDIUM
 
-  # SC — System and Communications Protection
+  # SC: System and Communications Protection
   - id: "SC-7"
     title: "Boundary Protection"
     patterns:
@@ -114,7 +114,7 @@ controls:
       - "kms"
     severity: HIGH
 
-  # SI — System and Information Integrity
+  # SI: System and Information Integrity
   - id: "SI-2"
     title: "Flaw Remediation"
     patterns:

@@ -9,9 +9,99 @@ from typing import Any
 
 import networkx as nx
 
-from cloudg.schema.models import CloudAsset, NetworkEdge
+from cloudg.graph.ports import (
+    ALL_PORTS_RANGE,
+    ALL_PROTOCOLS,
+    FILTER_RULE_EDGES,
+    PORTED_PROTOCOLS,
+    PORTLESS_PROTOCOLS,
+)
+from cloudg.schema.models import CloudAsset, EdgeType, NetworkEdge
 
 logger = logging.getLogger(__name__)
+
+# Edge types that carry ports. When two of them share a source and target
+# they are merged into one graph edge (see GraphBuilder._add_edge).
+_MERGEABLE_EDGES = FILTER_RULE_EDGES | {EdgeType.INTERNET_EXPOSED.value}
+
+# Protocols whose empty port list on a filter rule allows every port: the
+# port-carrying protocols plus the spellings of "every protocol". The
+# port-less protocols (ICMP and the like, see cloudg.graph.ports) add no
+# ports when such a rule is merged with a rule for another protocol: AWS
+# stores the ICMP type and code in the port fields and Azure writes "*".
+_EMPTY_MEANS_ALL_PROTOCOLS = PORTED_PROTOCOLS | ALL_PROTOCOLS
+
+
+def _split(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _join_unique(values: list[str], *, ignore_case: bool = False) -> list[str]:
+    """``values`` without repeats, first spelling kept, in order."""
+    seen: dict[str, str] = {}
+    for value in values:
+        seen.setdefault(value.upper() if ignore_case else value, value)
+    return list(seen.values())
+
+
+def _can_merge(existing: dict[str, Any], new: dict[str, Any]) -> bool:
+    """Whether two edges on the same source and target can be merged.
+
+    They must be the same port-carrying edge type with the same CIDR and
+    direction. Protocols may differ (see :func:`_merge_edge_attrs`).
+    """
+    return (
+        existing.get("edge_type") == new["edge_type"]
+        and new["edge_type"] in _MERGEABLE_EDGES
+        and existing.get("cidr", "") == new["cidr"]
+        and str(existing.get("direction", "")).lower() == new["direction"].lower()
+    )
+
+
+def _rule_ports(attrs: dict[str, Any], mixed_protocols: bool) -> list[str]:
+    """The ``port_range`` tokens one edge contributes to a merged edge."""
+    protocols = {p.upper() for p in _split(str(attrs.get("protocol", "")))}
+    if mixed_protocols and protocols and protocols <= PORTLESS_PROTOCOLS:
+        return []
+    tokens = _split(str(attrs.get("port_range", "")))
+    if tokens:
+        return tokens
+    # An empty port list on a TCP / UDP / all-protocol filter rule allows
+    # every port (the GCP collector writes it that way). Spell it out so the
+    # other rule's ports do not narrow it.
+    if attrs.get("edge_type") in FILTER_RULE_EDGES and protocols & _EMPTY_MEANS_ALL_PROTOCOLS:
+        return [ALL_PORTS_RANGE]
+    return []
+
+
+def _merge_edge_attrs(existing: dict[str, Any], new: dict[str, Any]) -> None:
+    """Fold the attributes of ``new`` into the graph edge ``existing``.
+
+    ``port_range`` becomes the comma-separated union of both edges' ports.
+    When the protocols match it is the two strings joined as written. When
+    they differ, ``protocol`` lists both (``"TCP,ICMP"``), ICMP and other
+    port-less rules add no ports, and an empty TCP / UDP / all-protocol rule
+    adds ``0-65535``. The ports are then a union across protocols: the edge
+    still says which ports are open from the source, but not which protocol
+    each port is open for. Descriptions are joined with ``"; "``.
+    """
+    protocols = _join_unique(
+        _split(str(existing.get("protocol", ""))) + _split(new["protocol"]), ignore_case=True
+    )
+    mixed = len(protocols) > 1
+    if not mixed and not existing.get("port_range") and not new["port_range"]:
+        port_range = ""
+    else:
+        port_range = ",".join(_join_unique(_rule_ports(existing, mixed) + _rule_ports(new, mixed)))
+    descriptions = _join_unique(
+        [d for d in str(existing.get("description", "")).split("; ") if d]
+        + ([new["description"]] if new["description"] else [])
+    )
+    existing["protocol"] = ",".join(protocols)
+    existing["port_range"] = port_range
+    existing["description"] = "; ".join(descriptions)
+    if not existing.get("relationship"):
+        existing["relationship"] = new["relationship"]
 
 
 class GraphBuilder:
@@ -19,6 +109,15 @@ class GraphBuilder:
 
     Nodes represent cloud resources with full CloudAsset data as attributes.
     Edges represent network connectivity, IAM trust, or containment relationships.
+
+    The graph is a ``nx.DiGraph``, so it holds one edge per source and target.
+    Collectors often emit several rules for one pair, for example two
+    security group ingress rules from ``0.0.0.0/0`` for ports 22 and 443.
+    Such ``SECURITY_GROUP_RULE``, ``NACL_RULE`` and ``INTERNET_EXPOSED`` edges
+    are merged into one graph edge whose ``port_range`` lists the ports of
+    all of them (``"22,443"``), as long as their CIDR and direction match.
+    Any other edge sharing a source and target with an earlier one replaces
+    its attributes, as NetworkX does.
     """
 
     def __init__(self) -> None:
@@ -93,22 +192,38 @@ class GraphBuilder:
             )
 
     def _add_edge(self, edge: NetworkEdge) -> None:
-        """Add an edge, creating placeholder endpoints as needed."""
+        """Add an edge, creating placeholder endpoints as needed.
+
+        A rule edge whose source and target already have a compatible rule
+        edge is merged into it instead of overwriting it; see the class
+        docstring.
+        """
         # Ensure source/target nodes exist (create placeholder if needed)
         self._ensure_node(edge.source_id)
         self._ensure_node(edge.target_id)
 
-        self._graph.add_edge(
-            edge.source_id,
-            edge.target_id,
-            edge_type=edge.edge_type.value,
-            port_range=edge.port_range or "",
-            protocol=edge.protocol or "",
-            cidr=edge.cidr or "",
-            direction=edge.direction or "",
-            description=edge.description or "",
-            relationship=edge.relationship or "",
-        )
+        attrs = {
+            "edge_type": edge.edge_type.value,
+            "port_range": edge.port_range or "",
+            "protocol": edge.protocol or "",
+            "cidr": edge.cidr or "",
+            "direction": edge.direction or "",
+            "description": edge.description or "",
+            "relationship": edge.relationship or "",
+        }
+        existing = self._graph.get_edge_data(edge.source_id, edge.target_id)
+        if existing is not None:
+            if _can_merge(existing, attrs):
+                _merge_edge_attrs(existing, attrs)
+                return
+            logger.debug(
+                "Edge %s -> %s (%s) replaces a %s edge on the same pair",
+                edge.source_id,
+                edge.target_id,
+                attrs["edge_type"],
+                existing.get("edge_type"),
+            )
+        self._graph.add_edge(edge.source_id, edge.target_id, **attrs)
 
     def compute_centrality(self) -> dict[str, dict[str, float]]:
         """Compute graph centrality metrics for blast-radius scoring.

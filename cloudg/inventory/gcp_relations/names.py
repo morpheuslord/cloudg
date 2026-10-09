@@ -60,7 +60,7 @@ _POOL_RE = re.compile(
 
 _SERVICE_ALIASES = {"sqladmin": "cloudsql"}
 
-# (path fragment, CAI service) — first match wins for relative names
+# (path fragment, CAI service); first match wins for relative names
 _RELATIVE_SERVICES: tuple[tuple[str, str], ...] = (
     ("/cryptoKeys/", "cloudkms"),
     ("/keyRings/", "cloudkms"),

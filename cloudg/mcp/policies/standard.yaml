@@ -1,0 +1,56 @@
+# cloudg MCP policy profile: standard (the default)
+#
+# Goal: nothing that grants access ever leaves the layer, attacker-controlled
+# text cannot pose as instructions, and results stay directly actionable
+# (real account IDs, ARNs and IPs are kept).
+#
+#   secrets (passwords, API tokens, JWTs, connection-string secrets, AWS
+#   secret keys, values under password/secret/token/... keys) -> redacted
+#   private keys                                               -> field dropped
+#   credential IDs (AKIA.../ASIA...)                           -> masked
+#   names / tags / descriptions                                -> invisible + bidi
+#                                                                 chars stripped,
+#                                                                 suspected prompt
+#                                                                 injection fenced
+#   raw_data blobs                                             -> excluded
+#   secrets passed in tool arguments                           -> call refused
+#   reveal (de-pseudonymisation)                               -> admin roles only
+name: standard
+description: >-
+  Default profile. Secrets redacted, private keys dropped, credential IDs masked,
+  untrusted cloud text sanitised, identifiers kept.
+hide_denied: true
+honor_hints: true
+deny_capabilities: [reveal]
+roles:
+  admin:
+    description: Operators allowed to reverse pseudonyms.
+    allow_capabilities: [reveal]
+  privacy-admin:
+    description: Privacy officers allowed to reverse pseudonyms.
+    allow_capabilities: [reveal]
+rate_limits:
+  - tools: ["reveal_token"]
+    rate: 30
+    per: minute
+    scope: principal
+transforms:
+  - type: sanitize
+    options:
+      on_suspicious: fence
+      max_free_text: 2000
+  - type: redact
+    options:
+      strategies:
+        secret: redact
+        private_key: drop
+        credential: {strategy: mask, keep_first: 4, keep_last: 4}
+  - type: project
+    options:
+      exclude: ["**.raw_data", "**._raw"]
+      max_string: 20000
+      max_chars: 120000
+  - type: annotate
+input_transforms:
+  - type: guard_secrets
+    options: {action: reject}

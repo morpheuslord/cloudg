@@ -1,0 +1,64 @@
+# Example policy: a SOC team sharing one cloudg MCP server.
+#
+#   analyst:   investigates findings and topology through pseudonyms; cannot
+#              start collections or scans, cannot export.
+#   lead:      sees real identifiers and restricted primitives, may reveal
+#              pseudonyms (rate limited, audited) and export files.
+#   collector: service principal that runs collections and scanners.
+#
+# Load with:  CloudGMCPLayer(policy="soc-analyst")  or  CLOUDG_MCP_POLICY=soc-analyst
+# Roles come from the Principal (e.g. derived from the HTTP bearer token).
+name: soc-analyst
+extends: standard
+description: >-
+  Example multi-role SOC deployment: pseudonymised analysts, revealing leads,
+  scanning collector service.
+audit: true
+max_sensitivity: confidential
+deny_capabilities: [cloud_access, exec, write_fs, reveal]
+
+roles:
+  analyst:
+    max_sensitivity: confidential
+    deny_categories: [live, export]
+    deny_tools: ["export_*", "subgraph_export"]
+    transform_options:
+      redact:
+        strategies:
+          identifier: pseudonymize
+          uuid: keep
+          network: pseudonymize
+          special_ip: keep
+          special_cidr: keep
+          pii: pseudonymize
+          free_text: pseudonymize
+  lead:
+    max_sensitivity: restricted
+    allow_capabilities: [reveal, write_fs]
+    rate_limits:
+      - {tools: ["reveal_token"], rate: 20, per: hour, scope: principal}
+  collector:
+    # live = map_inventory, collect_assets, run_scanners, run_pipeline
+    allow_capabilities: [cloud_access, exec, write_fs]
+    allow_categories: [live]
+
+rules:
+  - name: label-findings
+    match: {categories: [findings]}
+    transform_options:
+      annotate: {label_findings: true}
+  - name: friendly-account-names
+    description: >-
+      Show well-known accounts by name, also inside ARNs and in place of their
+      pseudonyms. The policy runs aliases after redaction, and arguments that
+      use an alias are mapped back to the real account.
+    transforms:
+      - type: substitute
+        options:
+          aliases:
+            aws_account_id:
+              "111111111111": prod-payments
+              "222222222222": shared-services
+
+rate_limits:
+  - {tools: ["*"], rate: 300, per: minute, burst: 100, scope: principal}

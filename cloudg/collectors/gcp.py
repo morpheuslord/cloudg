@@ -20,6 +20,7 @@ import asyncio
 import logging
 import re
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -40,7 +41,11 @@ from cloudg.collectors.gcp_assets import (
     state_str,
     to_plain,
 )
+from cloudg.config import GCP_DEFAULT_SKIP_ASSET_TYPES
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.resilience.errors import describe_error
+from cloudg.resilience.gcp import RetryCounter, gcp_retry, gcp_scope, paced
+from cloudg.resilience.governor import get_governor
 from cloudg.inventory.catalogs import asset_type_map, load_catalog
 from cloudg.schema.models import (
     AssetType,
@@ -58,20 +63,7 @@ _GCP_ASSET_TYPE_MAP: dict[str, AssetType] = asset_type_map(
 )
 
 # High-churn types skipped unless configured otherwise (GCPConfig.skip_asset_types)
-DEFAULT_SKIP_ASSET_TYPES: tuple[str, ...] = (
-    "k8s.io/Pod",
-    "k8s.io/Node",
-    "k8s.io/Event",
-    "events.k8s.io/Event",
-    "k8s.io/Endpoints",
-    "discovery.k8s.io/EndpointSlice",
-    "apps.k8s.io/ReplicaSet",
-    "apps.k8s.io/ControllerRevision",
-    "run.googleapis.com/Revision",
-    "cloudkms.googleapis.com/CryptoKeyVersion",
-    "secretmanager.googleapis.com/SecretVersion",
-    "serviceusage.googleapis.com/Service",
-)
+DEFAULT_SKIP_ASSET_TYPES: tuple[str, ...] = GCP_DEFAULT_SKIP_ASSET_TYPES
 
 _RESOURCE_MANAGER = "//cloudresourcemanager.googleapis.com/"
 
@@ -85,24 +77,12 @@ def _content_type(name: str) -> Any:
         return name
 
 
-def _retry() -> Any:
-    try:
-        from google.api_core import exceptions as gexc
-        from google.api_core import retry as retries
-    except ImportError:
-        return None
-    return retries.Retry(
-        predicate=retries.if_exception_type(
-            gexc.ResourceExhausted,
-            gexc.ServiceUnavailable,
-            gexc.DeadlineExceeded,
-            gexc.InternalServerError,
-        ),
-        initial=1.0,
-        maximum=60.0,
-        multiplier=2.0,
-        timeout=900.0,
-    )
+def _retry(scope: Any = None, counter: Any = None) -> Any:
+    """api_core Retry on quota / availability errors (initial 1s, x2, capped
+    at ratelimit.gcp.max_backoff_seconds (60), overall deadline_seconds
+    (900), at most max_retries consecutive retries, retry budget); retried
+    errors feed cloudg's adaptive rate limiter for ``scope``."""
+    return gcp_retry(scope, counter=counter)
 
 
 @dataclass
@@ -212,9 +192,9 @@ class GCPCollector(BaseCollector):
             self._client = asset_v1.AssetServiceClient(credentials=self._credentials)
         return self._client
 
-    def _call_kwargs(self) -> dict[str, Any]:
+    def _call_kwargs(self, scope: Any = None, counter: Any = None) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"timeout": self._timeout}
-        retry = _retry()
+        retry = _retry(scope, counter)
         if retry is not None:
             kwargs["retry"] = retry
         return kwargs
@@ -222,13 +202,32 @@ class GCPCollector(BaseCollector):
     def _iterate(
         self, method: Any, request: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], Exception | None]:
-        """Drain a paged CAI call in the calling (worker) thread."""
+        """Drain a paged CAI call in the calling (worker) thread.
+
+        Each page takes a token from the shared limiter of this scope x RPC
+        (Cloud Asset Inventory quotas are per minute per project / org), an
+        open circuit fails fast, and throttling that outlasts the retries
+        is reported as such (the caller records it in coverage).
+        """
+        gov = get_governor()
+        scope = gcp_scope(self._scope, "cloudasset", method)
         items: list[dict[str, Any]] = []
+        counter = RetryCounter()
+        enabled = gov.provider_enabled("gcp")
         try:
-            for item in method(request=request, **self._call_kwargs()):
-                items.append(to_plain(item))
+            if enabled:
+                gov.check(scope)
+                gov.limiter.acquire_sync(scope)
+                gov.record_call(scope)
+            # Concurrent listings per project / org (ratelimit.gcp.max_concurrency)
+            with gov.limiter.bulkhead(scope).hold_sync() if enabled else nullcontext():
+                result = method(request=request, **self._call_kwargs(scope, counter))
+                for item in paced(result, scope, request.get("page_size"), counter=counter):
+                    items.append(to_plain(item))
         except Exception as exc:
+            gov.on_final_error(scope, exc, str(scope.operation))
             return items, exc
+        gov.on_success(scope)
         return items, None
 
     # ------------------------------------------------------------------
@@ -276,7 +275,7 @@ class GCPCollector(BaseCollector):
                 "gcp_list_assets",
                 ServiceStatus.PARTIAL,
                 len(raw),
-                f"listing truncated: {error}",
+                f"listing truncated: {describe_error(error)}",
                 start=start,
             )
             return [self._record_from_asset(r) for r in raw]
@@ -286,27 +285,33 @@ class GCPCollector(BaseCollector):
             self._scope,
             error,
         )
+        return await self._collect_from_search(error, start)
+
+    async def _collect_from_search(self, error: Exception, start: float) -> list[dict[str, Any]]:
+        """Summary records from SearchAllResources after ListAssets failed with ``error``."""
         search_start = time.time()
         found, search_error = await asyncio.to_thread(self._search_resources)
+        self._record(
+            "gcp_list_assets", ServiceStatus.FAILED, error=describe_error(error), start=start
+        )
         if search_error is not None and not found:
-            self._record("gcp_list_assets", ServiceStatus.FAILED, error=str(error), start=start)
             self._record(
                 "gcp_search_resources",
                 ServiceStatus.FAILED,
-                error=str(search_error),
+                error=describe_error(search_error),
                 start=search_start,
             )
             raise RuntimeError(
-                f"GCP asset enumeration failed for {self._scope}: ListAssets: {error}; "
-                f"SearchAllResources: {search_error}"
+                f"GCP asset enumeration failed for {self._scope}: "
+                f"ListAssets: {describe_error(error)}; "
+                f"SearchAllResources: {describe_error(search_error)}"
             )
-        self._record("gcp_list_assets", ServiceStatus.FAILED, error=str(error), start=start)
         self._record(
             "gcp_search_resources",
             ServiceStatus.PARTIAL,
             len(found),
             "summary data only (ListAssets unavailable)"
-            + (f"; listing truncated: {search_error}" if search_error else ""),
+            + (f"; listing truncated: {describe_error(search_error)}" if search_error else ""),
             start=search_start,
         )
         return [self._record_from_search(r) for r in found]
@@ -317,16 +322,8 @@ class GCPCollector(BaseCollector):
 
     def _learn_projects(self, records: list[dict[str, Any]]) -> None:
         for rec in records:
-            data = rec.get("data") or {}
             if rec["asset_type"] == "cloudresourcemanager.googleapis.com/Project":
-                number = _num(data.get("projectNumber"))
-                if not number and str(data.get("name", "")).startswith("projects/"):
-                    number = data["name"].split("/", 1)[1]
-                if not number:
-                    number = rec["name"].rsplit("/", 1)[-1]
-                pid = data.get("projectId")
-                if number and pid:
-                    self._number_to_id.setdefault(number, pid)
+                self._learn_project_asset(rec)
         for rec in records:
             number = self._ancestor_number(rec)
             if not number or number in self._number_to_id:
@@ -339,6 +336,18 @@ class GCPCollector(BaseCollector):
             if len(numbers) == 1:
                 self._number_to_id.setdefault(numbers.pop(), self._project_id)
         self._id_to_number = {v: k for k, v in self._number_to_id.items()}
+
+    def _learn_project_asset(self, rec: dict[str, Any]) -> None:
+        """Project number -> id from a cloudresourcemanager Project asset."""
+        data = rec.get("data") or {}
+        number = _num(data.get("projectNumber"))
+        if not number and str(data.get("name", "")).startswith("projects/"):
+            number = data["name"].split("/", 1)[1]
+        if not number:
+            number = rec["name"].rsplit("/", 1)[-1]
+        pid = data.get("projectId")
+        if number and pid:
+            self._number_to_id.setdefault(number, pid)
 
     @staticmethod
     def _ancestor_number(rec: dict[str, Any]) -> str | None:

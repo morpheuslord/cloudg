@@ -27,7 +27,46 @@ _MAX_LOG_GROUPS_FOR_FILTERS = 2000
 _MAX_PROTECTED_RESOURCES = 5000
 
 _ARN_ACCOUNT_RE = re.compile(r"^arn:aws[a-zA-Z-]*:[a-z0-9-]+:[a-z0-9-]*:(\d{12}):")
-_ALARM_RULE_RE = re.compile(r"(?:ALARM|OK|INSUFFICIENT_DATA)\(\s*\"?([^\")]+?)\"?\s*\)")
+# Composite alarm rules reference child alarms as ALARM(name), OK(name) or
+# INSUFFICIENT_DATA(name), optionally quoted. Parsed by a single left to right
+# pass instead of a regular expression: every regex form of this backtracked
+# on hostile rules ("OK(" followed by thousands of spaces, or "OK(" repeated).
+_ALARM_STATES = ("INSUFFICIENT_DATA", "ALARM", "OK")
+
+
+def _alarm_child_name(raw: str) -> str:
+    name = raw.strip()
+    if name.startswith('"'):
+        name = name[1:]
+    if name.endswith('"'):
+        name = name[:-1]
+    name = name.strip()
+    return "" if '"' in name else name
+
+
+def alarm_rule_children(rule: str) -> list[str]:
+    """Child alarm names referenced by a composite alarm rule, in order."""
+    out: list[str] = []
+    i, n = 0, len(rule or "")
+    while i < n:
+        open_at = rule.find("(", i)
+        if open_at < 0:
+            break
+        if not any(rule.endswith(state, 0, open_at) for state in _ALARM_STATES):
+            i = open_at + 1
+            continue
+        j = open_at + 1
+        while j < n and rule[j] not in "()":
+            j += 1
+        if j < n and rule[j] == ")":
+            name = _alarm_child_name(rule[open_at + 1 : j])
+            if name:
+                out.append(name)
+            j += 1
+        i = j
+    return out
+
+
 _ASG_POLICY_RE = re.compile(r"autoScalingGroupName/([^:]+)")
 _AWS_OWNED_DOC_PREFIXES = (
     "AWS-",

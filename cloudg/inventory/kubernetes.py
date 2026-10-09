@@ -169,7 +169,7 @@ class _ClusterMapper:
         self._region = region
         self._account_id = account_id
         self.assets: list[CloudAsset] = []
-        # ns, kind, name, pod labels — matched against service selectors
+        # ns, kind, name, pod labels, matched against service selectors
         self._workloads: list[tuple[str, str, str, dict[str, str]]] = []
 
     def _add(

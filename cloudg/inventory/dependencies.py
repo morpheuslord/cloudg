@@ -61,14 +61,54 @@ _HIERARCHY_TYPES = {AssetType.ORGANIZATION, AssetType.ORG_UNIT, AssetType.CLOUD_
 _STRUCTURAL_EDGES = {EdgeType.CONTAINS.value, EdgeType.PEERING.value}
 
 
-class AssetIndex:
-    """Resolve asset references to asset IDs.
+def _arn_resource_tails(arn: str) -> set[str]:
+    """Short forms of an ARN's resource part a reference may use.
 
-    A reference is tried, in order, as an internal ID, an ARN / resource
-    ID (first asset wins), a unique name and finally a unique ARN tail
-    (the part after the last ``/``). Names and tails shared by several
-    assets are ambiguous and never match. The tables are built once, so
-    resolving every finding of a scan stays linear.
+    For ``arn:aws:rds:us-east-1:123456789012:db:orders`` these are
+    ``db:orders`` and ``orders``; for ``...:instance/i-0web1`` they are
+    ``instance/i-0web1`` and ``i-0web1``; for
+    ``...:function:api-handler`` they are ``function:api-handler`` and
+    ``api-handler``. The resource part and its last ``:`` and ``/``
+    segments are returned. Strings that are not ARNs, and the trivial
+    segments ``""`` and ``"*"``, give nothing.
+    """
+    parts = arn.split(":", 5)
+    if len(parts) < 6 or parts[0] != "arn":
+        return set()
+    resource = parts[5]
+    tails = {resource, resource.rsplit(":", 1)[-1], resource.rsplit("/", 1)[-1]}
+    return {t for t in tails if t and t != "*"}
+
+
+def _unique(table: dict[str, set[str]], ref: str) -> str | None:
+    matches = table.get(ref)
+    return next(iter(matches)) if matches and len(matches) == 1 else None
+
+
+class AssetIndex:
+    """Resolve asset references to asset IDs: the one asset matcher.
+
+    The matching tiers, tried in this order for every reference:
+
+    1. internal ID;
+    2. ARN / resource ID, or an alias given to :meth:`add` (first asset
+       wins);
+    3. unique name;
+    4. unique ARN tail: the part after the last ``/`` (``tails``);
+    5. unique ARN resource-part tail (``arn_parts``): ``db:orders``,
+       ``function:api-handler``, ``instance/i-0web1`` and the last ``:`` or
+       ``/`` segment of the resource part (``orders``, ``api-handler``,
+       ``i-0web1``);
+    6. unique name ignoring letter case (``casefold``).
+
+    Names and tails shared by several assets are ambiguous and never match.
+    Tiers 5 and 6 are off unless asked for, and they are skipped for a
+    reference that is the exact name of more than one asset, so an
+    ambiguous name stays unresolved. With the defaults, :meth:`find`,
+    :meth:`resolve` and :meth:`resolve_finding` behave exactly as the index
+    always has; turning the extra tiers on only resolves references that
+    were unresolved before. The tables are built once, so resolving every
+    finding of a scan stays linear.
     """
 
     def __init__(self, assets: Iterable[CloudAsset] = ()) -> None:
@@ -76,46 +116,123 @@ class AssetIndex:
         self._arns: dict[str, str] = {}
         self._names: dict[str, set[str]] = {}
         self._tails: dict[str, set[str]] = {}
+        self._arn_parts: dict[str, set[str]] = {}
+        self._folded_names: dict[str, set[str]] = {}
         for a in assets:
             self.add(a.id, a.arn, a.name)
 
-    def add(self, asset_id: str, arn: str | None = None, name: str | None = None) -> None:
-        """Index one asset by its ID, ARN, name and ARN tail."""
+    def add(
+        self,
+        asset_id: str,
+        arn: str | None = None,
+        name: str | None = None,
+        *,
+        aliases: Iterable[str] = (),
+    ) -> None:
+        """Index one asset by its ID, ARN, name, ARN tails and ``aliases``.
+
+        ``aliases`` are extra exact references (a KMS alias, a bare key id)
+        matched in the ARN tier: the first asset indexed under one wins.
+        """
         self._ids.add(asset_id)
         if arn:
             self._arns.setdefault(arn, asset_id)
             self._tails.setdefault(arn.rsplit("/", 1)[-1], set()).add(asset_id)
+            for part in _arn_resource_tails(arn):
+                self._arn_parts.setdefault(part, set()).add(asset_id)
+        for alias in aliases:
+            if alias:
+                self._arns.setdefault(alias, asset_id)
         if name:
             self._names.setdefault(name, set()).add(asset_id)
+            self._folded_names.setdefault(name.casefold(), set()).add(asset_id)
 
-    def _lookup(self, refs: Iterable[str | None]) -> str | None:
-        candidates = [r for r in refs if r]
+    def _exact(self, candidates: list[str]) -> str | None:
+        """Tiers 1 and 2: internal ID, then ARN or alias."""
         for ref in candidates:
             if ref in self._ids:
                 return ref
         for ref in candidates:
             if ref in self._arns:
                 return self._arns[ref]
-        for table in (self._names, self._tails):
-            for ref in candidates:
-                matches = table.get(ref)
-                if matches and len(matches) == 1:
-                    return next(iter(matches))
         return None
 
+    def _unique_in(self, table: dict[str, set[str]], refs: Iterable[str]) -> str | None:
+        for ref in refs:
+            found = _unique(table, ref)
+            if found:
+                return found
+        return None
+
+    def _lookup(
+        self,
+        refs: Iterable[str | None],
+        *,
+        tails: bool = True,
+        arn_parts: bool = False,
+        casefold: bool = False,
+    ) -> str | None:
+        candidates = [r for r in refs if r]
+        found = self._exact(candidates) or self._unique_in(self._names, candidates)
+        if not found and tails:
+            found = self._unique_in(self._tails, candidates)
+        if found or not (arn_parts or casefold):
+            return found
+        # The opt-in tiers never pick one of several assets sharing a name
+        loose = [r for r in candidates if r not in self._names]
+        if arn_parts:
+            found = self._unique_in(self._arn_parts, loose)
+        if not found and casefold:
+            found = self._unique_in(self._folded_names, (r.casefold() for r in loose))
+        return found
+
+    def find(
+        self,
+        ref: str | None,
+        *,
+        tails: bool = True,
+        arn_parts: bool = False,
+        casefold: bool = False,
+    ) -> str | None:
+        """ID of the asset ``ref`` names, or ``None`` if unknown or ambiguous.
+
+        Args:
+            ref: An internal ID, ARN / resource ID, alias, name or ARN tail.
+            tails: Try the unique ARN tail after the last ``/`` (tier 4).
+            arn_parts: Try the unique ARN resource-part forms (tier 5):
+                ``db:orders``, ``function:api-handler``, ``instance/i-0web1``,
+                ``orders``.
+            casefold: Finally try a unique name ignoring letter case (tier 6).
+        """
+        return self._lookup((ref,), tails=tails, arn_parts=arn_parts, casefold=casefold)
+
     def resolve(self, ref: str | None) -> str | None:
-        """ID of the asset ``ref`` names, or ``None`` if unknown or ambiguous."""
+        """ID of the asset ``ref`` names: ID, ARN, unique name, unique ARN tail."""
         return self._lookup((ref,))
 
-    def resolve_finding(self, finding: Finding) -> str | None:
-        """ID of the asset a finding affects.
+    def resolve_finding(
+        self,
+        finding: Finding,
+        *,
+        tails: bool = True,
+        arn_parts: bool = False,
+        casefold: bool = False,
+    ) -> str | None:
+        """ID of the asset a finding affects, or ``None``.
 
         Scanner output often puts an ARN or a display name in
         ``resource_id``, so both ``resource_id`` and ``resource_arn`` are
         tried at every tier: ID first, then ARN, then unique name, then
-        unique ARN tail.
+        unique ARN tail, then (when asked for) the ARN resource-part tails
+        and the case-insensitive name. The ontology and the RAG export call
+        this with the defaults.
         """
-        return self._lookup((finding.resource_id, finding.resource_arn))
+        return self._lookup(
+            (finding.resource_id, finding.resource_arn),
+            tails=tails,
+            arn_parts=arn_parts,
+            casefold=casefold,
+        )
 
 
 @dataclass
@@ -167,7 +284,7 @@ class DependencyGraph:
 
     def find(self, ref: str) -> CloudAsset | None:
         """Find an asset by internal ID, ARN / resource ID, unique name or
-        unique ARN tail (see :class:`AssetIndex`)."""
+        unique ARN tail (see :meth:`AssetIndex.resolve`)."""
         if self._index is None:
             self._index = AssetIndex(self.assets.values())
         asset_id = self._index.resolve(ref)
@@ -319,8 +436,8 @@ def cross_account_edges(assets: list[CloudAsset], edges: list[NetworkEdge]) -> l
     return out
 
 
-def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dict[str, Any]:
-    """Which security services run where, and which workloads no scanner covers."""
+def _service_matrix(assets: list[CloudAsset]) -> dict[str, dict[str, dict[str, bool]]]:
+    """``account -> region -> security service -> enabled`` for the service assets."""
     matrix: dict[str, dict[str, dict[str, bool]]] = {}
     for a in assets:
         svc = a.metadata.get("security_service")
@@ -329,7 +446,13 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         acct = a.account_id or "unknown"
         cell = matrix.setdefault(acct, {}).setdefault(a.region, {})
         cell[svc] = cell.get(svc, False) or bool(a.metadata.get("enabled"))
+    return matrix
 
+
+def _unscanned_workloads(
+    assets: list[CloudAsset], edges: list[NetworkEdge]
+) -> list[dict[str, Any]]:
+    """Scannable workloads no enabled vulnerability scanner MONITORS."""
     scanners = {
         a.id
         for a in assets
@@ -339,7 +462,7 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         e.target_id for e in edges if e.edge_type == EdgeType.MONITORS and e.source_id in scanners
     }
     scannable = (AssetType.EC2, AssetType.CONTAINER_REGISTRY, AssetType.LAMBDA_FUNCTION)
-    unscanned = [
+    return [
         {
             "name": a.name,
             "arn": a.arn,
@@ -350,13 +473,24 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         for a in assets
         if a.asset_type in scannable and a.id not in scanned
     ]
+
+
+def _unprotected_entry_points(
+    assets: list[CloudAsset], edges: list[NetworkEdge]
+) -> list[dict[str, Any]]:
+    """Internet-facing load balancers, APIs and CDNs no WAF PROTECTS."""
     protectable = (AssetType.LOAD_BALANCER, AssetType.API_GATEWAY, AssetType.CLOUDFRONT)
     protected = {e.target_id for e in edges if e.edge_type == EdgeType.PROTECTS}
-    unprotected = [
+    return [
         {"name": a.name, "arn": a.arn, "type": a.asset_type.value, "account_id": a.account_id}
         for a in assets
         if a.asset_type in protectable and a.is_internet_exposed and a.id not in protected
     ]
+
+
+def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dict[str, Any]:
+    """Which security services run where, and which workloads no scanner covers."""
+    matrix = _service_matrix(assets)
     gaps = sorted(
         f"{acct}/{region}: {svc}"
         for acct, regions in matrix.items()
@@ -367,6 +501,6 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
     return {
         "services_by_account_region": matrix,
         "gaps": gaps,
-        "workloads_without_vulnerability_scanning": unscanned,
-        "internet_facing_without_waf": unprotected,
+        "workloads_without_vulnerability_scanning": _unscanned_workloads(assets, edges),
+        "internet_facing_without_waf": _unprotected_entry_points(assets, edges),
     }

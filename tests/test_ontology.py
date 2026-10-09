@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 
+import pytest
+
+from cloudg.collectors.aws import AsyncAWSCollector
+from cloudg.collectors.azure import AzureCollector
 from cloudg.graph.ontology import (
     CMP,
     CMR,
@@ -13,7 +18,10 @@ from cloudg.graph.ontology import (
     get_relations_for_group,
     infer_relations,
     infer_asset_relations,
+    iter_asset_relations,
 )
+from cloudg.graph.ontology_rules import kms_key_index
+from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -166,8 +174,8 @@ class TestRelationType:
     """Test the relation type taxonomy."""
 
     def test_total_relation_types(self):
-        """Should have ~62 relation types."""
-        assert len(RelationType) >= 60
+        """64 relation types, as the module docstrings say."""
+        assert len(RelationType) == 64
 
     def test_all_types_have_groups(self):
         """Every relation type must belong to exactly one group."""
@@ -822,3 +830,262 @@ class TestVpcContainmentDirection:
             (RelationType.VPC_CONTAINS_SUBNET, "vnet-1-default")
         ]
         assert infer_asset_relations(subnet, [vnet, subnet]) == []
+
+
+# ── Port relations agree with the reachability port parsing ──
+
+_PORT_RELS = {
+    RelationType.ALL_TRAFFIC,
+    RelationType.ONLY_HTTP,
+    RelationType.ONLY_HTTPS,
+    RelationType.ONLY_SSH,
+    RelationType.ONLY_RDP,
+    RelationType.PORT_RESTRICTED,
+}
+
+
+def _aws_group(*ingress: dict) -> CloudAsset:
+    return CloudAsset(
+        id="sg-asset",
+        arn="arn:aws:ec2:us-east-1:123456789012:security-group/sg-0abc",
+        name="web-sg",
+        asset_type=AssetType.SECURITY_GROUP,
+        provider=CloudProvider.AWS,
+        metadata={"group_id": "sg-0abc", "ingress_rules": list(ingress), "egress_rules": []},
+    )
+
+
+def _aws_rule(protocol: str, low: int | None = None, high: int | None = None) -> dict:
+    rule = {"IpProtocol": protocol, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}
+    if low is not None:
+        rule.update(FromPort=low, ToPort=high if high is not None else low)
+    return rule
+
+
+def _aws_rule_edges(sg: CloudAsset) -> list[NetworkEdge]:
+    collector = AsyncAWSCollector(session=None, region="us-east-1", account_id="123456789012")
+    return asyncio.run(collector._collect_sg_edges([sg]))
+
+
+def _port_rels(edge: NetworkEdge) -> set[RelationType]:
+    return set(infer_relations(edge, {})) & _PORT_RELS
+
+
+class TestPortRelations:
+    @pytest.mark.parametrize(
+        ("rule", "expected"),
+        [
+            (
+                _aws_rule("tcp", 1, 1024),
+                {RelationType.ONLY_SSH, RelationType.ONLY_HTTP, RelationType.ONLY_HTTPS},
+            ),
+            (_aws_rule("tcp", 22), {RelationType.ONLY_SSH}),
+            (_aws_rule("tcp", 8000, 8100), {RelationType.PORT_RESTRICTED}),
+            (_aws_rule("tcp", 0, 65535), {RelationType.ALL_TRAFFIC}),
+            (_aws_rule("-1"), {RelationType.ALL_TRAFFIC}),
+            (_aws_rule("icmp", 8, -1), set()),
+        ],
+        ids=["1-1024", "22", "8000-8100", "0-65535", "all", "icmp"],
+    )
+    def test_aws_collector_rules(self, rule, expected):
+        (edge,) = _aws_rule_edges(_aws_group(rule))
+        assert _port_rels(edge) == expected
+
+    @pytest.mark.parametrize(
+        ("protocol", "ports", "expected"),
+        [
+            ("Tcp", "*", {RelationType.ALL_TRAFFIC}),
+            ("*", "*", {RelationType.ALL_TRAFFIC}),
+            ("Tcp", "3389", {RelationType.ONLY_RDP}),
+            ("Icmp", "*", set()),
+        ],
+    )
+    def test_azure_collector_rules(self, protocol, ports, expected):
+        nsg = CloudAsset(
+            id="nsg", name="nsg", asset_type=AssetType.NSG, provider=CloudProvider.AZURE
+        )
+        rule = {
+            "name": "r",
+            "access": "Allow",
+            "protocol": protocol,
+            "source_address_prefix": "Internet",
+            "destination_port_range": ports,
+        }
+        (edge,) = AzureCollector._rule_edges(nsg, rule, {})
+        rels = set(infer_relations(edge, {nsg.id: nsg}))
+        assert rels & _PORT_RELS == expected
+        assert RelationType.INTERNET_REACHABLE in rels
+        assert RelationType.CIDR_RESTRICTED not in rels
+
+    def test_ports_list_without_port_range_is_used(self):
+        edge = NetworkEdge(
+            source_id="10.0.0.0/8",
+            target_id="sg",
+            edge_type=EdgeType.SECURITY_GROUP_RULE,
+            cidr="10.0.0.0/8",
+            ports=[22, 443],
+        )
+        assert _port_rels(edge) == {RelationType.ONLY_SSH, RelationType.ONLY_HTTPS}
+
+    @pytest.mark.parametrize("source", ["Internet", "*", "Any", "::/0", "0.0.0.0/0"])
+    def test_internet_sources_are_internet_reachable(self, source):
+        edge = NetworkEdge(
+            source_id=source,
+            target_id="nsg",
+            edge_type=EdgeType.SECURITY_GROUP_RULE,
+            cidr=source,
+            port_range="22",
+            protocol="Tcp",
+        )
+        rels = set(infer_relations(edge, {}))
+        assert RelationType.INTERNET_REACHABLE in rels
+        assert RelationType.CIDR_RESTRICTED not in rels
+
+
+class TestContainmentTargetTypes:
+    """The specific containment relations check the target type as well."""
+
+    @pytest.mark.parametrize(
+        ("src_type", "tgt_type"),
+        [
+            (AssetType.EKS_CLUSTER, AssetType.SUBNET),
+            (AssetType.ECS_CLUSTER, AssetType.SECURITY_GROUP),
+            (AssetType.SUBNET, AssetType.ROUTE_TABLE),
+            (AssetType.SUBNET, AssetType.NACL),
+            (AssetType.SUBNET, AssetType.SUBNET),
+        ],
+    )
+    def test_mismatched_target_is_plain_contains(self, src_type, tgt_type):
+        rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+        assert rels == {RelationType.CONTAINS}
+
+    @pytest.mark.parametrize(
+        ("src_type", "tgt_type", "expected"),
+        [
+            (AssetType.EKS_CLUSTER, AssetType.NODE_GROUP, RelationType.CLUSTER_CONTAINS_SERVICE),
+            (
+                AssetType.ECS_CLUSTER,
+                AssetType.CONTAINER_SERVICE,
+                RelationType.CLUSTER_CONTAINS_SERVICE,
+            ),
+            (AssetType.SUBNET, AssetType.RDS_INSTANCE, RelationType.SUBNET_CONTAINS_INSTANCE),
+            (AssetType.SUBNET, AssetType.NAT_GATEWAY, RelationType.SUBNET_CONTAINS_INSTANCE),
+        ],
+    )
+    def test_matching_target_keeps_specific_relation(self, src_type, tgt_type, expected):
+        rels = _rels(_typed("s", src_type), _typed("t", tgt_type), EdgeType.CONTAINS)
+        assert rels == {expected}
+
+
+class TestSecurityGroupAssetTriples:
+    """AWS rule edges end on the security group asset (#25); the triples follow."""
+
+    def test_rule_and_membership_triples_use_the_group_asset(self):
+        sg = _aws_group(_aws_rule("tcp", 22), _aws_rule("tcp", 443))
+        vm = CloudAsset(
+            id="vm-asset", name="web-1", asset_type=AssetType.EC2, provider=CloudProvider.AWS
+        )
+        edges = [
+            *_aws_rule_edges(sg),
+            NetworkEdge(source_id=vm.id, target_id=sg.id, edge_type=EdgeType.ATTACHED_TO),
+        ]
+        g = CloudOntology().build([sg, vm], edges)
+        internet = CMR["0.0.0.0/0"]
+        assert (internet, CMP["INGRESS_ALLOWED"], CMR["sg-asset"]) in g
+        assert (internet, CMP["INTERNET_REACHABLE"], CMR["sg-asset"]) in g
+        assert (internet, CMP["ONLY_SSH"], CMR["sg-asset"]) in g
+        assert (internet, CMP["ONLY_HTTPS"], CMR["sg-asset"]) in g
+        assert (CMR["vm-asset"], CMP["PROTECTED_BY_SG"], CMR["sg-asset"]) in g
+        assert not any("sg-0abc" in str(s) for s in g.subjects())
+
+
+class TestKmsKeyIndex:
+    def test_iter_asset_relations_matches_per_asset_inference(self):
+        key = _kms_key(aliases=["alias/orders"])
+        assets = [*_make_assets(), key, _encrypted_db("alias/orders")]
+        expected = [(a.id, r, o) for a in assets for r, o in infer_asset_relations(a, assets)]
+        assert [(a.id, r, o) for a, r, o in iter_asset_relations(assets)] == expected
+        assert ("orders-db", RelationType.ENCRYPTED_BY_KMS, key.id) in expected
+
+    def test_first_key_wins_a_shared_reference(self):
+        first = _kms_key("key-a", aliases=["alias/shared"])
+        second = _kms_key("key-b", aliases=["alias/shared"])
+        index = kms_key_index([first, second, _encrypted_db("x")])
+        assert index.find("alias/shared", tails=False) == first.id
+        assert index.find("key-b", tails=False) == second.id
+        assert index.find("orders-db", tails=False) is None
+
+
+# ── AssetIndex: the shared asset matcher ──
+
+
+def _indexed(*assets: CloudAsset) -> AssetIndex:
+    return AssetIndex(assets)
+
+
+def _named(aid: str, name: str, arn: str | None = None) -> CloudAsset:
+    return CloudAsset(
+        id=aid, name=name, arn=arn, asset_type=AssetType.OTHER, provider=CloudProvider.AWS
+    )
+
+
+class TestAssetIndex:
+    def test_arn_resource_parts(self):
+        index = _indexed(
+            _named("db", "orders-prod", "arn:aws:rds:us-east-1:1:db:orders"),
+            _named("fn", "handler", "arn:aws:lambda:us-east-1:1:function:api-handler"),
+            _named("vm", "web", "arn:aws:ec2:us-east-1:1:instance/i-0web1"),
+        )
+        cases = {
+            "db:orders": "db",
+            "orders": "db",
+            "function:api-handler": "fn",
+            "api-handler": "fn",
+            "instance/i-0web1": "vm",
+            "i-0web1": "vm",
+        }
+        for ref, expected in cases.items():
+            assert index.find(ref, arn_parts=True) == expected, ref
+        # off by default, so resolve() and find() keep their old answers
+        assert index.find("db:orders") is None
+        assert index.resolve("api-handler") is None
+        assert index.resolve("i-0web1") == "vm"
+
+    def test_shared_arn_part_is_ambiguous(self):
+        index = _indexed(
+            _named("a", "a", "arn:aws:rds:us-east-1:1:db:orders"),
+            _named("b", "b", "arn:aws:rds:eu-west-1:1:db:orders"),
+        )
+        assert index.find("orders", arn_parts=True) is None
+
+    def test_casefold_name_tier(self):
+        index = _indexed(_named("db", "Orders-DB"), _named("x", "dup"), _named("y", "DUP"))
+        assert index.find("orders-db") is None
+        assert index.find("orders-db", casefold=True) == "db"
+        assert index.find("Dup", casefold=True) is None
+
+    def test_ambiguous_name_is_not_rescued_by_the_opt_in_tiers(self):
+        index = _indexed(
+            _named("rds-1", "prod-db", "arn:aws:rds:us-east-1:1:db:prod-db"),
+            _named("rds-2", "prod-db"),
+        )
+        assert index.find("prod-db", arn_parts=True, casefold=True) is None
+
+    def test_exact_tiers_win_over_opt_in_tiers(self):
+        index = _indexed(
+            _named("named", "orders"),
+            _named("db", "other", "arn:aws:rds:us-east-1:1:db:orders"),
+        )
+        assert index.find("orders", arn_parts=True) == "named"
+
+    def test_resolve_finding_with_arn_parts(self):
+        index = _indexed(_named("db", "orders-prod", "arn:aws:rds:us-east-1:1:db:orders"))
+        finding = _scanner_finding("db:orders")
+        assert index.resolve_finding(finding) is None
+        assert index.resolve_finding(finding, arn_parts=True) == "db"
+
+    def test_aliases_are_exact_references(self):
+        index = AssetIndex()
+        index.add("k1", "arn:aws:kms:us-east-1:1:key/k1", aliases=["alias/app"])
+        index.add("k2", "arn:aws:kms:us-east-1:1:key/k2", aliases=["alias/app"])
+        assert index.resolve("alias/app") == "k1"

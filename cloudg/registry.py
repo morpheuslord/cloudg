@@ -1,4 +1,4 @@
-"""Plugin registry — discovers collectors and scanners via entry_points."""
+"""Plugin registry: discovers collectors and scanners via entry_points."""
 
 from __future__ import annotations
 

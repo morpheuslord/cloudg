@@ -7,9 +7,9 @@ from typing import Any
 
 from cloudg.inventory.aws_services._base import rel
 from cloudg.inventory.aws_services.application._common import (
-    _ALARM_RULE_RE,
     _ASG_POLICY_RE,
     ApplicationBase,
+    alarm_rule_children,
 )
 from cloudg.schema.models import AssetType, CloudAsset, EdgeType
 
@@ -71,7 +71,7 @@ class AlarmCollectorsMixin(ApplicationBase):
                     "DEPENDS_ON",
                     description="composite alarm child",
                 )
-                for child in _ALARM_RULE_RE.findall(alarm.get("AlarmRule") or "")
+                for child in alarm_rule_children(alarm.get("AlarmRule") or "")
             ]
             return children, []
         monitored = self._alarm_dimension_targets(

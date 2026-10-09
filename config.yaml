@@ -31,7 +31,7 @@ aws:
   # Auth method 3: AWS CLI profile (plain or SSO)
   profile: null            # AWS CLI profile name (used if no direct keys)
 
-  # Auth method 4: nothing at all — the default chain picks up env vars,
+  # Auth method 4: nothing at all; the default chain picks up env vars,
   # the EC2/ECS instance role (inherited role), or cached SSO credentials.
 
   # Role assumption (optional, layered on top of any method above)
@@ -60,8 +60,8 @@ aws:
     home_region: null      # Control Tower home region (auto-detected)
     map_structure: true    # org / OU / account / SCP / control nodes on the map
 
-  max_retries: 10
-  retry_mode: adaptive     # legacy | standard | adaptive
+  max_retries: 10          # botocore retries per API call after the first attempt
+  retry_mode: adaptive     # legacy | standard | adaptive (botocore client-side rate limiting)
 
 # ── Azure ──
 azure:
@@ -198,6 +198,70 @@ rulesets:
   # rules_dir: ./my-rules  # Override to use your own rulesets; by default the
   #                        # rulesets shipped inside the package are used
   load_external: true
+
+# ── Cloud API throttling resilience ──
+# cloudg paces every cloud API call with shared adaptive token buckets
+# (per provider / account / region / service), halves a scope's rate when
+# the provider throttles and recovers it gradually (AIMD), honours
+# Retry-After, opens a circuit breaker on a scope that stays throttled,
+# and records it in coverage ("throttled") instead of failing the map.
+# Unset limits use built-in defaults at or below each provider's published
+# limits (see cloudg/resilience/limiter.py for the numbers and sources).
+# Where keys apply: "AWS hooks" = every boto3/aioboto3 session cloudg
+# builds; "Azure policy" = every Azure SDK client cloudg builds; "GCP" =
+# Cloud Asset Inventory listings. Rate, burst, breaker, adaptive and
+# retry_budget keys apply to all three. Unknown keys are logged and ignored.
+ratelimit:
+  enabled: true
+  aws:
+    # max_rps: 20                  # leaf bucket per account x region x service (ec2: per action)
+    # burst: 40
+    # account_max_rps: null        # aggregate per account (off by default)
+    # global_max_rps: null         # aggregate for all of AWS (off by default)
+    # max_concurrency: 128         # API calls in flight per account (AWS hooks; botocore's
+                                   # retries of a call reuse its slot)
+    adaptive: true                 # halve on throttle, recover additively
+    # min_rps: 0.2                 # adaptive floor
+    breaker_threshold: 5           # calls failing on throttling (after retries) -> open circuit
+    breaker_cooldown_seconds: 60   # open circuit rejects calls this long, then probes
+    retry_budget: 500              # botocore retries allowed before cloudg stops retrying
+                                   # (each success refunds 0.1; the first two retries
+                                   # of every call are free)
+    # Not used by the AWS hooks (botocore owns per-call retries and timeouts:
+    # aws.max_retries / aws.retry_mode above); only for call_with_resilience:
+    # max_retries: 8
+    # max_backoff_seconds: 60
+    # deadline_seconds: 900
+    services: {}                   # e.g. {ec2: {max_rps: 20, burst: 100}, iam: {max_rps: 5}}
+  azure:
+    # max_rps: 15                  # per subscription x resource provider
+    # account_max_rps: 20          # per subscription (ARM: 250 burst / 25 per s)
+    # account_burst: 200
+    # max_concurrency: 16          # in-flight HTTP requests per subscription (Azure policy)
+    max_retries: 8                 # azure-core retry_total / retry_status
+    max_backoff_seconds: 60        # azure-core retry_backoff_max
+    deadline_seconds: 900          # azure-core RetryPolicy timeout (whole operation)
+    retry_budget: 500
+    breaker_threshold: 5
+    breaker_cooldown_seconds: 60
+    services: {}                   # e.g. {resourcegraph: {max_rps: 3, burst: 15}}
+  gcp:
+    # max_rps: 10
+    # max_concurrency: 16          # concurrent Cloud Asset listings per project / org
+    max_retries: 8                 # consecutive api_core retries per page
+    max_backoff_seconds: 60        # api_core Retry maximum
+    deadline_seconds: 900          # api_core Retry timeout
+    retry_budget: 500
+    breaker_threshold: 5
+    breaker_cooldown_seconds: 60
+    services: {}                   # e.g. {cloudasset.ListAssets: {max_rps: 1.5, burst: 10}}
+  # Guard rails for live collections triggered on demand (MCP / agents)
+  live_cooldown_seconds: 120       # min time between live collections of one scope
+  live_max_concurrent: 1           # concurrent live collections per scope
+  live_max_concurrent_total: 2     # concurrent live collections overall
+  live_caller_max_operations: 0    # per caller per window (0 = unlimited)
+  live_caller_window_seconds: 3600
+  # live_operation_timeout_seconds: 3600  # cancel a live collection running longer (null: no limit)
 
 # ── General ──
 log_file: null             # null = console only; set path for file logging

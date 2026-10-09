@@ -1,4 +1,4 @@
-"""Collection coverage tracking — records which services succeeded/failed."""
+"""Collection coverage tracking: records which services succeeded/failed."""
 
 from __future__ import annotations
 

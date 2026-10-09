@@ -1,0 +1,8 @@
+# cloudg MCP policy profile: read_only
+#
+# The standard data protections, and no side effects outside the in-memory
+# workspace: no live cloud API calls, no scanner processes, no files written.
+name: read_only
+extends: standard
+description: Standard transforms; cloud_access, exec and write_fs denied.
+deny_capabilities: [cloud_access, exec, write_fs]

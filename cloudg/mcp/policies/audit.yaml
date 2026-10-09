@@ -1,0 +1,15 @@
+# cloudg MCP policy profile: audit
+#
+# Read-only plus a complete decision trail: every allowed / denied /
+# rate-limited call is kept in the policy's audit ring buffer and logged on
+# the "cloudg.mcp.audit" logger (argument names + keyed hashes, never values),
+# and every result carries inline provenance annotations.
+name: audit
+extends: read_only
+description: Read-only with a full audit trail and inline provenance annotations.
+audit: true
+audit_size: 10000
+transform_options:
+  annotate:
+    inline: true
+    label_findings: true

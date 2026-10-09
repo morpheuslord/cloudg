@@ -26,6 +26,7 @@ from typing import Any
 from cloudg.inventory.catalogs import asset_type_map, load_catalog
 from cloudg.collectors.gcp import _GCP_ASSET_TYPE_MAP, GCPCollector
 from cloudg.coverage import ServiceStatus
+from cloudg.resilience.errors import describe_error
 from cloudg.inventory.gcp_relations import apply_iam_policies, merge_gcp_principals
 from cloudg.schema.models import AssetType, CloudAsset
 
@@ -73,7 +74,9 @@ class GCPDeepInventoryCollector(GCPCollector):
         if error is not None:
             logger.error("GCP IAM policy search failed for %s: %s", self._scope, error)
             status = ServiceStatus.PARTIAL if policies else ServiceStatus.FAILED
-            self._record("gcp_iam_policies", status, len(policies), str(error), start=start)
+            self._record(
+                "gcp_iam_policies", status, len(policies), describe_error(error), start=start
+            )
         else:
             self._record("gcp_iam_policies", ServiceStatus.SUCCESS, len(policies), start=start)
         created = apply_iam_policies(assets, policies)

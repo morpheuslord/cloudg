@@ -10,9 +10,17 @@ This is the complete reference: every CLI command, the exact input and output fo
 
 The inventory mapper (`cloudg map`, `cloudg deps`, `cloudg.inventory`) has three deeper companion documents:
 
-- [Inventory reference](INVENTORY_REFERENCE.md): the structure of every return value and exported file, field by field, with annotated examples (`CloudAsset`, `NetworkEdge`, relation objects, `InventoryResult`, `summary`, coverage records, dependency trees, blast radius, security coverage, `inventory-map.json`, `inventory-graph.json`, GraphML, `inventory-organization.json`, `asset-map.json`, `compliance-map.json`, `cloudg deps --json`).
-- [Inventory catalog](INVENTORY_CATALOG.md): all 156 asset types with the native resource types mapped to each, the metadata keys and relations each one carries, and the full relationship matrix.
-- [Inventory internals](INVENTORY_INTERNALS.md): how a mapping run works, every module, the 133 AWS collector tasks, the linker's resolution rules, the Azure and GCP extractor frameworks, dependency semantics, catalogs, and recipes for adding collectors, extractors and asset types.
+- [Inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md): the structure of every return value and exported file, field by field, with annotated examples (`CloudAsset`, `NetworkEdge`, relation objects, `InventoryResult`, `summary`, coverage records, dependency trees, blast radius, security coverage, `inventory-map.json`, `inventory-graph.json`, GraphML, `inventory-organization.json`, `asset-map.json`, `compliance-map.json`, `cloudg deps --json`).
+- [Inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md): all 156 asset types with the native resource types mapped to each, the metadata keys and relations each one carries, and the full relationship matrix.
+- [Inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md): how a mapping run works, every module, the 133 AWS collector tasks, the linker's resolution rules, the Azure and GCP extractor frameworks, dependency semantics, catalogs, and recipes for adding collectors, extractors and asset types.
+
+Since 0.6.0 cloudg also runs as an MCP server for AI agents, and paces every cloud API call it makes. Both have their own documents on GitHub:
+
+- [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md): installing and serving the MCP layer, client configuration, transports and protocol versions, mounting it into an existing MCP server, in-process use, middleware, the live tools.
+- [MCP tool reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md): every tool, resource, resource template and prompt, with arguments and result shapes.
+- [MCP privacy](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md): policies, profiles, roles, transforms, detectors and the pseudonym vault.
+- [MCP internals](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_INTERNALS.md): how the layer is built, for contributors.
+- [Rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md): the shared rate limiter, circuit breakers and retries, per-provider wiring, every `ratelimit` key, and the guard on live collections.
 
 Contents:
 
@@ -25,6 +33,8 @@ Contents:
 - [Configuration](#configuration)
 - [Python API](#python-api)
 - [Integration recipes](#integration-recipes)
+- [MCP server](#mcp-server)
+- [Rate limits and throttling](#rate-limits-and-throttling)
 - [Plugin system](#plugin-system)
 - [Authentication](#authentication)
 - [Docker](#docker)
@@ -38,7 +48,8 @@ pip install cloudg            # core
 pip install cloudg[aws]       # + boto3, aioboto3
 pip install cloudg[azure]     # + Azure management SDKs
 pip install cloudg[gcp]       # + google-cloud-asset, google-auth
-pip install cloudg[all]       # every provider SDK
+pip install cloudg[mcp]       # + the official MCP SDK (mcp>=1.30,<3), see MCP server
+pip install cloudg[all]       # every provider SDK and the MCP SDK
 ```
 
 The cloud SDKs are optional extras, pulled in only when you collect from that provider. The core package alone ships the graph engine, the ontology builder, the findings normaliser, the report renderers and `cloudg ingest`. That is enough to aggregate existing scan results on a machine with no cloud access at all.
@@ -213,7 +224,7 @@ cloudg deps --map ./reports                                 # overview
 cloudg deps my-function --direction up --json               # machine-readable
 ```
 
-Each edge is read as "dependent needs dependency": a function needs its role, image, key and the queue that triggers it; an ALB needs the WAF protecting it; a resource needs the stack managing it. `--direction up` shows what an asset needs, `down` what needs it (what breaks or changes with it), `both` the two trees. Without an asset, `deps` prints the most shared dependencies (one KMS key behind forty resources), the largest blast radius, and every cross-account edge. Assets are matched by ARN or resource ID, internal ID, or a unique name.
+Each edge is read as "dependent needs dependency": a function needs its role, image, key and the queue that triggers it; an ALB needs the WAF protecting it; a resource needs the stack managing it. `--direction up` shows what an asset needs, `down` what needs it (what breaks or changes with it), `both` the two trees. Without an asset, `deps` prints the most shared dependencies (one KMS key behind forty resources), the largest blast radius, and every cross-account edge. Assets are matched by ARN or resource ID, internal ID, a unique name, or a unique ARN tail (the part after the last `/`).
 
 ### cloudg scan
 
@@ -326,7 +337,7 @@ All commands write into the output directory (`./reports` by default).
 | `findings.json` | the machine-readable result, structure below |
 | `raw-findings.json` | pre-normalisation findings (from `scan` and `ingest`) |
 | `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | the graph in three formats |
-| `ontology.ttl`, `ontology.jsonld` | RDF ontology, around 62 inferred relation types, SPARQL-queryable |
+| `ontology.ttl`, `ontology.jsonld` | RDF ontology, 64 inferred relation types, SPARQL-queryable |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks, one JSON object per line |
 | `terraform/*.tf.json`, `terraform/import.sh` | Terraform recreation of live infrastructure, 25+ asset types |
 | `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, summary (`cloudg map`) |
@@ -334,7 +345,7 @@ All commands write into the output directory (`./reports` by default).
 | `inventory-organization.json` | AWS Organization / Control Tower topology (`cloudg map --org`) |
 | `asset-map.json`, `compliance-map.json` | inventory overlaid with scanner findings (`cloudg map --findings`) |
 
-The inventory files are specified field by field in the [inventory reference](INVENTORY_REFERENCE.md).
+The inventory files are specified field by field in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md).
 
 `findings.json` has this shape:
 
@@ -374,7 +385,7 @@ The unit every scanner and parser produces.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | `str` | auto-generated UUID |
+| `id` | `str` | auto-generated UUID; reachability findings get a deterministic UUID5 of the rule and the asset's stable key (its ARN, else its asset ID), so the same finding keeps its id from scan to scan |
 | `resource_id` | `str` | internal asset ID or native identifier |
 | `resource_arn` | `str \| None` | cloud-native identifier when known |
 | `severity` | `Severity` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` |
@@ -397,14 +408,14 @@ The unit every scanner and parser produces.
 | `id` | `str` | auto UUID |
 | `arn` | `str \| None` | native identifier |
 | `name` | `str` | |
-| `asset_type` | `AssetType` | 156-value taxonomy covering compute, networking, storage, databases, IAM and identity federation, keys and secrets, logging, containers and Kubernetes, integration, data and ML platforms, DNS and deployment, security services and scanners, organization and governance, hybrid networking, `OTHER`; the full list with what maps to each is in the [inventory catalog](INVENTORY_CATALOG.md#asset-types-by-category) |
+| `asset_type` | `AssetType` | 156-value taxonomy covering compute, networking, storage, databases, IAM and identity federation, keys and secrets, logging, containers and Kubernetes, integration, data and ML platforms, DNS and deployment, security services and scanners, organization and governance, hybrid networking, `OTHER`; the full list with what maps to each is in the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md#asset-types-by-category) |
 | `provider` | `CloudProvider` | `AWS`, `AZURE`, `GCP` |
 | `region` | `str` | `"global"` for regionless resources |
 | `account_id` | `str \| None` | |
 | `tags` | `dict[str, str]` | |
 | `metadata` | `dict[str, Any]` | normalised extra attributes; inventory assets also carry declared `relations` and identifier `aliases` |
 | `collected_at` | `datetime` | when the asset was built |
-| `is_internet_exposed` | `bool` | set by the collector or the graph analysis |
+| `is_internet_exposed` | `bool` | set by the collector; the reachability analysis marks the graph nodes it reaches and reports them as findings, but does not change the asset |
 | `raw_data` | `dict[str, Any]` | raw API payload, never serialised |
 | `display_id` | computed `str` | `arn` or `id` |
 
@@ -434,7 +445,7 @@ Directed edge between two asset IDs (`source_id`, `target_id`); direction always
 | Workload | `INVOKES`, `USES_IMAGE`, `LOGS_TO` |
 | Security and governance | `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS` |
 
-What each one means, its typical endpoints and how it counts for dependency analysis is in the [inventory reference](INVENTORY_REFERENCE.md#6-edge-types-and-direction); every observed source type → relationship → target type combination is in the [relationship matrix](INVENTORY_CATALOG.md#relationship-matrix).
+What each one means, its typical endpoints and how it counts for dependency analysis is in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md#6-edge-types-and-direction); every observed source type → relationship → target type combination is in the [relationship matrix](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md#relationship-matrix).
 
 ### ComplianceResult
 
@@ -546,8 +557,37 @@ report:
 rulesets:
   rules_dir: null               # defaults to the packaged cloudg/rules/
 
+ratelimit:                      # cloud API throttling resilience (0.6.0)
+  enabled: true
+  aws:                          # azure and gcp take the same keys
+    max_rps: null               # null = built-in (AWS 20, Azure 15, GCP 10 per service)
+    burst: null
+    account_max_rps: null       # per account / subscription / project (Azure 20)
+    account_burst: null         # (Azure 200)
+    global_max_rps: null        # everything this process sends to the provider
+    global_burst: null
+    max_concurrency: null       # requests in flight per account (AWS 128, Azure 16, GCP 16)
+    adaptive: true              # halve on throttling, recover additively
+    min_rps: null
+    breaker_threshold: 5
+    breaker_cooldown_seconds: 60
+    max_retries: 8              # Azure SDK retries, GCP retries per page (AWS: aws.max_retries)
+    max_backoff_seconds: 60
+    deadline_seconds: 900
+    retry_budget: 500           # retries per provider, all SDKs, refilled by successes
+    services: {}                # {ec2: {max_rps: 10, burst: 50}, "ec2.DescribeImages": {...}}
+    live_cooldown_seconds: null
+  live_cooldown_seconds: 120    # guard on live collections triggered through MCP
+  live_max_concurrent: 1
+  live_max_concurrent_total: 2
+  live_caller_max_operations: 0
+  live_caller_window_seconds: 3600
+  live_operation_timeout_seconds: 3600  # cancel a live collection after this (null: no limit)
+
 concurrency_limit: 5
 ```
+
+`aws.max_retries` and `aws.retry_mode` configure botocore's own retries. They were accepted but ignored before 0.6.0; now they are applied to every AWS client. botocore counts `max_retries` after the first attempt, so the default of 10 allows up to 11 attempts per call. The `ratelimit` section is explained under [Rate limits and throttling](#rate-limits-and-throttling).
 
 In code, the same structure is `CloudGConfig`, a Pydantic model:
 
@@ -625,7 +665,7 @@ print(inventory.summary)                     # services, types, regions, exposur
 inventory.export("./reports")                # inventory-map.json / .graphml / graph
 ```
 
-`InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions`, `organization` (the discovered topology, when mapped) and `unresolved_references`, plus a computed `summary` (totals, per-service/type/region/account breakdowns, edge types and relationships, cross-account edges, external accounts, security service gaps, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json`, `inventory-dependencies.json` and, for an organization, `inventory-organization.json`; `InventoryResult.load(dir_or_file)` reads a map back.
+`InventoryResult` carries `assets`, `edges`, `coverage`, `providers`, `regions`, `organization` (the discovered topology, when mapped), `unresolved_references` and `throttling` (the run's throttling telemetry, or `None` when no API pushed back), plus a computed `summary` (totals, per-service/type/region/account breakdowns, edge types and relationships, cross-account edges, external accounts, security service gaps, internet-exposed and unlinked counts). `export(dir)` writes `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json`, `inventory-dependencies.json` and, for an organization, `inventory-organization.json`; `InventoryResult.load(dir_or_file)` reads a map back.
 
 Interdependency questions go through `DependencyGraph`:
 
@@ -676,7 +716,7 @@ Your own collectors can declare relationships the same way the built-in ones do,
 
 The deep collectors are public too, when you want single-region, single-account control: `AWSDeepInventoryCollector(session, region="us-east-1", account_id=None, tagging_sweep=True, **options)` (keyword options `is_primary_region`, `services`, `exclude_services`, `kubernetes`, `kubernetes_timeout`, `iam_resource_edges`, `max_images_per_repository`, `stack_resources`, `cloud_control`, `cloud_control_types`, `cloud_control_exclude`, `cloud_control_concurrency`; an unknown option raises `TypeError`), `AzureDeepInventoryCollector(credential, subscription_id, graph_client_factory=None, use_resource_graph=True)` and `GCPDeepInventoryCollector(project_id, credentials=None, **options)` (keyword options `organization_id`, `scope`, `project_filter`, `skip_asset_types`, `page_size`, `include_iam`, `client`, `coverage`, `timeout`, `link_locally`) all implement the standard `collect()` / `collect_edges()` / `run()` collector interface. Their assets carry declared relations; pass them through `RelationshipLinker` for the typed edges.
 
-Every structure above, from `summary` to the dependency tree, is specified field by field in the [inventory reference](INVENTORY_REFERENCE.md).
+Every structure above, from `summary` to the dependency tree, is specified field by field in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md).
 
 ### The deeper toolkit
 
@@ -684,9 +724,10 @@ Modules the pipeline uses internally that are equally useful standalone:
 
 | Module | Class | What it does from code |
 |---|---|---|
-| `cloudg.graph.builder` | `GraphBuilder` | `build(assets, edges)` → NetworkX DiGraph; `find_attack_paths(src, dst)`, `find_lateral_movement_paths()`, `compute_centrality()` for blast-radius scoring; `to_d3_json()`, `to_cytoscape_json()`, `save_graphml()` / `load_graphml()` |
-| `cloudg.graph.reachability` | `ReachabilityAnalyzer`, `finding_id` | BFS from the internet over network-flow edges only (security group / NACL ingress rules, routes, peering, load balancer targets, filter attachments, VPC and subnet placement; never IAM edges); `generate_findings()` returns exposure findings with deterministic ids; `compute_blast_radius(node)` follows every edge type |
-| `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers ~62 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
+| `cloudg.graph.builder` | `GraphBuilder` | `build(assets, edges)` → NetworkX DiGraph, with parallel security group, NACL and internet-exposure rules between the same two nodes merged into one edge (`port_range` and `protocol` become comma lists); `find_attack_paths(src, dst)`, `find_lateral_movement_paths()`, `compute_centrality()` for blast-radius scoring; `to_d3_json()`, `to_cytoscape_json()`, `save_graphml()` / `load_graphml()` |
+| `cloudg.graph.reachability` | `ReachabilityAnalyzer`, `network_flow_graph`, `finding_id`, `asset_key` | BFS from the internet over network-flow edges only. Entry points are `0.0.0.0/0`, `::/0` and the Azure `Internet`, `Any` and `*` sources. The walk follows `INTERNET_EXPOSED`, ingress `SECURITY_GROUP_RULE` and `NACL_RULE` edges, `ROUTE`, `PEERING` and `LOAD_BALANCER_TARGET` source to target; `ATTACHED_TO` backwards into a security group, NSG or NACL and forwards from a network interface or Elastic IP; `CONTAINS` only from a VPC, VNet or subnet. It never follows IAM edges, and not `INVOKES` either, so a function behind a public API gateway is not flagged. Security groups, NSGs, NACLs and target groups are hops: they are marked exposed but get no exposure finding of their own. `generate_findings()` returns exposure and sensitive-port findings with deterministic ids; `flow_hops()`, `flow_successors()`, `internet_entry_points()` and `network_flow_graph()` expose the same walk; `compute_blast_radius(node)` follows every edge type |
+| `cloudg.graph.ports` | `parse_port_ranges`, `edge_port_ranges`, `port_in_ranges`, `is_internet_source` | the port and edge rules the builder, the reachability analysis and the ontology share: `port_range` strings parsed into numeric ranges, filter rule and egress checks, internet sources |
+| `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers 64 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
 | `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
 | `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
@@ -698,6 +739,65 @@ Modules the pipeline uses internally that are equally useful standalone:
 | `cloudg.inventory.kubernetes` | `collect_eks_workloads`, `KubernetesReader` | read-only Kubernetes object mapping for EKS clusters |
 | `cloudg.inventory.catalogs` | `load_catalog`, `asset_type_map` | the YAML reference catalogs with `$CLOUDG_CATALOG_DIR` overlays |
 | `cloudg.registry` | `PluginRegistry` | entry-point discovery of collector and scanner plugins |
+
+### MCP layer API
+
+`cloudg.mcp` exposes the inventory, graph, findings, compliance and ontology to AI agents over the Model Context Protocol; the [MCP server](#mcp-server) chapter shows it in use. Importing it needs nothing beyond cloudg's own dependencies. Its exports:
+
+| Name | What it is |
+|---|---|
+| `CloudGMCPLayer` | The layer: registry, workspace, policy and middleware. `call_tool`, `read_resource`, `get_prompt`, `complete`, `list_*` and `*_wire` methods, `register_into(server)`, `serve(transport)` |
+| `default_registry()`, `Registry` | The built-in catalog, and the container for your own tools (`@registry.tool`, `@registry.resource`, `@registry.resource_template`, `@registry.prompt`) |
+| `Workspace`, `Dataset` | Loaded datasets, the active one, the allowed directories |
+| `Policy`, `available_profiles()` | Access rules, rate limits and transform pipelines; the seven built-in profile names |
+| `Principal`, `ToolContext`, `CallInfo` | Who is calling, what a tool receives, what middleware sees |
+| `register_into(layer, server)`, `build_server(layer, flavor)`, `export_definitions(layer)` | Mount into an MCP SDK or fastmcp server, build a standalone server object, or get framework-free wire definitions plus async handlers |
+| `Pipeline`, `TokenVault`, `TransformContext`, `build_transform()` | The transform machinery and the pseudonym vault |
+| `ToolSpec`, `ResourceSpec`, `ResourceTemplateSpec`, `PromptSpec`, `PromptArgument`, `ToolAnnotations`, `Capability`, `Sensitivity`, `Icon` | Primitive specifications |
+| `ToolResult`, `TextContent`, `ImageContent`, `EmbeddedResource`, `ResourceLink`, `TextResourceContents`, `ContentAnnotations`, `PromptMessage`, `PromptResult` | Results and content blocks |
+| `MCPLayerError`, `AccessDeniedError`, `InvalidArgumentsError`, `NotFoundError`, `RateLimitedError` | Errors, each with its JSON-RPC code |
+
+`CloudGMCPLayer` also takes all of its keyword arguments as one `LayerOptions` object (`from cloudg.mcp.layer import LayerOptions`; `CloudGMCPLayer(options=LayerOptions(policy="strict", prefix="cloudg_"))`), and an unknown keyword raises `TypeError`. A tool handler declares its arguments as parameters after `ctx`, or, when there are many, as one pydantic model in a parameter named `args` (`def my_tool(ctx, args: MyArgs)`); both forms produce the same flat input schema.
+
+The server side lives in `cloudg.mcp.server` (`serve`, `serve_async`, `ServeOptions`, `create_layer_from_options`; `serve_async(layer, transport, options=ServeOptions(...))` takes the serve settings as one object), the CLI in `cloudg.mcp.cli` (`mcp_group`, `main`, `client_config`), the middleware in `cloudg.mcp.middleware` (`AuditLogMiddleware`, `MetricsMiddleware`, `CachingMiddleware`, `ConcurrencyLimitMiddleware`, `RetryMiddleware`). Every signature is in the [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md).
+
+### Resilience API
+
+`cloudg.resilience` is the throttling layer every collector goes through, and you can put your own cloud calls through it too ([Rate limits and throttling](#rate-limits-and-throttling)):
+
+| Name | What it does |
+|---|---|
+| `call_with_resilience(fn, *args, scope=..., policy=None, **kwargs)` | Async. Breaker, deadline, shared rate limit, bulkhead, then the call; retries throttling and transient errors with decorrelated jitter, never sooner than Retry-After. Sync functions run in a worker thread |
+| `call_with_resilience_sync(...)` | The blocking variant, for worker threads |
+| `@resilient(scope, policy=None)` | Decorator form; `scope` may be a callable that receives the function's arguments |
+| `Scope(provider, account, region, service, operation)`, `RetryPolicy(...)` | Where a call goes; per-call retry bounds |
+| `classify(exc)`, `ErrorKind`, `retry_after(exc)`, `describe_error(exc)`, `is_throttle(exc)` | Provider-aware error classification (THROTTLED, TRANSIENT, FATAL) and the server's requested delay |
+| `classify_strict(exc)`, `is_provider_answer(exc)` | Classification from error codes, exception classes and HTTP statuses only, never message text (`None` when they say nothing); whether the error is an answer from the provider rather than a local failure |
+| `get_governor()`, `configure(config)`, `reset_governor()` | The process-wide limiter, breakers, budgets and stats |
+| `stats_scope()`, `current_stats()`, `ResilienceStats` | Per-run throttling telemetry; `get_governor().summary(stats)` is what `InventoryResult.throttling` holds |
+| `LiveOperationGuard`, `GuardSettings`, `operation_key()`, `LiveOperationRejected` (`CooldownActive`, `LiveOperationBusy`, `CallerQuotaExceeded`), `LiveOperationTimeout` | Single-flight, concurrency caps, cooldowns, caller quotas and an operation timeout for on-demand collections |
+| `RateLimiter`, `TokenBucket`, `LimitSpec`, `ProviderLimits`, `Bulkhead`, `CircuitBreaker`, `BreakerRegistry`, `DEFAULT_LIMITS` | The building blocks |
+| `CircuitOpenError`, `DeadlineExceededError`, `RetryBudgetExhaustedError` | cloudg's own errors, carrying `retry_after` |
+
+```python
+import asyncio
+
+import boto3
+from cloudg.resilience import Scope, call_with_resilience, stats_scope
+
+
+async def main():
+    ec2 = boto3.client("ec2", region_name="eu-west-1")
+    scope = Scope("aws", "123456789012", "eu-west-1", "ec2", "DescribeVpcs")
+    with stats_scope() as stats:
+        vpcs = await call_with_resilience(ec2.describe_vpcs, scope=scope)
+    print(len(vpcs["Vpcs"]), stats.messages())
+
+
+asyncio.run(main())
+```
+
+`cloudg.retry.with_retry` keeps its signature and retries what it always did. It now also retries provider throttling that `classify_strict` recognises from an error code, exception class or HTTP status (Azure 429s, GCP `ResourceExhausted`), and never sleeps less than the server's Retry-After, capped at its `max_delay`. It does not retry cloudg's own resilience errors, a plain HTTP 500, or an error whose message merely mentions rate limiting.
 
 ### PipelineResult
 
@@ -871,6 +971,197 @@ if critical:
     sys.exit(1)
 ```
 
+## MCP server
+
+cloudg 0.6.0 ships a [Model Context Protocol](https://modelcontextprotocol.io) layer, `cloudg.mcp`. An AI agent (Claude Desktop, Claude Code, Cursor, VS Code, or your own) can load an inventory map or a findings report, search and inspect assets, walk the relationship graph, ask for attack paths and blast radius, review findings and compliance gaps, query the ontology, and, when the policy allows it, start live collections. Every request goes through one policy that decides who may call what and transforms the data on its way out: secrets redacted, attacker-controllable text fenced, identifiers pseudonymised under the stricter profiles.
+
+The full guide is [MCP.md](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md); this chapter is the summary.
+
+### Installing
+
+```bash
+pip install cloudg            # the layer, the CLI and the dependency-free native server
+pip install "cloudg[mcp]"     # adds the official mcp SDK: the sdk flavor and register_into(...)
+pip install fastmcp           # only to serve with fastmcp or mount into a fastmcp server
+```
+
+The `mcp` extra pins `mcp>=1.30,<3`; this release was verified with mcp 1.30.0 and 2.3.0, and with fastmcp 2.14.7, 3.4.8 and 4.0.11. Mounting into an SDK `MCPServer` (mcp 2.x) or `FastMCP` (mcp 1.x) goes through private SDK attributes that a future release can rename, so applications that use that path should pin the minor version they tested (for example `mcp>=2.3,<2.4`). Mounting into the SDK's low-level `Server` and the native server do not depend on those attributes. `cloudg[all]` includes the `mcp` extra.
+
+### Serving it
+
+```bash
+# stdio, for a desktop client that launches the server itself
+cloudg mcp serve --dataset prod=./reports/inventory-map.json
+
+# print the client configuration to paste (claude-desktop, claude-code, cursor, vscode)
+cloudg mcp config --client claude-desktop --dataset prod=./reports/inventory-map.json
+
+# streamable HTTP on 127.0.0.1:8765/mcp, with a bearer token mapped to a role
+cloudg mcp serve --transport http --auth-token env:CLOUDG_MCP_TOKEN:analyst
+```
+
+The same commands are available as `cloudg-mcp ...` and `python -m cloudg.mcp ...`. The server speaks both MCP protocol eras: the handshake versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25, and the stateless 2026-07-28. `--flavor` picks the implementation: `native` (standard library only), `sdk` (the official SDK, needs `cloudg[mcp]`), `fastmcp`, or `auto`, which uses the SDK when it is installed and the native server otherwise. HTTP binds to loopback and checks `Origin` and `Host` by default; when binding anything else, pass `--auth-token`, `--allowed-host` and `--allowed-origin`.
+
+### Embedding it
+
+Mount every tool, resource and prompt into an MCP server you already run. Here an mcp 2.x `MCPServer` with one tool of its own; an mcp 1.x `FastMCP`, a low-level `Server` and a `fastmcp.FastMCP` work the same way:
+
+```python
+import asyncio
+
+from mcp import Client
+from mcp.server.mcpserver import MCPServer
+
+from cloudg.mcp import CloudGMCPLayer
+
+server = MCPServer("platform-tools")
+
+
+@server.tool()
+def ticket_count(team: str) -> int:
+    """The host's own tool."""
+    return 7
+
+
+layer = CloudGMCPLayer(policy="standard")
+layer.workspace.load("inventory/inventory-map.json", "prod")
+layer.register_into(server, prefix="cloudg_")
+
+
+async def main() -> None:
+    async with Client(server) as client:
+        tools = (await client.list_tools()).tools
+        print(len(tools), [t.name for t in tools][:3])
+        res = await client.call_tool("cloudg_count_assets", {"group_by": "provider"})
+        print(res.structured_content["groups"])
+
+
+asyncio.run(main())
+```
+
+```text
+74 ['ticket_count', 'cloudg_workspace_status', 'cloudg_list_datasets']
+{'AWS': 36, 'AZURE': 5, 'GCP': 3}
+```
+
+Mount after the host has registered its own handlers: the host's tools stay, and names cloudg does not own still reach the host. Or skip MCP on the wire and call the layer in-process:
+
+```python
+import asyncio
+from pathlib import Path
+
+from cloudg.mcp import CloudGMCPLayer, Workspace
+
+
+async def main() -> None:
+    layer = CloudGMCPLayer(policy="strict", workspace=Workspace(allowed_roots=[Path(".")]))
+    await layer.call_tool("load_dataset", {"path": "inventory/inventory-map.json", "name": "prod"})
+    res = await layer.call_tool("find_assets", {"internet_exposed": True, "limit": 2,
+                                                "fields": ["name", "type", "arn"]})
+    print(res.is_error, res.structured["total"], res.structured["items"])
+
+
+asyncio.run(main())
+```
+
+```text
+False 6 [{'id': 'res-04ddd3e8be', 'name': 'res-04ddd3e8be', 'type': 'EC2', 'arn': 'arn:aws:ec2:us-east-1:934619913841:instance/res-c6e5dce4cb'}, ...]
+```
+
+Under `strict` the names, account ids and ARNs come back pseudonymised; passing a pseudonym back as an argument works, because the input pipeline reverses it. Set `CLOUDG_MCP_VAULT_KEY` to keep pseudonyms stable across restarts (without it they change with every process, as in this run). A policy with `vault.path` also saves the vault when the server shuts down, so issued pseudonyms survive a restart. Both examples ran against the synthetic estate in `tests/mcp/fixtures/sample_estate.py`.
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `cloudg mcp serve` | Run the server: `--transport stdio/http/sse`, `--host`, `--port`, `--path`, `--flavor`, `--auth-token`, `--allowed-origin`, `--allowed-host`, `--cache-ttl`, `--max-concurrency`, `--log-level` |
+| `cloudg mcp tools` / `resources` / `prompts` | List what a principal sees under a policy (`--role`, `--principal-id`, `--json` for the exact wire definitions) |
+| `cloudg mcp call TOOL --args JSON` | Call a tool in-process through the full policy; exit status 1 on a tool error |
+| `cloudg mcp read URI` | Read a resource in-process |
+| `cloudg mcp config` | Print a client configuration snippet |
+
+All of them except `config` accept `--policy`, `--dataset [NAME=]PATH` (repeatable), `--prefix`, `--include-category` / `--exclude-category`, `--include-tool` / `--exclude-tool`, `--read-only` (drops tools that touch the cloud, run processes or write files), `--audit-log FILE`, `--timeout` and `--registry MODULE:ATTR`.
+
+### Catalog
+
+The built-in catalog has 74 tools, 13 resources, 11 resource templates and 11 prompts. The CLI adds `cloudg://metrics`. Tools by category:
+
+| Category | Tools | What they do |
+|---|---|---|
+| `graph` | 17 | neighbours, paths, exposure, attack and lateral paths, dependencies, blast radius, centrality, sub-graphs |
+| `inventory` | 11 | search, inspect and aggregate assets, accounts, regions, tags, coverage, organization |
+| `findings` | 10 | browse, summarise, prioritise, suppress and ingest security findings |
+| `workspace` | 8 | load, select, snapshot, diff and unload datasets |
+| `ontology` | 6 | RDF ontology, read-only SPARQL, semantic neighbourhoods, RAG chunks |
+| `compliance` | 5 | framework posture, controls and gaps |
+| `live` | 5 | the four live tools (`map_inventory`, `collect_assets`, `run_scanners`, `run_pipeline`) and `rate_limit_status` |
+| `privacy` | 5 | policy, pseudonym vault and data-handling controls |
+| `meta` | 4 | server capabilities and cloudg's vocabulary |
+| `export` | 3 | Terraform recreation, reports, ontology files |
+
+The 11 prompts are packaged workflows such as `security_posture_review`, `attack_surface_report`, `blast_radius_assessment`, `compliance_gap_analysis` and `incident_triage`. Every primitive is documented in [MCP_TOOLS.md](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md).
+
+The `cloudg://docs` resources let an agent read this reference and the inventory reference. The wheel ships both files inside the package (`cloudg/_docs/`), so they work from a plain `pip install`; a source checkout reads them from `docs/`, and `CLOUDG_DOCS_DIR` points elsewhere. The sdist includes every `docs/*.md`.
+
+### Policies and privacy
+
+`--policy` takes a built-in profile, a YAML or JSON file, or inline JSON; the default is `standard`.
+
+| Profile | In short | Tools listed for the local user |
+|---|---|---|
+| `open` | no restrictions, no transforms; for trusted local use | 74 |
+| `standard` | redacts secrets, drops private keys, masks credential ids, fences attacker-controllable text, refuses secrets in arguments; `reveal_token` only for `admin` and `privacy-admin` | 73 |
+| `strict` | `standard` plus pseudonymised identifiers, IPs, e-mails and tag values; hides the live, export and RESTRICTED tools (among them `sparql_query`, `subgraph_export` and the text graph and ontology exports); rate limits on every tool | 61 |
+| `read_only` | `standard` without cloud access, processes or file writes | 66 |
+| `airgapped` | `standard` without cloud access or processes | 69 |
+| `audit` | `read_only` with every call logged and risk annotations inline | 66 |
+| `soc-analyst` | a role-based example: analysts get pseudonymised data, a `lead` role sees it in clear | 62; `analyst` 60, `lead` 70 |
+
+Policies can extend each other, carry per-role rules, sensitivity ceilings and per-principal rate limits, and compose transforms (`redact`, `sanitize`, `project`, `annotate`, `substitute`, `alias`, `regex_replace`, `rename_keys`, `template`, `guard_secrets`, `depseudonymize`). The pseudonym vault (`TokenVault`) derives format-preserving pseudonyms with HMAC-SHA256. Every profile, key and transform is in [MCP_PRIVACY.md](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md). `reveal_token` (for the roles allowed to reveal) turns a pseudonym, or an alias a `substitute` or `alias` transform introduced, back into the real value.
+
+### Live tools
+
+`map_inventory`, `collect_assets`, `run_scanners` and `run_pipeline` call cloud APIs with the server's own credentials, whoever the caller is, so restrict them to trusted roles. The `strict`, `read_only`, `airgapped`, `audit` and `soc-analyst` profiles hide them, and `--read-only` drops them. Before any cloud call, a credential preflight (`preflight=true` by default, at most 25 seconds) checks that the configured AWS, Azure and GCP credentials work, so a missing profile fails in seconds instead of after every collector has retried.
+
+Then the call goes through the live operation guard. Identical concurrent calls share one run; a scope collected in the last two minutes is refused with `retry_after_seconds` and a pointer to a loaded live dataset that covers the same providers; at most one live operation runs per scope and two overall. A refusal is a tool error with code -31029 and `reason` `cooldown`, `busy` or `quota`. Principals with the `admin` or `operator` role can pass `force=true` to skip the cooldown. An operation still running after `ratelimit.live_operation_timeout_seconds` (default 3600) is cancelled and frees its scope. The answer of every live tool includes a `throttling` block when a cloud API pushed back during the run. `rate_limit_status` and the resource `cloudg://ratelimit` show the cooldowns, the operations in flight and the throttling state without touching any cloud API. The guard's settings are the `ratelimit.live_*` keys described in the next chapter.
+
+## Rate limits and throttling
+
+Since 0.6.0 every cloud API call cloudg makes goes through `cloudg.resilience`, one process-wide governor shared by all clients:
+
+- Token buckets per account x region x service (per API action for EC2; per subscription and resource provider on Azure; per project or organization and RPC on GCP), with defaults at or below each provider's published limits: AWS 20 rps per service and 20 per EC2 action, Azure 20 rps per subscription and 3 per user for Resource Graph, GCP 1.5 rps for Cloud Asset `ListAssets`.
+- Adaptive rates: a throttled scope's rate is halved for every client using it, paused for the server's Retry-After, and recovered by 5% of the ceiling every 5 seconds without throttling.
+- Concurrency caps per account (`max_concurrency`: 128 requests in flight on AWS, 16 on Azure and GCP).
+- Circuit breakers per service, or per API action for EC2: after 5 consecutive calls that still failed after retries, calls are skipped for 60 seconds, then one probe goes through. A throttled `DescribeSubnets` does not block `DescribeVpcs`.
+- Retries with decorrelated jitter that never undercut Retry-After, bounded by attempts, a per-call deadline and a per-provider retry budget that every SDK draws from. botocore keeps doing the retrying on AWS (`aws.retry_mode`, `aws.max_retries`), azure-core on Azure (an explicit `RetryPolicy` with cloudg's retries, backoff cap and timeout), google-api-core on GCP (a `Retry` capped per page); all of them report back to the governor. The first two retries of every call are free; after that each retry draws on the budget, and when it is spent the call gives up.
+
+Throttling never fails a map. A service that stayed throttled is recorded in coverage as FAILED or PARTIAL with an error starting `throttled:`, the rest of the map continues, and the run's numbers are attached to the result:
+
+```python
+result = InventoryMapper(config).map_inventory_sync()
+result.throttling                    # None, or totals / messages / skipped / scopes / breakers / slowed_buckets
+result.summary["throttling"]         # totals, messages, skipped
+```
+
+`inventory-map.json` carries the full block under `throttling`, and `cloudg map` logs each message, for example `Throttling: aws/123456789012/us-east-1/ec2: throttled 11x, slowed to 5.0 rps, 10 retries, 1 calls gave up`.
+
+Everything is configured under `ratelimit` (structure under [Configuration](#configuration)). Unset limits fall back to the built-ins, and service overrides merge into them:
+
+```yaml
+ratelimit:
+  aws:
+    account_max_rps: 40                       # all services of one account together
+    services:
+      resourcegroupstaggingapi: {max_rps: 1, burst: 2}
+      ec2.DescribeImageAttribute: {max_rps: 5, burst: 10}
+  azure:
+    services:
+      resourcegraph: {max_rps: 1, burst: 5}
+  live_cooldown_seconds: 600                  # MCP live collections, per scope
+```
+
+A misspelled key anywhere under `ratelimit` is logged as `Unknown config key ratelimit.aws.max_rpss is ignored` and the rest still loads. `ratelimit.enabled: false` turns it all off (botocore's own retries remain), and `ratelimit.<provider>.enabled: false` does it for one provider. The [rate limits and throttling guide](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md) has the architecture, the per-provider wiring, the built-in limits with their sources, every key with its default and where it takes effect, example output of a throttled run, the Python API and tuning advice.
+
 ## Plugin system
 
 Custom collectors and scanners register through setuptools entry points; no core changes needed. `PluginRegistry` (in `cloudg.registry`) discovers them at startup and falls back to the built-ins for any name not overridden.
@@ -908,7 +1199,7 @@ myscanner = "my_package.scanner:MyScanner"
 mycloud = "my_package.collector:MyCollector"
 ```
 
-After `pip install`, the name is available in `scanners.enabled` and `--scanners`. Collectors follow the base interface in `cloudg/collectors/base.py`. A collector plugin's assets join the inventory map like the built-in ones: declare what each asset talks to in `metadata["relations"]` and extra identifiers in `metadata["aliases"]`, and the relationship linker resolves them (see [Inventory internals](INVENTORY_INTERNALS.md#156-declare-relations-from-your-own-collector-or-plugin)). If your scanner emits a stable check ID in `source_finding_id`, you can add it to `rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
+After `pip install`, the name is available in `scanners.enabled` and `--scanners`. Collectors follow the base interface in `cloudg/collectors/base.py`. A collector plugin's assets join the inventory map like the built-in ones: declare what each asset talks to in `metadata["relations"]` and extra identifiers in `metadata["aliases"]`, and the relationship linker resolves them (see [Inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md#156-declare-relations-from-your-own-collector-or-plugin)). If your scanner emits a stable check ID in `source_finding_id`, you can add it to `cloudg/rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
 
 ## Authentication
 

@@ -1,4 +1,4 @@
-"""CloudG programmatic API — integration-ready entry point.
+"""CloudG programmatic API: the integration-ready entry point.
 
 Designed for embedding CloudG in larger systems. Provides:
 - Single `CloudGEngine` class for full pipeline control
@@ -40,35 +40,18 @@ from cloudg.schema.models import (
     ScanResult,
 )
 
+# resolve_iac_dirs lives with the scanner runs; re-exported here (public API)
+from cloudg.api_scanners import ScannerRunsMixin, resolve_iac_dirs
+
+__all__ = [
+    "AnalysisResult",
+    "CloudGEngine",
+    "CollectionResult",
+    "PipelineResult",
+    "resolve_iac_dirs",
+]
+
 logger = logging.getLogger(__name__)
-
-
-def resolve_iac_dirs(
-    iac_dir: str | None,
-    config_dirs: list[str] | None,
-    terraform_dir: str | Path | None = None,
-) -> tuple[list[str], str | None]:
-    """Resolve which directories the IaC scanners (Checkov, Trivy fs) target.
-
-    Priority: explicit dir -> configured dirs -> the generated Terraform
-    recreation of the live infrastructure. There is deliberately no fallback
-    to "." any more: scanning whatever directory cloudg happens to run from
-    is not a scan of the cloud, and its zero findings read like a clean bill
-    of health.
-
-    Returns:
-        (dirs, source) where source is "cli", "config", "terraform", or
-        None when there is nothing for the IaC scanners to target.
-    """
-    if iac_dir:
-        return [iac_dir], "cli"
-    if config_dirs:
-        return list(config_dirs), "config"
-    if terraform_dir:
-        tf_path = Path(terraform_dir)
-        if tf_path.is_dir() and any(tf_path.glob("*.tf.json")):
-            return [str(tf_path)], "terraform"
-    return [], None
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +88,7 @@ class AnalysisResult:
 
 @dataclass
 class PipelineResult:
-    """Complete pipeline output — single object for downstream consumption.
+    """Complete pipeline output: a single object for downstream consumption.
 
     This is the primary return type for `CloudGEngine.run_pipeline()`.
     Designed for easy serialisation and integration with larger systems.
@@ -184,7 +167,7 @@ OnError = Callable[[str, Exception], None]  # phase name, exception
 # ---------------------------------------------------------------------------
 
 
-class CloudGEngine:
+class CloudGEngine(ScannerRunsMixin):
     """Integration-ready programmatic API for CloudG.
 
     Provides fine-grained control over the pipeline for embedding in
@@ -199,7 +182,7 @@ class CloudGEngine:
     def __init__(self, config: CloudGConfig) -> None:
         self.config = config
 
-        # Event hooks — set these before calling run_pipeline()
+        # Event hooks: set these before calling run_pipeline()
         self.on_collection_complete: OnCollectionComplete | None = None
         self.on_scan_complete: OnScanComplete | None = None
         self.on_finding: OnFinding | None = None
@@ -272,7 +255,7 @@ class CloudGEngine:
         findings: list[Finding] | None = None,
         tagging_sweep: bool | None = None,
     ) -> "Any":
-        """Map the complete infrastructure inventory — no scanners involved.
+        """Map the complete infrastructure inventory; no scanners are involved.
 
         Runs the deep inventory collectors (full network fabric plus
         catch-all sweeps: AWS Resource Groups Tagging API, Azure ARM
@@ -371,204 +354,6 @@ class CloudGEngine:
 
         return all_findings
 
-    def _run_reachability_analysis(
-        self, assets: list[CloudAsset], edges: list[NetworkEdge]
-    ) -> list[Finding]:
-        """Graph-based reachability analysis for the scanning phase."""
-        try:
-            from cloudg.graph.builder import GraphBuilder
-            from cloudg.graph.reachability import ReachabilityAnalyzer
-
-            builder = GraphBuilder()
-            graph = builder.build(assets, edges)
-            analyzer = ReachabilityAnalyzer(graph)
-            return analyzer.generate_findings()
-        except Exception as exc:
-            logger.error("Graph analysis failed: %s", exc)
-            self._emit_error("graph_analysis", exc)
-            return []
-
-    def _resolve_scan_iac_dirs(
-        self,
-        iac_dir: str | None,
-        scanner_list: list[str],
-        assets: list[CloudAsset],
-        edges: list[NetworkEdge],
-        out: Path,
-    ) -> list[str]:
-        """Resolve the IaC directories the scanners should target.
-
-        When nothing is configured but Terraform recreation is enabled,
-        generate it now and scan that: the IaC scanners then audit the live
-        infrastructure via its Terraform representation instead of an
-        unrelated local directory.
-        """
-        tf_dir: str | None = None
-        if (
-            not iac_dir
-            and not self.config.scanners.iac_directories
-            and self.config.terraform.enabled
-        ):
-            tf_dir = self.config.terraform.output_dir or str(out / "terraform")
-            try:
-                from cloudg.renderers.terraform_export import TerraformExporter
-
-                TerraformExporter(output_dir=tf_dir).export(assets, edges)
-            except Exception as exc:
-                logger.error("Terraform export for IaC scanning failed: %s", exc)
-                self._emit_error("terraform", exc)
-                tf_dir = None
-
-        resolved_iac_dirs, iac_source = resolve_iac_dirs(
-            iac_dir, self.config.scanners.iac_directories, tf_dir
-        )
-        if iac_source == "terraform":
-            logger.info("IaC scanners target the Terraform recreation at %s", resolved_iac_dirs[0])
-        elif not resolved_iac_dirs and "checkov" in scanner_list:
-            logger.warning(
-                "Skipping Checkov: no IaC directory configured. "
-                "Pass iac_dir, set scanners.iac_directories, or enable terraform "
-                "so the recreated infrastructure can be scanned."
-            )
-        return resolved_iac_dirs
-
-    def _run_prowler(self, prov: str, profile: str | None, out: Path) -> list[Finding]:
-        from cloudg.scanners.prowler import ProwlerScanner
-
-        region = self.config.aws.regions[0] if self.config.aws.regions else None
-        scanner = ProwlerScanner(
-            provider=prov,
-            profile=profile,
-            output_dir=str(out / "prowler" / prov),
-            extra_args=self.config.scanners.prowler_extra_args or [],
-            aws_access_key_id=self.config.aws.access_key_id if prov == "aws" else None,
-            aws_secret_access_key=self.config.aws.secret_access_key if prov == "aws" else None,
-            aws_region=region if prov == "aws" else None,
-        )
-        return scanner.run()
-
-    def _run_scoutsuite(self, prov: str, profile: str | None, out: Path) -> list[Finding]:
-        from cloudg.scanners.scoutsuite import ScoutSuiteScanner
-
-        scanner = ScoutSuiteScanner(
-            provider=prov,
-            profile=profile if prov == "aws" else None,
-            report_dir=str(out / "scoutsuite" / prov),
-            extra_args=self.config.scanners.scoutsuite_extra_args or [],
-        )
-        return scanner.run()
-
-    def _run_checkov(self, target_dir: str) -> list[Finding]:
-        from cloudg.scanners.checkov import CheckovScanner
-
-        scanner = CheckovScanner(
-            target_dir=target_dir,
-            frameworks=self.config.scanners.checkov_frameworks or None,
-            extra_args=self.config.scanners.checkov_extra_args or [],
-        )
-        return scanner.run()
-
-    def _run_trivy(self, image_list: list[str]) -> list[Finding]:
-        from cloudg.scanners.trivy import TrivyScanner
-
-        scanner = TrivyScanner(extra_args=self.config.scanners.trivy_extra_args or [])
-        return scanner.scan_images(image_list)
-
-    def _run_iam_linter(self, assets: list[CloudAsset]) -> list[Finding]:
-        from cloudg.scanners.iam_linter import IAMLinter
-
-        linter = IAMLinter()
-        return linter.analyze_policies(assets)
-
-    def _submit_scanner_jobs(
-        self,
-        executor: Any,
-        scanner_list: list[str],
-        assets: list[CloudAsset],
-        resolved_iac_dirs: list[str],
-        resolved_images: list[str],
-        profile: str | None,
-        out: Path,
-    ) -> dict[Any, str]:
-        """Submit one job per enabled scanner target; returns future -> name."""
-        future_to_name: dict[Any, str] = {}
-
-        if "prowler" in scanner_list:
-            for prov in self.config.providers:
-                future_to_name[executor.submit(self._run_prowler, prov, profile, out)] = (
-                    f"prowler-{prov}"
-                )
-
-        if "scoutsuite" in scanner_list:
-            for prov in self.config.providers:
-                future_to_name[executor.submit(self._run_scoutsuite, prov, profile, out)] = (
-                    f"scoutsuite-{prov}"
-                )
-
-        if "checkov" in scanner_list:
-            for d in resolved_iac_dirs:
-                future_to_name[executor.submit(self._run_checkov, d)] = f"checkov-{d}"
-
-        if "trivy" in scanner_list and resolved_images:
-            future_to_name[executor.submit(self._run_trivy, resolved_images)] = "trivy"
-
-        # IAM linter always runs if assets exist
-        if assets:
-            future_to_name[executor.submit(self._run_iam_linter, assets)] = "iam"
-
-        return future_to_name
-
-    def _run_scanners_parallel(
-        self,
-        scanner_list: list[str],
-        assets: list[CloudAsset],
-        resolved_iac_dirs: list[str],
-        resolved_images: list[str],
-        profile: str | None,
-        out: Path,
-    ) -> list[Finding]:
-        """Run all enabled scanners concurrently and collect their findings."""
-        import concurrent.futures
-
-        scanner_findings: list[Finding] = []
-        max_workers = len(scanner_list) + len(self.config.providers) + 1
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
-            future_to_name = self._submit_scanner_jobs(
-                executor, scanner_list, assets, resolved_iac_dirs, resolved_images, profile, out
-            )
-
-            for future in concurrent.futures.as_completed(future_to_name):
-                name = future_to_name[future]
-                try:
-                    findings = future.result(timeout=self.config.scanners.timeout_seconds)
-                    scanner_findings.extend(findings)
-                    logger.info("[%s] %d findings", name, len(findings))
-                except concurrent.futures.TimeoutError:
-                    logger.error(
-                        "[%s] timed out after %ds", name, self.config.scanners.timeout_seconds
-                    )
-                    self._emit_error(name, TimeoutError(f"{name} timed out"))
-                except Exception as exc:
-                    logger.error("[%s] failed: %s", name, exc)
-                    self._emit_error(name, exc)
-
-        return scanner_findings
-
-    def _emit_scan_results(self, all_findings: list[Finding]) -> None:
-        """Emit per-finding and scan-complete callbacks."""
-        if self.on_finding:
-            for f in all_findings:
-                try:
-                    self.on_finding(f)
-                except Exception:
-                    logger.debug("Event hook raised; ignoring", exc_info=True)
-
-        if self.on_scan_complete:
-            try:
-                self.on_scan_complete(all_findings)
-            except Exception:
-                logger.debug("Event hook raised; ignoring", exc_info=True)
-
     # ------------------------------------------------------------------
     # Ingest: use existing scanner outputs instead of running scanners
     # ------------------------------------------------------------------
@@ -592,18 +377,7 @@ class CloudGEngine:
         from cloudg.ingest import ingest_reports as _ingest
 
         findings = _ingest(reports)
-
-        if self.on_finding:
-            for f in findings:
-                try:
-                    self.on_finding(f)
-                except Exception:
-                    logger.debug("Event hook raised; ignoring", exc_info=True)
-        if self.on_scan_complete:
-            try:
-                self.on_scan_complete(findings)
-            except Exception:
-                logger.debug("Event hook raised; ignoring", exc_info=True)
+        self._emit_scan_results(findings)
         return findings
 
     def normalise_findings(
@@ -627,13 +401,13 @@ class CloudGEngine:
         reports: dict[str, list[str | Path]],
         output_dir: str | Path = "./reports",
     ) -> PipelineResult:
-        """Run the cloudg pipeline on existing scanner outputs — no cloud
-        access and no scanner binaries needed.
+        """Run the cloudg pipeline on existing scanner outputs.
 
-        Phases: ingest -> normalise -> reports (JSON + HTML). Collection
-        does not run, so graph/ontology/Terraform outputs that need live
-        assets are empty; combine with `collect()` + `analyze()` when
-        cloud credentials are available.
+        Needs no cloud access and no scanner binaries. Phases: ingest,
+        normalise, reports (JSON + HTML). Collection does not run, so
+        graph/ontology/Terraform outputs that need live assets are empty;
+        combine with `collect()` + `analyze()` when cloud credentials are
+        available.
 
         Returns:
             PipelineResult with findings, scan_result, and report paths.
@@ -652,27 +426,10 @@ class CloudGEngine:
             scan_result = self.normalise_findings(findings)
             all_findings = scan_result.findings
         except Exception as exc:
-            logger.error("Normalisation failed: %s", exc)
-            errors.append(f"normalisation: {exc}")
-            self._emit_error("normalisation", exc)
+            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
 
         self._emit_phase_start("reporting")
-        report_paths: dict[str, Path] = {}
-        if scan_result:
-            try:
-                from cloudg.renderers.json_export import JSONExporter
-
-                exporter = JSONExporter(output_dir=str(out))
-                report_paths["json"] = Path(exporter.export(scan_result))
-
-                from cloudg.renderers.html_report import HTMLReportGenerator
-
-                html_gen = HTMLReportGenerator(output_dir=str(out))
-                report_paths["html"] = Path(html_gen.generate(scan_result))
-            except Exception as exc:
-                logger.error("Report generation failed: %s", exc)
-                errors.append(f"reporting: {exc}")
-                self._emit_error("reporting", exc)
+        report_paths = self._write_reports(scan_result, out, errors) if scan_result else {}
 
         return PipelineResult(
             findings=all_findings,
@@ -681,6 +438,37 @@ class CloudGEngine:
             duration_ms=int((time.time() - start) * 1000),
             errors=errors,
         )
+
+    def _record_phase_error(
+        self, phase: str, label: str, exc: Exception, errors: list[str]
+    ) -> None:
+        """Log a failed pipeline phase, keep it in ``errors`` and emit it."""
+        logger.error("%s: %s", label, exc)
+        errors.append(f"{phase}: {exc}")
+        self._emit_error(phase, exc)
+
+    def _write_reports(
+        self,
+        scan_result: ScanResult,
+        out: Path,
+        errors: list[str],
+        graph_json: dict[str, Any] | None = None,
+    ) -> dict[str, Path]:
+        """Write the JSON and HTML reports; a failure is recorded in ``errors``."""
+        report_paths: dict[str, Path] = {}
+        try:
+            from cloudg.renderers.json_export import JSONExporter
+
+            exporter = JSONExporter(output_dir=str(out))
+            report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
+
+            from cloudg.renderers.html_report import HTMLReportGenerator
+
+            html_gen = HTMLReportGenerator(output_dir=str(out))
+            report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+        except Exception as exc:
+            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+        return report_paths
 
     def run_from_reports_sync(
         self,
@@ -840,12 +628,9 @@ class CloudGEngine:
     async def run_pipeline(self, output_dir: str | Path = "./reports") -> PipelineResult:
         """Run the complete CloudG pipeline.
 
-        Phases:
-        1. Collection (multi-provider, multi-region)
-        2. Scanning (reachability, IAM linting)
-        3. Analysis (ontology, RAG, Terraform)
-        4. Normalisation
-        5. Report generation
+        Phases: 1. collection (multi-provider, multi-region), 2. scanning
+        (reachability, IAM linting), 3. analysis (ontology, RAG, Terraform),
+        4. normalisation, 5. report generation.
 
         Returns:
             PipelineResult with all outputs.
@@ -877,19 +662,26 @@ class CloudGEngine:
             edges=collection.edges,
             findings=all_findings,
             scan_result=scan_result,
-            graph_nodes=analysis.graph_nodes,
-            graph_edges=analysis.graph_edges,
-            ontology_triples=analysis.ontology_triples,
-            rag_chunks_path=analysis.rag_chunks_path,
-            terraform_paths=analysis.terraform_paths,
-            attack_paths=analysis.attack_paths,
-            providers_scanned=collection.providers_scanned,
-            regions_scanned=collection.regions_scanned,
-            coverage=collection.coverage,
             report_paths=report_paths,
             duration_ms=int((time.time() - start) * 1000),
             errors=errors,
+            **self._pipeline_outputs(collection, analysis),
         )
+
+    @staticmethod
+    def _pipeline_outputs(collection: CollectionResult, analysis: AnalysisResult) -> dict[str, Any]:
+        """Collection coverage and analysis outputs carried into a PipelineResult."""
+        return {
+            "graph_nodes": analysis.graph_nodes,
+            "graph_edges": analysis.graph_edges,
+            "ontology_triples": analysis.ontology_triples,
+            "rag_chunks_path": analysis.rag_chunks_path,
+            "terraform_paths": analysis.terraform_paths,
+            "attack_paths": analysis.attack_paths,
+            "providers_scanned": collection.providers_scanned,
+            "regions_scanned": collection.regions_scanned,
+            "coverage": collection.coverage,
+        }
 
     def _normalise_pipeline_findings(
         self,
@@ -915,9 +707,7 @@ class CloudGEngine:
             scan_result.edges = collection.edges
             all_findings = scan_result.findings
         except Exception as exc:
-            logger.error("Normalisation failed: %s", exc)
-            errors.append(f"normalisation: {exc}")
-            self._emit_error("normalisation", exc)
+            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
         return scan_result, all_findings
 
     def _generate_pipeline_reports(
@@ -929,29 +719,18 @@ class CloudGEngine:
     ) -> dict[str, Path]:
         """Generate JSON and HTML reports (with graph JSON) for the pipeline."""
         self._emit_phase_start("reporting")
-        report_paths: dict[str, Path] = {}
-        if scan_result:
-            try:
-                from cloudg.graph.builder import GraphBuilder
+        if not scan_result:
+            return {}
+        try:
+            from cloudg.graph.builder import GraphBuilder
 
-                builder = GraphBuilder()
-                builder.build(collection.assets, collection.edges)
-                graph_json = builder.to_d3_json()
-
-                from cloudg.renderers.json_export import JSONExporter
-
-                exporter = JSONExporter(output_dir=str(out))
-                report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
-
-                from cloudg.renderers.html_report import HTMLReportGenerator
-
-                html_gen = HTMLReportGenerator(output_dir=str(out))
-                report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
-            except Exception as exc:
-                logger.error("Report generation failed: %s", exc)
-                errors.append(f"reporting: {exc}")
-                self._emit_error("reporting", exc)
-        return report_paths
+            builder = GraphBuilder()
+            builder.build(collection.assets, collection.edges)
+            graph_json = builder.to_d3_json()
+        except Exception as exc:
+            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+            return {}
+        return self._write_reports(scan_result, out, errors, graph_json=graph_json)
 
     # ------------------------------------------------------------------
     # Sync wrapper

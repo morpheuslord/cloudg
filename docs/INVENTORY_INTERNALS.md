@@ -98,8 +98,9 @@ Companion documents:
 | `mapper.py` | `InventoryMapper` (orchestration, discovery, linking, findings overlay), `deduplicate`, `add_account_hierarchy`. |
 | `mapper_result.py` | `InventoryResult` (summary, analysis, export, load) and `_service_of`. |
 | `linker_index.py` | `IdentifierIndex`: identifier registration, scoped resolution, identifier variants, foreign-account detection. |
-| `linker.py` | `RelationshipLinker(IdentifierIndex)`: the three linking passes, external placeholders, unresolved bookkeeping. |
-| `dependencies.py` | `DEPENDENCY_DIRECTION`, `DependencyGraph`, `DependencyLink`, `cross_account_edges`, `security_coverage`. |
+| `linker.py` | `RelationshipLinker(RuleLinksMixin, IdentifierIndex)`: the three linking passes, external placeholders, unresolved bookkeeping. |
+| `linker_rules.py` | `RuleLinksMixin`: the provider-aware rules of pass 2 (`_link_rules`). |
+| `dependencies.py` | `AssetIndex` (the asset matcher shared with the ontology and RAG export), `DEPENDENCY_DIRECTION`, `DependencyGraph`, `DependencyLink`, `cross_account_edges`, `security_coverage`. |
 | `aws_deep.py` | `AWSDeepInventoryCollector`, `DeepInventoryOptions`, network fabric collectors, Tagging API sweep, three-tier dedupe in `collect()`. |
 | `aws_deep_tasks.py` | `SERVICE_FAMILIES`, `GLOBAL_TASKS`, `DEEP_TASK_METHODS`, `select_tasks`, `asset_type_from_arn`. |
 | `aws_services/` | The AWS service collector mixins ([5.6](#56-aws-service-modules)). |
@@ -125,7 +126,7 @@ Companion documents:
 | `cloudg/collectors/gcp.py`, `gcp_assets.py` | `GCPCollector` (Cloud Asset Inventory), record → asset building, firewall evaluation, internet edges. |
 | `cloudg/collectors/multi.py` | `MultiAccountCollector`: providers × accounts × regions, role assumption, primary region, coverage. |
 | `cloudg/cli_inventory.py` | `cloudg map` and `cloudg deps`, registered in `cloudg/cli.py`. |
-| `cloudg/api.py` | `CloudGEngine.map_inventory()` / `map_inventory_sync()`. |
+| `cloudg/api.py` | `CloudGEngine.map_inventory()` / `map_inventory_sync()`. The engine's scanner runs live in `cloudg/api_scanners.py`. |
 | `cloudg/config.py` | `InventoryConfig`, `AWSOrganizationConfig`, Azure / GCP inventory options. |
 | `cloudg/schema/models.py` | `AssetType`, `EdgeType`, `CloudAsset`, `NetworkEdge`. |
 | `cloudg/coverage.py` | `CollectionCoverage`, `ServiceCoverage`, `ServiceStatus`. |
@@ -469,23 +470,23 @@ without its JSON key / version suffix).
 ### 5.6 AWS service modules
 
 What each module collects, the asset types it creates, and the `(edge, relationship)` pairs it
-declares (`-` = no relationship). Generated from the source; see the
+declares (`none` = no asset type or no relationship). Generated from the source; see the
 [catalog](INVENTORY_CATALOG.md) for the metadata keys of each type.
 
 **`aws_services (top level)`**
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services._base` | helpers | — | `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `INVOKES`/`TRIGGERED_BY` |
-| `aws_services._policy_grants` | helpers | — | `GRANTS_ACCESS`/`READS_FROM` |
+| `aws_services._base` | helpers | none | `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `INVOKES`/`TRIGGERED_BY` |
+| `aws_services._policy_grants` | helpers | none | `GRANTS_ACCESS`/`READS_FROM` |
 | `aws_services.identity` | `iam` | `IAM_GROUP`, `IAM_POLICY`, `IAM_ROLE`, `IAM_USER`, `IDENTITY_PROVIDER`, `INSTANCE_PROFILE` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `IAM_POLICY_ATTACHMENT`, `IAM_TRUST`/`CROSS_ACCOUNT_TRUST`, `IAM_TRUST`/`ROLE_ASSUMES_ROLE`, `REFERENCES`/`PERMISSION_BOUNDARY_LIMITS` |
-| `aws_services.cloudcontrol` | `cloud_control` | `OTHER` | — |
+| `aws_services.cloudcontrol` | `cloud_control` | `OTHER` | none |
 
 **`application`**
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.application._common` | helpers | — | `ASSUMES_ROLE`/`RUNS_ON`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`READS_FROM` |
+| `aws_services.application._common` | helpers | none | `ASSUMES_ROLE`/`RUNS_ON`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`READS_FROM` |
 | `aws_services.application.alarms` | `cloudwatch_alarms` | `ALARM` | `INVOKES`/`INVOKES`, `INVOKES`/`SCALES_WITH`, `MONITORS`/`MONITORED_BY`, `REFERENCES`/`DEPENDS_ON` |
 | `aws_services.application.backup` | `backup_plans`, `backup_vaults` | `BACKUP_PLAN`, `BACKUP_VAULT` | `MANAGES`/`BACKUP_TO`, `REFERENCES`/`BACKUP_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS` |
 | `aws_services.application.batch` | `batch` | `BATCH_ENVIRONMENT`, `JOB_DEFINITION`, `JOB_QUEUE` | `LOGS_TO`/`LOGS_TO`, `MANAGES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`RUNS_ON`, `USES_IMAGE`/`RUNS_ON` |
@@ -511,7 +512,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.data_ml._common` | helpers | — | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
+| `aws_services.data_ml._common` | helpers | none | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
 | `aws_services.data_ml.analytics` | `emr`, `emr_serverless`, `athena` | `BIG_DATA_CLUSTER`, `QUERY_WORKGROUP` | `ASSUMES_ROLE`/`RUNS_ON`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`RUNS_ON`, `REFERENCES`/`WRITES_TO`, `USES_IMAGE`/`RUNS_ON` |
 | `aws_services.data_ml.bedrock` | `bedrock` | `AI_AGENT`, `AI_GUARDRAIL`, `KNOWLEDGE_BASE`, `LOG_SINK` | `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `PROTECTS`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
 | `aws_services.data_ml.databases` | `rds_proxies`, `rds_global_clusters`, `memorydb`, `dax` | `AURORA_CLUSTER`, `CACHE_CLUSTER`, `DATABASE_PROXY` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`, `LOAD_BALANCER_TARGET`/`SERVES_TRAFFIC_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`REPLICATES_TO`, `REFERENCES`/`WRITES_TO` |
@@ -519,7 +520,7 @@ declares (`-` = no relationship). Generated from the source; see the
 | `aws_services.data_ml.glue_etl` | helpers | `DATA_CATALOG`, `ETL_JOB`, `EVENT_RULE` | `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `INVOKES`/`TRIGGERED_BY`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
 | `aws_services.data_ml.lakeformation` | `lakeformation` | `DATA_CATALOG` | `ASSUMES_ROLE`/`RUNS_ON`, `GOVERNS`/`COMPLIANCE_GOVERNS`, `GRANTS_ACCESS`/`POLICY_ALLOWS_ACTION` |
 | `aws_services.data_ml.messaging` | `msk`, `amazon_mq` | `MESSAGE_BROKER` | `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`REPLICATES_TO` |
-| `aws_services.data_ml.registry` | `ecr_public` | `CONTAINER_REGISTRY` | — |
+| `aws_services.data_ml.registry` | `ecr_public` | `CONTAINER_REGISTRY` | none |
 | `aws_services.data_ml.sagemaker` | `sagemaker` | `ML_ENDPOINT`, `ML_MODEL`, `ML_WORKSPACE` | `ASSUMES_ROLE`/`RUNS_ON`, `ATTACHED_TO`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO`, `USES_IMAGE`/`RUNS_ON` |
 | `aws_services.data_ml.serverless_data` | `opensearch_serverless`, `redshift_serverless` | `DATA_WAREHOUSE`, `SEARCH_DOMAIN` | `ASSUMES_ROLE`/`RUNS_ON`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM` |
 | `aws_services.data_ml.transfer` | `transfer_family`, `datasync`, `fsx` | `DATA_TRANSFER`, `FILE_SYSTEM`, `IDENTITY_USER` | `ASSUMES_ROLE`/`RUNS_ON`, `ATTACHED_TO`, `CONTAINS`, `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`READS_FROM`, `REFERENCES`/`WRITES_TO` |
@@ -528,7 +529,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.governance._common` | helpers | — | `GRANTS_ACCESS` |
+| `aws_services.governance._common` | helpers | none | `GRANTS_ACCESS` |
 | `aws_services.governance.cognito` | `cognito_user_pools`, `cognito_identity_pools` | `IDENTITY_POOL`, `USER_POOL` | `ASSUMES_ROLE`/`ROLE_ASSUMES_ROLE`, `ASSUMES_ROLE`/`RUNS_ON`, `INVOKES`/`INVOKES`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS` |
 | `aws_services.governance.data_protection` | `kms`, `secrets_manager`, `dynamodb` | `DYNAMODB_TABLE`, `KMS_KEY`, `SECRET` | `GRANTS_ACCESS`, `INVOKES`/`ROTATES_SECRET`, `REFERENCES`/`DEPENDS_ON`, `REFERENCES`/`ENCRYPTED_BY_KMS`, `REFERENCES`/`REPLICATES_TO`, `REFERENCES`/`STREAMS_TO` |
 | `aws_services.governance.iam_extras` | `iam_saml_providers`, `iam_access_keys`, `rolesanywhere` | `ACCESS_KEY`, `IDENTITY_PROVIDER`, `PERMISSION_SET` | `ASSUMES_ROLE`/`ROLE_ASSUMES_ROLE`, `CONTAINS`, `IAM_POLICY_ATTACHMENT`/`ROLE_HAS_POLICY`, `IAM_TRUST`/`ROLE_ASSUMES_ROLE`, `REFERENCES`/`DEPENDS_ON` |
@@ -543,7 +544,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.network_ext.__init__` | `cloudfront` | — | — |
+| `aws_services.network_ext.__init__` | `cloudfront` | none | none |
 | `aws_services.network_ext.apigateway` | `apigateway_authorizers`, `apigateway_vpc_links`, `apigateway_domains` | `AUTHORIZER`, `CUSTOM_DOMAIN`, `VPC_LINK` | `ASSUMES_ROLE`/`RUNS_ON`, `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `INVOKES`/`INVOKES`, `LOAD_BALANCER_TARGET`/`SERVES_TRAFFIC_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `REFERENCES`/`DEPENDS_ON`, `ROUTE`/`SERVES_TRAFFIC_TO` |
 | `aws_services.network_ext.cloudfront` | `cloudfront_deep` | `CLOUDFRONT`, `EDGE_FUNCTION` | `INVOKES`/`INVOKES`, `LOGS_TO`/`LOGS_TO`, `REFERENCES`/`CERTIFICATE_SECURES`, `ROUTE`/`SERVES_TRAFFIC_TO` |
 | `aws_services.network_ext.direct_connect` | `direct_connect`, `direct_connect_gateways` | `DIRECT_CONNECT` | `ATTACHED_TO`, `CONTAINS`, `ROUTE`/`TRANSIT_ROUTED` |
@@ -570,7 +571,7 @@ declares (`-` = no relationship). Generated from the source; see the
 
 | Module | `_collect_*` methods | Asset types | Declared edge / relationship |
 |---|---|---|---|
-| `aws_services.security._common` | helpers | — | `MONITORS`/`MONITORED_BY` |
+| `aws_services.security._common` | helpers | none | `MONITORS`/`MONITORED_BY` |
 | `aws_services.security.detection` | `guardduty`, `securityhub`, `inspector2`, `macie`, `detective` | `DATA_SECURITY_SCANNER`, `SECURITY_HUB`, `THREAT_DETECTOR`, `VULNERABILITY_SCANNER` | `ASSUMES_ROLE`/`RUNS_ON`, `MONITORS`/`MONITORED_BY`, `MONITORS`/`READS_FROM` |
 | `aws_services.security.network_protection` | `wafv2`, `network_firewall`, `shield` | `DDOS_PROTECTION`, `NETWORK_FIREWALL`, `WAF_WEB_ACL` | `CONTAINS`/`SUBNET_CONTAINS_INSTANCE`, `PROTECTS`/`PROTECTED_BY_NACL`, `PROTECTS`/`PROTECTED_BY_WAF`, `REFERENCES`/`DEPENDS_ON` |
 | `aws_services.security.posture` | `config`, `access_analyzer`, `cloudtrail` | `ACCESS_ANALYZER`, `CLOUDTRAIL`, `CONFIG_RECORDER` | `ASSUMES_ROLE`/`RUNS_ON`, `LOGS_TO`/`LOGS_TO`, `LOGS_TO`/`STREAMS_TO`, `REFERENCES`/`ENCRYPTED_BY_KMS` |
@@ -771,7 +772,7 @@ run (failures are logged at debug level):
 1. **Declared relations** (`_link_declared`). For each relation: parse `edge` (unknown →
    `REFERENCES`), resolve `target` with the asset as context, fall back to an external account,
    else record as unresolved. `reverse` swaps source and target. Properties are copied.
-2. **Provider rules** (`_link_rules`), for metadata conventions that predate declared relations
+2. **Provider rules** (`_link_rules`, in `linker_rules.py`), for metadata conventions that predate declared relations
    or are shared by many collectors:
    - `security_groups[]`, `nsg_id`, `vpc_config.SecurityGroupIds` → `ATTACHED_TO / PROTECTED_BY_SG`;
    - `subnet_id`, `vpc_config.SubnetIds` → subnet `CONTAINS / SUBNET_CONTAINS_INSTANCE`;
@@ -1011,7 +1012,10 @@ networks.
 - **`deduplicate(assets, edges)`**: keyed on `arn`. The first copy is kept unless it came from a
   sweep / placeholder (`discovered_via`) and the new one did not, in which case they swap.
   `relations` and `aliases` are unioned onto the kept copy, `is_internet_exposed` is OR-ed, and
-  edges are re-pointed to the kept copy and deduplicated. This is what merges an S3 bucket seen
+  edges are re-pointed to the kept copy. An edge is dropped only when it became a self-loop or an
+  exact repeat of an earlier one: same endpoints, `edge_type`, `port_range`, `ports`,
+  `protocol`, `cidr` and `direction`. Parallel security group, NACL and internet-exposure rules
+  for different ports or protocols are kept. This is what merges an S3 bucket seen
   from every region, an account seen as an organization member and as a trust principal, or an
   Azure subscription seen by the hierarchy and by the subscription collector.
 - **`add_account_hierarchy(assets, edges)`**: one `CLOUD_ACCOUNT` per `(provider, account_id)`,
@@ -1067,10 +1071,21 @@ to `covered_types` so the sweep skips it.
 ## 14. Graph, ontology and viewer integration
 
 - `GraphBuilder.build(assets, edges)` adds `account_id` to node attributes and `relationship` /
-  `description` to edge attributes; endpoints that are not assets become `EXTERNAL` nodes.
+  `description` to edge attributes; endpoints that are not assets become `EXTERNAL` nodes. The
+  graph keeps one edge per source and target: parallel `SECURITY_GROUP_RULE`, `NACL_RULE` and
+  `INTERNET_EXPOSED` edges with the same `cidr` and `direction` are merged (ports and protocols
+  become comma lists, descriptions are joined with `"; "`), and any other parallel edge replaces
+  the earlier one. Graph exports therefore have fewer edges than the map
+  ([reference](INVENTORY_REFERENCE.md#15-inventory-graphjson)).
 - The ontology (`cloudg/graph/ontology.py`) creates OWL classes for every asset type
-  automatically and uses an edge's declared `relationship` first, falling back to inference from
-  the edge type only when none was declared. New relationship values must therefore be
+  automatically and uses an edge's declared `relationship` first. On `CONTAINS`, `ATTACHED_TO`
+  and the typed edges (`INVOKES`, `REFERENCES`, `PROTECTS` and the rest) the declared relation
+  replaces inference; on `SECURITY_GROUP_RULE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`,
+  `LOAD_BALANCER_TARGET`, `ROUTE`, `PEERING` and `INTERNET_EXPOSED` edges the inferred relations
+  are added after it. Inferred containment relations check both endpoint types (a
+  `VPC_CONTAINS_SUBNET` needs a VPC or VNet and a subnet; anything that matches no specific
+  relation is plain `CONTAINS`), and port relations come from the parsed port ranges
+  (`cloudg.graph.ports`). New relationship values must therefore be
   `RelationType` names; add a new name to `ontology_rules.RelationType` (and its group) before
   using it.
 - `docs/viewer.html` reads `inventory-graph.json`: node `type`, `account_id`, `is_external`
@@ -1343,7 +1358,7 @@ pytest -q
 
 ## 19. Public API and compatibility
 
-Kept stable across 0.5.x (breaking them needs a minor version bump and a changelog entry):
+Kept stable across 0.6.x (breaking them needs a minor version bump and a changelog entry):
 
 - `cloudg.inventory` exports and their constructor signatures:
   `AWSDeepInventoryCollector(session, region="us-east-1", account_id=None, tagging_sweep=True, **options)`,

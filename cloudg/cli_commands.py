@@ -7,7 +7,7 @@ CLI group in :mod:`cloudg.cli` via ``cli.add_command(run)``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import click
 
@@ -22,13 +22,11 @@ from cloudg.cli_run_helpers import (
     _collect_assets,
     _export_rag_phase,
     _graph_phase,
+    RunProducts,
     _post_scan_phases,
     _scanner_phase,
     _terraform_phase,
 )
-
-if TYPE_CHECKING:
-    from cloudg.config import CloudGConfig
 
 
 @click.command()
@@ -139,21 +137,7 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     _show_run_config(cfg, scanner_list, output_dir)
     resolved_images = _resolve_run_images(kwargs["images"], cfg)
 
-    # Phase 1: Asset Collection (always uses multi-provider orchestrator)
-    assets, edges, coverage_records = _collect_assets(cfg)
-
-    # Phase 2: Graph Analysis
-    graph, graph_json, reachability_findings = _graph_phase(cfg, assets, edges, output_dir)
-
-    # Phase 2b: Semantic Ontology — deferred to after scanner phase
-    # (so security/compliance findings can be included in the ontology)
-
-    # Phase 2c: RAG Export
-    if kwargs["rag_export"] and cfg.rag.enabled:
-        _export_rag_phase(cfg, assets, edges, graph, reachability_findings, output_dir)
-
-    # Phase 2d: Terraform Recreation
-    tf_dir = _terraform_phase(cfg, kwargs["terraform"], assets, edges, output_dir)
+    products, tf_dir = _pre_scan_phases(cfg, kwargs, output_dir)
 
     # Phase 3: Security Scanning (all scanners in parallel)
     scanner_findings, iam_findings = _scanner_phase(
@@ -163,21 +147,38 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
         kwargs["iac_dir"],
         resolved_images,
         tf_dir,
-        assets,
+        products.assets,
         output_dir,
     )
 
-    # Phases 3b–5: ontology, RAG update, normalisation, reports, summary
-    _post_scan_phases(
-        cfg,
-        kwargs,
-        assets,
-        edges,
-        graph,
-        graph_json,
-        reachability_findings,
-        scanner_findings,
-        iam_findings,
-        coverage_records,
-        output_dir,
+    # Phases 3b to 5: ontology, RAG update, normalisation, reports, summary
+    _post_scan_phases(cfg, kwargs, products, scanner_findings, iam_findings, output_dir)
+
+
+def _pre_scan_phases(
+    cfg: Any, kwargs: dict[str, Any], output_dir: Path
+) -> tuple[RunProducts, str | None]:
+    """Phases 1 to 2d of ``cloudg run``: collection, graph, RAG and Terraform.
+
+    Returns what those phases produced and the Terraform output directory.
+    """
+    # Phase 1: Asset Collection (always uses multi-provider orchestrator)
+    assets, edges, coverage_records = _collect_assets(cfg)
+
+    # Phase 2: Graph Analysis
+    graph, graph_json, reachability_findings = _graph_phase(cfg, assets, edges, output_dir)
+
+    # Phase 2b: Semantic Ontology, deferred to after the scanner phase
+    # (so security/compliance findings can be included in the ontology)
+
+    # Phase 2c: RAG Export
+    if kwargs["rag_export"] and cfg.rag.enabled:
+        _export_rag_phase(cfg, assets, edges, graph, reachability_findings, output_dir)
+
+    # Phase 2d: Terraform Recreation
+    tf_dir = _terraform_phase(cfg, kwargs["terraform"], assets, edges, output_dir)
+
+    products = RunProducts(
+        assets, edges, graph, graph_json, reachability_findings, coverage_records
     )
+    return products, tf_dir

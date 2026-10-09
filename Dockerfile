@@ -86,8 +86,8 @@ RUN echo "=== Verifying scanner installations ===" && \
     trivy --version    || echo "WARNING: trivy not working" && \
     echo "=== Scanner verification complete ==="
 
-# Parliament (IAM linting) — small pure-Python package, install directly
-RUN pip install --no-cache-dir parliament
+# Parliament (IAM linting): small pure-Python package, pinned like the builder stage
+RUN pip install --no-cache-dir parliament==1.6.4
 
 # ── Everything below here rebuilds on every code change (fast) ──
 

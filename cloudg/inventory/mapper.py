@@ -1,4 +1,4 @@
-"""Inventory mapper — scanner-independent infrastructure mapping.
+"""Inventory mapper: scanner-independent infrastructure mapping.
 
 Orchestrates deep collection across providers, accounts and regions, links
 every asset into an interconnected map, and produces exportable artifacts.
@@ -24,7 +24,7 @@ A mapping run:
 
 Scanner findings produced elsewhere (a `cloudg run`, `cloudg ingest`, or
 any `CloudGEngine.scan()`) can be merged in afterwards to overlay the
-inventory with risk — producing an asset map (asset → findings) and a
+inventory with risk, producing an asset map (asset → findings) and a
 compliance map (framework → affected assets).
 
 Usage (programmatic):
@@ -76,6 +76,55 @@ from cloudg.schema.models import (
 logger = logging.getLogger(__name__)
 
 
+def _merge_copy(current: CloudAsset, duplicate: CloudAsset) -> None:
+    """Fold the declared relations, aliases and exposure of ``duplicate`` into ``current``."""
+    for list_key in ("relations", "aliases"):
+        extra = duplicate.metadata.get(list_key) or []
+        if extra:
+            merged = list(current.metadata.get(list_key) or [])
+            merged.extend(x for x in extra if x not in merged)
+            current.metadata[list_key] = merged
+    current.is_internet_exposed = current.is_internet_exposed or duplicate.is_internet_exposed
+
+
+def _edge_identity(edge: NetworkEdge, source: str, target: str) -> tuple[Any, ...]:
+    """What makes two edges between the same endpoints the same edge.
+
+    Besides the endpoints and the type, the rule attributes count: two
+    SECURITY_GROUP_RULE / NACL_RULE / INTERNET_EXPOSED edges from one CIDR
+    to one group for different ports or protocols are parallel rules, not
+    duplicates.
+    """
+    return (
+        source,
+        target,
+        edge.edge_type.value,
+        edge.port_range,
+        tuple(sorted(edge.ports)),
+        edge.protocol,
+        edge.cidr,
+        edge.direction,
+    )
+
+
+def _remap_edges(edges: list[NetworkEdge], remap: dict[str, str]) -> list[NetworkEdge]:
+    """Re-point edges at the kept copies and drop the edges that became
+    self-loops or exact duplicates."""
+    new_edges = []
+    seen: set[tuple[Any, ...]] = set()
+    for e in edges:
+        s = remap.get(e.source_id, e.source_id)
+        t = remap.get(e.target_id, e.target_id)
+        identity = _edge_identity(e, s, t)
+        if s == t or identity in seen:
+            continue
+        seen.add(identity)
+        if s != e.source_id or t != e.target_id:
+            e = e.model_copy(update={"source_id": s, "target_id": t})
+        new_edges.append(e)
+    return new_edges
+
+
 def deduplicate(
     assets: list[CloudAsset], edges: list[NetworkEdge]
 ) -> tuple[list[CloudAsset], list[NetworkEdge]]:
@@ -88,13 +137,11 @@ def deduplicate(
     out: list[CloudAsset] = []
     for asset in assets:
         key = asset.arn
-        if not key:
-            out.append(asset)
-            continue
-        current = kept.get(key)
+        current = kept.get(key) if key else None
         if current is None:
-            kept[key] = asset
-            position[key] = len(out)
+            if key:
+                kept[key] = asset
+                position[key] = len(out)
             out.append(asset)
             continue
         # Prefer the detailed copy over sweep / placeholder discoveries
@@ -102,31 +149,13 @@ def deduplicate(
             asset, current = current, asset
             kept[key] = current
             out[position[key]] = current
-        for list_key in ("relations", "aliases"):
-            extra = asset.metadata.get(list_key) or []
-            if extra:
-                merged = list(current.metadata.get(list_key) or [])
-                merged.extend(x for x in extra if x not in merged)
-                current.metadata[list_key] = merged
-        current.is_internet_exposed = current.is_internet_exposed or asset.is_internet_exposed
+        _merge_copy(current, asset)
         remap[asset.id] = current.id
 
     if not remap:
         return out, edges
-    new_edges = []
-    seen: set[tuple[str, str, str]] = set()
-    for e in edges:
-        s = remap.get(e.source_id, e.source_id)
-        t = remap.get(e.target_id, e.target_id)
-        key3 = (s, t, e.edge_type.value)
-        if s == t or key3 in seen:
-            continue
-        seen.add(key3)
-        if s != e.source_id or t != e.target_id:
-            e = e.model_copy(update={"source_id": s, "target_id": t})
-        new_edges.append(e)
     logger.info("Deduplicated %d repeated assets", len(remap))
-    return out, new_edges
+    return out, _remap_edges(edges, remap)
 
 
 def _account_identifier(provider: CloudProvider, account_id: str) -> str:
@@ -137,22 +166,28 @@ def _account_identifier(provider: CloudProvider, account_id: str) -> str:
     return f"arn:aws:iam::{account_id}:root"
 
 
-def add_account_hierarchy(
-    assets: list[CloudAsset], edges: list[NetworkEdge]
-) -> tuple[list[CloudAsset], list[NetworkEdge]]:
-    """Ensure an account node per account and make it contain every
-    top-level resource (anything not already contained by something)."""
+def _needs_account(asset: CloudAsset) -> bool:
+    return bool(
+        asset.account_id
+        and asset.account_id != "unknown"
+        and asset.asset_type not in _HIERARCHY_TYPES
+    )
+
+
+def _account_nodes(
+    assets: list[CloudAsset],
+) -> tuple[dict[tuple[CloudProvider, str], CloudAsset], list[CloudAsset]]:
+    """The account node of every account (existing or new), and the new ones."""
     by_arn = {a.arn: a for a in assets if a.arn}
-    accounts: dict[tuple[CloudProvider, str], CloudAsset] = {}
-    for a in assets:
-        if a.asset_type == AssetType.CLOUD_ACCOUNT and a.account_id:
-            accounts[(a.provider, a.account_id)] = a
+    accounts: dict[tuple[CloudProvider, str], CloudAsset] = {
+        (a.provider, a.account_id): a
+        for a in assets
+        if a.asset_type == AssetType.CLOUD_ACCOUNT and a.account_id
+    }
     new_assets: list[CloudAsset] = []
     for a in assets:
-        if not a.account_id or a.account_id == "unknown" or a.asset_type in _HIERARCHY_TYPES:
-            continue
         key = (a.provider, a.account_id)
-        if key in accounts:
+        if not _needs_account(a) or key in accounts:
             continue
         ident = _account_identifier(a.provider, a.account_id)
         existing = by_arn.get(ident)
@@ -170,7 +205,15 @@ def add_account_hierarchy(
         )
         accounts[key] = node
         new_assets.append(node)
+    return accounts, new_assets
 
+
+def add_account_hierarchy(
+    assets: list[CloudAsset], edges: list[NetworkEdge]
+) -> tuple[list[CloudAsset], list[NetworkEdge]]:
+    """Ensure an account node per account and make it contain every
+    top-level resource (anything not already contained by something)."""
+    accounts, new_assets = _account_nodes(assets)
     contained = {e.target_id for e in edges if e.edge_type == EdgeType.CONTAINS}
     new_edges = list(edges)
     for a in assets:
@@ -437,7 +480,27 @@ class InventoryMapper:
     # ------------------------------------------------------------------
 
     async def map_inventory(self) -> InventoryResult:
-        """Deep-collect every provider and link the assets into a map."""
+        """Deep-collect every provider and link the assets into a map.
+
+        Cloud API throttling never fails the map: calls are rate limited and
+        retried (``config.ratelimit``), a service still throttled after its
+        retries is recorded FAILED / PARTIAL with reason "throttled", and the
+        run's throttling telemetry is attached as ``result.throttling``.
+        """
+        from cloudg.resilience import configure, current_stats, get_governor, stats_scope
+
+        configure(self._config)
+        # Reuse a run already bound by the caller (e.g. an MCP live tool) so
+        # its stats see this map's throttling too
+        with stats_scope(current_stats()) as stats:
+            result = await self._map_inventory()
+        if stats.eventful:
+            result.throttling = get_governor().summary(stats)
+            for line in result.throttling.get("messages", []):
+                logger.warning("Throttling: %s", line)
+        return result
+
+    async def _map_inventory(self) -> InventoryResult:
         start = time.time()
         cfg = self._config.model_copy(deep=True)
         org_coverage: list[CollectionCoverage] = []

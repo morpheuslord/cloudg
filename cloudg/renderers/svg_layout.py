@@ -99,7 +99,7 @@ class HierarchicalLayoutMixin:
                 continue
             name = f"{group_label} ({len(group_assets)})"
             sy = self._layout_sidebar_group(
-                name, colour, group_assets, sidebar_x, sidebar_w, sy, positions, containers
+                (name, colour), group_assets, (sidebar_x, sidebar_w), sy, positions, containers
             )
 
         # Any remaining sidebar types
@@ -108,7 +108,12 @@ class HierarchicalLayoutMixin:
                 continue
             name = f"{type_key} ({len(remaining)})"
             sy = self._layout_sidebar_group(
-                name, _COLOURS["other"], remaining, sidebar_x, sidebar_w, sy, positions, containers
+                (name, _COLOURS["other"]),
+                remaining,
+                (sidebar_x, sidebar_w),
+                sy,
+                positions,
+                containers,
             )
 
     def _collect_sidebar_assets(
@@ -198,8 +203,6 @@ class HierarchicalLayoutMixin:
         positions: dict[str, tuple[float, float]],
     ) -> tuple[list[dict[str, Any]], float]:
         """Size subnet boxes, place their resources, and return (containers, bottom y)."""
-        node_spacing = 55
-        subnet_pad = 20
         vpc_pad = 25
         header_h = 22
 
@@ -213,12 +216,7 @@ class HierarchicalLayoutMixin:
             subnet_asset = sdata["asset"]
             resources = sdata["resources"]
 
-            # Size the subnet box to fit its resources
-            n_res = max(len(resources), 1)
-            cols = min(n_res, 4)
-            rows = math.ceil(n_res / cols) if n_res > 0 else 1
-            sbox_w = cols * node_spacing + 2 * subnet_pad
-            sbox_h = rows * node_spacing + 2 * subnet_pad + header_h
+            cols, sbox_w, sbox_h = self._subnet_box_size(len(resources))
 
             # Check if it fits horizontally
             if sx + sbox_w > vpc_x + main_w - vpc_pad - margin:
@@ -226,18 +224,7 @@ class HierarchicalLayoutMixin:
                 sx = vpc_x + vpc_pad
                 sy = max_subnet_bottom + 10
 
-            subnet_containers.append(
-                {
-                    "type": "subnet",
-                    "name": subnet_asset.name,
-                    "cidr": subnet_asset.metadata.get("cidr_block", ""),
-                    "is_public": subnet_asset.metadata.get("map_public_ip", False),
-                    "x": sx,
-                    "y": sy,
-                    "w": sbox_w,
-                    "h": sbox_h,
-                }
-            )
+            subnet_containers.append(_subnet_container(subnet_asset, sx, sy, sbox_w, sbox_h))
 
             # Position the subnet asset label (center of box header)
             positions[subnet_asset.id] = (sx + sbox_w / 2, sy + header_h / 2)
@@ -249,6 +236,19 @@ class HierarchicalLayoutMixin:
             sx += sbox_w + 10
 
         return subnet_containers, max_subnet_bottom
+
+    @staticmethod
+    def _subnet_box_size(resource_count: int) -> tuple[int, int, int]:
+        """Return (columns, width, height) of a subnet box sized to fit its resources."""
+        node_spacing = 55
+        subnet_pad = 20
+        header_h = 22
+        n_res = max(resource_count, 1)
+        cols = min(n_res, 4)
+        rows = math.ceil(n_res / cols) if n_res > 0 else 1
+        sbox_w = cols * node_spacing + 2 * subnet_pad
+        sbox_h = rows * node_spacing + 2 * subnet_pad + header_h
+        return cols, sbox_w, sbox_h
 
     def _place_subnet_resources(
         self,
@@ -271,16 +271,19 @@ class HierarchicalLayoutMixin:
 
     def _layout_sidebar_group(
         self,
-        name: str,
-        colour: str,
+        header: tuple[str, str],
         group_assets: list[CloudAsset],
-        sidebar_x: float,
-        sidebar_w: float,
+        column: tuple[float, float],
         sy: float,
         positions: dict[str, tuple[float, float]],
         containers: list[dict[str, Any]],
     ) -> float:
-        """Place one sidebar group header plus its assets and return the next y."""
+        """Place one sidebar group header plus its assets and return the next y.
+
+        ``header`` is the group's (name, colour), ``column`` the sidebar's (x, width).
+        """
+        name, colour = header
+        sidebar_x, sidebar_w = column
         node_r = 18
         node_spacing = 55
 
@@ -309,3 +312,19 @@ class HierarchicalLayoutMixin:
 
         rows = math.ceil(len(group_assets) / cols)
         return sy + rows * (node_spacing - 10) + 15
+
+
+def _subnet_container(
+    subnet_asset: CloudAsset, x: float, y: float, w: int, h: int
+) -> dict[str, Any]:
+    """The container record drawn as one subnet box."""
+    return {
+        "type": "subnet",
+        "name": subnet_asset.name,
+        "cidr": subnet_asset.metadata.get("cidr_block", ""),
+        "is_public": subnet_asset.metadata.get("map_public_ip", False),
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+    }

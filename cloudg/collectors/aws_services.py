@@ -43,7 +43,9 @@ class CoreServiceCollectorsMixin:
         _account_id: str | None
         coverage: CollectionCoverage
 
-        def _get_aio_session(self) -> Any: ...
+        def _get_aio_session(self) -> Any:
+            # Provided by AsyncAWSCollector; this stub only types the mixin
+            raise NotImplementedError
 
     async def _collect_ec2(self) -> list[CloudAsset]:
         """Collect EC2 instances."""

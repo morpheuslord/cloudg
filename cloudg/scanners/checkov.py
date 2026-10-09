@@ -48,7 +48,7 @@ class CheckovScanner:
 
         If no frameworks are configured, Checkov auto-detects all applicable
         frameworks (terraform, cloudformation, arm, kubernetes, etc.) in the
-        target directory — which is the correct behaviour for cloud
+        target directory, which is the correct behaviour for cloud
         infrastructure scanning.
         """
         if not self.is_available():

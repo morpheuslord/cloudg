@@ -1,0 +1,8 @@
+# cloudg MCP policy profile: airgapped
+#
+# Analyse previously collected data only: nothing leaves the machine (no cloud
+# API calls, no scanner processes); exporting results to local files is allowed.
+name: airgapped
+extends: standard
+description: Standard transforms; cloud_access and exec denied, local files allowed.
+deny_capabilities: [cloud_access, exec]

@@ -1,4 +1,10 @@
-"""Async AWS resource collector using aioboto3 with adaptive retries."""
+"""Async AWS resource collector using aioboto3 with adaptive retries.
+
+Every aioboto3 session is wired into :mod:`cloudg.resilience` (shared
+adaptive rate limits, circuit breakers, throttle telemetry); a service whose
+calls stay throttled after retries is recorded FAILED / PARTIAL with reason
+"throttled" instead of failing the run.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +17,8 @@ from cloudg.collectors.aws_services import CoreServiceCollectorsMixin
 from cloudg.collectors.aws_services_extended import ExtendedServiceCollectorsMixin
 from cloudg.collectors.base import BaseCollector
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.resilience.errors import describe_error
+from cloudg.resilience.stats import throttle_ledger
 from cloudg.schema.models import (
     AssetType,
     CloudAsset,
@@ -21,22 +29,45 @@ from cloudg.schema.models import (
 logger = logging.getLogger(__name__)
 
 
-def _get_aio_config() -> Any:
-    """Return AioConfig with adaptive retries."""
+def _retries(max_attempts: int | None = None, mode: str | None = None) -> dict[str, Any]:
+    """botocore ``retries`` from ``aws.max_retries`` / ``aws.retry_mode``
+    (applied to the resilience governor by the orchestrator; adaptive / 10)."""
+    from cloudg.resilience.aws import botocore_retries
+
+    retries = botocore_retries()
+    if max_attempts is not None:
+        retries["max_attempts"] = max_attempts
+    if mode is not None:
+        retries["mode"] = mode
+    return retries
+
+
+def _get_aio_config(max_attempts: int | None = None, mode: str | None = None) -> Any:
+    """Return AioConfig with the configured retries (default: adaptive mode, 10 retries)."""
+    retries = _retries(max_attempts, mode)
     try:
         from aiobotocore.config import AioConfig
 
         return AioConfig(
-            retries={"mode": "adaptive", "max_attempts": 10},
+            retries=retries,
             connect_timeout=10,
             read_timeout=30,
         )
     except ImportError:
         from botocore.config import Config
 
-        return Config(
-            retries={"mode": "adaptive", "max_attempts": 10},
-        )
+        return Config(retries=retries)
+
+
+def _default_client_config(retries: dict[str, Any] | None = None) -> Any:
+    """Session-wide default for clients created without ``config=``: the
+    configured retries only (botocore's default timeouts are kept)."""
+    try:
+        from aiobotocore.config import AioConfig
+
+        return AioConfig(retries=dict(retries) if retries else _retries())
+    except ImportError:  # pragma: no cover (aiobotocore always ships with aioboto3)
+        return None
 
 
 class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMixin, BaseCollector):
@@ -61,7 +92,13 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         self._region = region
         self._account_id = account_id
         self._aioboto3_session: Any = None
-        self._aio_config = _get_aio_config()
+        # Read the governor's retry settings once: a later reconfiguration
+        # (another run with a different config) must not change the retries
+        # of a collector that is already running.
+        self._retry_settings = _retries()
+        self._aio_config = _get_aio_config(
+            self._retry_settings["max_attempts"], self._retry_settings["mode"]
+        )
         self.coverage = CollectionCoverage(provider="aws", region=region, account_id=account_id)
 
     def _get_aio_session(self) -> Any:
@@ -92,6 +129,16 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
                 session_kwargs["profile_name"] = self._boto3_session.profile_name
 
             self._aioboto3_session = aioboto3.Session(**session_kwargs)
+            # Every client of this session shares cloudg's adaptive rate
+            # limiter, circuit breakers and throttle telemetry.
+            from cloudg.resilience.aws import install_aws_hooks
+
+            install_aws_hooks(
+                self._aioboto3_session,
+                account_id=self._account_id,
+                region=self._region,
+                default_config=_default_client_config(self._retry_settings),
+            )
         return self._aioboto3_session
 
     # ------------------------------------------------------------------
@@ -106,54 +153,8 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         for sg in sg_assets:
             # Endpoint is the SG asset's id (like Azure NSG rule edges) so the
             # edge attaches to the SECURITY_GROUP node; the CIDR side stays external.
-            sg_id = sg.id
-
-            # Ingress rules
-            for rule in sg.metadata.get("ingress_rules", []):
-                for ip_range in rule.get("IpRanges", []):
-                    cidr = ip_range.get("CidrIp", "")
-                    from_port = rule.get("FromPort", 0)
-                    to_port = rule.get("ToPort", 65535)
-                    protocol = rule.get("IpProtocol", "-1")
-
-                    port_range = (
-                        f"{from_port}-{to_port}" if from_port != to_port else str(from_port)
-                    )
-
-                    # Cap port list to avoid OOM on wide ranges (e.g., 0-65535)
-                    port_count = min(to_port - from_port + 1, 100)
-                    edges.append(
-                        NetworkEdge(
-                            source_id=cidr,
-                            target_id=sg_id,
-                            edge_type=EdgeType.SECURITY_GROUP_RULE,
-                            ports=list(range(from_port, from_port + port_count)),
-                            port_range=port_range,
-                            protocol="ALL" if protocol == "-1" else protocol.upper(),
-                            cidr=cidr,
-                            direction="ingress",
-                        )
-                    )
-
-            # Egress rules
-            for rule in sg.metadata.get("egress_rules", []):
-                for ip_range in rule.get("IpRanges", []):
-                    cidr = ip_range.get("CidrIp", "")
-                    from_port = rule.get("FromPort", 0)
-                    to_port = rule.get("ToPort", 65535)
-                    protocol = rule.get("IpProtocol", "-1")
-
-                    edges.append(
-                        NetworkEdge(
-                            source_id=sg_id,
-                            target_id=cidr,
-                            edge_type=EdgeType.SECURITY_GROUP_RULE,
-                            port_range=f"{from_port}-{to_port}",
-                            protocol="ALL" if protocol == "-1" else protocol.upper(),
-                            cidr=cidr,
-                            direction="egress",
-                        )
-                    )
+            edges.extend(_sg_ingress_edges(sg.id, sg.metadata.get("ingress_rules", [])))
+            edges.extend(_sg_egress_edges(sg.id, sg.metadata.get("egress_rules", [])))
 
         return edges
 
@@ -184,20 +185,34 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
     async def _run_service_collector(self, name: str, coro: Any) -> list[CloudAsset]:
         """Run a service collector with coverage tracking."""
         start = time.time()
-        try:
-            result = await coro
-            duration_ms = int((time.time() - start) * 1000)
+        # The ledger collects throttling that per-item error handling inside
+        # the collector swallowed, so the service shows up PARTIAL
+        # ("throttled: ...") instead of a silently incomplete SUCCESS.
+        with throttle_ledger() as ledger:
+            try:
+                result = await coro
+            except Exception as exc:
+                duration_ms = int((time.time() - start) * 1000)
+                logger.error("Collector %s failed: %s", name, exc)
+                self.coverage.record(
+                    name, ServiceStatus.FAILED, error=describe_error(exc), duration_ms=duration_ms
+                )
+                return []
+        duration_ms = int((time.time() - start) * 1000)
+        if ledger.degraded:
+            logger.warning("Collector %s: %s", name, ledger.describe())
+            self.coverage.record(
+                name,
+                ServiceStatus.PARTIAL,
+                asset_count=len(result),
+                error=ledger.describe(),
+                duration_ms=duration_ms,
+            )
+        else:
             self.coverage.record(
                 name, ServiceStatus.SUCCESS, asset_count=len(result), duration_ms=duration_ms
             )
-            return result
-        except Exception as exc:
-            duration_ms = int((time.time() - start) * 1000)
-            logger.error("Collector %s failed: %s", name, exc)
-            self.coverage.record(
-                name, ServiceStatus.FAILED, error=str(exc), duration_ms=duration_ms
-            )
-            return []
+        return result
 
     def _service_tasks(self) -> dict[str, Any]:
         """Collector callables per service, invoked lazily by :meth:`collect`.
@@ -267,3 +282,57 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         all_edges = sg_edges + containment_edges
         logger.info("Collected %d AWS edges", len(all_edges))
         return all_edges
+
+
+def _sg_rule_ports(rule: dict[str, Any]) -> tuple[int, int, str]:
+    """Return (from port, to port, protocol label) for one security group rule."""
+    from_port = rule.get("FromPort", 0)
+    to_port = rule.get("ToPort", 65535)
+    protocol = rule.get("IpProtocol", "-1")
+    return from_port, to_port, "ALL" if protocol == "-1" else protocol.upper()
+
+
+def _sg_ingress_edges(sg_id: str, rules: list[dict[str, Any]]) -> list[NetworkEdge]:
+    """Edges from each ingress rule's CIDR ranges into the security group."""
+    edges: list[NetworkEdge] = []
+    for rule in rules:
+        for ip_range in rule.get("IpRanges", []):
+            cidr = ip_range.get("CidrIp", "")
+            from_port, to_port, protocol = _sg_rule_ports(rule)
+            port_range = f"{from_port}-{to_port}" if from_port != to_port else str(from_port)
+            # Cap port list to avoid OOM on wide ranges (e.g., 0-65535)
+            port_count = min(to_port - from_port + 1, 100)
+            edges.append(
+                NetworkEdge(
+                    source_id=cidr,
+                    target_id=sg_id,
+                    edge_type=EdgeType.SECURITY_GROUP_RULE,
+                    ports=list(range(from_port, from_port + port_count)),
+                    port_range=port_range,
+                    protocol=protocol,
+                    cidr=cidr,
+                    direction="ingress",
+                )
+            )
+    return edges
+
+
+def _sg_egress_edges(sg_id: str, rules: list[dict[str, Any]]) -> list[NetworkEdge]:
+    """Edges from the security group out to each egress rule's CIDR ranges."""
+    edges: list[NetworkEdge] = []
+    for rule in rules:
+        for ip_range in rule.get("IpRanges", []):
+            cidr = ip_range.get("CidrIp", "")
+            from_port, to_port, protocol = _sg_rule_ports(rule)
+            edges.append(
+                NetworkEdge(
+                    source_id=sg_id,
+                    target_id=cidr,
+                    edge_type=EdgeType.SECURITY_GROUP_RULE,
+                    port_range=f"{from_port}-{to_port}",
+                    protocol=protocol,
+                    cidr=cidr,
+                    direction="egress",
+                )
+            )
+    return edges

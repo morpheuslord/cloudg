@@ -1,10 +1,15 @@
-"""RAG-ready export — generates chunked, metadata-enriched representations
-of the cloud infrastructure graph for retrieval-augmented generation.
+"""RAG-ready export: chunked, metadata-enriched representations of the
+cloud infrastructure graph for retrieval-augmented generation.
 
 Three complementary chunking strategies:
 1. Entity-centric: one chunk per cloud asset with 1-hop neighbourhood
 2. Community-detection: Louvain clusters with aggregate summaries
 3. Relation-group: one chunk per semantic relation group (Network, IAM, etc.)
+
+Relation-group chunks carry the same relations the ontology holds: the
+relations inferred from each edge plus the asset-level ones inferred from
+metadata (``ENCRYPTED_BY_KMS``, VPC containment from ``vpc_id``, tag
+governance, rotation, EC2 security group membership).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from cloudg.graph.ontology import (
     RelationGroup,
     get_relation_group,
     infer_relations,
+    iter_asset_relations,
 )
 from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
@@ -115,8 +121,9 @@ def _index_findings(
 ) -> dict[str, list[Finding]]:
     """Group findings by the asset ID they resolve to.
 
-    ``index`` matches a finding by ID, ARN, unique name or unique ARN
-    tail; findings it cannot place stay keyed by their raw resource_id.
+    ``index`` matches a finding by ID, ARN, unique name, unique ARN tail
+    or unique ARN resource-part tail (:meth:`AssetIndex.resolve_finding`);
+    findings it cannot place stay keyed by their raw resource_id.
     """
     findings_by_resource: dict[str, list[Finding]] = defaultdict(list)
     if findings:
@@ -287,33 +294,53 @@ def _count_community_edges(graph: nx.DiGraph, member_set: set[str]) -> tuple[int
     return internal_edges, external_edges
 
 
+def _label(asset_id: str, assets_by_id: dict[str, CloudAsset]) -> str:
+    """Display name of an asset id, or the id itself when it is not an asset."""
+    asset = assets_by_id.get(asset_id)
+    return asset.name if asset else asset_id
+
+
+def _triple(
+    subject_id: str, predicate: str, object_id: str, assets_by_id: dict[str, CloudAsset]
+) -> dict[str, str]:
+    """A relation triple with display labels and empty edge evidence."""
+    return {
+        "subject": _label(subject_id, assets_by_id),
+        "subject_id": subject_id,
+        "predicate": predicate,
+        "object": _label(object_id, assets_by_id),
+        "object_id": object_id,
+        "port_range": "",
+        "protocol": "",
+        "cidr": "",
+    }
+
+
 def _group_relation_triples(
     edges: list[NetworkEdge],
     assets_by_id: dict[str, CloudAsset],
 ) -> dict[RelationGroup, list[dict[str, str]]]:
-    """Group edge triples by their inferred relation group."""
+    """Group relation triples by their relation group.
+
+    The triples are the relations inferred from every edge (with the
+    edge's port, protocol and CIDR as evidence) followed by the asset-level
+    relations of every asset in ``assets_by_id``, the same two sources the
+    ontology is built from.
+    """
     group_triples: dict[RelationGroup, list[dict[str, str]]] = defaultdict(list)
 
     for edge in edges:
-        src_name = assets_by_id.get(edge.source_id)
-        tgt_name = assets_by_id.get(edge.target_id)
-        src_label = src_name.name if src_name else edge.source_id
-        tgt_label = tgt_name.name if tgt_name else edge.target_id
-
         for rel in infer_relations(edge, assets_by_id):
-            group = get_relation_group(rel)
-            group_triples[group].append(
-                {
-                    "subject": src_label,
-                    "subject_id": edge.source_id,
-                    "predicate": rel.value,
-                    "object": tgt_label,
-                    "object_id": edge.target_id,
-                    "port_range": edge.port_range or "",
-                    "protocol": edge.protocol or "",
-                    "cidr": edge.cidr or "",
-                }
-            )
+            triple = _triple(edge.source_id, rel.value, edge.target_id, assets_by_id)
+            triple["port_range"] = edge.port_range or ""
+            triple["protocol"] = edge.protocol or ""
+            triple["cidr"] = edge.cidr or ""
+            group_triples[get_relation_group(rel)].append(triple)
+
+    for asset, rel, object_id in iter_asset_relations(list(assets_by_id.values())):
+        group_triples[get_relation_group(rel)].append(
+            _triple(asset.id, rel.value, object_id, assets_by_id)
+        )
 
     return group_triples
 
@@ -324,6 +351,49 @@ def _triple_evidence(triple: dict[str, str]) -> str:
         return ""
     parts = [p for p in [triple["port_range"], triple["protocol"], triple["cidr"]] if p]
     return f" [{', '.join(parts)}]"
+
+
+def _relation_group_lines(
+    group: RelationGroup, triples: list[dict[str, str]], type_counts: dict[str, int]
+) -> list[str]:
+    """Content lines of a relation-group chunk: totals, distribution, triples."""
+    content_lines = [
+        f"Relation Group: {group.value}",
+        f"Total relations: {len(triples)}",
+        "",
+        "Relation type distribution:",
+    ]
+    for rt_name, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+        content_lines.append(f"  {rt_name}: {count}")
+
+    content_lines.append("\nTriples:")
+    for t in triples[:50]:  # Cap for chunk size
+        content_lines.append(
+            f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
+        )
+    if len(triples) > 50:
+        content_lines.append(f"  ... and {len(triples) - 50} more")
+    return content_lines
+
+
+def _write_export(out: Path, all_chunks: list[RAGChunk], counts: dict[str, int]) -> dict[str, Path]:
+    """Write the JSONL chunks and the metadata index; return both paths."""
+    # Write JSONL (one JSON object per line, the usual vector DB input)
+    chunks_path = out / "rag_chunks.jsonl"
+    with open(chunks_path, "w") as f:
+        for chunk in all_chunks:
+            f.write(json.dumps(chunk.to_dict(), default=str) + "\n")
+
+    index = {
+        "total_chunks": len(all_chunks),
+        **counts,
+        "chunk_ids": [c.chunk_id for c in all_chunks],
+        "chunk_types": list({c.chunk_type for c in all_chunks}),
+    }
+    index_path = out / "rag_metadata_index.json"
+    with open(index_path, "w") as f:
+        json.dump(index, f, indent=2)
+    return {"chunks": chunks_path, "index": index_path}
 
 
 # ---------------------------------------------------------------------------
@@ -532,29 +602,10 @@ class RAGExporter:
         triples: list[dict[str, str]],
     ) -> RAGChunk:
         """Assemble content and metadata for one relation-group chunk."""
-        content_lines = [
-            f"Relation Group: {group.value}",
-            f"Total relations: {len(triples)}",
-            "",
-        ]
-
-        # Summarise relation type distribution
         type_counts: dict[str, int] = defaultdict(int)
         for t in triples:
             type_counts[t["predicate"]] += 1
-
-        content_lines.append("Relation type distribution:")
-        for rt_name, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            content_lines.append(f"  {rt_name}: {count}")
-
-        content_lines.append("\nTriples:")
-        for t in triples[:50]:  # Cap for chunk size
-            content_lines.append(
-                f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
-            )
-
-        if len(triples) > 50:
-            content_lines.append(f"  ... and {len(triples) - 50} more")
+        content_lines = _relation_group_lines(group, triples, type_counts)
 
         metadata = {
             "relation_group": group.value,
@@ -600,38 +651,19 @@ class RAGExporter:
         out.mkdir(parents=True, exist_ok=True)
 
         assets_by_id = {a.id: a for a in assets}
-        all_chunks: list[RAGChunk] = []
-
-        # Strategy 1
         entity_chunks = self.export_entity_chunks(assets, edges, findings)
-        all_chunks.extend(entity_chunks)
-
-        # Strategy 2
         community_chunks = self.export_community_chunks(graph, assets_by_id, findings)
-        all_chunks.extend(community_chunks)
-
-        # Strategy 3
         relation_chunks = self.export_relation_chunks(edges, assets_by_id)
-        all_chunks.extend(relation_chunks)
-
-        # Write JSONL (one JSON object per line — standard for vector DBs)
-        chunks_path = out / "rag_chunks.jsonl"
-        with open(chunks_path, "w") as f:
-            for chunk in all_chunks:
-                f.write(json.dumps(chunk.to_dict(), default=str) + "\n")
-
-        # Write metadata index
-        index = {
-            "total_chunks": len(all_chunks),
-            "entity_chunks": len(entity_chunks),
-            "community_chunks": len(community_chunks),
-            "relation_group_chunks": len(relation_chunks),
-            "chunk_ids": [c.chunk_id for c in all_chunks],
-            "chunk_types": list({c.chunk_type for c in all_chunks}),
-        }
-        index_path = out / "rag_metadata_index.json"
-        with open(index_path, "w") as f:
-            json.dump(index, f, indent=2)
+        all_chunks = [*entity_chunks, *community_chunks, *relation_chunks]
+        paths = _write_export(
+            out,
+            all_chunks,
+            {
+                "entity_chunks": len(entity_chunks),
+                "community_chunks": len(community_chunks),
+                "relation_group_chunks": len(relation_chunks),
+            },
+        )
 
         logger.info(
             "RAG export complete: %d chunks (%d entity, %d community, %d relation) -> %s",
@@ -641,8 +673,4 @@ class RAGExporter:
             len(relation_chunks),
             out,
         )
-
-        return {
-            "chunks": chunks_path,
-            "index": index_path,
-        }
+        return paths

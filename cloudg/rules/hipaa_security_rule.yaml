@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────
-# HIPAA Security Rule — Technical Safeguards Mappings
+# HIPAA Security Rule: Technical Safeguards Mappings
 # Source: 45 CFR Part 164, Subpart C (U.S. federal regulation,
 # public domain)
 #
@@ -13,7 +13,7 @@ source: "HIPAA Security Rule, 45 CFR 164.308-164.312"
 
 controls:
   - id: "HIPAA-164.308(a)(1)"
-    title: "Security management process — risk analysis and management"
+    title: "Security management process: risk analysis and management"
     patterns:
       - "vulnerability"
       - "cve"
@@ -29,7 +29,7 @@ controls:
     severity: HIGH
 
   - id: "HIPAA-164.312(a)(1)"
-    title: "Access control — unique user identification and authorization"
+    title: "Access control: unique user identification and authorization"
     patterns:
       - "access.*control"
       - "iam.*polic"
@@ -47,7 +47,7 @@ controls:
     severity: HIGH
 
   - id: "HIPAA-164.312(b)"
-    title: "Audit controls — record and examine system activity"
+    title: "Audit controls: record and examine system activity"
     patterns:
       - "audit"
       - "logging"
@@ -56,7 +56,7 @@ controls:
     severity: MEDIUM
 
   - id: "HIPAA-164.312(c)(1)"
-    title: "Integrity — protect ePHI from improper alteration or destruction"
+    title: "Integrity: protect ePHI from improper alteration or destruction"
     patterns:
       - "versioning"
       - "log.*file.*valid"
@@ -74,7 +74,7 @@ controls:
     severity: HIGH
 
   - id: "HIPAA-164.312(e)(1)"
-    title: "Transmission security — guard against unauthorized access in transit"
+    title: "Transmission security: guard against unauthorized access in transit"
     patterns:
       - "tls"
       - "ssl"

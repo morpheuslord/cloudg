@@ -1,4 +1,4 @@
-"""Tests for scanner orchestration — verifies all scanners are launched correctly."""
+"""Tests for scanner orchestration: verifies all scanners are launched correctly."""
 
 from __future__ import annotations
 

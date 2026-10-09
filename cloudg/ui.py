@@ -1,7 +1,7 @@
-"""cloudg.ui — Rich-based terminal UI layer for the CloudG CLI.
+"""cloudg.ui: Rich-based terminal UI layer for the CloudG CLI.
 
-Centralises every visual concern — theme, banner, phase headers, status
-lines, tables, panels and progress displays — so the command logic in
+Centralises every visual concern (theme, banner, phase headers, status
+lines, tables, panels and progress displays), so the command logic in
 ``cli.py`` stays free of formatting details and the whole CLI renders
 with one consistent look.
 """
@@ -74,7 +74,7 @@ def severity_style(severity: str) -> str:
 def print_banner(version: str) -> None:
     """Print the cloudg banner panel with version tag."""
     art = Text(_BANNER, style="banner")
-    tagline = Text("cloud graphing — map, graph and audit AWS / Azure / GCP", style="tagline")
+    tagline = Text("cloud graphing: map, graph and audit AWS / Azure / GCP", style="tagline")
     console.print(
         Panel(
             Group(art, Text(), tagline),
@@ -198,7 +198,7 @@ def summary_table(summary: Mapping[str, Any]) -> None:
         table.add_row(
             Text(f"  {sev}", style=severity_style(sev)), Text(str(count), style=severity_style(sev))
         )
-    frameworks = ", ".join(summary.get("compliance_frameworks", [])) or "—"
+    frameworks = ", ".join(summary.get("compliance_frameworks", [])) or "-"
     table.add_row("Frameworks", escape(frameworks))
     console.print(table)
 
@@ -220,10 +220,10 @@ def coverage_table(coverage_records: list[Any]) -> None:
         data = cov.to_summary()
         pct = data["coverage_pct"]
         pct_style = "success" if pct >= 90 else "warning" if pct >= 50 else "error"
-        failures = ", ".join(f["service"] for f in data["failures"]) or "—"
+        failures = ", ".join(f["service"] for f in data["failures"]) or "-"
         table.add_row(
-            data["region"] or "—",
-            data["account_id"] or "—",
+            data["region"] or "-",
+            data["account_id"] or "-",
             Text(f"{pct}%", style=pct_style),
             escape(failures),
         )

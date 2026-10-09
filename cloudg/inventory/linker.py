@@ -1,8 +1,8 @@
 """Cross-service relationship linker.
 
-Derives the edges that interlink an inventory — attachment, containment,
+Derives the edges that interlink an inventory (attachment, containment,
 routing, invocation, identity, protection, monitoring, governance and
-generic references — purely from collected asset metadata. No cloud API
+generic references) purely from collected asset metadata. No cloud API
 calls and no scanners: given any list of CloudAssets (AWS, Azure, GCP, or
 mixed), it produces the edges that turn a flat inventory into a connected
 map.
@@ -46,6 +46,7 @@ from cloudg.inventory.linker_index import (
     IdentifierIndex,
     _image_registry_host,
 )
+from cloudg.inventory.linker_rules import RuleLinksMixin
 from cloudg.schema.models import AssetType, CloudAsset, EdgeType, NetworkEdge
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ _MAX_SCAN_DEPTH = 6
 _MAX_UNRESOLVED = 2000
 
 
-class RelationshipLinker(IdentifierIndex):
+class RelationshipLinker(RuleLinksMixin, IdentifierIndex):
     """Builds interconnection edges between already-collected assets.
 
     Args:
@@ -219,181 +220,9 @@ class RelationshipLinker(IdentifierIndex):
             )
 
     # ------------------------------------------------------------------
-    # Pass 2: provider-aware rules
+    # Pass 2: provider-aware rules (_link_rules, from RuleLinksMixin) and
+    # Identity Center permission sets
     # ------------------------------------------------------------------
-
-    def _link_rules(self, asset: CloudAsset, edges: list[NetworkEdge]) -> None:
-        md = asset.metadata
-        raw = asset.raw_data or {}
-
-        def res(ref: Any) -> str | None:
-            return self.resolve(ref, asset)
-
-        # Security-group / NSG attachment (EC2, ELB, ENI, Lambda, RDS, Azure NIC)
-        for sg_ref in md.get("security_groups", []) or []:
-            self._add(
-                edges,
-                asset.id,
-                res(sg_ref),
-                EdgeType.ATTACHED_TO,
-                f"{asset.name} uses security group {sg_ref}",
-                "PROTECTED_BY_SG",
-            )
-        nsg_id = md.get("nsg_id")
-        if nsg_id:
-            self._add(
-                edges, asset.id, res(nsg_id), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"
-            )
-
-        # Subnet containment (everything with a subnet_id that isn't a subnet)
-        subnet_ref = md.get("subnet_id")
-        if subnet_ref and asset.asset_type != AssetType.SUBNET:
-            self._add(
-                edges,
-                res(subnet_ref),
-                asset.id,
-                EdgeType.CONTAINS,
-                f"Subnet {subnet_ref} contains {asset.name}",
-                "SUBNET_CONTAINS_INSTANCE",
-            )
-
-        # Lambda VPC config + execution role
-        vpc_config = md.get("vpc_config") or {}
-        if isinstance(vpc_config, dict):
-            for sn in vpc_config.get("SubnetIds", []) or []:
-                self._add(
-                    edges,
-                    res(sn),
-                    asset.id,
-                    EdgeType.CONTAINS,
-                    relationship="SUBNET_CONTAINS_INSTANCE",
-                )
-            for sg in vpc_config.get("SecurityGroupIds", []) or []:
-                self._add(
-                    edges, asset.id, res(sg), EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"
-                )
-        role_ref = raw.get("Role") or md.get("role_arn")
-        if role_ref and asset.asset_type in (
-            AssetType.LAMBDA_FUNCTION,
-            AssetType.STATE_MACHINE,
-        ):
-            self._add(
-                edges,
-                asset.id,
-                res(role_ref),
-                EdgeType.ASSUMES_ROLE,
-                f"{asset.name} executes as {role_ref}",
-                "RUNS_ON",
-            )
-        elif role_ref:
-            self._add(
-                edges,
-                asset.id,
-                res(role_ref),
-                EdgeType.REFERENCES,
-                f"{asset.name} references {role_ref}",
-            )
-
-        # EC2 instance profile
-        profile_arn = (raw.get("IamInstanceProfile") or {}).get("Arn") if raw else None
-        if profile_arn:
-            self._add(
-                edges,
-                asset.id,
-                res(profile_arn),
-                EdgeType.ASSUMES_ROLE,
-                "instance profile",
-                "RUNS_ON",
-            )
-
-        # KMS key references (secrets, volumes, tables, ...)
-        kms_ref = md.get("kms_key_id")
-        if kms_ref:
-            self._add(
-                edges,
-                asset.id,
-                res(kms_ref),
-                EdgeType.REFERENCES,
-                f"{asset.name} encrypted with {kms_ref}",
-                "ENCRYPTED_BY_KMS",
-            )
-
-        # CloudFront origins -> S3 buckets / load balancers, WAF -> distribution
-        for origin in md.get("origins", []) or []:
-            target = res(origin)
-            if target is None and isinstance(origin, str):
-                # bucket origins look like <bucket>.s3.<region>.amazonaws.com
-                target = res(origin.split(".s3", 1)[0]) if ".s3" in origin else None
-            if target and (
-                (asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys
-            ):
-                continue  # already linked by a declared (typed) relation
-            self._add(
-                edges,
-                asset.id,
-                target,
-                EdgeType.REFERENCES,
-                f"{asset.name} origin {origin}",
-                "SERVES_TRAFFIC_TO",
-            )
-        web_acl = md.get("web_acl_id")
-        if web_acl:
-            self._add(
-                edges, res(web_acl), asset.id, EdgeType.PROTECTS, "WAF web ACL", "PROTECTED_BY_WAF"
-            )
-
-        # Route tables: routes -> gateways, associations -> subnets
-        if asset.asset_type == AssetType.ROUTE_TABLE:
-            for route in md.get("routes", []) or []:
-                gw = (
-                    route.get("GatewayId")
-                    or route.get("NatGatewayId")
-                    or route.get("TransitGatewayId")
-                    or route.get("VpcPeeringConnectionId")
-                    or route.get("NetworkInterfaceId")
-                )
-                if gw and gw != "local":
-                    self._add(
-                        edges,
-                        asset.id,
-                        res(gw),
-                        EdgeType.ROUTE,
-                        f"route {route.get('DestinationCidrBlock', '')} via {gw}",
-                        "NAT_TRANSLATED" if route.get("NatGatewayId") else "TRANSIT_ROUTED",
-                    )
-            for assoc in md.get("associations", []) or []:
-                self._add(edges, asset.id, res(assoc.get("SubnetId")), EdgeType.ATTACHED_TO)
-
-        # Internet gateway attachments -> VPC
-        for attachment in md.get("attachments", []) or []:
-            if isinstance(attachment, dict) and attachment.get("VpcId"):
-                self._add(edges, asset.id, res(attachment.get("VpcId")), EdgeType.ATTACHED_TO)
-
-        # ENI / EBS / EIP attachment -> instance
-        inst_ref = md.get("attached_instance_id")
-        if inst_ref:
-            self._add(edges, asset.id, res(inst_ref), EdgeType.ATTACHED_TO)
-        for inst in md.get("attached_instance_ids", []) or []:
-            self._add(edges, asset.id, res(inst), EdgeType.ATTACHED_TO)
-        eni_ref = md.get("network_interface_id")
-        if eni_ref and asset.asset_type != AssetType.NETWORK_INTERFACE:
-            self._add(edges, asset.id, res(eni_ref), EdgeType.ATTACHED_TO)
-
-        # VPC peering
-        if asset.asset_type == AssetType.PEERING_CONNECTION:
-            req = res(md.get("requester_vpc_id"))
-            acc = res(md.get("accepter_vpc_id"))
-            self._add(edges, req, asset.id, EdgeType.PEERING, relationship="VPC_PEERED")
-            self._add(edges, asset.id, acc, EdgeType.PEERING, relationship="VPC_PEERED")
-
-        # Azure VM -> NICs
-        for nic_ref in md.get("network_interfaces", []) or []:
-            self._add(edges, res(nic_ref), asset.id, EdgeType.ATTACHED_TO)
-
-        # GCP: parent resource containment
-        parent = md.get("parent_full_resource_name")
-        if parent:
-            self._add(edges, res(parent), asset.id, EdgeType.CONTAINS)
 
     def _link_sso_roles(self, edges: list[NetworkEdge]) -> None:
         """Identity Center permission set -> the AWSReservedSSO_<name>_<hash>
@@ -447,15 +276,10 @@ class RelationshipLinker(IdentifierIndex):
             target = self.resolve(value, asset)
             if not target or target == asset.id:
                 continue
-            if (asset.id, target) in self._pair_keys or (target, asset.id) in self._pair_keys:
+            if self._linked_either_way(asset.id, target):
                 continue
-            self._add(
-                edges,
-                asset.id,
-                target,
-                EdgeType.REFERENCES,
-                f"{asset.name} references {value}",
-            )
+            description = f"{asset.name} references {value}"
+            self._add(edges, asset.id, target, EdgeType.REFERENCES, description)
 
     # ------------------------------------------------------------------
     # Main interface

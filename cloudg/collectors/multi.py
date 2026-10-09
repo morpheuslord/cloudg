@@ -16,6 +16,7 @@ from typing import Any
 
 from cloudg.config import CloudGConfig
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.resilience.errors import describe_error
 from cloudg.region_discovery import RegionDiscovery, is_all_regions
 from cloudg.schema.models import CloudAsset, NetworkEdge
 
@@ -54,6 +55,13 @@ class MultiAccountCollector:
         # the standard collector for that provider.
         self._collector_overrides = collector_overrides or {}
         self._caller_account: str | None = None
+        # Shared throttling resilience (rate limits, breakers, retries) from
+        # config.ratelimit / aws.max_retries / aws.retry_mode
+        from cloudg.resilience import configure
+
+        configure(config)
+        #: Throttling telemetry of the last collect_all() run
+        self.resilience_stats: Any = None
 
     async def collect_all(
         self,
@@ -63,6 +71,19 @@ class MultiAccountCollector:
         Returns:
             Tuple of (all_assets, all_edges, coverage_records).
         """
+        from cloudg.resilience import current_stats, stats_scope
+
+        bound = current_stats()
+        if bound is not None:  # the caller (e.g. InventoryMapper) owns the run's stats
+            self.resilience_stats = bound
+            return await self._collect_all()
+        with stats_scope() as stats:
+            self.resilience_stats = stats
+            return await self._collect_all()
+
+    async def _collect_all(
+        self,
+    ) -> tuple[list[CloudAsset], list[NetworkEdge], list[CollectionCoverage]]:
         providers = self._config.providers
         all_assets: list[CloudAsset] = []
         all_edges: list[NetworkEdge] = []
@@ -95,7 +116,7 @@ class MultiAccountCollector:
             if isinstance(result, Exception):
                 logger.error("Provider %s collection failed: %s", label, result)
                 coverage = CollectionCoverage(provider=label)
-                coverage.record(f"{label}_full", ServiceStatus.FAILED, error=str(result))
+                coverage.record(f"{label}_full", ServiceStatus.FAILED, error=describe_error(result))
                 self._coverage.append(coverage)
             elif isinstance(result, list):
                 for assets, edges in result:
@@ -182,16 +203,17 @@ class MultiAccountCollector:
 
         async with self._semaphore:
             try:
-                session = self._aws_session(account_id, region, cfg, coverage)
+                # Blocking boto3 calls (AssumeRole, GetCallerIdentity) run in a
+                # worker thread: their rate-limit waits must not stall the loop
+                session = await asyncio.to_thread(
+                    self._aws_session, account_id, region, cfg, coverage
+                )
                 if session is None:
                     return [], []
 
                 # Resolve account ID if not provided
                 if not account_id:
-                    try:
-                        account_id = session.client("sts").get_caller_identity().get("Account")
-                    except Exception:
-                        account_id = "unknown"
+                    account_id = await asyncio.to_thread(_caller_account, session)
 
                 collector = self._build_aws_collector(session, region, account_id, is_primary)
                 assets, edges, duration_ms = await self._timed_collect(collector)
@@ -200,7 +222,7 @@ class MultiAccountCollector:
 
             except Exception as exc:
                 logger.error("AWS collection failed for %s/%s: %s", account_id, region, exc)
-                coverage.record("aws_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("aws_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
     @staticmethod
@@ -220,7 +242,7 @@ class MultiAccountCollector:
 
         # Supports direct keys, OIDC web identity, profiles, the
         # default chain (instance/task roles), and AssumeRole with
-        # optional ExternalId — see cloudg.credentials.
+        # optional ExternalId; see cloudg.credentials.
         assume_into = account_id
         if account_id and account_id == self._caller_account:
             assume_into = None
@@ -228,7 +250,7 @@ class MultiAccountCollector:
             return build_aws_session(cfg, region, account_id=assume_into)
         except RuntimeError as exc:
             logger.error("AWS auth failed for %s/%s: %s", account_id, region, exc)
-            coverage.record("sts_assume_role", ServiceStatus.FAILED, error=str(exc))
+            coverage.record("sts_assume_role", ServiceStatus.FAILED, error=describe_error(exc))
             return None
 
     def _build_aws_collector(
@@ -343,25 +365,11 @@ class MultiAccountCollector:
                 assets = await collector.collect()
             except Exception as exc:
                 logger.error("Azure collection failed for %s: %s", subscription_id, exc)
-                coverage.record("azure_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("azure_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
-            edges: list[NetworkEdge] = []
-            try:
-                edges = await collector.collect_edges()
-            except Exception as exc:
-                logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
-                coverage.record("azure_edges", ServiceStatus.FAILED, error=str(exc))
-
-            duration_ms = int((time.time() - start) * 1000)
-            service_errors = dict(getattr(collector, "service_errors", None) or {})
-            for service, error in service_errors.items():
-                coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
-            coverage.record(
-                "azure_full",
-                ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
-                asset_count=len(assets),
-                duration_ms=duration_ms,
+            edges = await _azure_edges_and_coverage(
+                collector, len(assets), coverage, subscription_id, start
             )
             return assets, edges
 
@@ -390,20 +398,7 @@ class MultiAccountCollector:
         if not project_ids:
             project_ids = [None]
 
-        # Region resolution
-        gcp_regions = self._config.gcp.regions
-        if is_all_regions(gcp_regions):
-            logger.info("GCP: discovering all regions...")
-            try:
-                from cloudg.credentials import build_gcp_credentials
-
-                creds, default_project = build_gcp_credentials(self._config.gcp)
-                pid = project_ids[0] or default_project
-            except Exception:
-                creds, pid = None, None
-            gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
-
-        self._resolved_regions["gcp"] = gcp_regions
+        self._resolved_regions["gcp"] = await self._resolve_gcp_regions(project_ids[0])
 
         # Cloud Asset Inventory returns resources across ALL regions, so no
         # per-region iteration is needed.
@@ -420,6 +415,21 @@ class MultiAccountCollector:
             logger.info("GCP: scanning %d projects (all regions per project)", len(project_ids))
             tasks = [self._collect_gcp_single(pid) for pid in project_ids]
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    async def _resolve_gcp_regions(self, first_project_id: str | None) -> Any:
+        """Return the configured GCP regions, discovering them when set to all."""
+        gcp_regions = self._config.gcp.regions
+        if is_all_regions(gcp_regions):
+            logger.info("GCP: discovering all regions...")
+            try:
+                from cloudg.credentials import build_gcp_credentials
+
+                creds, default_project = build_gcp_credentials(self._config.gcp)
+                pid = first_project_id or default_project
+            except Exception:
+                creds, pid = None, None
+            gcp_regions = await self._region_discovery.discover_gcp(creds, pid)
+        return gcp_regions
 
     async def _collect_gcp_single(
         self,
@@ -463,7 +473,7 @@ class MultiAccountCollector:
 
             except Exception as exc:
                 logger.error("GCP collection failed for %s: %s", label, exc)
-                coverage.record("gcp_full", ServiceStatus.FAILED, error=str(exc))
+                coverage.record("gcp_full", ServiceStatus.FAILED, error=describe_error(exc))
                 return [], []
 
     @staticmethod
@@ -505,3 +515,44 @@ class MultiAccountCollector:
             duration_ms=duration_ms,
             error="; ".join(f"{s.service}: {s.error}" for s in degraded) or None,
         )
+
+
+def _caller_account(session: Any) -> str | None:
+    """The account of ``session``'s credentials ("unknown" when STS fails)."""
+    try:
+        return session.client("sts").get_caller_identity().get("Account")
+    except Exception as exc:
+        logger.debug("GetCallerIdentity failed: %s", exc)
+        return "unknown"
+
+
+async def _azure_edges_and_coverage(
+    collector: Any,
+    asset_count: int,
+    coverage: CollectionCoverage,
+    subscription_id: str | None,
+    start: float,
+) -> list[NetworkEdge]:
+    """Collect one Azure subscription's edges and record its coverage.
+
+    An edge failure is recorded as ``azure_edges`` and never discards the
+    assets; per-service collector errors become ``azure_<service>`` entries.
+    """
+    edges: list[NetworkEdge] = []
+    try:
+        edges = await collector.collect_edges()
+    except Exception as exc:
+        logger.error("Azure edge collection failed for %s: %s", subscription_id, exc)
+        coverage.record("azure_edges", ServiceStatus.FAILED, error=describe_error(exc))
+
+    duration_ms = int((time.time() - start) * 1000)
+    service_errors = dict(getattr(collector, "service_errors", None) or {})
+    for service, error in service_errors.items():
+        coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
+    coverage.record(
+        "azure_full",
+        ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
+        asset_count=asset_count,
+        duration_ms=duration_ms,
+    )
+    return edges

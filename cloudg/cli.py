@@ -1,4 +1,4 @@
-"""CloudG CLI — Click-based command-line interface.
+"""CloudG CLI: Click-based command-line interface.
 
 All terminal rendering goes through :mod:`cloudg.ui`, the Rich UI layer.
 """
@@ -25,6 +25,7 @@ from cloudg.cli_helpers import (
     _run_scan_jobs,
 )
 from cloudg.cli_inventory import deps, map_inventory
+from cloudg.mcp.cli import mcp_group
 from cloudg.ui import console
 
 # Global config reference (set by CLI group)
@@ -65,10 +66,14 @@ class BannerGroup(click.Group):
 @click.option("--log-file", default=None, help="Path to log file")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool, config_path: str | None, log_file: str | None) -> None:
-    """☁️  cloudg — cloud graphing: infrastructure mapping and security intelligence."""
+    """☁️  cloudg (cloud graphing): infrastructure mapping and security intelligence."""
     global _config
     from cloudg.config import load_config
 
+    if ctx.invoked_subcommand == "mcp":
+        # stdout is the MCP stdio protocol channel / machine-readable output
+        console.stderr = True
+        ctx.call_on_close(lambda: setattr(console, "stderr", False))
     ui.print_banner(__version__)
     _config = load_config(config_path)
     # Expose the loaded config to subcommands defined outside this module
@@ -81,6 +86,51 @@ def cli(ctx: click.Context, verbose: bool, config_path: str | None, log_file: st
 # ─────────────────────────────────────────────────────────────────────
 # COLLECT command
 # ─────────────────────────────────────────────────────────────────────
+
+
+def _build_collector(
+    provider: str,
+    resolver: Any,
+    *,
+    profile: str | None,
+    region: str,
+    subscription_id: str | None,
+    project_id: str | None,
+) -> Any:
+    """Resolve credentials for ``provider`` and return its collector."""
+    if provider == "aws":
+        from cloudg.collectors.aws import AsyncAWSCollector
+
+        creds = resolver.resolve_aws(profile=profile, region=region)
+        return AsyncAWSCollector(
+            session=creds.session, region=creds.region, account_id=creds.account_id
+        )
+    if provider == "azure":
+        from cloudg.collectors.azure import AzureCollector
+
+        creds = resolver.resolve_azure(subscription_id=subscription_id)
+        return AzureCollector(
+            credential=creds.credential,
+            subscription_id=creds.subscription_id,
+        )
+    if provider == "gcp":
+        from cloudg.collectors.gcp import GCPCollector
+
+        creds = resolver.resolve_gcp(project_id=project_id)
+        return GCPCollector(project_id=creds.project_id, credentials=creds.credentials)
+    raise click.BadParameter(f"Unknown provider: {provider}")
+
+
+async def _collect_inventory(
+    provider: str, resolver: Any, collector_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Run the provider's collector and return its assets and edges as JSON data."""
+    collector = _build_collector(provider, resolver, **collector_kwargs)
+    assets, edges = await collector.run()
+    return {
+        "assets": [a.model_dump(mode="json") for a in assets],
+        "edges": [e.model_dump(mode="json") for e in edges],
+    }
 
 
 @cli.command()
@@ -110,7 +160,7 @@ def collect(
     output: str,
 ) -> None:
     """Collect cloud assets from the specified provider."""
-    ui.section(f"Asset Collection — {provider.upper()}")
+    ui.section(f"Asset Collection: {provider.upper()}")
 
     from cloudg.credentials import CredentialResolver
 
@@ -118,41 +168,17 @@ def collect(
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    async def _collect() -> dict[str, Any]:
-        if provider == "aws":
-            from cloudg.collectors.aws import AsyncAWSCollector
-
-            creds = resolver.resolve_aws(profile=profile, region=region)
-            collector = AsyncAWSCollector(
-                session=creds.session, region=creds.region, account_id=creds.account_id
-            )
-        elif provider == "azure":
-            from cloudg.collectors.azure import AzureCollector
-
-            creds = resolver.resolve_azure(subscription_id=subscription_id)
-            collector = AzureCollector(
-                credential=creds.credential,
-                subscription_id=creds.subscription_id,
-            )
-        elif provider == "gcp":
-            from cloudg.collectors.gcp import GCPCollector
-
-            creds = resolver.resolve_gcp(project_id=project_id)
-            collector = GCPCollector(project_id=creds.project_id, credentials=creds.credentials)
-        else:
-            raise click.BadParameter(f"Unknown provider: {provider}")
-
-        assets, edges = await collector.run()
-        return {
-            "assets": [a.model_dump(mode="json") for a in assets],
-            "edges": [e.model_dump(mode="json") for e in edges],
-        }
-
+    collector_kwargs = {
+        "profile": profile,
+        "region": region,
+        "subscription_id": subscription_id,
+        "project_id": project_id,
+    }
     try:
         with console.status(
             f"[accent]Collecting assets from {provider.upper()}…[/]", spinner="dots"
         ):
-            result = asyncio.run(_collect())
+            result = asyncio.run(_collect_inventory(provider, resolver, collector_kwargs))
     except Exception as exc:
         ui.error_panel("Collection failed", exc)
         sys.exit(1)
@@ -310,6 +336,37 @@ def report(input_file: str, output: str, fmt: str) -> None:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _normalise_and_report_ingest(
+    all_findings: list[Any], tool_count: int, output: str, fmt: str
+) -> None:
+    """Normalise ingested findings, then write the raw findings and the reports."""
+    # Normalise: dedupe within and across scanners, score, map compliance
+    from cloudg.normaliser import FindingsNormaliser
+
+    cfg = _config
+    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir if cfg else None)
+    scan_result = normaliser.normalise(all_findings)
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save raw (pre-normalisation) findings alongside the reports
+    raw_path = output_dir / "raw-findings.json"
+    with open(raw_path, "w") as f:
+        dumped = [fi.model_dump(mode="json") for fi in all_findings]
+        json.dump(dumped, f, indent=2, default=str)
+
+    _render_ingest_reports(scan_result, fmt, output_dir)
+
+    ui.artifact("Raw findings", raw_path)
+
+    console.print()
+    ui.success(
+        f"Ingested [metric]{len(all_findings)}[/] findings from {tool_count} tool(s), "
+        f"[metric]{len(scan_result.findings)}[/] after deduplication"
+    )
+
+
 @cli.command()
 @click.option(
     "--prowler",
@@ -356,10 +413,10 @@ def ingest(
     output: str,
     fmt: str,
 ) -> None:
-    """Aggregate existing scanner outputs — no scanners are executed.
+    """Aggregate existing scanner outputs; no scanners are executed.
 
     Feed cloudg the native output files of scans you already ran
-    (Prowler, ScoutSuite, Checkov, Trivy — any combination) and it
+    (Prowler, ScoutSuite, Checkov, Trivy, in any combination) and it
     normalises, deduplicates across scanners via the check-equivalence
     rulesets, maps compliance frameworks, and generates reports.
 
@@ -385,41 +442,18 @@ def ingest(
     if not all_findings:
         ui.warn("No findings parsed from the given reports")
 
-    # Normalise: dedupe within and across scanners, score, map compliance
-    from cloudg.normaliser import FindingsNormaliser
-
-    cfg = _config
-    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir if cfg else None)
-    scan_result = normaliser.normalise(all_findings)
-
-    output_dir = Path(output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save raw (pre-normalisation) findings alongside the reports
-    raw_path = output_dir / "raw-findings.json"
-    with open(raw_path, "w") as f:
-        dumped = [fi.model_dump(mode="json") for fi in all_findings]
-        json.dump(dumped, f, indent=2, default=str)
-
-    _render_ingest_reports(scan_result, fmt, output_dir)
-
-    ui.artifact("Raw findings", raw_path)
-
-    console.print()
-    ui.success(
-        f"Ingested [metric]{len(all_findings)}[/] findings from {len(per_tool)} tool(s) — "
-        f"[metric]{len(scan_result.findings)}[/] after deduplication"
-    )
+    _normalise_and_report_ingest(all_findings, len(per_tool), output, fmt)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# RUN command (full pipeline) — defined in cloudg.cli_commands
-# MAP / DEPS commands (inventory mapping) — defined in cloudg.cli_inventory
+# RUN command (full pipeline): defined in cloudg.cli_commands
+# MAP / DEPS commands (inventory mapping): defined in cloudg.cli_inventory
 # ─────────────────────────────────────────────────────────────────────
 
 cli.add_command(run)
 cli.add_command(map_inventory)
 cli.add_command(deps)
+cli.add_command(mcp_group)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Prowler CSPM scanner wrapper — runs Prowler CLI and parses ASFF JSON output."""
+"""Prowler CSPM scanner wrapper: runs Prowler CLI and parses ASFF JSON output."""
 
 from __future__ import annotations
 
@@ -176,7 +176,7 @@ class ProwlerScanner:
                 logger.info("[Prowler] Completed successfully in %ds", elapsed)
 
         except subprocess.TimeoutExpired:
-            logger.error("[Prowler] Scan timed out after 3600s — killing process")
+            logger.error("[Prowler] Scan timed out after 3600s; killing process")
             proc.kill()
             return False
         except Exception as exc:
@@ -258,7 +258,7 @@ class ProwlerScanner:
                         compliance.append(framework)
                         break
 
-            # Extract status — skip PASS findings
+            # Extract status; skip PASS findings
             status = asff.get("Compliance", {}).get("Status", "")
             if status.upper() == "PASSED":
                 return None

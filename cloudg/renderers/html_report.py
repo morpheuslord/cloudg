@@ -13,7 +13,7 @@ from cloudg.schema.models import ScanResult
 
 logger = logging.getLogger(__name__)
 
-# Template directory candidates — the packaged directory ships in the
+# Template directory candidates: the packaged directory ships in the
 # wheel, the rest keep old checkouts and Docker layouts working
 _TEMPLATE_DIR_CANDIDATES = [
     Path(__file__).parent.parent / "templates",  # packaged: cloudg/templates

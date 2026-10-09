@@ -1,4 +1,4 @@
-"""Findings normaliser — pass-through aggregator using scanner-native compliance mappings.
+"""Findings normaliser: pass-through aggregator using scanner-native compliance mappings.
 
 Primary: Extracts compliance IDs from scanner-native fields (Prowler ASFF, Checkov, etc.)
 Secondary: Loads external rulesets from YAML files in rules/ directory
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────
-# FALLBACK ONLY — used when scanners don't emit compliance metadata.
+# FALLBACK ONLY: used when scanners don't emit compliance metadata.
 # All real compliance mappings come from scanner-native outputs.
 # ─────────────────────────────────────────────────────────────────
 _FALLBACK_RULES: dict[str, list[dict[str, str]]] = {
@@ -75,8 +75,8 @@ _TITLE_TAG_RE = re.compile(r"^\s*(\[[^\]]+\]\s*)+")
 _TITLE_JUNK_RE = re.compile(r"[^a-z0-9]+")
 
 # Prowler ASFF Ids look like
-# "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-eu-west-1-..."
-# — the check name is the third dash-separated token (check names use
+# "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-eu-west-1-...";
+# the check name is the third dash-separated token (check names use
 # underscores, never dashes).
 _PROWLER_ASFF_ID_RE = re.compile(r"^prowler-[a-z0-9]+-([a-z0-9_]+)-")
 
@@ -176,7 +176,7 @@ class FindingsNormaliser:
     Compliance mapping priority:
     1. Scanner-native fields (Prowler ASFF RelatedRequirements, Checkov check_id, etc.)
     2. Exact check-ID lookup against ruleset `checks` lists (generated from
-       Prowler's public compliance data — see scripts/import_prowler_compliance.py)
+       Prowler's public compliance data; see scripts/import_prowler_compliance.py)
     3. External YAML ruleset regex patterns from the rules/ directory
     4. Fallback regex patterns for untagged findings
 
@@ -269,7 +269,7 @@ class FindingsNormaliser:
     def _deduplicate(self, findings: list[Finding]) -> list[Finding]:
         """Deduplicate findings in two passes.
 
-        Pass 1 — within a scanner, keyed on (scanner, check_id, resource):
+        Pass 1, within a scanner, keyed on (scanner, check_id, resource):
         the same check re-reported for the same resource (e.g. via two
         report formats, or once per compliance framework) is a true
         duplicate. Findings without a check ID fall back to their
@@ -277,12 +277,12 @@ class FindingsNormaliser:
         that happen to share a generic title ("encryption at rest
         enabled") on the same bucket are never collapsed.
 
-        Pass 2 — across scanners: merge only when the normalised titles
+        Pass 2, across scanners: merge only when the normalised titles
         match AND both checks resolve to the same canonical semantic ID
         in the equivalence map. Findings that carry no check ID at all
         merge with each other on exact normalised title (the only signal
         those tools provide). A known check is never merged with an
-        unknown or non-equivalent one — visible duplication is preferred
+        unknown or non-equivalent one: visible duplication is preferred
         over silently dropping a scanner's coverage.
 
         Merging keeps the highest severity and unions source tools and
@@ -513,7 +513,7 @@ class FindingsNormaliser:
                     framework=framework,
                     control_id=control_id,
                     control_title=control_titles.get(
-                        (framework, control_id), f"{framework} — {control_id}"
+                        (framework, control_id), f"{framework} {control_id}"
                     ),
                     status=ComplianceStatus.FAIL if finding_ids else ComplianceStatus.PASS,
                     finding_ids=finding_ids,
