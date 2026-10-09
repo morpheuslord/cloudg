@@ -27,6 +27,8 @@ from cloudg.mcp.transforms.annotation import (
     INJECTION_PATTERNS,
     UNTRUSTED_NOTICE,
     Annotator,
+    AnnotatorOptions,
+    GuardOptions,
     UntrustedTextGuard,
     strip_invisible,
 )
@@ -46,11 +48,12 @@ from cloudg.mcp.transforms.detectors import (
     normalize_key,
     shannon_entropy,
 )
-from cloudg.mcp.transforms.projection import Projection
+from cloudg.mcp.transforms.projection import Projection, ProjectionOptions
 from cloudg.mcp.transforms.redaction import (
     DROP,
     STRATEGIES,
     Redactor,
+    RedactorOptions,
     SecretArgumentGuard,
     Strategy,
     generalize,
@@ -61,6 +64,7 @@ from cloudg.mcp.transforms.substitution import (
     FENCE_OPEN,
     AliasMap,
     Depseudonymizer,
+    repseudonymize,
     KeyRename,
     RegexReplace,
     Substitution,
@@ -105,8 +109,8 @@ _ALIASES = {
     "templates": "template",
     "depseudonymise": "depseudonymize",
     "depseudonymizer": "depseudonymize",
-    "secret_guard": "guard_secrets",
-    "reject_secrets": "guard_secrets",
+    "secret_guard": "guard_secrets",  # nosec B105 - transform name, not a credential
+    "reject_secrets": "guard_secrets",  # nosec B105 - transform name, not a credential
 }
 
 
@@ -171,6 +175,11 @@ def build_transform(spec: Any, **context: Any) -> Transform:
 
 
 __all__ = [
+    "AnnotatorOptions",
+    "GuardOptions",
+    "ProjectionOptions",
+    "RedactorOptions",
+    "repseudonymize",
     "AliasMap",
     "Annotator",
     "BUILTIN_DETECTORS",

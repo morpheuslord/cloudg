@@ -37,18 +37,26 @@ import base64
 import json
 import logging
 import weakref
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from cloudg.mcp.context import Principal
-from cloudg.mcp.core import InvalidArgumentsError, MCPLayerError, NotFoundError
+from cloudg.mcp.native._methods import METHODS
+from cloudg.mcp.native._shared import (
+    ListenStream,
+    RequestCtx,
+    Sender,
+    change_message,
+    expand_change,
+    level_ok,
+    normalize_level,
+    run_on_loop,
+)
 from cloudg.mcp.native.auth import PrincipalResolver, RequestInfo, default_principal_resolver
 from cloudg.mcp.native.jsonrpc import (
     BATCH_VERSIONS,
     CACHEABLE_METHODS,
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
-    HANDSHAKE_VERSIONS,
     INTERNAL_ERROR,
     INVALID_PARAMS,
     INVALID_REQUEST,
@@ -58,10 +66,7 @@ from cloudg.mcp.native.jsonrpc import (
     METHOD_NOT_FOUND,
     MODERN_VERSIONS,
     PROTOCOL_VERSION_META_KEY,
-    RESOURCE_NOT_FOUND,
     SERVER_INFO_META_KEY,
-    SUBSCRIPTION_ID_META_KEY,
-    SUPPORTED_VERSIONS,
     UNSUPPORTED_PROTOCOL_VERSION,
     JSONRPCError,
     error_response,
@@ -75,8 +80,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = logging.getLogger("cloudg.mcp.native")
 
-Sender = Callable[[dict[str, Any]], Awaitable[None]]
-
 __all__ = ["NativeMCPServer", "Session", "Sender", "has_modern_envelope", "normalize_level"]
 
 
@@ -86,80 +89,6 @@ def has_modern_envelope(params: Any) -> bool:
         return False
     meta = params.get("_meta")
     return isinstance(meta, dict) and PROTOCOL_VERSION_META_KEY in meta
-
-
-def normalize_level(level: Any) -> str:
-    """Map Python / loose level names onto the MCP (RFC 5424) levels."""
-    if isinstance(level, int):
-        if level >= logging.CRITICAL:
-            return "critical"
-        if level >= logging.ERROR:
-            return "error"
-        if level >= logging.WARNING:
-            return "warning"
-        if level >= logging.INFO:
-            return "info"
-        return "debug"
-    name = str(level).lower()
-    aliases = {"warn": "warning", "fatal": "critical", "exception": "error", "trace": "debug"}
-    name = aliases.get(name, name)
-    return name if name in LOG_LEVELS else "info"
-
-
-def _level_ok(level: str, threshold: str | None) -> bool:
-    if threshold is None:
-        return False
-    return LOG_LEVELS.index(level) >= LOG_LEVELS.index(threshold)
-
-
-_CHANGE_METHODS = {
-    "tools": "notifications/tools/list_changed",
-    "prompts": "notifications/prompts/list_changed",
-    "resources": "notifications/resources/list_changed",
-}
-_LISTEN_FLAGS = {
-    "tools": "toolsListChanged",
-    "prompts": "promptsListChanged",
-    "resources": "resourcesListChanged",
-}
-
-
-@dataclass(eq=False)
-class _ListenStream:
-    """One open ``subscriptions/listen`` stream (2026-07-28)."""
-
-    honored: dict[str, Any]
-    queue: asyncio.Queue[tuple[str, str | None] | None] = field(
-        default_factory=lambda: asyncio.Queue(maxsize=1024)
-    )
-
-    def wants(self, kind: str, uri: str | None) -> bool:
-        if kind == "resource":
-            return uri is not None and uri in (self.honored.get("resourceSubscriptions") or ())
-        flag = _LISTEN_FLAGS.get(kind)
-        return bool(flag and self.honored.get(flag))
-
-
-@dataclass
-class _RequestCtx:
-    """Per-request state handed to method implementations."""
-
-    session: "Session"
-    req_id: Any
-    method: str
-    version: str
-    modern: bool
-    principal: Principal
-    sink: Sender | None
-    meta: dict[str, Any]
-    log_level: str | None
-
-    async def notify(self, method: str, params: dict[str, Any]) -> None:
-        msg = {"jsonrpc": "2.0", "method": method, "params": params}
-        if self.sink is not None:
-            await self.sink(msg)
-        else:
-            await self.session.send_standalone(msg)
 
 
 class NativeMCPServer:
@@ -199,7 +128,7 @@ class NativeMCPServer:
         self.cache_scope = cache_scope
         self.title = title
         self.sessions: "weakref.WeakSet[Session]" = weakref.WeakSet()
-        self._listens: set[_ListenStream] = set()
+        self._listens: set[ListenStream] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self_ref = weakref.ref(self)
 
@@ -278,6 +207,12 @@ class NativeMCPServer:
             except RuntimeError:
                 pass
 
+    def add_listen(self, stream: ListenStream) -> None:
+        self._listens.add(stream)
+
+    def discard_listen(self, stream: ListenStream) -> None:
+        self._listens.discard(stream)
+
     def close_listens(self) -> None:
         """Ask every open ``subscriptions/listen`` stream to finish with its
         final result (graceful closure)."""
@@ -299,28 +234,10 @@ class NativeMCPServer:
     # ------------------------------------------------------------------
 
     def _on_layer_change(self, kind: str, uri: str | None) -> None:
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if running is loop:
-            self._dispatch_change(kind, uri)
-        else:  # called from a worker thread (sync handler) -> hop to the loop
-            loop.call_soon_threadsafe(self._dispatch_change, kind, uri)
+        run_on_loop(self._loop, self._dispatch_change, kind, uri)
 
     def _dispatch_change(self, kind: str, uri: str | None) -> None:
-        events: list[tuple[str, str | None]] = []
-        if kind in ("resource", "resource_updated", "updated"):
-            if uri:
-                events.append(("resource", uri))
-        elif kind in _CHANGE_METHODS:
-            events.append((kind, None))
-            if kind == "resources" and uri:
-                events.append(("resource", uri))
-        for ev_kind, ev_uri in events:
+        for ev_kind, ev_uri in expand_change(kind, uri):
             for stream in list(self._listens):
                 if stream.wants(ev_kind, ev_uri):
                     try:
@@ -419,13 +336,9 @@ class Session:
     def _emit_change(self, kind: str, uri: str | None) -> None:
         if self.closed or self.era != "legacy" or not self.initialized or self.send is None:
             return
-        if kind == "resource":
-            if uri not in self.subscriptions:
-                return
-            msg = {"jsonrpc": "2.0", "method": "notifications/resources/updated",
-                   "params": {"uri": uri}}
-        else:
-            msg = {"jsonrpc": "2.0", "method": _CHANGE_METHODS[kind]}
+        if kind == "resource" and uri not in self.subscriptions:
+            return
+        msg = change_message(kind, uri)
         task = asyncio.ensure_future(self.send_standalone(msg))
         self._pending_sends.add(task)
         task.add_done_callback(self._pending_sends.discard)
@@ -463,12 +376,13 @@ class Session:
                     None,
                     INVALID_REQUEST,
                     "JSON-RPC batches are not supported"
-                    + (f" by protocol version {self.protocol_version}" if self.protocol_version
-                       else " before initialization"),
+                    + (
+                        f" by protocol version {self.protocol_version}"
+                        if self.protocol_version
+                        else " before initialization"
+                    ),
                 )
-            results = await asyncio.gather(
-                *(self._handle_one(m, sink, principal) for m in message)
-            )
+            results = await asyncio.gather(*(self._handle_one(m, sink, principal) for m in message))
             out = [r for r in results if r is not None]
             return out or None
         return await self._handle_one(message, sink, principal)
@@ -476,36 +390,16 @@ class Session:
     async def _handle_one(
         self, msg: Any, sink: Sender | None, principal: Principal | None
     ) -> dict[str, Any] | None:
-        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
-            rid = msg.get("id") if isinstance(msg, dict) and valid_id(msg.get("id")) else None
-            return error_response(rid, INVALID_REQUEST, "Invalid Request")
-        if "method" in msg:
-            method = msg["method"]
-            params = msg.get("params")
-            has_id = "id" in msg
-            if not isinstance(method, str):
-                return error_response(
-                    msg.get("id") if valid_id(msg.get("id")) else None,
-                    INVALID_REQUEST,
-                    "Invalid Request: method must be a string",
-                )
-            if has_id and not valid_id(msg["id"]):
-                return error_response(None, INVALID_REQUEST, "Invalid Request: bad id")
-            if params is not None and not isinstance(params, dict):
-                if has_id:
-                    return error_response(msg["id"], INVALID_PARAMS, "params must be an object")
-                return None
-            if has_id:
-                return await self._handle_request(
-                    msg["id"], method, params or {}, sink, principal or self.principal
-                )
-            await self._handle_notification(method, params or {})
-            return None
-        if is_response(msg):
-            return None  # we never send requests; ignore stray responses
-        return error_response(
-            msg.get("id") if valid_id(msg.get("id")) else None, INVALID_REQUEST, "Invalid Request"
-        )
+        rejected = _rejection(msg)
+        if rejected is not _ACCEPT:
+            return rejected  # type: ignore[return-value]
+        method, params = msg["method"], msg.get("params") or {}
+        if "id" in msg:
+            return await self._handle_request(
+                msg["id"], method, params, sink, principal or self.principal
+            )
+        await self._handle_notification(method, params)
+        return None
 
     async def _handle_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "notifications/initialized":
@@ -534,7 +428,7 @@ class Session:
             self._inflight[req_id] = task
         try:
             rc = self._route(req_id, method, params, sink, principal)
-            impl = _METHODS.get((rc.modern, method))
+            impl = METHODS.get((rc.modern, method))
             if impl is None:
                 raise JSONRPCError(METHOD_NOT_FOUND, "Method not found", method)
             result = await impl(self, rc, params)
@@ -564,54 +458,14 @@ class Session:
         params: dict[str, Any],
         sink: Sender | None,
         principal: Principal,
-    ) -> _RequestCtx:
+    ) -> RequestCtx:
         meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
         if method == "initialize":
-            if self.era == "modern":
-                requested = params.get("protocolVersion")
-                raise JSONRPCError(
-                    UNSUPPORTED_PROTOCOL_VERSION,
-                    "connection is serving the 2026-07-28 protocol; initialize is not accepted",
-                    {"supported": list(MODERN_VERSIONS),
-                     **({"requested": requested} if isinstance(requested, str) else {})},
-                )
-            return _RequestCtx(self, req_id, method, "", False, principal, sink, meta, None)
-
+            self._check_initialize(params)
+            return RequestCtx(self, req_id, method, "", False, principal, sink, meta, None)
         if has_modern_envelope(params):
-            if self.era == "legacy":
-                raise JSONRPCError(
-                    INVALID_REQUEST,
-                    "this connection serves the handshake protocol era; requests carrying "
-                    "the 2026-07-28 envelope are not accepted on it",
-                )
-            if CLIENT_CAPABILITIES_META_KEY not in meta:
-                raise JSONRPCError(
-                    INVALID_PARAMS,
-                    f"params._meta is missing the required envelope key(s): "
-                    f"{CLIENT_CAPABILITIES_META_KEY}",
-                )
-            version = meta.get(PROTOCOL_VERSION_META_KEY)
-            if not isinstance(version, str):
-                raise JSONRPCError(INVALID_PARAMS, "the protocol-version envelope value must be a "
-                                                   "string")
-            if version not in MODERN_VERSIONS:
-                raise JSONRPCError(
-                    UNSUPPORTED_PROTOCOL_VERSION,
-                    f"Unsupported protocol version: {version}",
-                    {"supported": list(MODERN_VERSIONS), "requested": version},
-                )
-            self.era = "modern"
-            self.protocol_version = version
-            caps = meta.get(CLIENT_CAPABILITIES_META_KEY)
-            self.client_capabilities = caps if isinstance(caps, dict) else None
-            info = meta.get(CLIENT_INFO_META_KEY)
-            if isinstance(info, dict):
-                self.client_info = info
-            lvl = meta.get(LOG_LEVEL_META_KEY)
-            log_level = lvl if lvl in LOG_LEVELS else None
-            return _RequestCtx(self, req_id, method, version, True, principal, sink, meta,
-                               log_level)
-
+            version, log_level = self._enter_modern(meta)
+            return RequestCtx(self, req_id, method, version, True, principal, sink, meta, log_level)
         if self.era == "modern":
             raise JSONRPCError(
                 INVALID_PARAMS,
@@ -620,10 +474,59 @@ class Session:
             )
         if not self.init_responded and method != "ping":
             raise JSONRPCError(INVALID_REQUEST, "Server not initialized: send initialize first")
-        return _RequestCtx(
-            self, req_id, method, self.protocol_version or LATEST_HANDSHAKE_VERSION, False,
-            principal, sink, meta, self.log_level,
+        version = self.protocol_version or LATEST_HANDSHAKE_VERSION
+        return RequestCtx(
+            self, req_id, method, version, False, principal, sink, meta, self.log_level
         )
+
+    def _check_initialize(self, params: dict[str, Any]) -> None:
+        if self.era != "modern":
+            return
+        requested = params.get("protocolVersion")
+        raise JSONRPCError(
+            UNSUPPORTED_PROTOCOL_VERSION,
+            "connection is serving the 2026-07-28 protocol; initialize is not accepted",
+            {
+                "supported": list(MODERN_VERSIONS),
+                **({"requested": requested} if isinstance(requested, str) else {}),
+            },
+        )
+
+    def _enter_modern(self, meta: dict[str, Any]) -> tuple[str, str | None]:
+        """Validate a 2026-07-28 envelope and switch the connection to that
+        era; returns ``(version, requested log level)``."""
+        if self.era == "legacy":
+            raise JSONRPCError(
+                INVALID_REQUEST,
+                "this connection serves the handshake protocol era; requests carrying "
+                "the 2026-07-28 envelope are not accepted on it",
+            )
+        if CLIENT_CAPABILITIES_META_KEY not in meta:
+            raise JSONRPCError(
+                INVALID_PARAMS,
+                f"params._meta is missing the required envelope key(s): "
+                f"{CLIENT_CAPABILITIES_META_KEY}",
+            )
+        version = meta.get(PROTOCOL_VERSION_META_KEY)
+        if not isinstance(version, str):
+            raise JSONRPCError(
+                INVALID_PARAMS, "the protocol-version envelope value must be a string"
+            )
+        if version not in MODERN_VERSIONS:
+            raise JSONRPCError(
+                UNSUPPORTED_PROTOCOL_VERSION,
+                f"Unsupported protocol version: {version}",
+                {"supported": list(MODERN_VERSIONS), "requested": version},
+            )
+        self.era = "modern"
+        self.protocol_version = version
+        caps = meta.get(CLIENT_CAPABILITIES_META_KEY)
+        self.client_capabilities = caps if isinstance(caps, dict) else None
+        info = meta.get(CLIENT_INFO_META_KEY)
+        if isinstance(info, dict):
+            self.client_info = info
+        lvl = meta.get(LOG_LEVEL_META_KEY)
+        return version, (lvl if lvl in LOG_LEVELS else None)
 
     def _stamp_modern(self, method: str, result: dict[str, Any]) -> dict[str, Any]:
         result = dict(result)
@@ -640,7 +543,9 @@ class Session:
     # Helpers for method implementations
     # ------------------------------------------------------------------
 
-    def _tool_context(self, rc: _RequestCtx) -> Any:
+    def tool_context(self, rc: RequestCtx) -> Any:
+        """The layer :class:`~cloudg.mcp.context.ToolContext` for one request,
+        wired to send progress and log notifications to its client."""
         token = rc.meta.get("progressToken")
         if token is not None and not valid_id(token):
             token = None
@@ -662,7 +567,7 @@ class Session:
         async def log(level: Any, data: Any, logger_name: str | None) -> None:
             lvl = normalize_level(level)
             threshold = rc.log_level if rc.modern else self.log_level
-            if not _level_ok(lvl, threshold):
+            if not level_ok(lvl, threshold):
                 return
             params: dict[str, Any] = {"level": lvl, "data": data}
             if logger_name:
@@ -677,237 +582,27 @@ class Session:
             session=self,
         )
 
-
-# ---------------------------------------------------------------------------
-# Method implementations
-# ---------------------------------------------------------------------------
-
-MethodImpl = Callable[[Session, _RequestCtx, dict[str, Any]], Awaitable[dict[str, Any]]]
+    _tool_context = tool_context  # pre-0.6.1 name
 
 
-def _str_param(params: dict[str, Any], key: str) -> str:
-    value = params.get(key)
-    if not isinstance(value, str) or not value:
-        raise JSONRPCError(INVALID_PARAMS, f"Missing or invalid parameter: {key}")
-    return value
+_ACCEPT = object()
 
 
-def _layer_error(exc: MCPLayerError, *, not_found_code: int = INVALID_PARAMS,
-                 data: Any = None) -> JSONRPCError:
-    if isinstance(exc, NotFoundError):
-        return JSONRPCError(not_found_code, exc.message, data if data is not None else exc.data)
-    if isinstance(exc, InvalidArgumentsError):
-        return JSONRPCError(INVALID_PARAMS, exc.message, exc.data)
-    return JSONRPCError(exc.code, exc.message, exc.data)
-
-
-async def _m_initialize(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    if s.init_responded:
-        raise JSONRPCError(INVALID_REQUEST, "Session already initialized")
-    requested = params.get("protocolVersion")
-    if not isinstance(requested, str):
-        raise JSONRPCError(INVALID_PARAMS, "initialize requires a protocolVersion string")
-    version = requested if requested in HANDSHAKE_VERSIONS else LATEST_HANDSHAKE_VERSION
-    s.era = "legacy"
-    s.protocol_version = version
-    s.client_capabilities = params.get("capabilities") if isinstance(
-        params.get("capabilities"), dict) else {}
-    s.client_info = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else None
-    s.init_responded = True
-    result: dict[str, Any] = {
-        "protocolVersion": version,
-        "capabilities": s.server.capabilities(version),
-        "serverInfo": s.server.server_info(),
-    }
-    if s.layer.instructions:
-        result["instructions"] = s.layer.instructions
-    return result
-
-
-async def _m_ping(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    return {}
-
-
-async def _m_discover(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "supportedVersions": list(SUPPORTED_VERSIONS),
-        "capabilities": s.server.capabilities(rc.version),
-    }
-    if s.layer.instructions:
-        out["instructions"] = s.layer.instructions
-    return out
-
-
-async def _m_tools_list(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    items = s.layer.tools_wire(rc.principal)
-    page, nxt = s.server.paginate("tools", items, params.get("cursor"))
-    out: dict[str, Any] = {"tools": page}
-    if nxt:
-        out["nextCursor"] = nxt
-    return out
-
-
-async def _m_tools_call(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    name = _str_param(params, "name")
-    arguments = params.get("arguments")
-    if arguments is not None and not isinstance(arguments, dict):
-        raise JSONRPCError(INVALID_PARAMS, "arguments must be an object")
-    ctx = s._tool_context(rc)
-    try:
-        result = await s.layer.call_tool(name, arguments or {}, principal=rc.principal, context=ctx)
-    except NotFoundError as exc:
-        raise JSONRPCError(INVALID_PARAMS, exc.message, {"name": name}) from None
-    except MCPLayerError as exc:
-        raise _layer_error(exc) from None
-    return result.to_wire()
-
-
-async def _m_resources_list(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    items = s.layer.resources_wire(rc.principal)
-    page, nxt = s.server.paginate("resources", items, params.get("cursor"))
-    out: dict[str, Any] = {"resources": page}
-    if nxt:
-        out["nextCursor"] = nxt
-    return out
-
-
-async def _m_templates_list(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    items = s.layer.resource_templates_wire(rc.principal)
-    page, nxt = s.server.paginate("templates", items, params.get("cursor"))
-    out: dict[str, Any] = {"resourceTemplates": page}
-    if nxt:
-        out["nextCursor"] = nxt
-    return out
-
-
-async def _m_resources_read(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    uri = _str_param(params, "uri")
-    ctx = s._tool_context(rc)
-    try:
-        contents = await s.layer.read_resource(uri, principal=rc.principal, context=ctx)
-    except MCPLayerError as exc:
-        code = INVALID_PARAMS if rc.modern else RESOURCE_NOT_FOUND
-        raise _layer_error(exc, not_found_code=code, data={"uri": uri}) from None
-    return {"contents": [c.to_wire() for c in contents]}
-
-
-async def _m_subscribe(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    s.subscriptions.add(_str_param(params, "uri"))
-    return {}
-
-
-async def _m_unsubscribe(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    s.subscriptions.discard(_str_param(params, "uri"))
-    return {}
-
-
-async def _m_prompts_list(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    items = s.layer.prompts_wire(rc.principal)
-    page, nxt = s.server.paginate("prompts", items, params.get("cursor"))
-    out: dict[str, Any] = {"prompts": page}
-    if nxt:
-        out["nextCursor"] = nxt
-    return out
-
-
-async def _m_prompts_get(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    name = _str_param(params, "name")
-    arguments = params.get("arguments")
-    if arguments is not None and not isinstance(arguments, dict):
-        raise JSONRPCError(INVALID_PARAMS, "arguments must be an object")
-    ctx = s._tool_context(rc)
-    try:
-        result = await s.layer.get_prompt(name, arguments or {}, principal=rc.principal,
-                                          context=ctx)
-    except MCPLayerError as exc:
-        raise _layer_error(exc) from None
-    return result.to_wire()
-
-
-async def _m_complete(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    ref = params.get("ref")
-    argument = params.get("argument")
-    if not isinstance(ref, dict) or ref.get("type") not in ("ref/prompt", "ref/resource"):
-        raise JSONRPCError(INVALID_PARAMS, "Invalid completion ref")
-    if not isinstance(argument, dict) or not isinstance(argument.get("name"), str):
-        raise JSONRPCError(INVALID_PARAMS, "Invalid completion argument")
-    context = params.get("context") if isinstance(params.get("context"), dict) else {}
-    ctx_args = context.get("arguments") if isinstance(context.get("arguments"), dict) else None
-    try:
-        completion = await s.layer.complete(
-            ref, argument, principal=rc.principal, context_arguments=ctx_args
-        )
-    except MCPLayerError as exc:
-        raise _layer_error(exc) from None
-    return {"completion": completion}
-
-
-async def _m_set_level(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    level = params.get("level")
-    if level not in LOG_LEVELS:
-        raise JSONRPCError(INVALID_PARAMS, f"Invalid log level: {level!r}")
-    s.log_level = level
-    return {}
-
-
-async def _m_listen(s: Session, rc: _RequestCtx, params: dict[str, Any]) -> dict[str, Any]:
-    requested = params.get("notifications")
-    if not isinstance(requested, dict):
-        raise JSONRPCError(INVALID_PARAMS, "subscriptions/listen requires a notifications filter")
-    honored: dict[str, Any] = {}
-    for flag in _LISTEN_FLAGS.values():
-        if requested.get(flag) is True:
-            honored[flag] = True
-    uris = requested.get("resourceSubscriptions")
-    if isinstance(uris, list):
-        clean = [u for u in uris if isinstance(u, str)]
-        if clean:
-            honored["resourceSubscriptions"] = clean
-    meta = {SUBSCRIPTION_ID_META_KEY: rc.req_id}
-    stream = _ListenStream(honored)
-    s.server._listens.add(stream)
-    try:
-        await rc.notify(
-            "notifications/subscriptions/acknowledged",
-            {"notifications": honored, "_meta": dict(meta)},
-        )
-        while True:
-            event = await stream.queue.get()
-            if event is None:
-                break
-            kind, uri = event
-            if kind == "resource":
-                await rc.notify("notifications/resources/updated",
-                                {"uri": uri, "_meta": dict(meta)})
-            else:
-                await rc.notify(_CHANGE_METHODS[kind], {"_meta": dict(meta)})
-    finally:
-        s.server._listens.discard(stream)
-    return {"_meta": dict(meta)}
-
-
-_COMMON: dict[str, MethodImpl] = {
-    "tools/list": _m_tools_list,
-    "tools/call": _m_tools_call,
-    "resources/list": _m_resources_list,
-    "resources/templates/list": _m_templates_list,
-    "resources/read": _m_resources_read,
-    "prompts/list": _m_prompts_list,
-    "prompts/get": _m_prompts_get,
-    "completion/complete": _m_complete,
-}
-_LEGACY_ONLY: dict[str, MethodImpl] = {
-    "initialize": _m_initialize,
-    "ping": _m_ping,
-    "resources/subscribe": _m_subscribe,
-    "resources/unsubscribe": _m_unsubscribe,
-    "logging/setLevel": _m_set_level,
-}
-_MODERN_ONLY: dict[str, MethodImpl] = {
-    "server/discover": _m_discover,
-    "subscriptions/listen": _m_listen,
-}
-_METHODS: dict[tuple[bool, str], MethodImpl] = {
-    **{(False, m): f for m, f in {**_COMMON, **_LEGACY_ONLY}.items()},
-    **{(True, m): f for m, f in {**_COMMON, **_MODERN_ONLY}.items()},
-}
+def _rejection(msg: Any) -> Any:
+    """The error response for a malformed message, ``None`` to drop it
+    silently (stray responses, bad notifications), or ``_ACCEPT``."""
+    rid = msg.get("id") if isinstance(msg, dict) and valid_id(msg.get("id")) else None
+    if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+        return error_response(rid, INVALID_REQUEST, "Invalid Request")
+    if "method" not in msg:
+        # we never send requests, so responses are stray and ignored
+        return None if is_response(msg) else error_response(rid, INVALID_REQUEST, "Invalid Request")
+    if not isinstance(msg["method"], str):
+        return error_response(rid, INVALID_REQUEST, "Invalid Request: method must be a string")
+    has_id = "id" in msg
+    if has_id and not valid_id(msg["id"]):
+        return error_response(None, INVALID_REQUEST, "Invalid Request: bad id")
+    params = msg.get("params")
+    if params is not None and not isinstance(params, dict):
+        return error_response(rid, INVALID_PARAMS, "params must be an object") if has_id else None
+    return _ACCEPT

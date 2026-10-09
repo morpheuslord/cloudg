@@ -34,8 +34,9 @@ class Harness:
     async def _send(self, msg: dict[str, Any]) -> None:
         self.sent.append(msg)
 
-    async def request(self, method: str, params: dict[str, Any] | None = None,
-                      **kw: Any) -> dict[str, Any]:
+    async def request(
+        self, method: str, params: dict[str, Any] | None = None, **kw: Any
+    ) -> dict[str, Any]:
         self._id += 1
         msg: dict[str, Any] = {"jsonrpc": "2.0", "id": self._id, "method": method}
         if params is not None:
@@ -51,15 +52,20 @@ class Harness:
         assert await self.session.handle(msg) is None
 
     async def init(self, version: str = "2025-11-25") -> dict[str, Any]:
-        resp = await self.request("initialize", {
-            "protocolVersion": version, "capabilities": {},
-            "clientInfo": {"name": "pytest", "version": "1"},
-        })
+        resp = await self.request(
+            "initialize",
+            {
+                "protocolVersion": version,
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1"},
+            },
+        )
         await self.notify("notifications/initialized")
         return resp
 
-    async def modern(self, method: str, params: dict[str, Any] | None = None,
-                     meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def modern(
+        self, method: str, params: dict[str, Any] | None = None, meta: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         p = dict(params or {})
         p["_meta"] = {**ENVELOPE, **(meta or {})}
         return await self.request(method, p)
@@ -125,14 +131,17 @@ async def test_unknown_method(h: Harness) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("msg", [
-    {"id": 1, "method": "ping"},                       # missing jsonrpc
-    {"jsonrpc": "1.0", "id": 1, "method": "ping"},     # wrong version
-    {"jsonrpc": "2.0", "id": None, "method": "ping"},  # null id
-    {"jsonrpc": "2.0", "id": True, "method": "ping"},  # bool id
-    {"jsonrpc": "2.0", "id": 1, "method": 5},          # non-string method
-    "garbage",
-])
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"id": 1, "method": "ping"},  # missing jsonrpc
+        {"jsonrpc": "1.0", "id": 1, "method": "ping"},  # wrong version
+        {"jsonrpc": "2.0", "id": None, "method": "ping"},  # null id
+        {"jsonrpc": "2.0", "id": True, "method": "ping"},  # bool id
+        {"jsonrpc": "2.0", "id": 1, "method": 5},  # non-string method
+        "garbage",
+    ],
+)
 async def test_invalid_requests(h: Harness, msg: Any) -> None:
     resp = await h.session.handle(msg)
     assert resp["error"]["code"] == -32600
@@ -140,8 +149,9 @@ async def test_invalid_requests(h: Harness, msg: Any) -> None:
 
 async def test_params_must_be_object(h: Harness) -> None:
     await h.init()
-    resp = await h.session.handle({"jsonrpc": "2.0", "id": 9, "method": "tools/list",
-                                   "params": [1, 2]})
+    resp = await h.session.handle(
+        {"jsonrpc": "2.0", "id": 9, "method": "tools/list", "params": [1, 2]}
+    )
     assert resp["error"]["code"] == -32602
 
 
@@ -153,11 +163,13 @@ async def test_client_responses_are_ignored(h: Harness) -> None:
 async def test_batches_allowed_only_for_2025_03_26() -> None:
     old = Harness()
     await old.init("2025-03-26")
-    out = await old.session.handle([
-        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
-        {"jsonrpc": "2.0", "method": "notifications/progress", "params": {}},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-    ])
+    out = await old.session.handle(
+        [
+            {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            {"jsonrpc": "2.0", "method": "notifications/progress", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        ]
+    )
     assert isinstance(out, list) and [r["id"] for r in out] == [1, 2]
 
     new = Harness()
@@ -168,8 +180,16 @@ async def test_batches_allowed_only_for_2025_03_26() -> None:
 
 
 async def test_batch_before_initialize_rejected(h: Harness) -> None:
-    out = await h.session.handle([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                                   "params": {"protocolVersion": "2025-03-26"}}])
+    out = await h.session.handle(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26"},
+            }
+        ]
+    )
     assert out["error"]["code"] == -32600
 
 
@@ -206,14 +226,16 @@ async def test_tools_list_exact_wire_and_pagination() -> None:
 
 async def test_tool_call_structured_and_errors(h: Harness) -> None:
     await h.init()
-    ok = (await h.request("tools/call", {"name": "echo",
-                                         "arguments": {"text": "ab", "times": 2}}))["result"]
+    ok = (await h.request("tools/call", {"name": "echo", "arguments": {"text": "ab", "times": 2}}))[
+        "result"
+    ]
     assert ok["structuredContent"] == {"text": "abab"}
     assert ok["isError"] is False
     assert ok["content"][0]["type"] == "text"
 
-    bad_args = (await h.request("tools/call", {"name": "echo",
-                                               "arguments": {"times": 9}}))["result"]
+    bad_args = (await h.request("tools/call", {"name": "echo", "arguments": {"times": 9}}))[
+        "result"
+    ]
     assert bad_args["isError"] is True  # validation errors are tool errors (SEP-1303)
 
     failing = (await h.request("tools/call", {"name": "fail"}))["result"]
@@ -237,13 +259,18 @@ async def test_resource_links_in_tool_result(h: Harness) -> None:
 
 async def test_progress_and_log_notifications(h: Harness) -> None:
     await h.init()
-    result = (await h.request("tools/call", {"name": "slow", "arguments": {"steps": 3},
-                                             "_meta": {"progressToken": "tok"}}))["result"]
+    result = (
+        await h.request(
+            "tools/call",
+            {"name": "slow", "arguments": {"steps": 3}, "_meta": {"progressToken": "tok"}},
+        )
+    )["result"]
     assert result["structuredContent"] == {"done": 3}
     progress = h.notifications("notifications/progress")
     assert [p["params"]["progress"] for p in progress] == [1, 2, 3]
-    assert all(p["params"]["progressToken"] == "tok" and p["params"]["total"] == 3
-               for p in progress)
+    assert all(
+        p["params"]["progressToken"] == "tok" and p["params"]["total"] == 3 for p in progress
+    )
     logs = h.notifications("notifications/message")
     assert len(logs) == 3 and logs[0]["params"]["level"] == "info"
     assert logs[0]["params"]["data"] == {"step": 1}
@@ -266,18 +293,27 @@ async def test_request_sink_receives_request_scoped_notifications(h: Harness) ->
     async def collect(msg: dict[str, Any]) -> None:
         sink.append(msg)
 
-    await h.request("tools/call", {"name": "slow", "arguments": {"steps": 1},
-                                   "_meta": {"progressToken": 5}}, sink=collect)
+    await h.request(
+        "tools/call",
+        {"name": "slow", "arguments": {"steps": 1}, "_meta": {"progressToken": 5}},
+        sink=collect,
+    )
     assert {m["method"] for m in sink} == {"notifications/progress", "notifications/message"}
     assert h.sent == []
 
 
 async def test_cancellation_suppresses_response(h: Harness) -> None:
     await h.init()
-    task = asyncio.create_task(h.session.handle(
-        {"jsonrpc": "2.0", "id": "slow-1", "method": "tools/call",
-         "params": {"name": "sleepy", "arguments": {"seconds": 30}}}
-    ))
+    task = asyncio.create_task(
+        h.session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "slow-1",
+                "method": "tools/call",
+                "params": {"name": "sleepy", "arguments": {"seconds": 30}},
+            }
+        )
+    )
     await asyncio.sleep(0.05)
     await h.notify("notifications/cancelled", {"requestId": "slow-1", "reason": "user"})
     assert await asyncio.wait_for(task, 2) is None
@@ -296,8 +332,9 @@ async def test_resources(h: Harness) -> None:
     assert listing == h.layer.resources_wire()
     templates = (await h.request("resources/templates/list"))["result"]["resourceTemplates"]
     assert templates[0]["uriTemplate"] == "test://items/{item_id}"
-    contents = (await h.request("resources/read",
-                                {"uri": "test://items/beta"}))["result"]["contents"]
+    contents = (await h.request("resources/read", {"uri": "test://items/beta"}))["result"][
+        "contents"
+    ]
     assert contents[0]["uri"] == "test://items/beta" and '"index": 1' in contents[0]["text"]
     missing = await h.request("resources/read", {"uri": "test://items/zeta"})
     assert missing["error"]["code"] == -32002
@@ -310,26 +347,38 @@ async def test_prompts_and_completions(h: Harness) -> None:
     await h.init()
     prompts = (await h.request("prompts/list"))["result"]["prompts"]
     assert prompts[0]["name"] == "greet" and prompts[0]["arguments"][0]["required"] is True
-    got = (await h.request("prompts/get", {"name": "greet",
-                                           "arguments": {"name": "Ann"}}))["result"]
+    got = (await h.request("prompts/get", {"name": "greet", "arguments": {"name": "Ann"}}))[
+        "result"
+    ]
     assert got["messages"][0]["content"]["text"] == "Hi Ann!"
     missing = await h.request("prompts/get", {"name": "greet", "arguments": {}})
     assert missing["error"]["code"] == -32602
     unknown = await h.request("prompts/get", {"name": "nope"})
     assert unknown["error"]["code"] == -32602
 
-    comp = (await h.request("completion/complete", {
-        "ref": {"type": "ref/resource", "uri": "test://items/{item_id}"},
-        "argument": {"name": "item_id", "value": "a"},
-    }))["result"]["completion"]
+    comp = (
+        await h.request(
+            "completion/complete",
+            {
+                "ref": {"type": "ref/resource", "uri": "test://items/{item_id}"},
+                "argument": {"name": "item_id", "value": "a"},
+            },
+        )
+    )["result"]["completion"]
     assert comp["values"] == ["alpha"]
-    comp = (await h.request("completion/complete", {
-        "ref": {"type": "ref/prompt", "name": "greet"},
-        "argument": {"name": "name", "value": "g"},
-    }))["result"]["completion"]
+    comp = (
+        await h.request(
+            "completion/complete",
+            {
+                "ref": {"type": "ref/prompt", "name": "greet"},
+                "argument": {"name": "name", "value": "g"},
+            },
+        )
+    )["result"]["completion"]
     assert comp["values"] == ["gamma"]
-    bad = await h.request("completion/complete", {"ref": {"type": "ref/x"},
-                                                  "argument": {"name": "a"}})
+    bad = await h.request(
+        "completion/complete", {"ref": {"type": "ref/x"}, "argument": {"name": "a"}}
+    )
     assert bad["error"]["code"] == -32602
 
 
@@ -344,8 +393,7 @@ async def test_change_notifications_respect_subscriptions(h: Harness) -> None:
     await asyncio.sleep(0.05)
     methods = [m["method"] for m in h.sent]
     assert methods.count("notifications/resources/updated") == 1
-    assert h.notifications("notifications/resources/updated")[0]["params"] == {
-        "uri": "test://info"}
+    assert h.notifications("notifications/resources/updated")[0]["params"] == {"uri": "test://info"}
     assert "notifications/tools/list_changed" in methods
     assert "notifications/prompts/list_changed" in methods
     assert "notifications/resources/list_changed" in methods
@@ -400,8 +448,10 @@ async def test_discover_and_modern_stamps(h: Harness) -> None:
 async def test_modern_envelope_validation(h: Harness) -> None:
     resp = await h.request("tools/list", {"_meta": {PROTOCOL_VERSION_META_KEY: MODERN}})
     assert resp["error"]["code"] == -32602
-    resp = await h.request("tools/list", {"_meta": {PROTOCOL_VERSION_META_KEY: "2099-01-01",
-                                                    CLIENT_CAPABILITIES_META_KEY: {}}})
+    resp = await h.request(
+        "tools/list",
+        {"_meta": {PROTOCOL_VERSION_META_KEY: "2099-01-01", CLIENT_CAPABILITIES_META_KEY: {}}},
+    )
     assert resp["error"]["code"] == -32022
     assert resp["error"]["data"] == {"supported": [MODERN], "requested": "2099-01-01"}
 
@@ -424,13 +474,19 @@ async def test_modern_only_and_legacy_only_methods(h: Harness) -> None:
 async def test_modern_logging_requires_opt_in(h: Harness) -> None:
     await h.modern("tools/call", {"name": "slow", "arguments": {"steps": 1}})
     assert h.notifications("notifications/message") == []
-    await h.modern("tools/call", {"name": "slow", "arguments": {"steps": 1}},
-                   meta={LOG_LEVEL_META_KEY: "debug", "progressToken": "p"})
+    await h.modern(
+        "tools/call",
+        {"name": "slow", "arguments": {"steps": 1}},
+        meta={LOG_LEVEL_META_KEY: "debug", "progressToken": "p"},
+    )
     assert len(h.notifications("notifications/message")) == 1
     assert len(h.notifications("notifications/progress")) == 1
     h.sent.clear()
-    await h.modern("tools/call", {"name": "slow", "arguments": {"steps": 1}},
-                   meta={LOG_LEVEL_META_KEY: "error"})
+    await h.modern(
+        "tools/call",
+        {"name": "slow", "arguments": {"steps": 1}},
+        meta={LOG_LEVEL_META_KEY: "error"},
+    )
     assert h.notifications("notifications/message") == []
 
 
@@ -440,20 +496,34 @@ async def test_subscriptions_listen(h: Harness) -> None:
     async def sink(msg: dict[str, Any]) -> None:
         frames.append(msg)
 
-    listen = asyncio.create_task(h.session.handle({
-        "jsonrpc": "2.0", "id": "L1", "method": "subscriptions/listen",
-        "params": {"_meta": ENVELOPE, "notifications": {
-            "toolsListChanged": True, "promptsListChanged": False,
-            "resourceSubscriptions": ["test://info"]}},
-    }, sink=sink))
+    listen = asyncio.create_task(
+        h.session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "L1",
+                "method": "subscriptions/listen",
+                "params": {
+                    "_meta": ENVELOPE,
+                    "notifications": {
+                        "toolsListChanged": True,
+                        "promptsListChanged": False,
+                        "resourceSubscriptions": ["test://info"],
+                    },
+                },
+            },
+            sink=sink,
+        )
+    )
     for _ in range(50):
         if frames:
             break
         await asyncio.sleep(0.01)
     ack = frames[0]
     assert ack["method"] == "notifications/subscriptions/acknowledged"
-    assert ack["params"]["notifications"] == {"toolsListChanged": True,
-                                              "resourceSubscriptions": ["test://info"]}
+    assert ack["params"]["notifications"] == {
+        "toolsListChanged": True,
+        "resourceSubscriptions": ["test://info"],
+    }
     assert ack["params"]["_meta"][SUBSCRIPTION_ID_META_KEY] == "L1"
     h.layer.notify_change("tools")
     h.layer.notify_change("prompts")  # not requested
@@ -474,8 +544,9 @@ async def test_subscriptions_listen(h: Harness) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25",
-                                     MODERN])
+@pytest.mark.parametrize(
+    "version", ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", MODERN]
+)
 async def test_results_validate_against_sdk_schema(version: str) -> None:
     methods = pytest.importorskip("mcp_types.methods")
     hh = Harness()
@@ -501,7 +572,9 @@ async def test_results_validate_against_sdk_schema(version: str) -> None:
     await call("resources/read", {"uri": "test://info"})
     await call("prompts/list")
     await call("prompts/get", {"name": "greet", "arguments": {"name": "x"}})
-    await call("completion/complete", {"ref": {"type": "ref/prompt", "name": "greet"},
-                                       "argument": {"name": "name", "value": ""}})
+    await call(
+        "completion/complete",
+        {"ref": {"type": "ref/prompt", "name": "greet"}, "argument": {"name": "name", "value": ""}},
+    )
     if version == MODERN:
         await call("server/discover")

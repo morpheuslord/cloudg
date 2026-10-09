@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
 from cloudg.mcp.transforms.base import TransformContext
 from cloudg.mcp.transforms.substitution import FENCE_CLOSE, FENCE_OPEN
@@ -100,7 +101,7 @@ INJECTION_PATTERNS: tuple[str, ...] = (
     r"<\|?\s*(?:im_start|im_end|system|endoftext|eot_id|start_header_id)\s*\|?>",
     r"</?\s*(?:system|assistant|tool_call|function_call|instructions?)\s*>",
     r"\[/?(?:INST|SYS)\]",
-    r"#{2,}\s*(?:system|instruction|assistant)\b",
+    r"##\s*(?:system|instruction|assistant)\b",
     r"\bdo\s+not\s+(?:tell|inform|alert|notify|mention\s+(?:this\s+)?to)\s+the\s+user",
     r"\b(?:call|invoke|execute)\s+(?:the\s+)?[\w\-]+\s+tool\b",
     r"\boverride\s+(?:your|the|all)\s+(?:instructions|guidelines|rules|policy|policies)",
@@ -112,7 +113,7 @@ INJECTION_PATTERNS: tuple[str, ...] = (
     r"(?:ignore|forget|disregard|run|execute|delete)\b",
 )
 
-DEFAULT_FREE_TEXT_KEYS = (
+DEFAULT_FREE_TEXT_KEYS: tuple[str, ...] = (
     "name",
     "*_name",
     "display*",
@@ -139,10 +140,37 @@ UNTRUSTED_NOTICE = (
 )
 
 
+#: One literal every injection pattern needs (lowercase). A text that
+#: contains none of them cannot match, so the combined regex is skipped.
+#: Only used for ASCII text: Unicode case folding (``\u017f`` matches ``s``
+#: under ``re.IGNORECASE``) would make a plain ``lower()`` check unsafe.
+_INJECTION_HINTS: tuple[str, ...] = (
+    "ignore", "disregard", "forget", "you", "instruction", "system", "developer",
+    "<", "[", "##", "not", "tool", "override", "reveal", "http", "webhook",
+    "exfiltrat", "jailbreak", "run", "execute", "delete",
+)  # fmt: skip
+_INJECTION_HINT_RE = re.compile("|".join(re.escape(h) for h in _INJECTION_HINTS))
+
+
+@dataclass(frozen=True)
+class GuardOptions:
+    """Options of :class:`UntrustedTextGuard` (see its docstring)."""
+
+    strip: bool = True
+    detect: bool = True
+    on_suspicious: str = "fence"
+    max_free_text: int | None = 2000
+    max_length: int | None = None
+    free_text_keys: tuple[str, ...] = DEFAULT_FREE_TEXT_KEYS
+    extra_patterns: tuple[str, ...] = ()
+    min_length: int = 12
+    max_paths: int = 20
+
+
 class UntrustedTextGuard:
     """Sanitise attacker-influenced text (``sanitize`` transform).
 
-    Args:
+    Keyword options (or one :class:`GuardOptions`):
         strip: Remove invisible / control / bidi characters.
         detect: Run the prompt-injection heuristics.
         on_suspicious: ``"fence"`` (default), ``"datamark"``, ``"redact"``
@@ -152,49 +180,49 @@ class UntrustedTextGuard:
         free_text_keys: Key globs considered free text.
         extra_patterns: Additional injection regexes.
         min_length: Shortest string worth running the heuristics on.
+        max_paths: How many paths of suspicious values the report lists.
     """
 
     name = "sanitize"
 
-    def __init__(
-        self,
-        *,
-        strip: bool = True,
-        detect: bool = True,
-        on_suspicious: str = "fence",
-        max_free_text: int | None = 2000,
-        max_length: int | None = None,
-        free_text_keys: Iterable[str] = DEFAULT_FREE_TEXT_KEYS,
-        extra_patterns: Iterable[str] = (),
-        min_length: int = 12,
-        max_paths: int = 20,
-    ) -> None:
-        if on_suspicious not in ("fence", "datamark", "redact", "flag"):
+    def __init__(self, options: GuardOptions | None = None, **kwargs: Any) -> None:
+        for k in ("free_text_keys", "extra_patterns"):
+            if k in kwargs:
+                kwargs[k] = tuple(kwargs[k])
+        opts = replace(options, **kwargs) if options is not None else GuardOptions(**kwargs)
+        if opts.on_suspicious not in ("fence", "datamark", "redact", "flag"):
             raise ValueError("on_suspicious must be fence | datamark | redact | flag")
-        self.strip = strip
-        self.detect = detect
-        self.on_suspicious = on_suspicious
-        self.max_free_text = max_free_text
-        self.max_length = max_length
-        keys = list(free_text_keys)
+        self.options = opts
+        self.strip = opts.strip
+        self.detect = opts.detect
+        self.on_suspicious = opts.on_suspicious
+        self.max_free_text = opts.max_free_text
+        self.max_length = opts.max_length
         self._free_rx = re.compile(
-            "|".join(f"(?:{fnmatch.translate(k.lower())})" for k in keys) or r"(?!)"
+            "|".join(f"(?:{fnmatch.translate(k.lower())})" for k in opts.free_text_keys) or r"(?!)"
         )
         self._inj_rx = re.compile(
-            "|".join(f"(?:{p})" for p in (*INJECTION_PATTERNS, *extra_patterns)),
+            "|".join(f"(?:{p})" for p in (*INJECTION_PATTERNS, *opts.extra_patterns)),
             re.IGNORECASE | re.DOTALL,
         )
-        self.min_length = min_length
-        self.max_paths = max_paths
+        # custom patterns have no known literals: always run the regex then
+        self._hints = None if opts.extra_patterns else _INJECTION_HINT_RE
+        self.min_length = opts.min_length
+        self.max_paths = opts.max_paths
         self._free_cache: dict[str, bool] = {}
         self._inj_cache: dict[str, bool] = {}
+
+    def _maybe_injection(self, text: str) -> bool:
+        if self._hints is None or not text.isascii():
+            return True
+        return self._hints.search(text.lower()) is not None
 
     def is_suspicious(self, text: str) -> bool:
         if len(text) < self.min_length:
             return False
         hit = self._inj_cache.get(text)
         if hit is None:
-            hit = bool(self._inj_rx.search(text))
+            hit = self._maybe_injection(text) and bool(self._inj_rx.search(text))
             if len(self._inj_cache) > 100_000:
                 self._inj_cache.clear()
             self._inj_cache[text] = hit
@@ -219,60 +247,77 @@ class UntrustedTextGuard:
             return "^".join(safe.split())
         return f"{FENCE_OPEN}{safe}{FENCE_CLOSE}"
 
+    def _cap(self, key: str | None) -> int | None:
+        cap = self.max_length
+        if self.max_free_text is not None and self._is_free(key):
+            cap = self.max_free_text if cap is None else min(cap, self.max_free_text)
+        return cap
+
     def apply(self, value: Any, ctx: TransformContext) -> Any:
-        stats = {"stripped_chars": 0, "sanitized_fields": 0, "suspicious": 0, "truncated": 0}
-        paths: list[str] = []
-
-        def fix(text: str, key: str | None, path: str) -> str:
-            if self.strip:
-                text, n = strip_invisible(text)
-                if n:
-                    stats["stripped_chars"] += n
-                    stats["sanitized_fields"] += 1
-            cap = self.max_length
-            if self.max_free_text is not None and self._is_free(key):
-                cap = self.max_free_text if cap is None else min(cap, self.max_free_text)
-            if cap is not None and len(text) > cap:
-                text = text[:cap] + f"… [+{len(text) - cap} chars]"
-                stats["truncated"] += 1
-            if self.detect and self.is_suspicious(text):
-                stats["suspicious"] += 1
-                if len(paths) < self.max_paths:
-                    paths.append(path or "$")
-                text = self.neutralise(text)
-            return text
-
-        def walk(v: Any, key: str | None, path: str) -> Any:
-            if isinstance(v, str):
-                return fix(v, key, path)
-            if isinstance(v, dict):
-                out = {}
-                for k, x in v.items():
-                    nk = k
-                    if isinstance(k, str) and self.strip:
-                        nk, n = strip_invisible(k)
-                        if n:
-                            stats["stripped_chars"] += n
-                            stats["sanitized_fields"] += 1
-                    out[nk] = walk(
-                        x, k if isinstance(k, str) else key, f"{path}.{k}" if path else str(k)
-                    )
-                return out
-            if isinstance(v, (list, tuple)):
-                return [walk(x, key, f"{path}[{i}]") for i, x in enumerate(v)]
-            return v
-
-        out = walk(value, None, "")
-        if any(stats.values()):
-            sec = ctx.report.setdefault("untrusted", {})
-            for k, n in stats.items():
-                if n:
-                    sec[k] = sec.get(k, 0) + n
-            if paths:
-                sec.setdefault("paths", []).extend(paths)
-                sec["action"] = self.on_suspicious
-                sec["notice"] = UNTRUSTED_NOTICE
+        run = _GuardRun(self)
+        out = run.walk(value, None, "")
+        run.report(ctx)
         return out
+
+
+class _GuardRun:
+    """State of one :meth:`UntrustedTextGuard.apply` call."""
+
+    __slots__ = ("g", "stats", "paths")
+
+    def __init__(self, guard: UntrustedTextGuard) -> None:
+        self.g = guard
+        self.stats = {"stripped_chars": 0, "sanitized_fields": 0, "suspicious": 0, "truncated": 0}
+        self.paths: list[str] = []
+
+    def strip(self, text: str) -> str:
+        if not self.g.strip:
+            return text
+        text, n = strip_invisible(text)
+        if n:
+            self.stats["stripped_chars"] += n
+            self.stats["sanitized_fields"] += 1
+        return text
+
+    def fix(self, text: str, key: str | None, path: str) -> str:
+        g = self.g
+        text = self.strip(text)
+        cap = g._cap(key)
+        if cap is not None and len(text) > cap:
+            text = text[:cap] + f"… [+{len(text) - cap} chars]"
+            self.stats["truncated"] += 1
+        if g.detect and g.is_suspicious(text):
+            self.stats["suspicious"] += 1
+            if len(self.paths) < g.max_paths:
+                self.paths.append(path or "$")
+            text = g.neutralise(text)
+        return text
+
+    def walk(self, v: Any, key: str | None, path: str) -> Any:
+        if isinstance(v, str):
+            return self.fix(v, key, path)
+        if isinstance(v, dict):
+            out = {}
+            for k, x in v.items():
+                is_str = isinstance(k, str)
+                nk = self.strip(k) if is_str else k
+                out[nk] = self.walk(x, k if is_str else key, f"{path}.{k}" if path else str(k))
+            return out
+        if isinstance(v, (list, tuple)):
+            return [self.walk(x, key, f"{path}[{i}]") for i, x in enumerate(v)]
+        return v
+
+    def report(self, ctx: TransformContext) -> None:
+        if not any(self.stats.values()):
+            return
+        sec = ctx.report.setdefault("untrusted", {})
+        for k, n in self.stats.items():
+            if n:
+                sec[k] = sec.get(k, 0) + n
+        if self.paths:
+            sec.setdefault("paths", []).extend(self.paths)
+            sec["action"] = self.g.on_suspicious
+            sec["notice"] = UNTRUSTED_NOTICE
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +328,25 @@ _SEVERITIES = ("critical", "high", "medium", "low", "info", "informational")
 _ORDER = ("public", "internal", "confidential", "restricted")
 
 
+@dataclass(frozen=True)
+class AnnotatorOptions:
+    """Options of :class:`Annotator` (see its docstring)."""
+
+    inline: bool = False
+    key: str = "_annotations"
+    provenance: bool = True
+    classification: bool = True
+    summary: bool = True
+    label_findings: bool = False
+    content_annotations: bool = True
+    profile: str | None = None
+    notice: str | None = None
+
+
 class Annotator:
     """Attach classification / provenance / transform summary.
 
-    Args:
+    Keyword options (or one :class:`AnnotatorOptions`):
         inline: Also add the annotations to dict results under ``key``.
         key: Inline key (``_annotations``).
         provenance / classification / summary: Toggle sections.
@@ -300,72 +360,28 @@ class Annotator:
 
     name = "annotate"
 
-    def __init__(
-        self,
-        *,
-        inline: bool = False,
-        key: str = "_annotations",
-        provenance: bool = True,
-        classification: bool = True,
-        summary: bool = True,
-        label_findings: bool = False,
-        content_annotations: bool = True,
-        profile: str | None = None,
-        notice: str | None = None,
-    ) -> None:
-        self.inline = inline
-        self.key = key
-        self.provenance = provenance
-        self.classification = classification
-        self.summary = summary
-        self.label_findings = label_findings
-        self.content_annotations = content_annotations
-        self.profile = profile
-        self.notice = notice
+    def __init__(self, options: AnnotatorOptions | None = None, **kwargs: Any) -> None:
+        opts = replace(options, **kwargs) if options is not None else AnnotatorOptions(**kwargs)
+        self.options = opts
+        self.inline = opts.inline
+        self.key = opts.key
+        self.provenance = opts.provenance
+        self.classification = opts.classification
+        self.summary = opts.summary
+        self.label_findings = opts.label_findings
+        self.content_annotations = opts.content_annotations
+        self.profile = opts.profile
+        self.notice = opts.notice
 
     def apply(self, value: Any, ctx: TransformContext) -> Any:
         ann: dict[str, Any] = {}
-        spec = ctx.spec
-        sens = getattr(getattr(spec, "sensitivity", None), "value", None)
+        sens = getattr(getattr(ctx.spec, "sensitivity", None), "value", None)
         if self.classification:
             ann["classification"] = self._classify(sens, ctx.report)
         if self.provenance:
-            prov: dict[str, Any] = {
-                "kind": ctx.kind,
-                "name": getattr(spec, "name", None),
-                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            }
-            if self.profile:
-                prov["policy"] = self.profile
-            if getattr(spec, "category", None):
-                prov["category"] = spec.category  # type: ignore[union-attr]
-            if isinstance(value, dict):
-                for k in ("dataset", "dataset_id", "source"):
-                    if isinstance(value.get(k), (str, int)):
-                        prov["dataset"] = value[k]
-                        break
-            if ctx.principal is not None:
-                prov["principal_roles"] = sorted(getattr(ctx.principal, "roles", ()) or ())
-            ann["provenance"] = prov
+            ann["provenance"] = self._provenance(value, ctx)
         if self.summary:
-            done = {
-                k: sum(v.values()) if isinstance(v, dict) else v
-                for k, v in ctx.report.items()
-                if k
-                in (
-                    "redacted",
-                    "masked",
-                    "hashed",
-                    "pseudonymized",
-                    "generalized",
-                    "dropped",
-                    "aliased",
-                )
-            }
-            if done:
-                ann["transformed"] = done
-            if "untrusted" in ctx.report and ctx.report["untrusted"].get("suspicious"):
-                ann["untrusted_content"] = UNTRUSTED_NOTICE
+            ann.update(_transform_summary(ctx.report))
         if self.notice:
             ann["notice"] = self.notice
         severities: dict[str, int] = {}
@@ -380,6 +396,26 @@ class Annotator:
         if self.inline and isinstance(out, dict):
             out = {**out, self.key: ann}
         return out
+
+    def _provenance(self, value: Any, ctx: TransformContext) -> dict[str, Any]:
+        spec = ctx.spec
+        prov: dict[str, Any] = {
+            "kind": ctx.kind,
+            "name": getattr(spec, "name", None),
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if self.profile:
+            prov["policy"] = self.profile
+        if getattr(spec, "category", None):
+            prov["category"] = spec.category  # type: ignore[union-attr]
+        if isinstance(value, dict):
+            for k in ("dataset", "dataset_id", "source"):
+                if isinstance(value.get(k), (str, int)):
+                    prov["dataset"] = value[k]
+                    break
+        if ctx.principal is not None:
+            prov["principal_roles"] = sorted(getattr(ctx.principal, "roles", ()) or ())
+        return prov
 
     @staticmethod
     def _classify(sens: str | None, report: dict[str, Any]) -> dict[str, Any]:
@@ -404,29 +440,7 @@ class Annotator:
 
     def _findings(self, value: Any, counts: dict[str, int], label: bool) -> Any:
         if isinstance(value, dict):
-            sev = value.get("severity")
-            is_finding = (
-                isinstance(sev, str)
-                and sev.lower() in _SEVERITIES
-                and ("title" in value or "resource_id" in value)
-            )
-            if not label and not is_finding:
-                # fast path: no mutation needed, only counting
-                for v in value.values():
-                    if isinstance(v, (dict, list)):
-                        self._findings(v, counts, label)
-                return value
-            out = {
-                k: self._findings(v, counts, label) if isinstance(v, (dict, list)) else v
-                for k, v in value.items()
-            }
-            if is_finding:
-                s = sev.lower()  # type: ignore[union-attr]
-                counts[s] = counts.get(s, 0) + 1
-                if label:
-                    risk = value.get("risk_score")
-                    out["_risk"] = f"{s.upper()} risk" + (f" ({risk})" if risk is not None else "")
-            return out
+            return self._finding_dict(value, counts, label)
         if isinstance(value, list):
             if not label:
                 for v in value:
@@ -435,6 +449,62 @@ class Annotator:
                 return value
             return [self._findings(v, counts, label) for v in value]
         return value
+
+    def _finding_dict(self, value: dict[Any, Any], counts: dict[str, int], label: bool) -> Any:
+        sev = _finding_severity(value)
+        if not label and sev is None:
+            # fast path: no mutation needed, only counting
+            for v in value.values():
+                if isinstance(v, (dict, list)):
+                    self._findings(v, counts, label)
+            return value
+        out = {
+            k: self._findings(v, counts, label) if isinstance(v, (dict, list)) else v
+            for k, v in value.items()
+        }
+        if sev is not None:
+            counts[sev] = counts.get(sev, 0) + 1
+            if label:
+                risk = value.get("risk_score")
+                out["_risk"] = f"{sev.upper()} risk" + (f" ({risk})" if risk is not None else "")
+        return out
+
+
+_SUMMARY_SECTIONS = (
+    "redacted",
+    "masked",
+    "hashed",
+    "pseudonymized",
+    "generalized",
+    "dropped",
+    "aliased",
+)
+
+
+def _transform_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """``transformed`` counts per section and the untrusted-content notice."""
+    out: dict[str, Any] = {}
+    done = {
+        k: sum(v.values()) if isinstance(v, dict) else v
+        for k, v in report.items()
+        if k in _SUMMARY_SECTIONS
+    }
+    if done:
+        out["transformed"] = done
+    if "untrusted" in report and report["untrusted"].get("suspicious"):
+        out["untrusted_content"] = UNTRUSTED_NOTICE
+    return out
+
+
+def _finding_severity(value: dict[Any, Any]) -> str | None:
+    """Lowercase severity of a finding-like dict (``severity`` plus a
+    ``title`` or ``resource_id``), else ``None``."""
+    sev = value.get("severity")
+    if not isinstance(sev, str) or sev.lower() not in _SEVERITIES:
+        return None
+    if "title" in value or "resource_id" in value:
+        return sev.lower()
+    return None
 
 
 def _content_hint(sens: str | None, severities: dict[str, int]) -> dict[str, Any]:

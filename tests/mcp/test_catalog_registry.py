@@ -11,8 +11,18 @@ from cloudg.mcp.catalog import CATEGORIES, default_registry
 from cloudg.mcp.core import Capability, Sensitivity
 
 REG = default_registry()
-OWN_CATEGORIES = {"workspace", "inventory", "graph", "findings", "compliance", "ontology",
-                  "export", "live", "meta", "prompts"}
+OWN_CATEGORIES = {
+    "workspace",
+    "inventory",
+    "graph",
+    "findings",
+    "compliance",
+    "ontology",
+    "export",
+    "live",
+    "meta",
+    "prompts",
+}
 
 
 def own_tools():
@@ -39,8 +49,12 @@ def test_tool_metadata(spec):
     assert isinstance(spec.sensitivity, Sensitivity)
     # capabilities are consistent with annotations
     if ann.read_only:
-        assert not spec.capabilities & {Capability.WRITE_STATE, Capability.WRITE_FS,
-                                        Capability.CLOUD_ACCESS, Capability.EXEC}
+        assert not spec.capabilities & {
+            Capability.WRITE_STATE,
+            Capability.WRITE_FS,
+            Capability.CLOUD_ACCESS,
+            Capability.EXEC,
+        }
     # Tools that reach cloud APIs or spawn processes are open-world
     if spec.capabilities & {Capability.CLOUD_ACCESS, Capability.EXEC}:
         assert ann.open_world is True
@@ -48,18 +62,32 @@ def test_tool_metadata(spec):
         assert ann.open_world is False
 
 
+def _declared_arguments(handler) -> dict[str, bool]:
+    """Argument name -> required, from the signature or, for handlers of
+    the form ``(ctx, args: Model)``, from the arguments model."""
+    from typing import get_type_hints
+
+    from pydantic import BaseModel
+
+    params = {n: p for n, p in inspect.signature(handler).parameters.items() if n != "ctx"}
+    if list(params) == ["args"]:
+        model = get_type_hints(handler)["args"]
+        if isinstance(model, type) and issubclass(model, BaseModel):
+            return {n: f.is_required() for n, f in model.model_fields.items()}
+    return {n: p.default is inspect.Parameter.empty for n, p in params.items()}
+
+
 @pytest.mark.parametrize("spec", own_tools(), ids=lambda s: s.name)
 def test_tool_input_schema_matches_signature(spec):
     schema = spec.input_schema
     assert schema["type"] == "object" and schema["additionalProperties"] is False
-    params = [p for p in inspect.signature(spec.handler).parameters if p != "ctx"]
-    assert set(schema.get("properties", {})) == set(params)
+    declared = _declared_arguments(spec.handler)
+    assert set(schema.get("properties", {})) == set(declared)
     for name, prop in schema["properties"].items():
         assert prop, f"{spec.name}.{name} has an empty (untyped) schema"
     required = set(schema.get("required", []))
-    for p in inspect.signature(spec.handler).parameters.values():
-        if p.name != "ctx":
-            assert (p.name in required) == (p.default is inspect.Parameter.empty)
+    for name, is_required in declared.items():
+        assert (name in required) == is_required
 
 
 @pytest.mark.parametrize("spec", own_tools(), ids=lambda s: s.name)
@@ -80,9 +108,12 @@ def test_paginated_tools_have_cursor_and_limit():
 
 
 def test_dataset_argument_everywhere_it_matters():
-    reads = [s for s in own_tools() if s.category in ("inventory", "graph", "findings",
-                                                       "ontology", "export")
-             and s.name not in ("ingest_reports",)]
+    reads = [
+        s
+        for s in own_tools()
+        if s.category in ("inventory", "graph", "findings", "ontology", "export")
+        and s.name not in ("ingest_reports",)
+    ]
     for s in reads:
         assert "dataset" in s.input_schema["properties"], s.name
 
@@ -163,12 +194,23 @@ def test_privacy_module_is_optional(monkeypatch):
 
 
 OUTPUT_CALLS = {
-    "find_assets": {}, "get_asset": {"ref": "web-1"}, "neighbors": {"ref": "web-1"},
-    "find_paths": {"source": "internet", "target": "orders-db"}, "attack_paths": {},
-    "lateral_movement_paths": {}, "list_findings": {}, "findings_for_asset": {"ref": "web-1"},
-    "top_risks": {}, "workspace_status": {}, "dataset_summary": {}, "count_assets": {},
-    "diff_datasets": {"base": "sample"}, "get_edges": {}, "depends_on": {"ref": "api-handler"},
-    "dependents": {"ref": "kms-main"}, "sparql_query": {"query": "ASK { ?s ?p ?o }"},
+    "find_assets": {},
+    "get_asset": {"ref": "web-1"},
+    "neighbors": {"ref": "web-1"},
+    "find_paths": {"source": "internet", "target": "orders-db"},
+    "attack_paths": {},
+    "lateral_movement_paths": {},
+    "list_findings": {},
+    "findings_for_asset": {"ref": "web-1"},
+    "top_risks": {},
+    "workspace_status": {},
+    "dataset_summary": {},
+    "count_assets": {},
+    "diff_datasets": {"base": "sample"},
+    "get_edges": {},
+    "depends_on": {"ref": "api-handler"},
+    "dependents": {"ref": "kms-main"},
+    "sparql_query": {"query": "ASK { ?s ?p ?o }"},
     "compliance_summary": {},
 }
 

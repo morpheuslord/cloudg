@@ -56,8 +56,19 @@ def _modules() -> list[ModuleType]:
         workspace,
     )
 
-    return [workspace, inventory, graph, findings, compliance, ontology, export, live, meta,
-            resources, prompts]
+    return [
+        workspace,
+        inventory,
+        graph,
+        findings,
+        compliance,
+        ontology,
+        export,
+        live,
+        meta,
+        resources,
+        prompts,
+    ]
 
 
 def default_registry() -> Registry:

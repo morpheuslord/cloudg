@@ -27,6 +27,7 @@ R, W, FS = Capability.READ_STATE, Capability.WRITE_STATE, Capability.READ_FS
 
 CATALOG = Catalog()
 
+
 @CATALOG.tool(
     title="Workspace status",
     category=CATEGORY,
@@ -52,6 +53,7 @@ def workspace_status(ctx: Any) -> dict:
         ctx.link("cloudg://workspace", "workspace", title="Workspace status")
     return status
 
+
 @CATALOG.tool(
     title="List datasets",
     category=CATEGORY,
@@ -66,6 +68,7 @@ def list_datasets(ctx: Any) -> dict:
     ws = ctx.workspace
     items = [{**d.describe(), "active": d.name == ws.active_name} for d in ws.datasets()]
     return {"active_dataset": ws.active_name, "datasets": items, "total": len(items)}
+
 
 @CATALOG.tool(
     title="Load dataset",
@@ -89,32 +92,38 @@ def load_dataset(
             "Trivy output.",
         ),
     ],
-    name: Annotated[
-        str, Field(description="Dataset name; default derives from the path.")
-    ] = "",
+    name: Annotated[str, Field(description="Dataset name; default derives from the path.")] = "",
     kind: Annotated[
         Literal[
-            "auto", "inventory", "report", "generic", "prowler", "scoutsuite", "checkov",
+            "auto",
+            "inventory",
+            "report",
+            "generic",
+            "prowler",
+            "scoutsuite",
+            "checkov",
             "trivy",
         ],
         Field(description="Content type; 'auto' detects it."),
     ] = "auto",
     activate: Annotated[bool, Field(description="Make it the active dataset.")] = True,
-    replace: Annotated[bool, Field(description="Overwrite an existing dataset with the "
-                                   "same name (otherwise a name clash is an error).")]
-    = False,
+    replace: Annotated[
+        bool,
+        Field(
+            description="Overwrite an existing dataset with the "
+            "same name (otherwise a name clash is an error)."
+        ),
+    ] = False,
 ) -> dict:
     """Load a file or directory into the workspace as a named dataset.
     An inventory directory that also holds findings.json gets those
     findings merged in. Scanner output is normalised (deduplicated and
     mapped to compliance frameworks); Prowler must be ASFF (-M json-asff),
     OCSF output is refused. Returns the dataset summary."""
-    ds = ctx.workspace.load(path, name or None, kind=kind, activate=activate,
-                            replace=replace)
-    ctx.link(
-        f"cloudg://datasets/{ds.name}/summary", f"{ds.name} summary", title="Dataset summary"
-    )
+    ds = ctx.workspace.load(path, name or None, kind=kind, activate=activate, replace=replace)
+    ctx.link(f"cloudg://datasets/{ds.name}/summary", f"{ds.name} summary", title="Dataset summary")
     return {"loaded": ds.name, "active": ctx.workspace.active_name == ds.name, **ds.summary()}
+
 
 @CATALOG.tool(
     title="Select dataset",
@@ -133,6 +142,7 @@ def select_dataset(
     ds = ctx.workspace.select(name)
     return {"active_dataset": ds.name, **ds.describe()}
 
+
 @CATALOG.tool(
     title="Unload dataset",
     category=CATEGORY,
@@ -149,8 +159,12 @@ def unload_dataset(
     """Remove a dataset from memory (files on disk are untouched). Any
     suppressions or ingested findings held only in memory are lost."""
     ctx.workspace.remove(name)
-    return {"unloaded": name, "active_dataset": ctx.workspace.active_name,
-            "remaining": ctx.workspace.names()}
+    return {
+        "unloaded": name,
+        "active_dataset": ctx.workspace.active_name,
+        "remaining": ctx.workspace.names(),
+    }
+
 
 @CATALOG.tool(
     title="Snapshot dataset",
@@ -166,15 +180,20 @@ def snapshot_dataset(
     ctx: Any,
     new_name: Annotated[str, Field(min_length=1, description="Name for the copy.")],
     dataset: DatasetArg = "",
-    replace: Annotated[bool, Field(description="Overwrite an existing dataset named "
-                                   "new_name (otherwise a name clash is an error).")]
-    = False,
+    replace: Annotated[
+        bool,
+        Field(
+            description="Overwrite an existing dataset named "
+            "new_name (otherwise a name clash is an error)."
+        ),
+    ] = False,
 ) -> dict:
     """Freeze a copy of a dataset under a new name (e.g. before ingesting
     new findings or re-collecting) so diff_datasets can compare later.
     The copy does not become active."""
     ds = ctx.workspace.snapshot(dataset or None, new_name, replace=replace)
     return {"snapshot": ds.name, **ds.describe()}
+
 
 @CATALOG.tool(
     title="Diff datasets",
@@ -188,8 +207,7 @@ def snapshot_dataset(
 def diff_datasets(
     ctx: Any,
     base: Annotated[str, Field(min_length=1, description="Baseline dataset (before).")],
-    target: Annotated[str, Field(description="Dataset to compare (after); empty = active.")]
-    = "",
+    target: Annotated[str, Field(description="Dataset to compare (after); empty = active.")] = "",
     limit: Annotated[int, Field(ge=1, le=500, description="Max items per section.")] = 50,
 ) -> dict:
     """Compare two datasets: assets added / removed / changed (matched
@@ -197,6 +215,7 @@ def diff_datasets(
     severity, and assets that became internet-exposed. Use for drift and
     change review between two collections or reports."""
     return ctx.workspace.diff(base, target or None, limit=limit)
+
 
 @CATALOG.tool(
     title="Dataset summary",

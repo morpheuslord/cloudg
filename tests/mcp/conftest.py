@@ -77,6 +77,14 @@ class _Caller:
         assert res.is_error, f"{tool} unexpectedly succeeded: {res.structured}"
         return res.content[0].text
 
+    async def error_data(self, tool: str, /, **args: Any) -> tuple[str, Any]:
+        """Error text plus the structured error data (suggestions, value...)."""
+        from cloudg.mcp.core import META_PREFIX
+
+        res = await self.layer.call_tool(tool, args)
+        assert res.is_error, f"{tool} unexpectedly succeeded: {res.structured}"
+        return res.content[0].text, (res.meta or {}).get(f"{META_PREFIX}error_data")
+
 
 @pytest.fixture
 def call(layer) -> _Caller:

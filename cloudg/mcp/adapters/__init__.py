@@ -37,6 +37,7 @@ server object (SDK, fastmcp or the dependency-free native server).
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Iterable
 
 from cloudg.mcp.adapters.export import (
@@ -62,6 +63,8 @@ __all__ = [
     "to_langchain_tools",
     "to_openai_tools",
 ]
+
+logger = logging.getLogger("cloudg.mcp.adapters")
 
 BUILD_FLAVORS = ("auto", "sdk", "lowlevel", "mcpserver", "fastmcp", "native")
 
@@ -109,8 +112,11 @@ def register_into(
     Args:
         layer: The cloudg layer.
         server: An MCP server object (see the module docstring).
-        prefix: Name prefix for tools and prompts (sets ``layer.prefix``),
-            e.g. ``"cloudg_"`` to avoid collisions with the host's tools.
+        prefix: Name prefix for tools and prompts, e.g. ``"cloudg_"`` to
+            avoid collisions with the host's tools. It sets ``layer.prefix``:
+            the prefix belongs to the layer, so it also applies to every
+            other server this layer is (or was) mounted on. To expose the
+            catalog under two prefixes, mount two layers.
         include: Subset of ``{"tools", "resources", "templates", "prompts",
             "completions", "logging", "subscriptions"}`` to register
             (default: all).
@@ -122,7 +128,14 @@ def register_into(
             act on change notifications.
     """
     if prefix is not None:
-        layer.set_prefix(prefix)  # validated; note it changes the layer itself
+        if layer.prefix and prefix != layer.prefix:
+            logger.warning(
+                "register_into(prefix=%r) replaces this layer's prefix %r on every server "
+                "it is mounted on; use one layer per prefix",
+                prefix,
+                layer.prefix,
+            )
+        layer.set_prefix(prefix)
     kind = detect_server_kind(server)
     if kind == "native":
         if server.layer is not layer:
@@ -135,12 +148,22 @@ def register_into(
     if kind == "sdk-highlevel":
         from cloudg.mcp.adapters.mcp_sdk import install as install_sdk
 
-        return install_sdk(layer, server, include=include,
-                           principal_resolver=principal_resolver, list_changed=list_changed)
+        return install_sdk(
+            layer,
+            server,
+            include=include,
+            principal_resolver=principal_resolver,
+            list_changed=list_changed,
+        )
     from cloudg.mcp.adapters.lowlevel import install as install_lowlevel
 
-    return install_lowlevel(layer, server, include=include,
-                            principal_resolver=principal_resolver, list_changed=list_changed)
+    return install_lowlevel(
+        layer,
+        server,
+        include=include,
+        principal_resolver=principal_resolver,
+        list_changed=list_changed,
+    )
 
 
 def build_server(
@@ -166,31 +189,32 @@ def build_server(
     if flavor not in BUILD_FLAVORS:
         raise ValueError(f"Unknown flavor {flavor!r}; choose from {BUILD_FLAVORS}")
     if flavor == "auto":
-        try:
-            import mcp.server.lowlevel  # noqa: F401
+        from cloudg.mcp.native._shared import sdk_installed
 
-            flavor = "lowlevel"
-        except ImportError:
-            flavor = "native"
+        flavor = "lowlevel" if sdk_installed() else "native"
     if flavor == "native":
         from cloudg.mcp.native.protocol import NativeMCPServer
 
         return NativeMCPServer(layer, principal_resolver=principal_resolver, **native_kwargs)
-    if flavor in ("sdk", "lowlevel"):
-        from cloudg.mcp.adapters.mcp_sdk import create_lowlevel_server
-
-        server = create_lowlevel_server(layer, name=name)
-    elif flavor == "mcpserver":
-        from cloudg.mcp.adapters.mcp_sdk import create_highlevel_server
-
-        server = create_highlevel_server(layer, name=name)
-    else:
-        import fastmcp
-
-        server = fastmcp.FastMCP(name or layer.name, instructions=layer.instructions or None)
+    server = _new_server(layer, flavor, name)
     binding = register_into(layer, server, include=include, principal_resolver=principal_resolver)
     try:
         server._cloudg_binding = binding
-    except Exception:  # pragma: no cover (slotted / frozen server classes)
-        pass
+    except (AttributeError, TypeError):  # pragma: no cover (slotted / frozen server classes)
+        logger.debug("cannot attach the cloudg binding to %s", type(server).__name__)
     return server
+
+
+def _new_server(layer: "CloudGMCPLayer", flavor: str, name: str | None) -> Any:
+    """A fresh, empty SDK or fastmcp server object for ``build_server``."""
+    if flavor in ("sdk", "lowlevel"):
+        from cloudg.mcp.adapters.mcp_sdk import create_lowlevel_server
+
+        return create_lowlevel_server(layer, name=name)
+    if flavor == "mcpserver":
+        from cloudg.mcp.adapters.mcp_sdk import create_highlevel_server
+
+        return create_highlevel_server(layer, name=name)
+    import fastmcp
+
+    return fastmcp.FastMCP(name or layer.name, instructions=layer.instructions or None)

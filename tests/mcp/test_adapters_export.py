@@ -29,26 +29,33 @@ async def test_export_definitions_and_handlers() -> None:
     assert exported.resource_templates == layer.resource_templates_wire()
     assert exported.prompts == layer.prompts_wire()
     assert exported.server["name"] == "cloudg"
-    assert set(exported.as_dict()) == {"server", "tools", "resources", "resourceTemplates",
-                                       "prompts"}
+    assert set(exported.as_dict()) == {
+        "server",
+        "tools",
+        "resources",
+        "resourceTemplates",
+        "prompts",
+    }
 
     result = await exported.dispatch("tools/call", {"name": "echo", "arguments": {"text": "q"}})
     assert result["structuredContent"] == {"text": "q"} and result["isError"] is False
     assert (await exported.dispatch("tools/list"))["tools"] == exported.tools
     read = await exported.dispatch("resources/read", {"uri": "test://info"})
     assert '"hello"' in read["contents"][0]["text"]
-    prompt = await exported.dispatch("prompts/get", {"name": "greet",
-                                                     "arguments": {"name": "E"}})
+    prompt = await exported.dispatch("prompts/get", {"name": "greet", "arguments": {"name": "E"}})
     assert prompt["messages"][0]["content"]["text"] == "Hi E!"
-    comp = await exported.dispatch("completion/complete", {
-        "ref": {"type": "ref/resource", "uri": "test://items/{item_id}"},
-        "argument": {"name": "item_id", "value": "be"}})
+    comp = await exported.dispatch(
+        "completion/complete",
+        {
+            "ref": {"type": "ref/resource", "uri": "test://items/{item_id}"},
+            "argument": {"name": "item_id", "value": "be"},
+        },
+    )
     assert comp["completion"]["values"] == ["beta"]
     assert (await exported.dispatch("resources/templates/list"))["resourceTemplates"]
     assert (await exported.dispatch("prompts/list"))["prompts"]
     assert (await exported.dispatch("resources/list"))["resources"]
-    assert (await exported.tool_functions["echo"](text="fn"))["structuredContent"] == {
-        "text": "fn"}
+    assert (await exported.tool_functions["echo"](text="fn"))["structuredContent"] == {"text": "fn"}
     with pytest.raises(KeyError):
         await exported.dispatch("nope")
     with pytest.raises(NotFoundError):
@@ -66,8 +73,9 @@ async def test_export_uses_principal_per_call() -> None:
     layer.use(spy)
     exported = export_definitions(layer, Principal(id="default-p"))
     await exported.dispatch("tools/call", {"name": "echo", "arguments": {"text": "x"}})
-    await exported.dispatch("tools/call", {"name": "echo", "arguments": {"text": "x"}},
-                            principal=Principal(id="other"))
+    await exported.dispatch(
+        "tools/call", {"name": "echo", "arguments": {"text": "x"}}, principal=Principal(id="other")
+    )
     assert [p.id for p in seen] == ["default-p", "other"]
 
 

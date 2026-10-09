@@ -417,10 +417,10 @@ def test_rate_limit_token_bucket(monkeypatch):
     p.check_call(t, Principal(id="other"), {})  # separate bucket per principal
     p.check_call(tool("cold"), LOCAL, {})  # not matched
     # refill: pretend 31 seconds passed
-    import cloudg.mcp.policy as mod
+    import time
 
-    real = mod.time.monotonic
-    monkeypatch.setattr(mod.time, "monotonic", lambda: real() + 31)
+    real = time.monotonic
+    monkeypatch.setattr(time, "monotonic", lambda: real() + 31)
     p.check_call(t, LOCAL, {})
     assert p.counters["rate_limited"] == 1
     p.reset_rate_limits()

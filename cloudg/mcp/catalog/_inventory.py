@@ -4,7 +4,7 @@ keys, metadata truncation and the organization topology views."""
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Any, Callable, Sequence
 
 from cloudg.inventory.mapper_result import _service_of
@@ -30,6 +30,15 @@ class AssetFilter:
     internet_exposed: bool | None = None
     has_findings: bool | None = None
     min_severity: str = ""
+
+    @classmethod
+    def from_args(cls, args: dict[str, Any]) -> "AssetFilter":
+        """Build from a tool's arguments (``locals()``): the matching keys."""
+        return cls(**{f.name: args[f.name] for f in fields(cls) if f.name in args})
+
+    def key(self) -> dict[str, Any]:
+        """The filter as a dict, for cursor fingerprints."""
+        return asdict(self)
 
 
 def _tag_predicate(tag: str) -> Predicate:
@@ -183,8 +192,14 @@ def account_rows(ds: Dataset) -> list[dict[str, Any]]:
         acct = a.account_id or "unknown"
         e = accts.setdefault(
             acct,
-            {"account_id": acct, "provider": a.provider.value, "assets": 0, "regions": set(),
-             "internet_exposed": 0, "open_findings": 0},
+            {
+                "account_id": acct,
+                "provider": a.provider.value,
+                "assets": 0,
+                "regions": set(),
+                "internet_exposed": 0,
+                "open_findings": 0,
+            },
         )
         e["assets"] += 1
         e["regions"].add(a.region)
@@ -264,12 +279,23 @@ def org_from_assets(ds: Dataset, include_policies: bool, max_accounts: int) -> d
         if e.edge_type.value == "CONTAINS" and e.source_id in ids and e.target_id in ids
     }
     nodes = [
-        {"id": a.id, "name": a.name, "type": a.asset_type.value, "account_id": a.account_id,
-         "parent_id": parents.get(a.id), "external": bool(a.metadata.get("external"))}
+        {
+            "id": a.id,
+            "name": a.name,
+            "type": a.asset_type.value,
+            "account_id": a.account_id,
+            "parent_id": parents.get(a.id),
+            "external": bool(a.metadata.get("external")),
+        }
         for a in hier
     ]
-    out = {"dataset": ds.name, "source": "map_assets", "nodes": nodes[:max_accounts],
-           "total": len(nodes), "truncated": len(nodes) > max_accounts}
+    out = {
+        "dataset": ds.name,
+        "source": "map_assets",
+        "nodes": nodes[:max_accounts],
+        "total": len(nodes),
+        "truncated": len(nodes) > max_accounts,
+    }
     if include_policies:
         out["policies"] = _org_policies(ds)
     return out

@@ -173,8 +173,15 @@ class AuditLogMiddleware:
         digest = hmac.new(self._salt, _canonical(value).encode("utf-8"), hashlib.sha256)
         return digest.hexdigest()[:16]
 
-    def record(self, info: "CallInfo", *, outcome: str, duration_ms: float,
-               result: Any = None, error: BaseException | None = None) -> dict[str, Any]:
+    def record(
+        self,
+        info: "CallInfo",
+        *,
+        outcome: str,
+        duration_ms: float,
+        result: Any = None,
+        error: BaseException | None = None,
+    ) -> dict[str, Any]:
         args = info.arguments or {}
         entry: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -193,8 +200,7 @@ class AuditLogMiddleware:
         if self.hash_values and args:
             entry["argument_hashes"] = {k: self.hash_value(v) for k, v in sorted(args.items())}
         if error is not None:
-            entry["error"] = {"type": type(error).__name__,
-                              "code": getattr(error, "code", None)}
+            entry["error"] = {"type": type(error).__name__, "code": getattr(error, "code", None)}
         elif isinstance(result, ToolResult) and result.is_error:
             entry["error"] = {"code": _error_code(result)}
         report = _transform_report(result)
@@ -230,12 +236,25 @@ class AuditLogMiddleware:
         self._safe_write(info, _outcome(result), start, result=result)
         return result
 
-    def _safe_write(self, info: "CallInfo", outcome: str, start: float, *,
-                    result: Any = None, error: BaseException | None = None) -> None:
+    def _safe_write(
+        self,
+        info: "CallInfo",
+        outcome: str,
+        start: float,
+        *,
+        result: Any = None,
+        error: BaseException | None = None,
+    ) -> None:
         try:
-            self.write(self.record(info, outcome=outcome,
-                                   duration_ms=(time.perf_counter() - start) * 1000,
-                                   result=result, error=error))
+            self.write(
+                self.record(
+                    info,
+                    outcome=outcome,
+                    duration_ms=(time.perf_counter() - start) * 1000,
+                    result=result,
+                    error=error,
+                )
+            )
         except Exception:  # auditing must never break a call
             logger.exception("audit log write failed")
 
@@ -587,9 +606,12 @@ class RetryMiddleware:
                 if attempt >= self.retries:
                     raise
             else:
-                if not (isinstance(result, ToolResult) and result.is_error
-                        and _error_code(result) in self.retry_codes
-                        and attempt < self.retries):
+                if not (
+                    isinstance(result, ToolResult)
+                    and result.is_error
+                    and _error_code(result) in self.retry_codes
+                    and attempt < self.retries
+                ):
                     if attempt and isinstance(result, ToolResult):
                         result.meta["cloudg/retries"] = attempt
                     return result

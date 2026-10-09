@@ -6,42 +6,48 @@ Adapters never call handlers directly; they go through
 :meth:`get_prompt` and :meth:`complete`. Whichever server a request arrives
 through, it gets the same validation, access control, transforms
 (redaction / pseudonymisation / projection / annotation / substitution),
-timeouts and audit trail.
+timeouts and audit trail. Output shaping lives in
+:mod:`cloudg.mcp.layer_output`, construction options in
+:mod:`cloudg.mcp.layer_options`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
+import inspect
 import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable
-
-from pydantic import BaseModel
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from cloudg.mcp.context import Principal, ToolContext
 from cloudg.mcp.core import (
     META_PREFIX,
     BlobResourceContents,
-    EmbeddedResource,
     InvalidArgumentsError,
     MCPLayerError,
     NotFoundError,
-    PromptMessage,
     PromptResult,
     PromptSpec,
-    Registry,
-    ResourceLink,
     ResourceSpec,
     ResourceTemplateSpec,
-    TextContent,
     TextResourceContents,
     ToolResult,
     ToolSpec,
     maybe_await,
     render_json,
+)
+from cloudg.mcp.layer_options import LayerOptions, filter_registry
+from cloudg.mcp.layer_output import (
+    OutputScope,
+    error_result,
+    jsonable,
+    restored_pairs,
+    shape_prompt,
+    shape_resource,
+    shape_tool_result,
+    transform_error,
 )
 from cloudg.mcp.schema import validate_arguments
 from cloudg.mcp.transforms.base import TransformContext
@@ -49,7 +55,8 @@ from cloudg.mcp.transforms.base import TransformContext
 if TYPE_CHECKING:  # pragma: no cover
     from cloudg.config import CloudGConfig
     from cloudg.mcp.policy import Policy
-    from cloudg.mcp.state import Workspace
+
+__all__ = ["CallInfo", "CloudGMCPLayer", "LayerOptions", "Middleware", "Next"]
 
 logger = logging.getLogger("cloudg.mcp")
 
@@ -75,10 +82,14 @@ class CallInfo:
     principal: Principal
     context: ToolContext
     started: float = field(default_factory=time.monotonic)
+    #: The call's :class:`~cloudg.mcp.layer_output.OutputScope` (set by the layer).
+    output: Any = field(default=None, repr=False)
 
 
 _EMPTY_COMPLETION: dict[str, Any] = {"values": [], "total": 0, "hasMore": False}
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9_.\-]{0,64}$")
+#: ``ToolContext.meta`` key holding the canonical URI of a resource read.
+URI_META_KEY = f"{META_PREFIX}uri"
 
 Next = Callable[[CallInfo], Awaitable[Any]]
 # ``async def middleware(info: CallInfo, call_next: Next) -> Any``; for tools
@@ -86,29 +97,26 @@ Next = Callable[[CallInfo], Awaitable[Any]]
 # PromptResult. Raise an MCPLayerError to reject the call.
 Middleware = Callable[[CallInfo, Next], Awaitable[Any]]
 
-
-def _jsonable(value: Any) -> Any:
-    """Convert handler output into JSON-compatible Python data."""
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json", exclude={"raw_data"})
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        return _jsonable(value.to_dict())
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if hasattr(value, "value") and isinstance(getattr(value, "value"), (str, int)):
-        return value.value  # Enum
-    if hasattr(value, "__dataclass_fields__"):
-        import dataclasses
-
-        return _jsonable(dataclasses.asdict(value))
-    return str(value)
-
-
 dumps = render_json
+_URI_KEYWORD: dict[Any, bool] = {}
+
+
+def _policy_call(fn: Callable[..., Any], *args: Any, uri: str | None = None) -> Any:
+    """Call a policy method, passing the concrete resource ``uri`` when the
+    policy accepts it (older policies only match the spec's own URI)."""
+    if uri is not None:
+        key = getattr(fn, "__func__", fn)
+        accepts = _URI_KEYWORD.get(key)
+        if accepts is None:
+            try:
+                params = inspect.signature(fn).parameters.values()
+            except (TypeError, ValueError):
+                params = ()  # type: ignore[assignment]
+            accepts = any(p.name == "uri" or p.kind is p.VAR_KEYWORD for p in params)
+            _URI_KEYWORD[key] = accepts
+        if accepts:
+            return fn(*args, uri=uri)
+    return fn(*args)
 
 
 class CloudGMCPLayer:
@@ -117,67 +125,57 @@ class CloudGMCPLayer:
     Args:
         config: cloudg configuration (providers, credentials...). Defaults
             to ``CloudGConfig()``.
-        workspace: Shared state; created from ``config`` when omitted.
-        policy: Access + transform policy: a :class:`~cloudg.mcp.policy.Policy`,
-            a built-in profile name (``"open"``, ``"standard"``,
-            ``"strict"``...), a path to a YAML/JSON policy file, or a dict.
-        registry: Primitives to expose. Defaults to the full cloudg catalog.
-        include_categories / exclude_categories: Filter the catalog by
-            category (``inventory``, ``graph``, ``findings``...).
-        include_tools / exclude_tools: Filter by tool name.
-        prefix: Prepended to every tool and prompt name (``"cloudg_"``) so
-            the primitives can be mounted into another server without name
-            collisions.
-        middleware: Extra middleware, outermost first.
-        default_timeout: Seconds before a tool call is cancelled.
-        max_output_chars: Hard cap on the rendered text of one result.
+        options: All other settings as one :class:`LayerOptions`.
+        **kwargs: The same settings as keywords (each field of
+            :class:`LayerOptions`): ``workspace``, ``policy`` (a
+            :class:`~cloudg.mcp.policy.Policy`, profile name, policy file
+            path or dict), ``registry``, ``include_categories`` /
+            ``exclude_categories``, ``include_tools`` / ``exclude_tools``,
+            ``prefix`` (prepended to every tool and prompt name),
+            ``middleware`` (outermost first), ``default_timeout`` (seconds
+            before a tool call is cancelled), ``max_output_chars``, ``name``,
+            ``version`` and ``instructions``. Unknown keywords raise
+            :class:`TypeError`.
     """
 
     def __init__(
         self,
         config: "CloudGConfig | None" = None,
         *,
-        workspace: "Workspace | None" = None,
-        policy: "Policy | str | dict[str, Any] | None" = None,
-        registry: Registry | None = None,
-        include_categories: Iterable[str] | None = None,
-        exclude_categories: Iterable[str] | None = None,
-        include_tools: Iterable[str] | None = None,
-        exclude_tools: Iterable[str] | None = None,
-        prefix: str = "",
-        middleware: Iterable[Middleware] = (),
-        default_timeout: float | None = 300.0,
-        max_output_chars: int = 200_000,
-        name: str = "cloudg",
-        version: str | None = None,
-        instructions: str | None = None,
+        options: LayerOptions | None = None,
+        **kwargs: Any,
     ) -> None:
         from cloudg import __version__
-        from cloudg.mcp.policy import Policy
+        from cloudg.mcp.policy import Policy as PolicyClass
 
+        opts = LayerOptions.build(options, kwargs)
+        workspace = opts.workspace
         if workspace is None:
             from cloudg.config import CloudGConfig
             from cloudg.mcp.state import Workspace
 
             workspace = Workspace(config or CloudGConfig())
         self.workspace = workspace
-        self.policy: Policy = policy if isinstance(policy, Policy) else Policy.load(policy)
-
+        policy = opts.policy
+        self.policy: Policy = (
+            policy if isinstance(policy, PolicyClass) else PolicyClass.load(policy)
+        )
+        registry = opts.registry
         if registry is None:
             from cloudg.mcp.catalog import default_registry
 
             registry = default_registry()
-        self.registry = self._filter_registry(
-            registry, include_categories, exclude_categories, include_tools, exclude_tools
-        )
+        self.registry = filter_registry(registry, opts)
         self.prefix = ""
-        self.set_prefix(prefix)
-        self.middleware: list[Middleware] = list(middleware)
-        self.default_timeout = default_timeout
-        self.max_output_chars = max_output_chars
-        self.name = name
-        self.version = version or __version__
-        self.instructions = instructions if instructions is not None else DEFAULT_INSTRUCTIONS
+        self.set_prefix(opts.prefix)
+        self.middleware: list[Middleware] = list(opts.middleware)
+        self.default_timeout = opts.default_timeout
+        self.max_output_chars = opts.max_output_chars
+        self.name = opts.name
+        self.version = opts.version or __version__
+        self.instructions = (
+            opts.instructions if opts.instructions is not None else DEFAULT_INSTRUCTIONS
+        )
         # Notified with (kind, uri) when a resource changes (dataset loaded,
         # workspace mutated); adapters forward these as
         # notifications/resources/updated and list_changed.
@@ -189,44 +187,6 @@ class CloudGMCPLayer:
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _filter_registry(
-        registry: Registry,
-        include_categories: Iterable[str] | None,
-        exclude_categories: Iterable[str] | None,
-        include_tools: Iterable[str] | None,
-        exclude_tools: Iterable[str] | None,
-    ) -> Registry:
-        inc_c = set(include_categories) if include_categories else None
-        exc_c = set(exclude_categories or ())
-        inc_t = set(include_tools) if include_tools else None
-        exc_t = set(exclude_tools or ())
-        if not (inc_c or exc_c or inc_t or exc_t):
-            return registry
-
-        def keep(spec: Any) -> bool:
-            if inc_c is not None and spec.category not in inc_c:
-                return False
-            if spec.category in exc_c:
-                return False
-            if isinstance(spec, ToolSpec):
-                if inc_t is not None and spec.name not in inc_t:
-                    return False
-                if spec.name in exc_t:
-                    return False
-            return True
-
-        out = Registry()
-        for spec in [
-            *registry.tools.values(),
-            *registry.resources.values(),
-            *registry.templates.values(),
-            *registry.prompts.values(),
-        ]:
-            if keep(spec):
-                out.add(spec)
-        return out
 
     def set_prefix(self, prefix: str) -> None:
         """Change the name prefix of every exposed tool and prompt. The
@@ -293,7 +253,7 @@ class CloudGMCPLayer:
         try:
             self._loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass
+            logger.debug("no running event loop to remember")
 
     # ------------------------------------------------------------------
     # Listing
@@ -344,7 +304,7 @@ class CloudGMCPLayer:
         return [s.to_wire(self.exposed_name(s.name)) for s in self.list_prompts(principal)]
 
     # ------------------------------------------------------------------
-    # Middleware plumbing
+    # Middleware plumbing, transforms
     # ------------------------------------------------------------------
 
     async def _run_chain(self, info: CallInfo, terminal: Next) -> Any:
@@ -353,27 +313,48 @@ class CloudGMCPLayer:
             chain = _bind(mw, chain)
         return await chain(info)
 
-    def _transform(self, value: Any, spec: Any, principal: Principal, kind: str) -> tuple[Any, dict]:
-        pipeline = self.policy.output_pipeline(spec, principal)
-        if not pipeline:
-            return value, {}
-        tctx = TransformContext(
-            principal=principal, spec=spec, kind=kind, direction="output", vault=self.policy.vault
-        )
-        return pipeline.apply(value, tctx), tctx.report
+    def _transform(
+        self, value: Any, spec: Any, principal: Principal, kind: str
+    ) -> tuple[Any, dict]:
+        """``(transformed, report)`` for ``value`` under the caller's output
+        pipeline."""
+        return OutputScope(self.policy, spec, principal, kind).apply(value)
 
-    def _untransform_arguments(
-        self, arguments: dict[str, Any], spec: Any, principal: Principal, kind: str
-    ) -> dict[str, Any]:
-        pipeline = self.policy.input_pipeline(spec, principal)
-        if not pipeline:
-            return arguments
-        tctx = TransformContext(
-            principal=principal, spec=spec, kind=kind, direction="input", vault=self.policy.vault
-        )
-        return pipeline.apply(arguments, tctx)
+    def _begin(
+        self, kind: str, name: str, spec: Any, args: dict[str, Any], ctx: ToolContext
+    ) -> CallInfo:
+        """Set up one call: its context and its output scope (also used for
+        the progress and log notifications the handler sends)."""
+        scope = OutputScope(self.policy, spec, ctx.principal, kind)
+        ctx.kind, ctx.name = kind, name
+        ctx.transform_output = lambda value: scope(jsonable(value))
+        return CallInfo(kind, name, spec, args, ctx.principal, ctx, output=scope)
 
-    async def _invoke(self, fn: Callable[..., Any], ctx: ToolContext, kwargs: dict[str, Any]) -> Any:
+    def _scope(self, info: CallInfo) -> OutputScope:
+        if info.output is None:  # a middleware built its own CallInfo
+            info.output = OutputScope(self.policy, info.spec, info.principal, info.kind)
+        return info.output
+
+    def _untransform(self, info: CallInfo, values: dict[str, Any]) -> dict[str, Any]:
+        """Run the input pipeline (secret guards, pseudonym reversal) and
+        remember the real values it restored for the output side."""
+        pipeline = self.policy.input_pipeline(info.spec, info.principal)
+        if not pipeline:
+            return values
+        tctx = TransformContext(
+            principal=info.principal,
+            spec=info.spec,
+            kind=info.kind,
+            direction="input",
+            vault=self.policy.vault,
+        )
+        out = pipeline.apply(values, tctx)
+        self._scope(info).add_restored(restored_pairs(values, out, tctx))
+        return out
+
+    async def _invoke(
+        self, fn: Callable[..., Any], ctx: ToolContext, kwargs: dict[str, Any]
+    ) -> Any:
         """Run a handler: coroutine functions on the loop, plain functions
         in a worker thread so blocking graph/ontology work does not stall
         the server."""
@@ -384,6 +365,29 @@ class CloudGMCPLayer:
         result = await asyncio.to_thread(fn, ctx, **kwargs)
         return await maybe_await(result)
 
+    async def _invoke_guarded(self, info: CallInfo, kwargs: dict[str, Any]) -> Any:
+        """:meth:`_invoke` for resources and prompts: an unexpected handler
+        exception becomes an internal :class:`MCPLayerError` (transformed by
+        the caller) instead of leaking raw exception text through an
+        adapter."""
+        try:
+            return await self._invoke(info.spec.handler, info.context, kwargs)
+        except MCPLayerError:
+            raise
+        except Exception as exc:
+            logger.exception("%s %s failed", info.kind.capitalize(), info.name)
+            raise MCPLayerError(f"{type(exc).__name__}: {exc}") from None
+
+    def _record(self, hook: str, *args: Any) -> None:
+        """Call an optional policy audit hook (``record_hidden`` /
+        ``record_rejection``); failures are logged, never raised."""
+        record = getattr(self.policy, hook, None)
+        if record is not None:
+            try:
+                record(*args)
+            except Exception:
+                logger.debug("%s failed", hook, exc_info=True)
+
     # ------------------------------------------------------------------
     # Tools
     # ------------------------------------------------------------------
@@ -392,19 +396,9 @@ class CloudGMCPLayer:
         principal = principal or Principal.local()
         spec = self.registry.tools.get(self.internal_name(name))
         if spec is None or not self.policy.is_allowed(spec, principal):
-            self._record_hidden("tool", name, principal)
+            self._record("record_hidden", "tool", name, principal)
             raise NotFoundError(f"Unknown tool: {name}")
         return spec
-
-    def _record_hidden(self, kind: str, name: str, principal: Principal) -> None:
-        """Audit a call to an unknown or policy-hidden primitive: probing
-        for hidden tools is worth seeing in the audit trail."""
-        record = getattr(self.policy, "record_hidden", None)
-        if record is not None:
-            try:
-                record(kind, name, principal)
-            except Exception:
-                logger.debug("record_hidden failed", exc_info=True)
 
     async def call_tool(
         self,
@@ -420,30 +414,27 @@ class CloudGMCPLayer:
         principal = principal or (context.principal if context else Principal.local())
         spec = self.get_tool(name, principal)
         ctx = context or self.context(principal)
-        ctx.principal, ctx.kind, ctx.name = principal, "tool", spec.name
-        info = CallInfo("tool", spec.name, spec, dict(arguments or {}), principal, ctx)
+        ctx.principal = principal
+        info = self._begin("tool", spec.name, spec, dict(arguments or {}), ctx)
         try:
             return await self._run_chain(info, self._tool_terminal)
         except MCPLayerError as exc:
             # Includes NotFoundError raised by a handler ("asset not found"):
             # the model can recover from an isError result, not from a
             # protocol error.
-            return self._error_result(exc.message, spec, principal, exc.code, exc.data)
+            return error_result(self._scope(info), exc.message, exc.code, exc.data)
 
     async def _tool_terminal(self, info: CallInfo) -> ToolResult:
         spec: ToolSpec = info.spec
+        scope = self._scope(info)
         try:
             self.policy.check_call(spec, info.principal, info.arguments)
             try:
-                arguments = self._untransform_arguments(
-                    info.arguments, spec, info.principal, "tool"
-                )
+                arguments = self._untransform(info, info.arguments)
             except MCPLayerError as exc:
                 # check_call already audited this call as allowed; the input
                 # pipeline (e.g. a secret in the arguments) refused it
-                record = getattr(self.policy, "record_rejection", None)
-                if record is not None:
-                    record(spec, info.principal, info.arguments, exc)
+                self._record("record_rejection", spec, info.principal, info.arguments, exc)
                 raise
             kwargs = validate_arguments(spec.handler, arguments)
             timeout = spec.timeout_seconds or self.default_timeout
@@ -452,90 +443,13 @@ class CloudGMCPLayer:
         except (MCPLayerError, InvalidArgumentsError):
             raise
         except asyncio.TimeoutError:
-            return self._error_result(f"Tool {spec.name} timed out", spec, info.principal, "timeout")
+            return error_result(scope, f"Tool {spec.name} timed out", "timeout")
         except Exception as exc:
             logger.exception("Tool %s failed", spec.name)
             # Exception text often quotes ARNs / account ids: it goes
             # through the same output pipeline as a normal result.
-            return self._error_result(
-                f"{type(exc).__name__}: {exc}", spec, info.principal, "handler_error"
-            )
-        return self._finalise_tool_result(raw, info)
-
-    def _error_result(
-        self, message: str, spec: Any, principal: Principal, code: Any, data: Any = None
-    ) -> ToolResult:
-        text, _ = self._transform(message, spec, principal, "tool")
-        meta: dict[str, Any] = {f"{META_PREFIX}error_code": code}
-        if data is not None:
-            meta[f"{META_PREFIX}error_data"], _ = self._transform(
-                _jsonable(data), spec, principal, "tool"
-            )
-        return ToolResult(content=[TextContent(str(text))], is_error=True, meta=meta)
-
-    def _transform_links(
-        self, links: list[ResourceLink], spec: Any, principal: Principal, kind: str
-    ) -> list[ResourceLink]:
-        out = []
-        for link in links:
-            wire, _ = self._transform(
-                {"uri": link.uri, "name": link.name, "title": link.title,
-                 "description": link.description},
-                spec, principal, kind,
-            )
-            out.append(
-                ResourceLink(
-                    uri=str(wire.get("uri", link.uri)),
-                    name=str(wire.get("name", link.name)),
-                    title=wire.get("title"),
-                    description=wire.get("description"),
-                    mime_type=link.mime_type,
-                    size=link.size,
-                    annotations=link.annotations,
-                    meta=link.meta,
-                )
-            )
-        return out
-
-    def _finalise_tool_result(self, raw: Any, info: CallInfo) -> ToolResult:
-        spec: ToolSpec = info.spec
-        if isinstance(raw, ToolResult):
-            result = raw
-            if result.structured is not None:
-                result.structured, report = self._transform(
-                    result.structured, spec, info.principal, "tool"
-                )
-            else:
-                report = {}
-            for i, c in enumerate(result.content):
-                if isinstance(c, TextContent):
-                    text, r = self._transform(c.text, spec, info.principal, "tool")
-                    result.content[i] = TextContent(str(text), c.annotations, c.meta)
-                    _merge_report(report, r)
-                elif isinstance(c, ResourceLink):
-                    result.content[i] = self._transform_links([c], spec, info.principal, "tool")[0]
-                elif isinstance(c, EmbeddedResource) and isinstance(
-                    c.resource, TextResourceContents
-                ):
-                    text, r = self._transform(c.resource.text, spec, info.principal, "tool")
-                    res = c.resource
-                    c.resource = TextResourceContents(res.uri, str(text), res.mime_type, res.meta)
-                    _merge_report(report, r)
-            if result.meta:
-                result.meta, r = self._transform(result.meta, spec, info.principal, "tool")
-                _merge_report(report, r)
-        else:
-            data = _jsonable(raw)
-            structured = data if isinstance(data, dict) else {"result": data}
-            structured, report = self._transform(structured, spec, info.principal, "tool")
-            text = dumps(structured)
-            if len(text) > self.max_output_chars:
-                report["truncated_chars"] = len(text) - self.max_output_chars
-                text = text[: self.max_output_chars] + "\n... [truncated by cloudg mcp layer]"
-            result = ToolResult(content=[TextContent(text)], structured=structured)
-        result.content.extend(
-            self._transform_links(info.context.links, spec, info.principal, "tool")
-        )
+            return error_result(scope, f"{type(exc).__name__}: {exc}", "handler_error")
+        result, report = shape_tool_result(scope, raw, info.context.links, self.max_output_chars)
         if report:
             result.meta[f"{META_PREFIX}transforms"] = report
         result.meta.setdefault(
@@ -547,19 +461,29 @@ class CloudGMCPLayer:
     # Resources
     # ------------------------------------------------------------------
 
-    def _resolve_resource(
-        self, uri: str, principal: Principal
-    ) -> tuple[ResourceSpec | ResourceTemplateSpec, dict[str, str]]:
+    def _resolve_resource(self, uri: str, principal: Principal) -> tuple[Any, dict[str, str], str]:
+        """``(spec, template values, canonical URI)`` for ``uri``.
+
+        Template values arrive percent-decoded, so ``cloudg://graph/%64%33``
+        names the same resource as ``cloudg://graph/d3``: the canonical URI
+        (values filled in verbatim) resolves to the static resource when one
+        exists, and is what the policy matches allow / deny patterns against.
+        """
         spec: Any = self.registry.resources.get(uri)
         values: dict[str, str] = {}
+        canonical = uri
         if spec is None:
             found = self.registry.find_template(uri)
             if found:
                 spec, values = found
-        if spec is None or not self.policy.is_allowed(spec, principal):
-            self._record_hidden("resource", uri, principal)
+                canonical = spec.canonical(values)
+                static = self.registry.resources.get(canonical)
+                if static is not None:
+                    spec, values = static, {}
+        if spec is None or not _policy_call(self.policy.is_allowed, spec, principal, uri=canonical):
+            self._record("record_hidden", "resource", uri, principal)
             raise NotFoundError(f"Unknown resource: {uri}")
-        return spec, values
+        return spec, values, canonical
 
     async def read_resource(
         self,
@@ -569,37 +493,24 @@ class CloudGMCPLayer:
         context: ToolContext | None = None,
     ) -> list[TextResourceContents | BlobResourceContents]:
         principal = principal or (context.principal if context else Principal.local())
-        spec, values = self._resolve_resource(uri, principal)
+        spec, values, canonical = self._resolve_resource(uri, principal)
+        served = canonical if isinstance(spec, ResourceSpec) else uri
         ctx = context or self.context(principal)
-        ctx.principal, ctx.kind, ctx.name = principal, "resource", uri
-        info = CallInfo("resource", uri, spec, values, principal, ctx)
-        return await self._run_chain(info, self._resource_terminal)
+        ctx.principal = principal
+        ctx.meta[URI_META_KEY] = canonical
+        info = self._begin("resource", served, spec, values, ctx)
+        try:
+            return await self._run_chain(info, self._resource_terminal)
+        except MCPLayerError as exc:
+            raise transform_error(self._scope(info), exc) from None
 
     async def _resource_terminal(self, info: CallInfo) -> list[Any]:
         spec = info.spec
-        self.policy.check_call(spec, info.principal, info.arguments)
-        values = self._untransform_arguments(info.arguments, spec, info.principal, "resource")
-        raw = await self._invoke(spec.handler, info.context, values)
-        uri, mime = info.name, spec.mime_type
-        if isinstance(raw, list) and raw and all(
-            isinstance(x, (TextResourceContents, BlobResourceContents)) for x in raw
-        ):
-            out = []
-            for item in raw:
-                if isinstance(item, TextResourceContents):
-                    text, _ = self._transform(item.text, spec, info.principal, "resource")
-                    item = TextResourceContents(item.uri, str(text), item.mime_type, item.meta)
-                out.append(item)
-            return out
-        if isinstance(raw, bytes):
-            return [BlobResourceContents(uri, base64.b64encode(raw).decode(), mime)]
-        if isinstance(raw, str):
-            text, report = self._transform(raw, spec, info.principal, "resource")
-            meta = {f"{META_PREFIX}transforms": report} if report else None
-            return [TextResourceContents(uri, str(text), mime, meta)]
-        data, report = self._transform(_jsonable(raw), spec, info.principal, "resource")
-        meta = {f"{META_PREFIX}transforms": report} if report else None
-        return [TextResourceContents(uri, dumps(data), mime or "application/json", meta)]
+        canonical = info.context.meta.get(URI_META_KEY, info.name)
+        _policy_call(self.policy.check_call, spec, info.principal, info.arguments, uri=canonical)
+        values = self._untransform(info, info.arguments)
+        raw = await self._invoke_guarded(info, values)
+        return shape_resource(self._scope(info), raw, info.name, spec.mime_type)
 
     # ------------------------------------------------------------------
     # Prompts
@@ -616,47 +527,45 @@ class CloudGMCPLayer:
         principal = principal or (context.principal if context else Principal.local())
         spec = self.registry.prompts.get(self.internal_name(name))
         if spec is None or not self.policy.is_allowed(spec, principal):
-            self._record_hidden("prompt", name, principal)
+            self._record("record_hidden", "prompt", name, principal)
             raise NotFoundError(f"Unknown prompt: {name}")
         args = dict(arguments or {})
         missing = [a.name for a in spec.arguments if a.required and not args.get(a.name)]
         if missing:
             raise InvalidArgumentsError(f"Missing required prompt arguments: {', '.join(missing)}")
         ctx = context or self.context(principal)
-        ctx.principal, ctx.kind, ctx.name = principal, "prompt", spec.name
-        info = CallInfo("prompt", spec.name, spec, args, principal, ctx)
-        return await self._run_chain(info, self._prompt_terminal)
+        ctx.principal = principal
+        info = self._begin("prompt", spec.name, spec, args, ctx)
+        try:
+            return await self._run_chain(info, self._prompt_terminal)
+        except MCPLayerError as exc:
+            raise transform_error(self._scope(info), exc) from None
 
     async def _prompt_terminal(self, info: CallInfo) -> PromptResult:
         spec: PromptSpec = info.spec
         self.policy.check_call(spec, info.principal, info.arguments)
-        args = self._untransform_arguments(info.arguments, spec, info.principal, "prompt")
+        args = self._untransform(info, info.arguments)
         known = {a.name for a in spec.arguments}
-        raw = await self._invoke(
-            spec.handler, info.context, {k: v for k, v in args.items() if k in known}
-        )
-        if isinstance(raw, PromptResult):
-            result = raw
-        elif isinstance(raw, str):
-            result = PromptResult([PromptMessage("user", TextContent(raw))], spec.description)
-        else:
-            result = PromptResult(list(raw), spec.description)
-        for m in result.messages:
-            if isinstance(m.content, TextContent):
-                text, _ = self._transform(m.content.text, spec, info.principal, "prompt")
-                m.content = TextContent(str(text), m.content.annotations, m.content.meta)
-            elif isinstance(m.content, EmbeddedResource) and isinstance(
-                m.content.resource, TextResourceContents
-            ):
-                text, _ = self._transform(m.content.resource.text, spec, info.principal, "prompt")
-                m.content.resource.text = str(text)
-            elif isinstance(m.content, ResourceLink):
-                m.content = self._transform_links([m.content], spec, info.principal, "prompt")[0]
-        return result
+        raw = await self._invoke_guarded(info, {k: v for k, v in args.items() if k in known})
+        return shape_prompt(self._scope(info), raw, spec.description)
 
     # ------------------------------------------------------------------
     # Completions
     # ------------------------------------------------------------------
+
+    def _completion_target(self, ref: dict[str, Any], arg_name: str) -> tuple[Any, Any]:
+        """``(spec, completion fn)`` named by a completion ``ref``."""
+        spec: Any = None
+        fn: Callable[..., Any] | None = None
+        if ref.get("type") == "ref/prompt":
+            spec = self.registry.prompts.get(self.internal_name(ref.get("name", "")))
+            if spec is not None:
+                fn = next((a.completion for a in spec.arguments if a.name == arg_name), None)
+        elif ref.get("type") == "ref/resource":
+            spec = self.registry.templates.get(ref.get("uri", ""))
+            if spec is not None:
+                fn = spec.completions.get(arg_name)
+        return spec, fn
 
     async def complete(
         self,
@@ -672,34 +581,28 @@ class CloudGMCPLayer:
         ``completion`` object."""
         principal = principal or Principal.local()
         arg_name, partial = argument.get("name", ""), str(argument.get("value", ""))
-        spec: Any = None
-        fn: Callable[..., Any] | None = None
-        if ref.get("type") == "ref/prompt":
-            spec = self.registry.prompts.get(self.internal_name(ref.get("name", "")))
-            if spec is not None:
-                fn = next((a.completion for a in spec.arguments if a.name == arg_name), None)
-        elif ref.get("type") == "ref/resource":
-            spec = self.registry.templates.get(ref.get("uri", ""))
-            if spec is not None:
-                fn = spec.completions.get(arg_name)
+        spec, fn = self._completion_target(ref, arg_name)
         if spec is None or fn is None or not self.policy.is_allowed(spec, principal):
             return dict(_EMPTY_COMPLETION)
-        ctx = self.context(principal, kind="completion", name=arg_name)
+        ctx = self.context(principal)
         ctx.meta["completion_fn"] = fn
         name = spec.name if isinstance(spec, PromptSpec) else spec.uri_template
         args = {"argument": arg_name, "value": partial, "context": dict(context_arguments or {})}
-        info = CallInfo("completion", name, spec, args, principal, ctx)
+        info = self._begin("completion", name, spec, args, ctx)
+        ctx.name = arg_name
         # Completions disclose data too: they run through the middleware
         # chain (audit, metrics) and the policy's rate limits and transforms
-        return await self._run_chain(info, self._completion_terminal)
+        try:
+            return await self._run_chain(info, self._completion_terminal)
+        except MCPLayerError as exc:
+            raise transform_error(self._scope(info), exc) from None
 
     async def _completion_terminal(self, info: CallInfo) -> dict[str, Any]:
         spec, principal = info.spec, info.principal
         arg_name = info.arguments["argument"]
         self.policy.check_call(spec, principal, {"__completion__": arg_name})
-        restored = self._untransform_arguments(
-            {"partial": info.arguments["value"], "arguments": info.arguments["context"]},
-            spec, principal, "completion",
+        restored = self._untransform(
+            info, {"partial": info.arguments["value"], "arguments": info.arguments["context"]}
         )
         ctx = info.context
         ctx.meta["arguments"] = restored.get("arguments", {})
@@ -717,7 +620,7 @@ class CloudGMCPLayer:
             # (asset names, account ids...) need a key to recognise a bare
             # value, exactly as they would in a tool result.
             key = arg_name or "value"
-            wrapped, _ = self._transform([{key: v} for v in values], spec, principal, "completion")
+            wrapped = self._scope(info)([{key: v} for v in values])
             values = [str(w.get(key, "")) if isinstance(w, dict) else str(w) for w in wrapped]
         return {"values": values[:100], "total": len(values), "hasMore": len(values) > 100}
 
@@ -729,7 +632,8 @@ class CloudGMCPLayer:
         """Mount every tool, resource, template and prompt into an existing
         MCP server object (mcp SDK ``MCPServer`` / ``FastMCP`` / low-level
         ``Server``, or a standalone ``fastmcp.FastMCP``). See
-        :func:`cloudg.mcp.adapters.register_into`."""
+        :func:`cloudg.mcp.adapters.register_into` (``prefix=`` changes this
+        layer's prefix for every server it is mounted on)."""
         from cloudg.mcp.adapters import register_into
 
         return register_into(self, server, **kwargs)
@@ -747,13 +651,3 @@ def _bind(mw: Middleware, nxt: Next) -> Next:
         return await mw(info, nxt)
 
     return call
-
-
-def _merge_report(into: dict[str, Any], other: dict[str, Any]) -> None:
-    for k, v in other.items():
-        if isinstance(v, (int, float)) and isinstance(into.get(k), (int, float)):
-            into[k] += v
-        else:
-            into.setdefault(k, v)
-
-

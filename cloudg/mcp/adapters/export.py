@@ -62,7 +62,10 @@ class ExportedDefinitions:
     )
 
     async def dispatch(
-        self, method: str, params: dict[str, Any] | None = None, *,
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
         principal: Principal | None = None,
     ) -> dict[str, Any]:
         """Run one MCP method; raises ``KeyError`` for unknown methods and
@@ -98,16 +101,13 @@ def export_definitions(
         )
         return result.to_wire()
 
-    async def resources_list(params: dict[str, Any], *,
-                             principal: Principal | None = None) -> dict:
+    async def resources_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
         return {"resources": layer.resources_wire(who(principal))}
 
-    async def templates_list(params: dict[str, Any], *,
-                             principal: Principal | None = None) -> dict:
+    async def templates_list(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
         return {"resourceTemplates": layer.resource_templates_wire(who(principal))}
 
-    async def resources_read(params: dict[str, Any], *,
-                             principal: Principal | None = None) -> dict:
+    async def resources_read(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
         contents = await layer.read_resource(params["uri"], principal=who(principal))
         return {"contents": [c.to_wire() for c in contents]}
 
@@ -123,7 +123,9 @@ def export_definitions(
     async def complete(params: dict[str, Any], *, principal: Principal | None = None) -> dict:
         ctx = params.get("context") or {}
         completion = await layer.complete(
-            params["ref"], params["argument"], principal=who(principal),
+            params["ref"],
+            params["argument"],
+            principal=who(principal),
             context_arguments=ctx.get("arguments"),
         )
         return {"completion": completion}
@@ -138,8 +140,11 @@ def export_definitions(
         return call
 
     return ExportedDefinitions(
-        server={"name": layer.name, "version": str(layer.version),
-                "instructions": layer.instructions},
+        server={
+            "name": layer.name,
+            "version": str(layer.version),
+            "instructions": layer.instructions,
+        },
         tools=tools,
         resources=layer.resources_wire(default),
         resource_templates=layer.resource_templates_wire(default),
@@ -158,24 +163,28 @@ def export_definitions(
     )
 
 
-def to_openai_tools(layer: "CloudGMCPLayer",
-                    principal: Principal | None = None) -> list[dict[str, Any]]:
+def to_openai_tools(
+    layer: "CloudGMCPLayer", principal: Principal | None = None
+) -> list[dict[str, Any]]:
     """OpenAI Chat Completions / Responses function-tool definitions."""
     out = []
     for t in layer.tools_wire(principal):
-        out.append({
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t.get("description") or t.get("title") or t["name"],
-                "parameters": t["inputSchema"],
-            },
-        })
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description") or t.get("title") or t["name"],
+                    "parameters": t["inputSchema"],
+                },
+            }
+        )
     return out
 
 
-def to_anthropic_tools(layer: "CloudGMCPLayer",
-                       principal: Principal | None = None) -> list[dict[str, Any]]:
+def to_anthropic_tools(
+    layer: "CloudGMCPLayer", principal: Principal | None = None
+) -> list[dict[str, Any]]:
     """Anthropic Messages API tool definitions."""
     return [
         {
@@ -210,8 +219,13 @@ def to_langchain_tools(layer: "CloudGMCPLayer", principal: Principal | None = No
             text = "\n".join(c.text for c in result.content if hasattr(c, "text"))
             return text, result.structured
 
-        tools.append(StructuredTool.from_function(
-            coroutine=run, name=name, description=t.get("description") or name,
-            args_schema=t["inputSchema"], response_format="content_and_artifact",
-        ))
+        tools.append(
+            StructuredTool.from_function(
+                coroutine=run,
+                name=name,
+                description=t.get("description") or name,
+                args_schema=t["inputSchema"],
+                response_format="content_and_artifact",
+            )
+        )
     return tools

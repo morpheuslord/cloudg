@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from cloudg.mcp.transforms.base import TransformContext
+from cloudg.mcp.transforms.textscan import replace_known
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,8 +161,14 @@ class AliasMap:
 
         return self._rx.sub(sub, text), count
 
-    def unsubstitute(self, text: str) -> tuple[str, int]:
+    def unsubstitute(
+        self, text: str, pairs: list[tuple[str, str]] | None = None
+    ) -> tuple[str, int]:
+        """Aliases back to real values. ``pairs`` (optional) collects
+        ``(real, alias)`` for each replacement."""
         if text in self.reverse:
+            if pairs is not None:
+                pairs.append((self.reverse[text], text))
             return self.reverse[text], 1
         if self._rev_rx is None:
             return text, 0
@@ -172,6 +179,8 @@ class AliasMap:
             alias = m.group(0)
             if alias in self.reverse:
                 count += 1
+                if pairs is not None:
+                    pairs.append((self.reverse[alias], alias))
                 return self.reverse[alias]
             return alias
 
@@ -403,13 +412,30 @@ class Substitution:
 #: Fence markers written by :class:`~cloudg.mcp.transforms.annotation.UntrustedTextGuard`.
 FENCE_OPEN = "⟦untrusted⟧ "
 FENCE_CLOSE = " ⟦/untrusted⟧"
-_FENCE_RE = re.compile(re.escape(FENCE_OPEN) + r"(.*?)" + re.escape(FENCE_CLOSE), re.S)
 
 
 def strip_fences(text: str) -> str:
+    """Remove the untrusted-content fences, keeping the fenced text. A
+    linear scan (no regex), so hostile input with many unmatched fence
+    markers costs no more than one pass."""
     if "⟦" not in text:
         return text
-    return _FENCE_RE.sub(lambda m: m.group(1), text)
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = text.find(FENCE_OPEN, pos)
+        if start < 0:
+            break
+        end = text.find(FENCE_CLOSE, start + len(FENCE_OPEN))
+        if end < 0:
+            break
+        out.append(text[pos:start])
+        out.append(text[start + len(FENCE_OPEN) : end])
+        pos = end + len(FENCE_CLOSE)
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
 class Depseudonymizer:
@@ -437,23 +463,25 @@ class Depseudonymizer:
         self.strip_fences = strip_fences
         self.keys = keys
 
-    def _reverse(self, text: str, vault: Any, ns: str, counter: list[int]) -> str:
+    def _reverse(self, text: str, run: "_ReverseRun") -> str:
         """Exact vault token first, then aliases, then tokens embedded in
         text (an aliased ARN ``arn:...:prod-payments:instance/i-<token>``
         needs both the alias and the token reversed)."""
+        vault, ns, pairs = run.vault, run.ns, run.pairs
         if self.strip_fences:
             text = strip_fences(text)
         if vault is not None:
             real = vault.detokenize(text, namespace=ns)
             if real is not None:
-                counter[0] += 1
+                run.count += 1
+                pairs.append((real, text))
                 return strip_fences(real) if self.strip_fences else real
         for amap in self.aliases:
-            text, n = amap.unsubstitute(text)
-            counter[0] += n
+            text, n = amap.unsubstitute(text, pairs)
+            run.count += n
         if vault is not None:
-            text, n = vault.detokenize_text_count(text, namespace=ns)
-            counter[0] += n
+            text, n = vault.detokenize_text_count(text, namespace=ns, pairs=pairs)
+            run.count += n
             if n and self.strip_fences:
                 text = strip_fences(text)  # a pseudonymised value may have been fenced
         return text
@@ -461,25 +489,90 @@ class Depseudonymizer:
     def apply(self, value: Any, ctx: TransformContext) -> Any:
         vault = ctx.vault if ctx.vault is not None else self.vault
         ns = vault.namespace_for(ctx.principal) if vault is not None else "global"
-        counter = [0]
-
-        def walk(v: Any) -> Any:
-            if isinstance(v, str):
-                return self._reverse(v, vault, ns, counter)
-            if isinstance(v, dict):
-                return {
-                    (
-                        self._reverse(k, vault, ns, counter)
-                        if self.keys and isinstance(k, str)
-                        else k
-                    ): walk(x)
-                    for k, x in v.items()
-                }
-            if isinstance(v, (list, tuple)):
-                return [walk(x) for x in v]
-            return v
-
-        out = walk(value)
-        if counter[0]:
-            ctx.count("depseudonymized", counter[0])
+        run = _ReverseRun(vault, ns, ctx.restored)
+        out = self._walk(value, run)
+        if run.count:
+            ctx.count("depseudonymized", run.count)
         return out
+
+    def _walk(self, v: Any, run: "_ReverseRun") -> Any:
+        if isinstance(v, str):
+            return self._reverse(v, run)
+        if isinstance(v, dict):
+            return {
+                (self._reverse(k, run) if self.keys and isinstance(k, str) else k): self._walk(
+                    x, run
+                )
+                for k, x in v.items()
+            }
+        if isinstance(v, (list, tuple)):
+            return [self._walk(x, run) for x in v]
+        return v
+
+
+class _ReverseRun:
+    """State of one :meth:`Depseudonymizer.apply` call."""
+
+    __slots__ = ("vault", "ns", "pairs", "count")
+
+    def __init__(self, vault: Any, ns: str, pairs: list[tuple[str, str]]) -> None:
+        self.vault = vault
+        self.ns = ns
+        self.pairs = pairs
+        self.count = 0
+
+
+# ---------------------------------------------------------------------------
+# Re-pseudonymising restored values
+# ---------------------------------------------------------------------------
+
+
+def repseudonymize(value: Any, restored: Any) -> Any:
+    """Put pseudonyms back into ``value`` for every real value restored by
+    the input pipeline of the same call.
+
+    ``restored`` is :attr:`TransformContext.restored` (a list of ``(real,
+    token)`` pairs) or the input :class:`TransformContext` itself. Every
+    string in ``value`` (dict keys included) has each restored real value
+    replaced by its token wherever it appears as a whole word (see
+    :mod:`cloudg.mcp.transforms.textscan`; values containing whitespace are
+    replaced as plain substrings). A handler that echoes an argument in an
+    error message ("Unknown severity 'web-1'") therefore cannot hand the
+    caller the real value behind the pseudonym it sent. ``value`` is
+    returned unchanged when nothing was restored."""
+    pairs = getattr(restored, "restored", restored) or ()
+    table: dict[str, str] = {}
+    spaced: list[tuple[str, str]] = []
+    for real, token in pairs:
+        if not real or real == token or real in table:
+            continue
+        table[real] = token
+        if any(c.isspace() for c in real):
+            spaced.append((real, token))
+    if not table:
+        return value
+    spaced.sort(key=lambda p: len(p[0]), reverse=True)
+
+    def fix(text: str) -> str:
+        hit = table.get(text)
+        if hit is not None:
+            return hit
+        for real, token in spaced:
+            text = text.replace(real, token)
+        return replace_known(text, table.get)
+
+    return _repseudo_walk(value, fix)
+
+
+def _repseudo_walk(value: Any, fix: Any) -> Any:
+    if isinstance(value, str):
+        return fix(value)
+    if isinstance(value, dict):
+        return {
+            (fix(k) if isinstance(k, str) else k): _repseudo_walk(v, fix) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_repseudo_walk(v, fix) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_repseudo_walk(v, fix) for v in value)
+    return value

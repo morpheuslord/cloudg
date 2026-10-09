@@ -68,8 +68,7 @@ async def test_tool_calls() -> None:
     async with fastmcp.Client(server) as client:
         ok = dump(await client.call_tool_mcp("echo", {"text": "ab", "times": 2}))
         assert ok["structuredContent"] == {"text": "abab"} and not ok.get("isError")
-        slow = dump(await client.call_tool_mcp("slow", {"steps": 2},
-                                               progress_handler=on_progress))
+        slow = dump(await client.call_tool_mcp("slow", {"steps": 2}, progress_handler=on_progress))
         assert slow["structuredContent"] == {"done": 2}
         assert progress == [1, 2]
         failed = dump(await client.call_tool_mcp("fail", {}))
@@ -87,8 +86,10 @@ async def test_resources_templates_prompts_completions() -> None:
     async with fastmcp.Client(server) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
         assert "test://info" in uris
-        templates = [t.uriTemplate if hasattr(t, "uriTemplate") else t.uri_template
-                     for t in await client.list_resource_templates()]
+        templates = [
+            t.uriTemplate if hasattr(t, "uriTemplate") else t.uri_template
+            for t in await client.list_resource_templates()
+        ]
         assert "test://items/{item_id}" in templates
         info = await client.read_resource("test://info")
         assert '"hello"' in info[0].text
@@ -137,8 +138,9 @@ async def test_principal_resolver_is_used() -> None:
         return await call_next(info)
 
     layer.use(spy)
-    register_into(layer, server,
-                  principal_resolver=lambda info: Principal(id="resolved", roles={"r1"}))
+    register_into(
+        layer, server, principal_resolver=lambda info: Principal(id="resolved", roles={"r1"})
+    )
     async with fastmcp.Client(server) as client:
         await client.call_tool_mcp("echo", {"text": "x"})
     assert seen and seen[0].id == "resolved"
@@ -184,7 +186,8 @@ async def test_change_notifications() -> None:
         await client.call_tool_mcp("touch", {"uri": "test://info"})
         for _ in range(100):
             if any("ResourceUpdated" in repr(m) for m in received) and any(
-                    "ToolListChanged" in repr(m) for m in received):
+                "ToolListChanged" in repr(m) for m in received
+            ):
                 break
             await asyncio.sleep(0.02)
     assert any("ToolListChanged" in repr(m) for m in received)

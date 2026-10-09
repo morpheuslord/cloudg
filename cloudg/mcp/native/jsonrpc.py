@@ -68,8 +68,14 @@ SUBSCRIPTION_ID_META_KEY = "io.modelcontextprotocol/subscriptionId"
 
 #: Results that carry ``ttlMs`` / ``cacheScope`` on the 2026-07-28 wire.
 CACHEABLE_METHODS: frozenset[str] = frozenset(
-    {"tools/list", "prompts/list", "resources/list", "resources/templates/list", "resources/read",
-     "server/discover"}
+    {
+        "tools/list",
+        "prompts/list",
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+        "server/discover",
+    }
 )
 
 # -- error codes ------------------------------------------------------------------
@@ -86,7 +92,14 @@ UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 #: RFC 5424 severities in ascending order (``logging/setLevel``).
 LOG_LEVELS: tuple[str, ...] = (
-    "debug", "info", "notice", "warning", "error", "critical", "alert", "emergency",
+    "debug",
+    "info",
+    "notice",
+    "warning",
+    "error",
+    "critical",
+    "alert",
+    "emergency",
 )
 
 
@@ -120,9 +133,7 @@ def is_notification(msg: Any) -> bool:
 
 
 def is_response(msg: Any) -> bool:
-    return isinstance(msg, dict) and "method" not in msg and (
-        "result" in msg or "error" in msg
-    )
+    return isinstance(msg, dict) and "method" not in msg and ("result" in msg or "error" in msg)
 
 
 def result_response(req_id: Any, result: dict[str, Any]) -> dict[str, Any]:

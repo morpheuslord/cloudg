@@ -96,8 +96,9 @@ def build_registry() -> Registry:
         os.write(1, b"NOISE from fd 1\n")
         return {"noisy": True}
 
-    @reg.resource("test://info", name="info", title="Info", category="test",
-                  sensitivity=Sensitivity.PUBLIC)
+    @reg.resource(
+        "test://info", name="info", title="Info", category="test", sensitivity=Sensitivity.PUBLIC
+    )
     def info(ctx) -> dict:
         """Static info resource."""
         return {"hello": "world"}

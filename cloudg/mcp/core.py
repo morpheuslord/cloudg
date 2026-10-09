@@ -155,8 +155,6 @@ class Capability(str, Enum):
     REVEAL = "reveal"  # reverses pseudonymisation / reveals hidden values
 
 
-
-
 # ---------------------------------------------------------------------------
 # Specs
 # ---------------------------------------------------------------------------
@@ -333,6 +331,16 @@ class ResourceTemplateSpec(_BaseSpec):
                 .replace("{" + k + "*}", multi)
                 .replace("{" + k + "}", quote(str(v), safe=""))
             )
+        return out
+
+    def canonical(self, values: dict[str, str]) -> str:
+        """The URI with decoded ``values`` filled in verbatim (no
+        percent-encoding): ``cloudg://graph/%64%33`` and ``cloudg://graph/d3``
+        share one canonical form, which is what access policies match."""
+        out = self.uri_template
+        for k, v in values.items():
+            for form in ("{+" + k + "}", "{" + k + "*}", "{" + k + "}"):
+                out = out.replace(form, str(v))
         return out
 
     def to_wire(self) -> dict[str, Any]:

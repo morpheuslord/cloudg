@@ -70,8 +70,9 @@ async def test_find_assets_cursor_errors(call, workspace):
 
 
 async def test_find_assets_bad_filters(call):
-    msg = await call.error("find_assets", asset_types=["EC3"])
-    assert "Unknown asset type 'EC3'" in msg and "EC2" in msg
+    msg, data = await call.error_data("find_assets", asset_types=["EC3"])
+    assert "Unknown asset type" in msg and "EC2" in msg and "EC3" not in msg
+    assert data["value"] == "EC3"
     msg = await call.error("find_assets", provider="oracle")
     assert "provider" in msg
     msg = await call.error("find_assets", fields=["bogus"])
@@ -101,8 +102,11 @@ async def test_get_asset(call, layer):
 
 
 async def test_get_asset_not_found_suggests(call):
-    msg = await call.error("get_asset", ref="web-9")
-    assert "Did you mean" in msg and "web-1" in msg
+    msg, data = await call.error_data("get_asset", ref="web-9")
+    assert "close match" in msg and "web-9" not in msg and "web-1" not in msg
+    assert data["value"] == "web-9"
+    assert "web-1" in {s["name"] for s in data["suggestions"]}
+    assert {"name", "arn", "type", "dataset"} <= set(data["suggestions"][0])
 
 
 async def test_get_asset_metadata(call):

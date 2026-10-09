@@ -40,15 +40,23 @@ def test_find_asset_by_id_arn_name_tail_and_case(sample_dataset):
 def test_resolve_asset_suggests_close_matches(sample_dataset):
     with pytest.raises(ReferenceNotFoundError) as exc:
         sample_dataset.resolve_asset("web-3")
-    assert "Did you mean" in exc.value.message
-    assert "web-1" in exc.value.data["suggestions"]
+    assert "close match" in exc.value.message and "web-3" not in exc.value.message
+    assert "web-1" in {s["name"] for s in exc.value.data["suggestions"]}
+    assert exc.value.data["value"] == "web-3"
     assert isinstance(exc.value, NotFoundError)
 
 
 def test_resolve_asset_ambiguous_name(sample_dataset):
     ds = sample_dataset
-    ds.assets.append(CloudAsset(id="dup", name="web-1", asset_type=AssetType.EC2,
-                                provider=CloudProvider.AWS, account_id="222222222222"))
+    ds.assets.append(
+        CloudAsset(
+            id="dup",
+            name="web-1",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            account_id="222222222222",
+        )
+    )
     ds.invalidate()
     assert ds.find_asset("web-1").id == "web-1"  # exact id still wins
     ds.assets[-1].name = "prod-vpc"  # clash with the VPC's name
@@ -76,8 +84,18 @@ def test_cached_views_and_invalidation(sample_dataset):
     assert ds.cache_state()["graph"]
     assert ds.dependency_graph() is ds.dependency_graph()
     v = ds.version
-    ds.add_findings([Finding(id="f-new", resource_id="web-2", severity=Severity.LOW, title="t",
-                             description="d", source_tool="x")])
+    ds.add_findings(
+        [
+            Finding(
+                id="f-new",
+                resource_id="web-2",
+                severity=Severity.LOW,
+                title="t",
+                description="d",
+                source_tool="x",
+            )
+        ]
+    )
     assert ds.version == v + 1
     assert not ds.cache_state()["graph"]
     assert ds.graph is not g1
@@ -95,8 +113,7 @@ def test_internet_reachable_and_centrality(sample_dataset):
     reach = sample_dataset.internet_reachable()
     assert {"alb-web", "sg-admin", "api-gw", "az-nsg"} <= reach
     c = sample_dataset.centrality()
-    assert "web-1" in c and set(c["web-1"]) == {"degree", "betweenness", "in_degree",
-                                                 "out_degree"}
+    assert "web-1" in c and set(c["web-1"]) == {"degree", "betweenness", "in_degree", "out_degree"}
 
 
 def test_ontology_and_rag_cached(sample_dataset):
@@ -141,13 +158,20 @@ def test_constructors_from_engine_results(sample_dataset):
     inv = sample_estate.build_inventory()
     ds = Dataset.from_inventory(inv, "inv")
     assert ds.organization["organization_id"] == "o-sample" and ds.coverage
-    col = CollectionResult(assets=inv.assets, edges=inv.edges, providers_scanned=["aws"],
-                           regions_scanned={"aws": ["us-east-1"]}, duration_ms=5)
+    col = CollectionResult(
+        assets=inv.assets,
+        edges=inv.edges,
+        providers_scanned=["aws"],
+        regions_scanned={"aws": ["us-east-1"]},
+        duration_ms=5,
+    )
     assert len(Dataset.from_collection(col, "c").assets) == len(inv.assets)
-    sr = ScanResult(assets=inv.assets, findings=sample_estate.findings(),
-                    compliance=sample_estate.compliance())
-    pr = PipelineResult(assets=inv.assets, edges=inv.edges, findings=sr.findings, scan_result=sr,
-                        errors=["x"])
+    sr = ScanResult(
+        assets=inv.assets, findings=sample_estate.findings(), compliance=sample_estate.compliance()
+    )
+    pr = PipelineResult(
+        assets=inv.assets, edges=inv.edges, findings=sr.findings, scan_result=sr, errors=["x"]
+    )
     p = Dataset.from_pipeline(pr, "p")
     assert len(p.compliance) == len(sr.compliance) and p.metadata["errors"] == ["x"]
     assert len(Dataset.from_scan_result(sr, "s").findings) == len(sr.findings)
@@ -210,8 +234,19 @@ def test_load_report_rebuilds_edges_from_graph(sample_paths):
 
 def test_load_generic_and_errors(tmp_path):
     p = tmp_path / "g.json"
-    p.write_text(json.dumps([{"resource_id": "x", "severity": "HIGH", "title": "t",
-                              "description": "d", "source_tool": "manual"}]))
+    p.write_text(
+        json.dumps(
+            [
+                {
+                    "resource_id": "x",
+                    "severity": "HIGH",
+                    "title": "t",
+                    "description": "d",
+                    "source_tool": "manual",
+                }
+            ]
+        )
+    )
     ds = load_dataset_file(p, "g")
     assert len(ds.findings) == 1 and ds.kind == "generic"
     p.write_text(json.dumps({"assets": [{"name": "x"}]}))
@@ -225,12 +260,30 @@ def test_load_generic_and_errors(tmp_path):
 
 def test_load_scanner_report_normalises(tmp_path):
     report = tmp_path / "trivy.json"
-    report.write_text(json.dumps({
-        "SchemaVersion": 2, "ArtifactName": "nginx:1.0", "ArtifactType": "container_image",
-        "Results": [{"Target": "nginx:1.0", "Vulnerabilities": [{
-            "VulnerabilityID": "CVE-2024-0001", "PkgName": "openssl", "InstalledVersion": "1",
-            "Severity": "CRITICAL", "Title": "bad openssl", "Description": "desc"}]}],
-    }))
+    report.write_text(
+        json.dumps(
+            {
+                "SchemaVersion": 2,
+                "ArtifactName": "nginx:1.0",
+                "ArtifactType": "container_image",
+                "Results": [
+                    {
+                        "Target": "nginx:1.0",
+                        "Vulnerabilities": [
+                            {
+                                "VulnerabilityID": "CVE-2024-0001",
+                                "PkgName": "openssl",
+                                "InstalledVersion": "1",
+                                "Severity": "CRITICAL",
+                                "Title": "bad openssl",
+                                "Description": "desc",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     ds = load_dataset_file(report, "t")
     assert ds.kind == "trivy" and ds.findings
     assert ds.findings[0].severity == Severity.CRITICAL
@@ -257,7 +310,7 @@ def test_workspace_load_select_remove_and_events(tmp_path, sample_paths):
     assert c.name == "findings-2"
     ws.select("findings")
     assert ws.get().name == "findings"
-    with pytest.raises(NoDatasetError, match="Loaded datasets"):
+    with pytest.raises(NoDatasetError, match="dataset"):
         ws.get("nope")
     ws.remove("findings")
     assert ws.active_name in ("inventory", "findings-2")
@@ -291,9 +344,16 @@ def test_workspace_eviction(tmp_path, sample_dataset):
 def test_snapshot_and_diff(workspace):
     workspace.snapshot(None, "before")
     ds = workspace.get("sample")
-    ds.assets.append(CloudAsset(id="new-vm", name="new-vm", asset_type=AssetType.EC2,
-                                provider=CloudProvider.AWS, arn="arn:aws:ec2:x:1:instance/new",
-                                is_internet_exposed=True))
+    ds.assets.append(
+        CloudAsset(
+            id="new-vm",
+            name="new-vm",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            arn="arn:aws:ec2:x:1:instance/new",
+            is_internet_exposed=True,
+        )
+    )
     ds.assets = [a for a in ds.assets if a.id != "web-2"]
     for a in ds.assets:
         if a.id == "orders-db":
@@ -310,8 +370,10 @@ def test_snapshot_and_diff(workspace):
     assert set(changed["orders-db"]["changed_fields"]) == {"internet_exposed", "tags"}
     assert changed["orders-db"]["internet_exposed"] == {"before": False, "after": True}
     assert d["edges"]["removed"]["count"] >= 1
-    assert any(f["title"].startswith("Security group allows SSH")
-               for f in d["findings"]["resolved"]["items"])
+    assert any(
+        f["title"].startswith("Security group allows SSH")
+        for f in d["findings"]["resolved"]["items"]
+    )
     assert d["findings"]["severity_changed"]["count"] == 1
     exposed = {x["id"] for x in d["newly_internet_exposed"]["items"]}
     assert exposed == {"orders-db", "new-vm"}

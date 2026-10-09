@@ -29,13 +29,18 @@ from __future__ import annotations
 import base64
 import inspect
 import logging
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from cloudg.mcp.adapters._common import (
     ChangeFanout,
+    call_layer,
     lower_headers,
     normalize_kinds,
+    normalize_level,
     resolve_principal,
+    scope_principal,
+    send_change,
 )
 from cloudg.mcp.context import Principal
 from cloudg.mcp.core import (
@@ -44,7 +49,7 @@ from cloudg.mcp.core import (
     NotFoundError,
     ResourceTemplateSpec,
 )
-from cloudg.mcp.native.auth import PRINCIPAL_SCOPE_KEY, PrincipalResolver, RequestInfo
+from cloudg.mcp.native.auth import PrincipalResolver, RequestInfo
 
 if TYPE_CHECKING:  # pragma: no cover
     from cloudg.mcp.layer import CloudGMCPLayer
@@ -65,6 +70,71 @@ def _fields(model: Any) -> set[str]:
     return set(getattr(model, "model_fields", {}) or {})
 
 
+def _fastmcp_api() -> SimpleNamespace:
+    """The fastmcp classes the adapter needs, across fastmcp 2.x to 4.x."""
+    import mcp.types as MT
+    from fastmcp import exceptions as fx
+    from fastmcp.prompts import Prompt
+    from fastmcp.resources import Resource, ResourceTemplate
+    from fastmcp.tools import Tool
+
+    api = SimpleNamespace(MT=MT, fx=fx, Prompt=Prompt, Resource=Resource, Tool=Tool)
+    api.ResourceTemplate = ResourceTemplate
+    try:
+        from fastmcp.tools import ToolResult
+    except ImportError:  # fastmcp 2.x
+        from fastmcp.tools.tool import ToolResult
+    try:
+        from fastmcp.prompts import PromptArgument
+    except ImportError:  # fastmcp 2.x
+        from fastmcp.prompts.prompt import PromptArgument
+    api.ToolResult, api.PromptArgument = ToolResult, PromptArgument
+    try:
+        from fastmcp.resources import ResourceContent, ResourceResult
+    except ImportError:  # fastmcp 2.x: read() returns str | bytes
+        ResourceContent = ResourceResult = None  # type: ignore[assignment,misc]
+    try:
+        from fastmcp.prompts import Message, PromptResult
+    except ImportError:  # fastmcp 2.x: render() returns list[PromptMessage]
+        Message = PromptResult = None  # type: ignore[assignment,misc]
+    api.ResourceContent, api.ResourceResult = ResourceContent, ResourceResult
+    api.Message, api.PromptResult = Message, PromptResult
+    return api
+
+
+def _component_classes(binding: "FastMCPBinding", api: SimpleNamespace) -> SimpleNamespace:
+    """fastmcp component subclasses whose run / read / render delegate to
+    ``binding``."""
+
+    class CloudGTool(api.Tool):  # type: ignore[misc,name-defined]
+        async def run(self, arguments: dict[str, Any]) -> Any:
+            return await binding._run_tool(self.name, arguments)
+
+    class CloudGResource(api.Resource):  # type: ignore[misc,name-defined]
+        async def read(self) -> Any:
+            return await binding._read(str(self.uri))
+
+    class CloudGTemplate(api.ResourceTemplate):  # type: ignore[misc,name-defined]
+        def matches(self, uri: str) -> dict[str, Any] | None:
+            spec = binding.layer.registry.templates.get(self.uri_template)
+            return spec.match(uri) if spec is not None else None
+
+        async def create_resource(self, uri: str, params: dict[str, Any]) -> Any:
+            return binding._make_resource(CloudGResource, uri, self)
+
+        async def read(self, arguments: dict[str, Any]) -> Any:
+            spec = binding.layer.registry.templates[self.uri_template]
+            return await binding._read(spec.expand(**arguments))
+
+    class CloudGPrompt(api.Prompt):  # type: ignore[misc,name-defined]
+        async def render(self, arguments: dict[str, Any] | None = None) -> Any:
+            return await binding._render(self.name, arguments or {})
+
+    return SimpleNamespace(
+        Tool=CloudGTool, Resource=CloudGResource, Template=CloudGTemplate, Prompt=CloudGPrompt
+    )
+
+
 class FastMCPBinding:
     """Registers the layer's primitives on a ``fastmcp.FastMCP`` server."""
 
@@ -76,77 +146,26 @@ class FastMCPBinding:
         include: Any = None,
         principal_resolver: PrincipalResolver | None = None,
     ) -> None:
-        import mcp.types as MT
-        from fastmcp import exceptions as fx
-        from fastmcp.prompts import Prompt as FPrompt
-        from fastmcp.resources import Resource as FResource
-        from fastmcp.resources import ResourceTemplate as FTemplate
-        from fastmcp.tools import Tool as FTool
-
-        try:
-            from fastmcp.tools import ToolResult as FToolResult
-        except ImportError:  # fastmcp 2.x
-            from fastmcp.tools.tool import ToolResult as FToolResult
-        try:
-            from fastmcp.prompts import PromptArgument as FPromptArgument
-        except ImportError:  # fastmcp 2.x
-            from fastmcp.prompts.prompt import PromptArgument as FPromptArgument
-        try:
-            from fastmcp.resources import ResourceContent, ResourceResult
-        except ImportError:  # fastmcp 2.x: read() returns str | bytes
-            ResourceContent = ResourceResult = None  # type: ignore[assignment,misc]
-        try:
-            from fastmcp.prompts import Message as FMessage
-            from fastmcp.prompts import PromptResult as FPromptResult
-        except ImportError:  # fastmcp 2.x: render() returns list[PromptMessage]
-            FMessage = FPromptResult = None  # type: ignore[assignment,misc]
-
+        api = _fastmcp_api()
         self.layer = layer
         self.server = server
         self.kinds = normalize_kinds(include)
         self.resolver = principal_resolver
-        self.MT = MT
-        self.fx = fx
-        self._ResourceContent = ResourceContent
-        self._ResourceResult = ResourceResult
-        self._FMessage = FMessage
-        self._FPromptResult = FPromptResult
+        self.MT = api.MT
+        self.fx = api.fx
+        self._ResourceContent = api.ResourceContent
+        self._ResourceResult = api.ResourceResult
+        self._FMessage = api.Message
+        self._FPromptResult = api.PromptResult
+        self._FToolResult = api.ToolResult
+        self._FPromptArgument = api.PromptArgument
         self.fanout = ChangeFanout(layer, self._notify)
-        binding = self
-
-        # -- component subclasses (closures over the binding) ------------
-
-        class CloudGTool(FTool):  # type: ignore[misc,valid-type]
-            async def run(self, arguments: dict[str, Any]) -> Any:
-                return await binding._run_tool(self.name, arguments)
-
-        class CloudGResource(FResource):  # type: ignore[misc,valid-type]
-            async def read(self) -> Any:
-                return await binding._read(str(self.uri))
-
-        class CloudGTemplate(FTemplate):  # type: ignore[misc,valid-type]
-            def matches(self, uri: str) -> dict[str, Any] | None:
-                spec = binding.layer.registry.templates.get(self.uri_template)
-                return spec.match(uri) if spec is not None else None
-
-            async def create_resource(self, uri: str, params: dict[str, Any]) -> Any:
-                return binding._make_resource(CloudGResource, uri, self)
-
-            async def read(self, arguments: dict[str, Any]) -> Any:
-                spec = binding.layer.registry.templates[self.uri_template]
-                return await binding._read(spec.expand(**arguments))
-
-        class CloudGPrompt(FPrompt):  # type: ignore[misc,valid-type]
-            async def render(self, arguments: dict[str, Any] | None = None) -> Any:
-                return await binding._render(self.name, arguments or {})
-
-        self.CloudGTool = CloudGTool
-        self.CloudGResource = CloudGResource
-        self.CloudGTemplate = CloudGTemplate
-        self.CloudGPrompt = CloudGPrompt
-        self._result_cls = self._make_result_class(FToolResult)
-        self._FToolResult = FToolResult
-        self._FPromptArgument = FPromptArgument
+        components = _component_classes(self, api)
+        self.CloudGTool = components.Tool
+        self.CloudGResource = components.Resource
+        self.CloudGTemplate = components.Template
+        self.CloudGPrompt = components.Prompt
+        self._result_cls = self._make_result_class(api.ToolResult)
 
         self.lowlevel: Any = None
         self._register()
@@ -162,68 +181,66 @@ class FastMCPBinding:
     # ------------------------------------------------------------------
 
     def _register(self) -> None:
-        MT = self.MT
-        layer = self.layer
         if "tools" in self.kinds:
-            tool_fields = _fields(self.CloudGTool)
-            for spec in layer.registry.tools.values():
-                wire = spec.to_wire(layer.exposed_name(spec.name))
-                kwargs: dict[str, Any] = {
-                    "name": wire["name"],
-                    "description": wire.get("description") or None,
-                    "parameters": wire["inputSchema"],
-                    "output_schema": wire.get("outputSchema"),
-                    "tags": {"cloudg", spec.category, *spec.tags},
-                }
-                if wire.get("annotations"):
-                    kwargs["annotations"] = MT.ToolAnnotations.model_validate(wire["annotations"])
-                if "title" in tool_fields and wire.get("title"):
-                    kwargs["title"] = wire["title"]
-                if "meta" in tool_fields:
-                    kwargs["meta"] = wire.get("_meta")
-                self.server.add_tool(self.CloudGTool(**kwargs))
+            self._register_tools()
         if "resources" in self.kinds:
-            for spec in layer.registry.resources.values():
+            for spec in self.layer.registry.resources.values():
                 self.server.add_resource(self._make_resource(self.CloudGResource, spec.uri, spec))
         if "templates" in self.kinds:
-            tmpl_fields = _fields(self.CloudGTemplate)
-            for tspec in layer.registry.templates.values():
-                wire = tspec.to_wire()
-                kwargs = {
-                    "uri_template": tspec.uri_template,
-                    "name": tspec.name,
-                    "description": tspec.description or None,
-                    "mime_type": tspec.mime_type,
-                    "parameters": _template_parameters(tspec),
-                    "tags": {"cloudg", tspec.category, *tspec.tags},
-                }
-                if "title" in tmpl_fields and tspec.title:
-                    kwargs["title"] = tspec.title
-                if "meta" in tmpl_fields:
-                    kwargs["meta"] = wire.get("_meta")
-                if wire.get("annotations") and "annotations" in tmpl_fields:
-                    kwargs["annotations"] = MT.Annotations.model_validate(wire["annotations"])
-                self.server.add_template(self.CloudGTemplate(**kwargs))
+            self._register_templates()
         if "prompts" in self.kinds:
-            prompt_fields = _fields(self.CloudGPrompt)
-            for pspec in layer.registry.prompts.values():
-                wire = pspec.to_wire()
-                kwargs = {
-                    "name": layer.exposed_name(pspec.name),
-                    "description": pspec.description or None,
-                    "arguments": [
-                        self._FPromptArgument(
-                            name=a.name, description=a.description or None, required=a.required
-                        )
-                        for a in pspec.arguments
-                    ],
-                    "tags": {"cloudg", pspec.category, *pspec.tags},
-                }
-                if "title" in prompt_fields and pspec.title:
-                    kwargs["title"] = pspec.title
-                if "meta" in prompt_fields:
-                    kwargs["meta"] = wire.get("_meta")
-                self.server.add_prompt(self.CloudGPrompt(**kwargs))
+            self._register_prompts()
+
+    def _register_tools(self) -> None:
+        layer, tool_fields = self.layer, _fields(self.CloudGTool)
+        for spec in layer.registry.tools.values():
+            wire = spec.to_wire(layer.exposed_name(spec.name))
+            kwargs: dict[str, Any] = {
+                "name": wire["name"],
+                "description": wire.get("description") or None,
+                "parameters": wire["inputSchema"],
+                "output_schema": wire.get("outputSchema"),
+                "tags": {"cloudg", spec.category, *spec.tags},
+            }
+            if wire.get("annotations"):
+                kwargs["annotations"] = self.MT.ToolAnnotations.model_validate(wire["annotations"])
+            _add_optional(kwargs, tool_fields, wire, title=wire.get("title"))
+            self.server.add_tool(self.CloudGTool(**kwargs))
+
+    def _register_templates(self) -> None:
+        tmpl_fields = _fields(self.CloudGTemplate)
+        for tspec in self.layer.registry.templates.values():
+            wire = tspec.to_wire()
+            kwargs: dict[str, Any] = {
+                "uri_template": tspec.uri_template,
+                "name": tspec.name,
+                "description": tspec.description or None,
+                "mime_type": tspec.mime_type,
+                "parameters": _template_parameters(tspec),
+                "tags": {"cloudg", tspec.category, *tspec.tags},
+            }
+            _add_optional(kwargs, tmpl_fields, wire, title=tspec.title)
+            if wire.get("annotations") and "annotations" in tmpl_fields:
+                kwargs["annotations"] = self.MT.Annotations.model_validate(wire["annotations"])
+            self.server.add_template(self.CloudGTemplate(**kwargs))
+
+    def _register_prompts(self) -> None:
+        layer, prompt_fields = self.layer, _fields(self.CloudGPrompt)
+        for pspec in layer.registry.prompts.values():
+            arguments = [
+                self._FPromptArgument(
+                    name=a.name, description=a.description or None, required=a.required
+                )
+                for a in pspec.arguments
+            ]
+            kwargs: dict[str, Any] = {
+                "name": layer.exposed_name(pspec.name),
+                "description": pspec.description or None,
+                "arguments": arguments,
+                "tags": {"cloudg", pspec.category, *pspec.tags},
+            }
+            _add_optional(kwargs, prompt_fields, pspec.to_wire(), title=pspec.title)
+            self.server.add_prompt(self.CloudGPrompt(**kwargs))
 
     def _make_resource(self, cls: Any, uri: str, source: Any) -> Any:
         fields = _fields(cls)
@@ -243,16 +260,18 @@ class FastMCPBinding:
         if callable(to_wire) and "meta" in fields:
             try:
                 kwargs["meta"] = to_wire().get("_meta")
-            except Exception:
-                pass
+            except (TypeError, ValueError, AttributeError):  # a fastmcp component, not a spec
+                logger.debug("no cloudg wire metadata for resource %s", uri)
         return cls(**kwargs)
 
     def _install_middleware(self) -> None:
         try:
             from fastmcp.server.middleware import Middleware
         except ImportError:  # pragma: no cover (fastmcp < 2.9)
-            logger.warning("fastmcp has no middleware support; cloudg policy filtering of "
-                           "list results is disabled (calls are still enforced)")
+            logger.warning(
+                "fastmcp has no middleware support; cloudg policy filtering of "
+                "list results is disabled (calls are still enforced)"
+            )
             return
         binding = self
 
@@ -283,8 +302,11 @@ class FastMCPBinding:
 
         try:
             self.lowlevel = install_lowlevel(
-                self.layer, inner, include=kinds,
-                principal_resolver=self.resolver, list_changed=False,
+                self.layer,
+                inner,
+                include=kinds,
+                principal_resolver=self.resolver,
+                list_changed=False,
             )
         except Exception:
             logger.debug("could not bind cloudg protocol features on fastmcp", exc_info=True)
@@ -319,13 +341,7 @@ class FastMCPBinding:
             token = get_access_token()
         except Exception:
             token = None
-        principal = None
-        scope = getattr(request, "scope", None)
-        if isinstance(scope, dict):
-            principal = scope.get(PRINCIPAL_SCOPE_KEY)
-            state = scope.get("state")
-            if principal is None and isinstance(state, dict):
-                principal = state.get(PRINCIPAL_SCOPE_KEY)
+        principal = scope_principal(request)
         return RequestInfo(
             transport="http" if request is not None else "stdio",
             headers=headers,
@@ -360,8 +376,6 @@ class FastMCPBinding:
         async def log(level: Any, data: Any, logger_name: str | None) -> None:
             if ctx is None:
                 return
-            from cloudg.mcp.adapters._common import normalize_level
-
             text = data if isinstance(data, str) else _json(data)
             await ctx.log(text, level=normalize_level(level), logger_name=logger_name)
 
@@ -372,7 +386,10 @@ class FastMCPBinding:
             except Exception:
                 request_id = None
         return self.layer.context(
-            principal, request_id=request_id, progress_callback=progress, log_callback=log,
+            principal,
+            request_id=request_id,
+            progress_callback=progress,
+            log_callback=log,
             session=ctx,
         )
 
@@ -427,38 +444,36 @@ class FastMCPBinding:
         result._cloudg_raw = call_result
         return result
 
-    async def _run_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def _call(self, method: str, target: str, *args: Any, error_cls: Any) -> Any:
+        """Run ``layer.<method>(target, *args)`` for the current fastmcp
+        request; layer errors map to fastmcp errors, anything else to a
+        generic ``error_cls("Internal error")``."""
         ctx = self._context()
         self._track(ctx)
         principal = self._principal(ctx)
-        try:
-            result = await self.layer.call_tool(
-                name, arguments or {}, principal=principal,
-                context=self._tool_context(ctx, principal),
-            )
-        except NotFoundError as exc:
-            raise self.fx.NotFoundError(exc.message) from None
-        except MCPLayerError as exc:
-            raise self.fx.ToolError(exc.message) from None
+        call = getattr(self.layer, method)(
+            target, *args, principal=principal, context=self._tool_context(ctx, principal)
+        )
+
+        def mapped(exc: MCPLayerError) -> Exception:
+            if isinstance(exc, NotFoundError):
+                return self.fx.NotFoundError(exc.message)
+            return error_cls(exc.message)
+
+        return await call_layer(call, mapped, lambda: error_cls("Internal error"))
+
+    async def _run_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        result = await self._call("call_tool", name, arguments or {}, error_cls=self.fx.ToolError)
         return self._tool_result(result.to_wire())
 
     async def _read(self, uri: str) -> Any:
-        ctx = self._context()
-        self._track(ctx)
-        principal = self._principal(ctx)
-        try:
-            contents = await self.layer.read_resource(
-                uri, principal=principal, context=self._tool_context(ctx, principal)
-            )
-        except NotFoundError as exc:
-            raise self.fx.NotFoundError(exc.message) from None
-        except MCPLayerError as exc:
-            raise self.fx.ResourceError(exc.message) from None
+        contents = await self._call("read_resource", uri, error_cls=self.fx.ResourceError)
         if self._ResourceResult is not None:
             items = []
             for c in contents:
-                raw: Any = base64.b64decode(c.blob) if isinstance(
-                    c, BlobResourceContents) else c.text
+                raw: Any = (
+                    base64.b64decode(c.blob) if isinstance(c, BlobResourceContents) else c.text
+                )
                 items.append(self._ResourceContent(raw, mime_type=c.mime_type, meta=c.meta))
             return self._ResourceResult(items)
         if not contents:
@@ -469,18 +484,8 @@ class FastMCPBinding:
         return first.text
 
     async def _render(self, name: str, arguments: dict[str, Any]) -> Any:
-        ctx = self._context()
-        self._track(ctx)
-        principal = self._principal(ctx)
-        try:
-            result = await self.layer.get_prompt(
-                name, arguments, principal=principal, context=self._tool_context(ctx, principal)
-            )
-        except NotFoundError as exc:
-            raise self.fx.NotFoundError(exc.message) from None
-        except MCPLayerError as exc:
-            err = getattr(self.fx, "PromptError", self.fx.ToolError)
-            raise err(exc.message) from None
+        error_cls = getattr(self.fx, "PromptError", self.fx.ToolError)
+        result = await self._call("get_prompt", name, arguments, error_cls=error_cls)
         wire = result.to_wire()
         MT = self.MT
         if self._FPromptResult is None:
@@ -490,8 +495,10 @@ class FastMCPBinding:
             content = m["content"]
             ctype = content.get("type")
             model = {
-                "text": MT.TextContent, "image": MT.ImageContent,
-                "audio": getattr(MT, "AudioContent", None), "resource": MT.EmbeddedResource,
+                "text": MT.TextContent,
+                "image": MT.ImageContent,
+                "audio": getattr(MT, "AudioContent", None),
+                "resource": MT.EmbeddedResource,
             }.get(ctype)
             value = model.model_validate(content) if model is not None else _json(content)
             messages.append(self._FMessage(value, role=m["role"]))
@@ -518,14 +525,18 @@ class FastMCPBinding:
     def _filter_resources(self, resources: Any) -> Any:
         principal = self._principal(self._context())
         allowed = {w["uri"] for w in self.layer.resources_wire(principal)}
-        return [r for r in resources
-                if not isinstance(r, self.CloudGResource) or str(r.uri) in allowed]
+        return [
+            r for r in resources if not isinstance(r, self.CloudGResource) or str(r.uri) in allowed
+        ]
 
     def _filter_templates(self, templates: Any) -> Any:
         principal = self._principal(self._context())
         allowed = {w["uriTemplate"] for w in self.layer.resource_templates_wire(principal)}
-        return [t for t in templates
-                if not isinstance(t, self.CloudGTemplate) or t.uri_template in allowed]
+        return [
+            t
+            for t in templates
+            if not isinstance(t, self.CloudGTemplate) or t.uri_template in allowed
+        ]
 
     def _filter_prompts(self, prompts: Any) -> Any:
         principal = self._principal(self._context())
@@ -537,14 +548,17 @@ class FastMCPBinding:
     # ------------------------------------------------------------------
 
     async def _notify(self, session: Any, kind: str, uri: str | None) -> None:
-        if kind == "tools":
-            await session.send_tool_list_changed()
-        elif kind == "prompts":
-            await session.send_prompt_list_changed()
-        elif kind == "resources":
-            await session.send_resource_list_changed()
-        elif kind == "resource" and uri:
-            await session.send_resource_updated(uri)
+        await send_change(session, kind, uri)
+
+
+def _add_optional(
+    kwargs: dict[str, Any], fields: set[str], wire: dict[str, Any], *, title: str | None
+) -> None:
+    """Set ``title`` / ``meta`` when this fastmcp version has those fields."""
+    if "title" in fields and title:
+        kwargs["title"] = title
+    if "meta" in fields:
+        kwargs["meta"] = wire.get("_meta")
 
 
 def _template_parameters(spec: ResourceTemplateSpec) -> dict[str, Any]:

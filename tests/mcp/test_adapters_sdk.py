@@ -111,7 +111,8 @@ async def test_v2_definitions_and_calls(v2_target: tuple[Any, Any, str], mode: s
 
         resources = (await client.list_resources()).resources
         assert [dump(r) for r in resources if r.uri == "test://info"] == [
-            w for w in layer.resources_wire() if w["uri"] == "test://info"]
+            w for w in layer.resources_wire() if w["uri"] == "test://info"
+        ]
         templates = (await client.list_resource_templates()).resource_templates
         assert [t.uri_template for t in templates] == ["test://items/{item_id}"]
         read = await client.read_resource("test://items/alpha")
@@ -126,8 +127,9 @@ async def test_v2_definitions_and_calls(v2_target: tuple[Any, Any, str], mode: s
             {"name": "item_id", "value": "g"},
         )
         assert completion.completion.values == ["gamma"]
-        completion = await client.complete(PromptReference(type="ref/prompt", name="greet"),
-                                           {"name": "name", "value": "al"})
+        completion = await client.complete(
+            PromptReference(type="ref/prompt", name="greet"), {"name": "name", "value": "al"}
+        )
         assert completion.completion.values == ["alpha"]
         prompt = await client.get_prompt("greet", {"name": "Ada", "style": "formal"})
         assert prompt.messages[0].content.text == "Good day, Ada."
@@ -152,8 +154,9 @@ async def test_v2_capabilities_and_legacy_notifications(v2_target: tuple[Any, An
     async def on_log(params: Any) -> None:
         logs.append(params)
 
-    async with Client(server, mode="legacy", message_handler=on_message,
-                      logging_callback=on_log) as client:
+    async with Client(
+        server, mode="legacy", message_handler=on_message, logging_callback=on_log
+    ) as client:
         caps = client.server_capabilities
         assert caps.tools.list_changed and caps.resources.subscribe
         assert caps.completions is not None and caps.logging is not None
@@ -182,8 +185,9 @@ async def test_v2_listen_stream(v2_target: tuple[Any, Any, str]) -> None:
 
     _, server, _ = v2_target
     async with Client(server, mode="auto") as client:
-        async with client.listen(tools_list_changed=True,
-                                 resource_subscriptions=["test://info"]) as sub:
+        async with client.listen(
+            tools_list_changed=True, resource_subscriptions=["test://info"]
+        ) as sub:
             await client.call_tool("touch", {"uri": "test://info"})
             seen = set()
             for _ in range(2):
@@ -209,14 +213,19 @@ async def test_v2_principal_resolution_policy_and_prefix() -> None:
 
     layer.policy.is_allowed = is_allowed  # type: ignore[method-assign]
     server = host_mcpserver()
-    register_into(layer, server, prefix="cg_",
-                  principal_resolver=lambda info: Principal(id="svc", roles={"analyst"}))
+    register_into(
+        layer,
+        server,
+        prefix="cg_",
+        principal_resolver=lambda info: Principal(id="svc", roles={"analyst"}),
+    )
     async with Client(server, mode="legacy") as client:
         names = [t.name for t in (await client.list_tools()).tools]
         assert "cg_echo" in names and "echo" not in names and "host_tool" in names
         assert "cg_fail" not in names
         assert (await client.call_tool("cg_echo", {"text": "y"})).structured_content == {
-            "text": "y"}
+            "text": "y"
+        }
         with pytest.raises(Exception):
             await client.call_tool("cg_fail", {})
         prompt = await client.get_prompt("cg_greet", {"name": "P"})
@@ -295,8 +304,9 @@ async def test_v1_adapters(kind: str) -> None:
             {"name": "item_id", "value": "b"},
         )
         assert completion.completion.values == ["beta"]
-        completion = await session.complete(PromptReference(type="ref/prompt", name="greet"),
-                                            {"name": "name", "value": "d"})
+        completion = await session.complete(
+            PromptReference(type="ref/prompt", name="greet"), {"name": "name", "value": "d"}
+        )
         assert completion.completion.values == ["delta"]
         prompt = await session.get_prompt("greet", {"name": "Ola"})
         assert prompt.messages[0].content.text == "Hi Ola!"
@@ -308,3 +318,24 @@ async def test_v1_adapters(kind: str) -> None:
             await asyncio.sleep(0.02)
         assert any("ResourceUpdated" in repr(m) for m in received)
         assert any("ToolListChanged" in repr(m) for m in received)
+
+
+async def test_lowlevel_never_forwards_raw_exception_text() -> None:
+    from cloudg.mcp.adapters.lowlevel import install
+    from cloudg.mcp.core import AccessDeniedError
+    from mcp.server.lowlevel import Server
+
+    binding = install(build_layer(), Server("host"))
+
+    async def crash() -> None:
+        raise ValueError("secret detail arn:aws:iam::111111111111:role/x")
+
+    async def denied() -> None:
+        raise AccessDeniedError("Access denied", data={"policy": "p"})
+
+    with pytest.raises(Exception) as caught:
+        await binding._through_layer(crash())
+    assert "111111111111" not in str(caught.value) and "Internal error" in str(caught.value)
+    with pytest.raises(Exception) as caught:
+        await binding._through_layer(denied())
+    assert "Access denied" in str(caught.value)

@@ -17,8 +17,9 @@ async def test_workspace_status_and_links(call, layer):
 
 
 async def test_workspace_status_empty_suggests_next_steps(tmp_path):
-    layer = CloudGMCPLayer(policy="open", workspace=Workspace(allowed_roots=[tmp_path],
-                                                              output_dir=tmp_path))
+    layer = CloudGMCPLayer(
+        policy="open", workspace=Workspace(allowed_roots=[tmp_path], output_dir=tmp_path)
+    )
     res = await layer.call_tool("workspace_status", {})
     assert res.structured["datasets"] == []
     assert any("load_dataset" in s for s in res.structured["next_steps"])
@@ -32,8 +33,7 @@ async def test_list_datasets(call):
 
 
 async def test_load_select_unload(call, sample_paths):
-    out = await call("load_dataset", path=str(sample_paths["report"]), name="rep",
-                     activate=False)
+    out = await call("load_dataset", path=str(sample_paths["report"]), name="rep", activate=False)
     assert out["loaded"] == "rep" and out["active"] is False and out["total_findings"] == 12
     assert (await call("list_datasets"))["total"] == 2
     out = await call("select_dataset", name="rep")
@@ -61,8 +61,9 @@ async def test_load_dataset_errors(call, sample_paths):
 
 
 async def test_select_unknown(call):
-    msg = await call.error("select_dataset", name="nope")
-    assert "No dataset named 'nope'" in msg and "sample" in msg
+    msg, data = await call.error_data("select_dataset", name="nope")
+    assert "No such dataset" in msg and "nope" not in msg and "sample" not in msg
+    assert data["value"] == "nope" and data["datasets"] == [{"dataset": "sample"}]
 
 
 async def test_snapshot_and_diff_tools(call, workspace):
@@ -76,15 +77,15 @@ async def test_snapshot_and_diff_tools(call, workspace):
     assert [a["id"] for a in out["assets"]["removed"]["items"]] == ["bastion"]
     assert out["edges"]["removed"]["count"] >= 2
     msg = await call.error("diff_datasets", base="nope")
-    assert "No dataset named" in msg
+    assert "No such dataset" in msg
 
 
 async def test_dataset_summary(call, layer):
     out = await call("dataset_summary")
     assert out["open_findings"] == 11 and out["internet_exposed"] == 6
     assert out["accounts"] >= 4
-    msg = await call.error("dataset_summary", dataset="nope")
-    assert "nope" in msg
+    msg, data = await call.error_data("dataset_summary", dataset="nope")
+    assert "No such dataset" in msg and data["value"] == "nope"
 
 
 @pytest.mark.parametrize("tool", ["select_dataset", "unload_dataset"])

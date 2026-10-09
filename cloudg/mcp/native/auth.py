@@ -92,6 +92,12 @@ def default_principal_resolver(info: RequestInfo) -> Principal:
     Order: a principal set by an auth layer, an OAuth access token from the
     hosting SDK (``client_id`` becomes the id, scopes become roles), the local
     user for stdio / in-memory transports, otherwise anonymous.
+
+    Design note: OAuth scopes become policy roles verbatim, so whoever
+    issues tokens decides roles. A scope named like a privileged role
+    (``admin``, ``privacy-admin``) grants what the policy gives that role,
+    reveal included. Pass a custom ``principal_resolver`` to map scopes onto
+    roles explicitly when the authorization server is not fully trusted.
     """
     if info.principal is not None:
         return info.principal
@@ -193,8 +199,7 @@ class TokenAuth:
             principal = value
         else:
             roles = _roles(value) if isinstance(value, str) else {"default", *value}
-            principal = Principal(id=_token_id(token), roles=roles,
-                                  attributes={"auth": "bearer"})
+            principal = Principal(id=_token_id(token), roles=roles, attributes={"auth": "bearer"})
         self._entries.append((_digest(token), principal))
 
     def __bool__(self) -> bool:
@@ -219,5 +224,6 @@ class TokenAuth:
 
     def authenticate(self, authorization_header: str | None) -> Principal | None:
         """Validate an ``Authorization`` header value."""
-        return self.lookup(RequestInfo(headers={"authorization": authorization_header or ""})
-                           .bearer_token)
+        return self.lookup(
+            RequestInfo(headers={"authorization": authorization_header or ""}).bearer_token
+        )

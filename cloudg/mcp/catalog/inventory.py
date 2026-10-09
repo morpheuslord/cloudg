@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from cloudg.inventory.mapper_result import _service_of
 from cloudg.mcp.catalog._common import (
@@ -79,12 +79,45 @@ FieldsArg = Annotated[
     Field(description=f"Project each item to these fields. Valid: {', '.join(ASSET_FIELDS)}"),
 ]
 
+
+class FindAssetsArgs(BaseModel):
+    """find_assets arguments (the MCP wire schema)."""
+
+    query: QueryArg = ""
+    provider: ProviderArg = ""
+    asset_types: AssetTypesArg = None
+    region: RegionArg = ""
+    account_id: AccountArg = ""
+    tag: TagArg = ""
+    internet_exposed: ExposedArg = None
+    has_findings: HasFindingsArg = None
+    min_severity: MinSeverityArg = ""
+    sort_by: SortArg = "name"
+    descending: bool = False
+    fields: FieldsArg = None
+    limit: Limit = DEFAULT_LIMIT
+    cursor: Cursor = ""
+    dataset: DatasetArg = ""
+
+
+class CountAssetsArgs(BaseModel):
+    """count_assets arguments (the MCP wire schema)."""
+
+    group_by: GroupBy = "type"
+    provider: str = ""
+    asset_types: list[str] | None = None
+    region: str = ""
+    account_id: str = ""
+    internet_exposed: bool | None = None
+    top: Annotated[int, Field(ge=1, le=500)] = 50
+    dataset: DatasetArg = ""
+
+
 _RO = dict(category=CATEGORY, read_only=True, idempotent=True, open_world=False)
 
 CATALOG = Catalog()
 
 
-# Tool arguments are the MCP wire schema, so they stay flat.
 @CATALOG.tool(
     title="Find assets",
     sensitivity=Sensitivity.CONFIDENTIAL,
@@ -92,44 +125,20 @@ CATALOG = Catalog()
     tags={"start-here"},
     **_RO,
 )
-def find_assets(  # pylint: disable=too-many-arguments  # flat MCP wire schema
-    ctx: Any,
-    query: QueryArg = "",
-    provider: ProviderArg = "",
-    asset_types: AssetTypesArg = None,
-    region: RegionArg = "",
-    account_id: AccountArg = "",
-    tag: TagArg = "",
-    internet_exposed: ExposedArg = None,
-    has_findings: HasFindingsArg = None,
-    min_severity: MinSeverityArg = "",
-    sort_by: SortArg = "name",
-    descending: bool = False,
-    fields: FieldsArg = None,
-    limit: Limit = DEFAULT_LIMIT,
-    cursor: Cursor = "",
-    dataset: DatasetArg = "",
-) -> dict:
+def find_assets(ctx: Any, args: FindAssetsArgs) -> dict:
     """Search assets with filters (provider, type, region, account, tag,
     exposure, findings, severity, free text), sorting and cursor
     pagination. Returns compact briefs; call get_asset (or read the
     item's uri) for details. Example: find internet-exposed EC2 with
     HIGH findings: asset_types=['EC2'], internet_exposed=true,
     min_severity='HIGH'."""
-    ds = ws_dataset(ctx, dataset)
-    proj = check_fields(fields, ASSET_FIELDS)
-    flt = AssetFilter(
-        query=query, provider=provider, asset_types=asset_types, region=region,
-        account_id=account_id, tag=tag, internet_exposed=internet_exposed,
-        has_findings=has_findings, min_severity=min_severity,
-    )
+    ds = ws_dataset(ctx, args.dataset)
+    proj = check_fields(args.fields, ASSET_FIELDS)
+    flt = AssetFilter.from_args(dict(args))
     matched = filter_assets(ds, flt)
-    sort_assets(ds, matched, sort_by, descending)
-    fp = fingerprint(
-        ds, q=query, p=provider, t=asset_types, r=region, a=account_id, tag=tag,
-        ie=internet_exposed, hf=has_findings, ms=min_severity, s=sort_by, d=descending,
-    )
-    page, env = paginate(matched, limit, cursor, fp)
+    sort_assets(ds, matched, args.sort_by, args.descending)
+    fp = fingerprint(ds, f=flt.key(), s=args.sort_by, d=args.descending)
+    page, env = paginate(matched, args.limit, args.cursor, fp)
     items = [project(asset_brief(ds, a, tags="tags" in (proj or [])), proj) for a in page]
     out = {"dataset": ds.name, **env, "items": items}
     if not matched and ds.assets:
@@ -212,38 +221,25 @@ def get_asset_metadata(
     output_schema=schema(CountOut),
     **_RO,
 )
-def count_assets(  # pylint: disable=too-many-arguments  # flat MCP wire schema
-    ctx: Any,
-    group_by: GroupBy = "type",
-    provider: str = "",
-    asset_types: list[str] | None = None,
-    region: str = "",
-    account_id: str = "",
-    internet_exposed: bool | None = None,
-    top: Annotated[int, Field(ge=1, le=500)] = 50,
-    dataset: DatasetArg = "",
-) -> dict:
+def count_assets(ctx: Any, args: CountAssetsArgs) -> dict:
     """Count assets grouped by type, provider, region, account, cloud
     service, exposure or worst open-finding severity, with optional
     filters. A cheap aggregate view with no identifiers beyond group keys."""
-    ds = ws_dataset(ctx, dataset)
-    flt = AssetFilter(
-        provider=provider, asset_types=asset_types, region=region, account_id=account_id,
-        internet_exposed=internet_exposed,
-    )
+    ds = ws_dataset(ctx, args.dataset)
+    flt = AssetFilter.from_args(dict(args))
     matched = filter_assets(ds, flt)
     groups: dict[str, int] = {}
     for a in matched:
-        k = group_key(ds, a, group_by)
+        k = group_key(ds, a, args.group_by)
         groups[k] = groups.get(k, 0) + 1
     ordered = sorted(groups.items(), key=lambda kv: (-kv[1], kv[0]))
     return {
         "dataset": ds.name,
-        "group_by": group_by,
+        "group_by": args.group_by,
         "total": len(matched),
         "group_count": len(groups),
-        "groups": dict(ordered[:top]),
-        "truncated": len(groups) > top,
+        "groups": dict(ordered[: args.top]),
+        "truncated": len(groups) > args.top,
     }
 
 
@@ -294,8 +290,7 @@ def list_regions(ctx: Any, dataset: DatasetArg = "") -> dict:
         {**r, "providers": sorted(r["providers"]), "accounts": len(r["accounts"])}
         for r in sorted(regions.values(), key=lambda r: -r["assets"])
     ]
-    return {"dataset": ds.name, "total": len(items), "items": items,
-            "scanned_regions": ds.regions}
+    return {"dataset": ds.name, "total": len(items), "items": items, "scanned_regions": ds.regions}
 
 
 @CATALOG.tool(title="List tags", sensitivity=Sensitivity.CONFIDENTIAL, **_RO)
@@ -319,8 +314,14 @@ def list_tags(
     items = []
     for k, vals in sorted(keys.items(), key=lambda kv: -sum(kv[1].values())):
         top_vals = sorted(vals.items(), key=lambda kv: -kv[1])[: (top if key else 5)]
-        items.append({"key": k, "assets": sum(vals.values()), "distinct_values": len(vals),
-                      "top_values": dict(top_vals)})
+        items.append(
+            {
+                "key": k,
+                "assets": sum(vals.values()),
+                "distinct_values": len(vals),
+                "top_values": dict(top_vals),
+            }
+        )
     page, env = bounded(items, top)
     return {"dataset": ds.name, **env, "items": page}
 

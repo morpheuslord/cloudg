@@ -16,10 +16,8 @@ from cloudg.mcp.state.base import (
     count_by,
     matches_note,
     now_iso,
-    ref_tails,
 )
 from cloudg.schema.models import (
-    AssetType,
     CloudAsset,
     ComplianceResult,
     EdgeType,
@@ -31,9 +29,12 @@ if TYPE_CHECKING:  # pragma: no cover
     import networkx as nx
 
     from cloudg.coverage import CollectionCoverage
-    from cloudg.inventory.dependencies import DependencyGraph
+    from cloudg.inventory.dependencies import AssetIndex, DependencyGraph
     from cloudg.inventory.mapper_result import InventoryResult
 
+_IDENTITY_EDGES = frozenset(
+    {EdgeType.ASSUMES_ROLE.value, EdgeType.IAM_TRUST.value, EdgeType.GRANTS_ACCESS.value}
+)
 _CACHE_STATE_KEYS = ("graph", "dependency_graph", "ontology", "centrality", "rag_entity")
 
 
@@ -139,40 +140,31 @@ class Dataset:
     def by_id(self) -> dict[str, CloudAsset]:
         return self._cached("by_id", lambda: {a.id: a for a in self.assets})
 
-    def _lookup_tables(self) -> dict[str, Any]:
-        def build() -> dict[str, Any]:
-            arn: dict[str, CloudAsset] = {}
-            names: dict[str, list[CloudAsset]] = {}
-            lower: dict[str, list[CloudAsset]] = {}
-            tails: dict[str, list[CloudAsset]] = {}
-            for a in self.assets:
-                if a.arn:
-                    arn.setdefault(a.arn, a)
-                    for tail in ref_tails(a.arn):
-                        tails.setdefault(tail, []).append(a)
-                names.setdefault(a.name, []).append(a)
-                lower.setdefault(a.name.lower(), []).append(a)
-            return {"arn": arn, "names": names, "lower": lower, "tails": tails}
+    @property
+    def asset_index(self) -> "AssetIndex":
+        """The shared :class:`~cloudg.inventory.dependencies.AssetIndex`
+        over this dataset's assets (the matcher the inventory mapper and
+        dependency graph use)."""
 
-        return self._cached("lookup", build)
+        def build() -> Any:
+            from cloudg.inventory.dependencies import AssetIndex
+
+            return AssetIndex(self.assets)
+
+        return self._cached("asset_index", build)
 
     def find_asset(self, ref: str) -> CloudAsset | None:
-        """Find by internal ID, ARN / resource ID (first asset wins), unique
-        name, unique ARN tail (see :func:`ref_tails`), then unique
-        case-insensitive name. Shared names and tails never match."""
+        """Find an asset by reference, with the tiers of
+        :class:`~cloudg.inventory.dependencies.AssetIndex` in order: internal
+        id; ARN / resource id (first asset wins); unique name; unique last
+        ``/`` segment of the ARN; unique ARN resource part or its last
+        ``:`` / ``/`` segment (``db:orders``, ``orders``, ``i-0abc``); unique
+        name ignoring case. A name or tail shared by several assets never
+        matches (:meth:`resolve_asset` then reports the candidates)."""
         if not ref:
             return None
-        hit = self.by_id.get(ref)
-        if hit is not None:
-            return hit
-        lk = self._lookup_tables()
-        if ref in lk["arn"]:
-            return lk["arn"][ref]
-        for table, key in (("names", ref), ("tails", ref), ("lower", ref.lower())):
-            hits = lk[table].get(key, [])
-            if len(hits) == 1:
-                return hits[0]
-        return None
+        aid = self.asset_index.find(ref, arn_parts=True, casefold=True)
+        return self.by_id.get(aid) if aid else None
 
     def suggest_assets(self, ref: str, n: int = 5) -> list[CloudAsset]:
         """Assets whose name or ARN contains ``ref``, then close name matches."""
@@ -238,25 +230,11 @@ class Dataset:
     def findings_by_id(self) -> dict[str, Finding]:
         return self._cached("findings_by_id", lambda: {f.id: f for f in self.findings})
 
-    def _key_index(self) -> dict[str, str]:
-        """Any identifier (id / ARN / name) -> asset id (first wins)."""
-
-        def build() -> dict[str, str]:
-            idx: dict[str, str] = {}
-            for a in self.assets:
-                for k in (a.id, a.arn, a.name):
-                    if k:
-                        idx.setdefault(k, a.id)
-            return idx
-
-        return self._cached("key_index", build)
-
     def finding_asset_id(self, finding: Finding) -> str | None:
-        idx = self._key_index()
-        for k in (finding.resource_arn, finding.resource_id):
-            if k and k in idx:
-                return idx[k]
-        return None
+        """Id of the asset a finding affects, resolved like
+        :meth:`find_asset` over ``resource_id`` and ``resource_arn``
+        (:meth:`AssetIndex.resolve_finding`); None when unknown or ambiguous."""
+        return self.asset_index.resolve_finding(finding, arn_parts=True, casefold=True)
 
     @property
     def findings_by_asset(self) -> dict[str, list[Finding]]:
@@ -314,18 +292,36 @@ class Dataset:
 
     @property
     def flow_graph(self) -> "nx.DiGraph":
-        """Directed graph for traffic / attack-path questions: the builder
-        graph plus a reversed copy of every ``resource ATTACHED_TO
-        security-group`` edge, because traffic a security group admits
-        flows on to the resources attached to it."""
+        """Directed graph for traffic / attack-path questions.
+
+        The network-flow hops of
+        :func:`cloudg.graph.reachability.network_flow_graph` (the same walk
+        as the internet-exposure analysis: forward flow edges, ingress
+        rules, network placement, and security groups / NSGs / NACLs
+        admitting traffic to the resources attached to them; those reversed
+        ``ATTACHED_TO`` hops carry ``derived="sg_admits"``), plus every
+        identity edge (``ASSUMES_ROLE``, ``IAM_TRUST``, ``GRANTS_ACCESS``)
+        as collected, marked ``identity=True``: an attacker who reaches a
+        workload can pivot through its role."""
 
         def build() -> Any:
-            g = self.graph.copy()
-            sg_types = {AssetType.SECURITY_GROUP.value, AssetType.NSG.value}
-            for u, v, d in list(self.graph.edges(data=True)):
-                if d.get("edge_type") == EdgeType.ATTACHED_TO.value:
-                    if self.graph.nodes[v].get("asset_type") in sg_types and not g.has_edge(v, u):
-                        g.add_edge(v, u, **{**d, "derived": "sg_admits"})
+            from cloudg.graph.reachability import network_flow_graph
+
+            g = network_flow_graph(self.graph)
+            for _u, _v, d in g.edges(data=True):
+                if d.get("reversed"):
+                    d["derived"] = "sg_admits"
+            for e in self.edges:
+                if e.edge_type.value in _IDENTITY_EDGES and not g.has_edge(
+                    e.source_id, e.target_id
+                ):
+                    g.add_edge(
+                        e.source_id,
+                        e.target_id,
+                        edge_type=e.edge_type.value,
+                        relationship=e.relationship,
+                        identity=True,
+                    )
             return g
 
         return self._cached("flow_graph", build)

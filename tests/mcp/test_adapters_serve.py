@@ -49,9 +49,16 @@ async def wait_for_port(port: int, timeout: float = 15) -> None:
 
 
 def post(url: str, body: Any, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
-        "Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-        **(headers or {})})
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **(headers or {}),
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, resp.read()
@@ -74,27 +81,40 @@ async def running(layer: Any, **kwargs: Any) -> Any:
 
 def test_create_layer_from_options(tmp_path: Path) -> None:
     layer = create_layer_from_options(
-        registry=build_registry(), policy=_permissive_policy(), prefix="cg_",
-        exclude_categories=["admin"], audit_log=tmp_path / "a.jsonl", cache_ttl=30,
+        registry=build_registry(),
+        policy=_permissive_policy(),
+        prefix="cg_",
+        exclude_categories=["admin"],
+        audit_log=tmp_path / "a.jsonl",
+        cache_ttl=30,
         max_concurrency=4,
     )
     names = [t["name"] for t in layer.tools_wire()]
     assert "cg_echo" in names and "cg_touch" not in names
     assert "cloudg://metrics" in layer.registry.resources
     kinds = [type(m).__name__ for m in layer.middleware]
-    assert kinds == ["AuditLogMiddleware", "MetricsMiddleware", "ConcurrencyLimitMiddleware",
-                     "CachingMiddleware"]
+    assert kinds == [
+        "AuditLogMiddleware",
+        "MetricsMiddleware",
+        "ConcurrencyLimitMiddleware",
+        "CachingMiddleware",
+    ]
     with pytest.raises(FileNotFoundError):
-        create_layer_from_options(registry=build_registry(), policy=_permissive_policy(),
-                                  datasets=[str(tmp_path / "missing.json")])
+        create_layer_from_options(
+            registry=build_registry(),
+            policy=_permissive_policy(),
+            datasets=[str(tmp_path / "missing.json")],
+        )
 
 
 def test_read_only_registry() -> None:
     reg = build_registry()
     ro = read_only_registry(reg)
     assert "touch" not in ro.tools and "echo" in ro.tools
-    assert all(not (s.capabilities & {Capability.WRITE_FS, Capability.CLOUD_ACCESS,
-                                       Capability.EXEC}) for s in ro.tools.values())
+    assert all(
+        not (s.capabilities & {Capability.WRITE_FS, Capability.CLOUD_ACCESS, Capability.EXEC})
+        for s in ro.tools.values()
+    )
     assert ro.resources.keys() == reg.resources.keys()
 
 
@@ -114,8 +134,9 @@ def test_validate_serve_options() -> None:
         validate_serve_options("fastmcp", "http", cors_origins=["https://a"])
     with pytest.raises(ValueError, match="fastmcp"):
         validate_serve_options("fastmcp", "sse", stateless=True)
-    assert validate_serve_options("fastmcp", "http", json_response=True,
-                                  stateless=True) == "fastmcp"
+    assert (
+        validate_serve_options("fastmcp", "http", json_response=True, stateless=True) == "fastmcp"
+    )
     assert validate_serve_options("sdk", "stdio", cors_origins=["x"]) == "sdk"
     with pytest.raises(ValueError):
         validate_serve_options("native", "pigeon")
@@ -131,8 +152,10 @@ async def _asgi_status(mw: Any, headers: dict[str, str]) -> int:
         sent.append(message)
 
     mw.app = app
-    scope = {"type": "http", "headers": [(k.lower().encode(), v.encode())
-                                         for k, v in headers.items()]}
+    scope = {
+        "type": "http",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+    }
     await mw(scope, None, send)
     return sent[0]["status"]
 
@@ -143,16 +166,92 @@ async def test_asgi_guard_keeps_origin_check_on_public_binds() -> None:
 
     public = TokenAuthASGIMiddleware(None, None, OriginHostGuard("0.0.0.0"))
     assert await _asgi_status(public, {"Host": "mcp.example.com"}) == 200
-    assert await _asgi_status(public, {"Host": "mcp.example.com",
-                                       "Origin": "https://evil.example"}) == 403
-    assert await _asgi_status(public, {"Host": "mcp.example.com",
-                                       "Origin": "https://mcp.example.com"}) == 200
-    pinned = TokenAuthASGIMiddleware(None, TokenAuth({"t": "r"}),
-                                     OriginHostGuard("0.0.0.0", None, ["mcp.example.com"]))
+    assert (
+        await _asgi_status(public, {"Host": "mcp.example.com", "Origin": "https://evil.example"})
+        == 403
+    )
+    # no Host allow-list: a rebound attacker name is Host and Origin at once
+    assert (
+        await _asgi_status(
+            public, {"Host": "attacker.example:80", "Origin": "http://attacker.example:80"}
+        )
+        == 403
+    )
+    pinned = TokenAuthASGIMiddleware(
+        None, TokenAuth({"t": "r"}), OriginHostGuard("0.0.0.0", None, ["mcp.example.com"])
+    )
     assert await _asgi_status(pinned, {"Host": "other.example"}) == 421
     assert await _asgi_status(pinned, {"Host": "mcp.example.com"}) == 401
-    assert await _asgi_status(pinned, {"Host": "mcp.example.com",
-                                       "Authorization": "Bearer t"}) == 200
+    assert (
+        await _asgi_status(pinned, {"Host": "mcp.example.com", "Authorization": "Bearer t"}) == 200
+    )
+    assert (
+        await _asgi_status(
+            pinned,
+            {
+                "Host": "mcp.example.com",
+                "Origin": "https://mcp.example.com",
+                "Authorization": "Bearer t",
+            },
+        )
+        == 200
+    )
+
+
+async def test_asgi_binds_session_ids_to_the_principal() -> None:
+    from cloudg.mcp.native.auth import TokenAuth
+    from cloudg.mcp.native.http import OriginHostGuard
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"mcp-session-id", b"sid-1")],
+            }
+        )
+
+    mw = TokenAuthASGIMiddleware(
+        app, TokenAuth({"alice-token": "a", "bob-token": "b"}), OriginHostGuard("127.0.0.1")
+    )
+
+    async def status(token: str, sid: str | None = None) -> int:
+        sent: list[dict[str, Any]] = []
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        headers = [(b"host", b"127.0.0.1:8765"), (b"authorization", f"Bearer {token}".encode())]
+        if sid:
+            headers.append((b"mcp-session-id", sid.encode()))
+        await mw({"type": "http", "headers": headers}, None, send)
+        return sent[0]["status"]
+
+    assert await status("alice-token") == 200  # issues sid-1, bound to alice
+    assert await status("bob-token", "sid-1") == 404  # another principal's session
+    assert await status("alice-token", "sid-1") == 200
+
+
+def test_serve_and_layer_options_reject_unknown_keywords() -> None:
+    from cloudg.mcp.layer import CloudGMCPLayer, LayerOptions
+    from cloudg.mcp.server import ServeOptions
+
+    with pytest.raises(TypeError, match="bogus"):
+        ServeOptions.build(None, {"bogus": 1})
+    opts = ServeOptions.build(ServeOptions(port=1), {"host": "::1"})
+    assert (opts.port, opts.host) == (1, "::1")
+    assert "tok" not in repr(ServeOptions(auth_tokens=["tok:admin"]))
+    with pytest.raises(TypeError, match="bogus"):
+        CloudGMCPLayer(registry=build_registry(), bogus=1)
+    layer = CloudGMCPLayer(
+        options=LayerOptions(registry=build_registry(), prefix="x_"), name="named"
+    )
+    assert (layer.prefix, layer.name) == ("x_", "named")
+
+
+async def test_serve_async_rejects_unknown_keyword() -> None:
+    with pytest.raises(TypeError, match="bogus"):
+        await serve_async(object(), "stdio", bogus=True)  # type: ignore[arg-type]
 
 
 def test_logging_setup_leaves_root_alone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,14 +282,21 @@ async def test_native_flavor_http_with_auth() -> None:
     layer = create_layer_from_options(registry=build_registry(), policy=_permissive_policy())
     port = free_port()
     ready: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-    task = asyncio.create_task(serve_async(layer, "http", flavor="native", port=port,
-                                           auth_tokens=["tok:analyst"], ready=ready))
+    task = asyncio.create_task(
+        serve_async(
+            layer, "http", flavor="native", port=port, auth_tokens=["tok:analyst"], ready=ready
+        )
+    )
     try:
         host, bound = await asyncio.wait_for(ready, 10)
         assert bound == port
         url = f"http://127.0.0.1:{port}/mcp"
-        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {}}}
+        init = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "capabilities": {}},
+        }
         status, _ = await asyncio.to_thread(post, url, init)
         assert status == 401
         status, body = await asyncio.to_thread(post, url, init, {"Authorization": "Bearer tok"})
@@ -225,18 +331,35 @@ async def test_sdk_flavor_http_auth_and_principal() -> None:
         return await call_next(info)
 
     layer.use(spy)
-    async with running(layer, flavor="sdk", auth_tokens=["tok:auditor:auditor-1"],
-                       json_response=True, stateless=True) as url:
-        call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "echo", "arguments": {"text": "x"}}}
+    async with running(
+        layer,
+        flavor="sdk",
+        auth_tokens=["tok:auditor:auditor-1"],
+        json_response=True,
+        stateless=True,
+    ) as url:
+        call = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "echo", "arguments": {"text": "x"}},
+        }
         status, _ = await asyncio.to_thread(post, url, call)
         assert status == 401
         status, _ = await asyncio.to_thread(
-            post, url, call, {"Authorization": "Bearer tok", "Origin": "https://evil.example"})
+            post, url, call, {"Authorization": "Bearer tok", "Origin": "https://evil.example"}
+        )
         assert status == 403  # cloudg Origin guard in front of the SDK app
-        init = {"jsonrpc": "2.0", "id": 0, "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25", "capabilities": {},
-                           "clientInfo": {"name": "t", "version": "1"}}}
+        init = {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+        }
         headers = {"Authorization": "Bearer tok", "MCP-Protocol-Version": "2025-11-25"}
         await asyncio.to_thread(post, url, init, headers)
         status, body = await asyncio.to_thread(post, url, call, headers)
@@ -262,17 +385,30 @@ async def test_fastmcp_flavor_http() -> None:
 async def test_fastmcp_flavor_applies_http_options() -> None:
     pytest.importorskip("fastmcp")
     layer = create_layer_from_options(registry=build_registry(), policy=_permissive_policy())
-    async with running(layer, flavor="fastmcp", json_response=True, stateless=True,
-                       allowed_origins=["https://app.example"],
-                       auth_tokens=["tok:analyst"]) as url:
-        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                           "clientInfo": {"name": "t", "version": "1"}}}
+    async with running(
+        layer,
+        flavor="fastmcp",
+        json_response=True,
+        stateless=True,
+        allowed_origins=["https://app.example"],
+        auth_tokens=["tok:analyst"],
+    ) as url:
+        init = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+        }
         status, _ = await asyncio.to_thread(post, url, init)
         assert status == 401
         ok = {"Authorization": "Bearer tok", "Origin": "https://app.example"}
-        status, _ = await asyncio.to_thread(post, url, init,
-                                            {**ok, "Origin": "http://localhost:3000"})
+        status, _ = await asyncio.to_thread(
+            post, url, init, {**ok, "Origin": "http://localhost:3000"}
+        )
         assert status == 403  # --allowed-origin replaced the loopback default
         status, body = await asyncio.to_thread(post, url, init, ok)
         assert status == 200 and json.loads(body)["result"]["serverInfo"]  # JSON, not SSE

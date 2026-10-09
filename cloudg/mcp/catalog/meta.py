@@ -29,20 +29,32 @@ from cloudg.schema.models import (
 CATEGORY = "meta"
 
 SchemaSection = Literal[
-    "all", "asset_types", "edge_types", "severities", "relation_types", "relation_groups",
-    "compliance_statuses", "providers",
+    "all",
+    "asset_types",
+    "edge_types",
+    "severities",
+    "relation_types",
+    "relation_groups",
+    "compliance_statuses",
+    "providers",
 ]
 
 EDGE_READS: dict[str, tuple[str, str]] = {
     "REFERENCES": ("uses / points at", "function -> secret, table -> KMS key, queue -> DLQ"),
-    "ATTACHED_TO": ("is attached to", "instance -> security group, volume -> instance, "
-                    "ENI -> instance"),
-    "ROUTE": ("routes through / forwards to", "route table -> gateway, DNS record -> load "
-              "balancer, ingress -> service"),
+    "ATTACHED_TO": (
+        "is attached to",
+        "instance -> security group, volume -> instance, ENI -> instance",
+    ),
+    "ROUTE": (
+        "routes through / forwards to",
+        "route table -> gateway, DNS record -> load balancer, ingress -> service",
+    ),
     "PEERING": ("peers with", "VPC -> peering connection -> VPC"),
     "USES_IMAGE": ("runs the image of", "task definition / workload / function -> registry"),
-    "ASSUMES_ROLE": ("runs as", "function, task, node group, instance profile -> role / "
-                     "service account"),
+    "ASSUMES_ROLE": (
+        "runs as",
+        "function, task, node group, instance profile -> role / service account",
+    ),
     "LOGS_TO": ("sends logs to", "trail, flow log, LB, function -> log destination"),
     "LOAD_BALANCER_TARGET": ("sends traffic to", "load balancer -> target group -> instance"),
     "GRANTS_ACCESS": ("is granted access to", "principal -> resource its policy names"),
@@ -65,10 +77,13 @@ RULE_RELATIONS: dict[str, str] = {
     "SECURITY_GROUP_RULE": "inferred from ports, protocol, CIDR and direction "
     "(INGRESS_ALLOWED / EGRESS_ALLOWED, ONLY_SSH, ONLY_HTTPS, ALL_TRAFFIC, "
     "INTERNET_REACHABLE...)",
-    "CONTAINS": "inferred from the endpoint asset types (VPC_CONTAINS_SUBNET, "
-    "SUBNET_CONTAINS_INSTANCE, CLUSTER_CONTAINS_SERVICE)",
+    "CONTAINS": "inferred from both endpoint types (VPC_CONTAINS_SUBNET, "
+    "SUBNET_CONTAINS_INSTANCE, CLUSTER_CONTAINS_SERVICE, ORG_CONTAINS_ACCOUNT), else the "
+    "generic CONTAINS",
+    "ATTACHED_TO": "PROTECTED_BY_SG when the target is a security group or NSG, "
+    "PROTECTED_BY_NACL for a NACL, else DEPENDS_ON",
     "IAM_TRUST": "ROLE_ASSUMES_ROLE, plus CROSS_ACCOUNT_TRUST when the accounts differ",
-    "NACL_RULE": "PROTECTED_BY_NACL, plus relations inferred from the target's metadata",
+    "NACL_RULE": "none; protection relations come from ATTACHED_TO edges",
     "IAM_POLICY_ATTACHMENT": "inferred from the principal type (USER_HAS_POLICY, "
     "ROLE_HAS_POLICY, GROUP_HAS_POLICY)",
 }
@@ -76,8 +91,12 @@ RULE_RELATIONS: dict[str, str] = {
 WORKFLOWS = {
     "orient": ["workspace_status", "dataset_summary", "count_assets", "findings_summary"],
     "triage risk": ["top_risks", "get_asset", "findings_for_asset", "blast_radius"],
-    "attack surface": ["internet_exposure", "attack_paths", "lateral_movement_paths",
-                       "find_paths(source='internet', target=...)"],
+    "attack surface": [
+        "internet_exposure",
+        "attack_paths",
+        "lateral_movement_paths",
+        "find_paths(source='internet', target=...)",
+    ],
     "change impact": ["dependents", "dependency_tree", "shared_dependencies", "blast_radius"],
     "compliance": ["compliance_summary", "list_controls", "control_status", "compliance_gaps"],
     "drift": ["snapshot_dataset", "map_inventory / load_dataset", "diff_datasets"],
@@ -118,10 +137,18 @@ def _relation_types() -> dict[str, list[str]]:
 
     return {g.value: [r.value for r in get_relations_for_group(g)] for g in RelationGroup}
 
+
 CATALOG = Catalog()
 
-_RO = dict(category=CATEGORY, sensitivity=Sensitivity.PUBLIC, capabilities=(),
-          read_only=True, idempotent=True, open_world=False)
+_RO = dict(
+    category=CATEGORY,
+    sensitivity=Sensitivity.PUBLIC,
+    capabilities=(),
+    read_only=True,
+    idempotent=True,
+    open_world=False,
+)
+
 
 @CATALOG.tool(title="List capabilities", tags={"start-here"}, **_RO)
 def list_capabilities(ctx: Any) -> dict:
@@ -133,15 +160,17 @@ def list_capabilities(ctx: Any) -> dict:
     layer = ctx.layer
     cats: dict[str, list[dict[str, Any]]] = {}
     for spec in layer.list_tools(ctx.principal):
-        cats.setdefault(spec.category, []).append({
-            "name": layer.exposed_name(spec.name),
-            "title": spec.title,
-            "read_only": spec.annotations.read_only,
-            "open_world": spec.annotations.open_world,
-            "sensitivity": spec.sensitivity.value,
-            "capabilities": sorted(c.value for c in spec.capabilities),
-            "summary": (spec.description.split(". ")[0].strip()[:160]),
-        })
+        cats.setdefault(spec.category, []).append(
+            {
+                "name": layer.exposed_name(spec.name),
+                "title": spec.title,
+                "read_only": spec.annotations.read_only,
+                "open_world": spec.annotations.open_world,
+                "sensitivity": spec.sensitivity.value,
+                "capabilities": sorted(c.value for c in spec.capabilities),
+                "summary": (spec.description.split(". ")[0].strip()[:160]),
+            }
+        )
     return {
         "server": layer.name,
         "version": layer.version,
@@ -155,9 +184,10 @@ def list_capabilities(ctx: Any) -> dict:
             "dataset": "empty = active dataset",
             "ref": "asset id, ARN, unique name or unique ARN tail",
             "pagination": "pass next_cursor back as cursor; cursors expire when the "
-                          "dataset changes",
+            "dataset changes",
         },
     }
+
 
 @CATALOG.tool(title="Describe schema", **_RO)
 def describe_schema(ctx: Any, section: SchemaSection = "all") -> dict:
@@ -184,11 +214,13 @@ def describe_schema(ctx: Any, section: SchemaSection = "all") -> dict:
         out["providers"] = [p.value for p in CloudProvider]
     return out
 
+
 @CATALOG.tool(title="Explain asset type", **_RO)
 def explain_asset_type(
     ctx: Any,
-    asset_type: Annotated[str, Field(min_length=1, description="An AssetType value, "
-                                     "e.g. LAMBDA_FUNCTION.")],
+    asset_type: Annotated[
+        str, Field(min_length=1, description="An AssetType value, e.g. LAMBDA_FUNCTION.")
+    ],
 ) -> dict:
     """How cloudg models one asset type: family, notes, OWL ontology
     class, Terraform resource type, whether it is a sensitive data store
@@ -217,11 +249,13 @@ def explain_asset_type(
         out["in_active_dataset"] = sum(1 for a in ds.assets if a.asset_type == t)
     return out
 
+
 @CATALOG.tool(title="Explain edge type", **_RO)
 def explain_edge_type(
     ctx: Any,
-    edge_type: Annotated[str, Field(min_length=1, description="An EdgeType value, e.g. "
-                                    "ASSUMES_ROLE.")],
+    edge_type: Annotated[
+        str, Field(min_length=1, description="An EdgeType value, e.g. ASSUMES_ROLE.")
+    ],
 ) -> dict:
     """How to read one edge type: direction ("source verb target"),
     typical endpoints, its dependency direction (forward: source depends

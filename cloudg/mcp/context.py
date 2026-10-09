@@ -70,6 +70,10 @@ class ToolContext:
     # Event loop serving the request; lets sync handlers (which run in a
     # worker thread) report progress via report_progress_sync
     loop: asyncio.AbstractEventLoop | None = None
+    # The caller's output transform for this call (set by the layer):
+    # progress messages and log data reach the client through it, like the
+    # result does
+    transform_output: Callable[[Any], Any] | None = None
     _last_progress: float | None = field(default=None, repr=False)
 
     @property
@@ -90,6 +94,8 @@ class ToolContext:
             return
         self._last_progress = progress
         try:
+            if message:
+                message = str(self._outgoing(message))
             res = self.progress_callback(progress, total, message)
             if hasattr(res, "__await__"):
                 await res  # type: ignore[misc]
@@ -119,11 +125,18 @@ class ToolContext:
         if self.log_callback is None:
             return
         try:
-            res = self.log_callback(level, data, logger_name)
+            res = self.log_callback(level, self._outgoing(data), logger_name)
             if hasattr(res, "__await__"):
                 await res  # type: ignore[misc]
-        except Exception:
-            logger.debug("log callback failed", exc_info=True)
+        except Exception:  # a log notification must never break a call
+            logger.debug("log notification dropped", exc_info=True)
+
+    def _outgoing(self, value: Any) -> Any:
+        """``value`` as the client may see it. A transform that refuses the
+        value (a blocked secret) raises, and the notification is dropped."""
+        if self.transform_output is None:
+            return value
+        return self.transform_output(value)
 
     def link(
         self,

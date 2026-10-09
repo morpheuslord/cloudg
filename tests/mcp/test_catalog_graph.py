@@ -10,8 +10,13 @@ async def test_neighbors(call, layer):
     ids = {n["id"] for n in out["nodes"]}
     assert ids == {"sg-app", "app-role", "subnet-private", "tg-web", "inspector"}
     assert out["edge_count"] == 5 and not out["truncated"]
-    out = await call("neighbors", ref="web-1", direction="out",
-                     edge_types=["ASSUMES_ROLE", "GRANTS_ACCESS"], depth=2)
+    out = await call(
+        "neighbors",
+        ref="web-1",
+        direction="out",
+        edge_types=["ASSUMES_ROLE", "GRANTS_ACCESS"],
+        depth=2,
+    )
     ids = {n["id"] for n in out["nodes"]}
     assert ids == {"app-role", "data-bucket", "orders-db"}
     out = await call("neighbors", ref="web-1", direction="in")
@@ -25,7 +30,7 @@ async def test_neighbors(call, layer):
 
 
 async def test_neighbors_errors(call):
-    assert "Did you mean" in await call.error("neighbors", ref="web-7")
+    assert "close match" in await call.error("neighbors", ref="web-7")
     assert "edge type" in await call.error("neighbors", ref="web-1", edge_types=["FOO"])
     assert "depth" in await call.error("neighbors", ref="web-1", depth=9)
 
@@ -62,12 +67,11 @@ async def test_find_paths(call):
     assert out["paths"][0]["edge_types"] == ["SECURITY_GROUP_RULE", "SG_ADMITS"]
     out = await call("find_paths", source="internet", target="bastion", mode="directed")
     assert out["paths"] == [] and "hint" in out
-    out = await call("find_paths", source="web-1", target="web-2", mode="undirected",
-                     max_paths=2)
+    out = await call("find_paths", source="web-1", target="web-2", mode="undirected", max_paths=2)
     assert len(out["paths"]) == 2 and out["truncated"]
     out = await call("find_paths", source="internet", target="orders-db", max_depth=2)
     assert out["paths"] == []
-    assert "Did you mean" in await call.error("find_paths", source="web-1", target="orderz-db")
+    assert "close match" in await call.error("find_paths", source="web-1", target="orderz-db")
 
 
 async def test_attack_paths(call):
@@ -92,8 +96,7 @@ async def test_attack_paths_nothing_exposed(call, workspace, sample_dataset):
     workspace.add(ds)
     out = await call("attack_paths")
     assert out["paths"] == [] and "hint" in out
-    assert "no internet node" in await call.error("find_paths", source="internet",
-                                                  target="web-1")
+    assert "no internet node" in await call.error("find_paths", source="internet", target="web-1")
 
 
 async def test_lateral_movement_paths(call):
@@ -128,12 +131,12 @@ async def test_blast_radius(call):
     out = await call("blast_radius", ref="kms-main")
     dep = out["dependency"]
     assert dep["transitive_dependents"] >= 4
-    assert {"api-handler", "data-bucket", "orders-db", "db-secret"} <= {i["id"]
-                                                                       for i in dep["items"]}
+    assert {"api-handler", "data-bucket", "orders-db", "db-secret"} <= {
+        i["id"] for i in dep["items"]
+    }
     assert dep["by_depth"]["1"] == 4
     out = await call("blast_radius", ref="app-role")
-    assert {n["id"] for n in out["network"]["sensitive_reachable"]} >= {"orders-db",
-                                                                        "data-bucket"}
+    assert {n["id"] for n in out["network"]["sensitive_reachable"]} >= {"orders-db", "data-bucket"}
     assert out["network"]["risk_score"] > 0
     out = await call("blast_radius", ref="kms-main", limit=1)
     assert out["dependency"]["truncated"] and len(out["dependency"]["items"]) == 1
@@ -170,8 +173,7 @@ async def test_cross_account_edges(call):
     assert any("999999999999" in k for k in out["by_account_pair"])
     out = await call("cross_account_edges", external_only=True)
     assert all(i["external"] for i in out["items"]) and out["total"] >= 1
-    out = await call("cross_account_edges", account_id="222222222222",
-                     edge_types=["IAM_TRUST"])
+    out = await call("cross_account_edges", account_id="222222222222", edge_types=["IAM_TRUST"])
     assert {i["source_account"] for i in out["items"]} == {"111111111111", "999999999999"}
 
 

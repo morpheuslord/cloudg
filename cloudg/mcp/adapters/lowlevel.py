@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from cloudg.mcp.adapters._common import (
     ChangeFanout,
+    call_layer,
+    layer_error_parts,
     lower_headers,
     normalize_kinds,
     normalize_level,
@@ -44,11 +46,12 @@ from cloudg.mcp.adapters._common import (
     owns_template,
     owns_tool,
     resolve_principal,
+    scope_principal,
+    send_change,
 )
 from cloudg.mcp.context import Principal
-from cloudg.mcp.core import InvalidArgumentsError, MCPLayerError, NotFoundError
-from cloudg.mcp.native.auth import PRINCIPAL_SCOPE_KEY, PrincipalResolver, RequestInfo
-from cloudg.mcp.native.jsonrpc import INVALID_PARAMS, LOG_LEVELS, RESOURCE_NOT_FOUND
+from cloudg.mcp.native.auth import PrincipalResolver, RequestInfo
+from cloudg.mcp.native.jsonrpc import INTERNAL_ERROR, INVALID_PARAMS, LOG_LEVELS, RESOURCE_NOT_FOUND
 
 if TYPE_CHECKING:  # pragma: no cover
     from cloudg.mcp.layer import CloudGMCPLayer
@@ -63,20 +66,44 @@ OrigCall = Callable[[], Awaitable[Any]] | None
 _METHODS: list[tuple[str, str, str, str, str]] = [
     ("tools/list", "ListToolsRequest", "PaginatedRequestParams", "tools", "_list_tools"),
     ("tools/call", "CallToolRequest", "CallToolRequestParams", "tools", "_call_tool"),
-    ("resources/list", "ListResourcesRequest", "PaginatedRequestParams", "resources",
-     "_list_resources"),
-    ("resources/templates/list", "ListResourceTemplatesRequest", "PaginatedRequestParams",
-     "templates", "_list_templates"),
-    ("resources/read", "ReadResourceRequest", "ReadResourceRequestParams", "resources",
-     "_read_resource"),
+    (
+        "resources/list",
+        "ListResourcesRequest",
+        "PaginatedRequestParams",
+        "resources",
+        "_list_resources",
+    ),
+    (
+        "resources/templates/list",
+        "ListResourceTemplatesRequest",
+        "PaginatedRequestParams",
+        "templates",
+        "_list_templates",
+    ),
+    (
+        "resources/read",
+        "ReadResourceRequest",
+        "ReadResourceRequestParams",
+        "resources",
+        "_read_resource",
+    ),
     ("prompts/list", "ListPromptsRequest", "PaginatedRequestParams", "prompts", "_list_prompts"),
     ("prompts/get", "GetPromptRequest", "GetPromptRequestParams", "prompts", "_get_prompt"),
-    ("completion/complete", "CompleteRequest", "CompleteRequestParams", "completions",
-     "_complete"),
-    ("resources/subscribe", "SubscribeRequest", "SubscribeRequestParams", "subscriptions",
-     "_subscribe"),
-    ("resources/unsubscribe", "UnsubscribeRequest", "UnsubscribeRequestParams", "subscriptions",
-     "_unsubscribe"),
+    ("completion/complete", "CompleteRequest", "CompleteRequestParams", "completions", "_complete"),
+    (
+        "resources/subscribe",
+        "SubscribeRequest",
+        "SubscribeRequestParams",
+        "subscriptions",
+        "_subscribe",
+    ),
+    (
+        "resources/unsubscribe",
+        "UnsubscribeRequest",
+        "UnsubscribeRequestParams",
+        "subscriptions",
+        "_unsubscribe",
+    ),
     ("logging/setLevel", "SetLevelRequest", "SetLevelRequestParams", "logging", "_set_level"),
 ]
 
@@ -145,8 +172,8 @@ class LowLevelBinding:
             self._patch_input_schema()
         try:
             server.__dict__.setdefault("_cloudg_bindings", []).append(self)
-        except Exception:
-            pass
+        except (AttributeError, TypeError):  # slotted server class: nothing to record on
+            logger.debug("cannot record the cloudg binding on %s", type(server).__name__)
 
     # ------------------------------------------------------------------
     # Installation
@@ -211,7 +238,8 @@ class LowLevelBinding:
 
             bus = InMemorySubscriptionBus()
             self.server.add_request_handler(
-                "subscriptions/listen", self.T.SubscriptionsListenRequestParams,
+                "subscriptions/listen",
+                self.T.SubscriptionsListenRequestParams,
                 ListenHandler(bus),
             )
             return bus
@@ -229,8 +257,9 @@ class LowLevelBinding:
             return
         original = server.create_initialization_options
 
-        def create_initialization_options(notification_options: Any = None, *args: Any,
-                                          **kwargs: Any) -> Any:
+        def create_initialization_options(
+            notification_options: Any = None, *args: Any, **kwargs: Any
+        ) -> Any:
             if notification_options is None:
                 notification_options = NotificationOptions(
                     prompts_changed=True, resources_changed=True, tools_changed=True
@@ -276,13 +305,7 @@ class LowLevelBinding:
     def request_info(self, ctx: Any) -> RequestInfo:
         request = getattr(ctx, "request", None) if ctx is not None else None
         headers = lower_headers(getattr(request, "headers", None)) if request is not None else {}
-        principal: Principal | None = None
-        scope = getattr(request, "scope", None)
-        if isinstance(scope, dict):
-            principal = scope.get(PRINCIPAL_SCOPE_KEY)
-            state = scope.get("state")
-            if principal is None and isinstance(state, dict):
-                principal = state.get(PRINCIPAL_SCOPE_KEY)
+        principal = scope_principal(request)
         token = None
         try:
             from mcp.server.auth.middleware.auth_context import get_access_token
@@ -324,13 +347,14 @@ class LowLevelBinding:
 
         return McpError(ErrorData(code=code, message=message, data=data))
 
-    def _layer_error(self, exc: MCPLayerError, not_found_code: int = INVALID_PARAMS,
-                     data: Any = None) -> Exception:
-        if isinstance(exc, NotFoundError):
-            return self._error(not_found_code, exc.message, data if data is not None else exc.data)
-        if isinstance(exc, InvalidArgumentsError):
-            return self._error(INVALID_PARAMS, exc.message, exc.data)
-        return self._error(exc.code, exc.message, exc.data)
+    async def _through_layer(self, call: Any, **error_kw: Any) -> Any:
+        """Await a layer call; layer errors become SDK errors with the same
+        JSON-RPC code, anything else a generic internal error."""
+        return await call_layer(
+            call,
+            lambda exc: self._error(*layer_error_parts(exc, **error_kw)),
+            lambda: self._error(INTERNAL_ERROR, "Internal error"),
+        )
 
     def _tool_context(self, ctx: Any, principal: Principal) -> Any:
         session = getattr(ctx, "session", None) if ctx is not None else None
@@ -382,13 +406,16 @@ class LowLevelBinding:
             session=session,
         )
 
-    async def _merge(self, orig_call: OrigCall, ours: list[dict[str, Any]], field: str,
-                     key: str, model: Any) -> Any:
+    async def _merge(
+        self, orig_call: OrigCall, ours: list[dict[str, Any]], field: str, key: str, model: Any
+    ) -> Any:
         if orig_call is None:
             return model.model_validate({field: ours})
         base = await orig_call()
-        data = base if isinstance(base, dict) else base.model_dump(
-            by_alias=True, mode="json", exclude_none=True
+        data = (
+            base
+            if isinstance(base, dict)
+            else base.model_dump(by_alias=True, mode="json", exclude_none=True)
         )
         if data.get("nextCursor"):
             return base  # cloudg entries are appended to the host's last page
@@ -419,12 +446,10 @@ class LowLevelBinding:
         self._track(ctx)
         principal = self._principal(ctx)
         tctx = self._tool_context(ctx, principal)
-        try:
-            result = await self.layer.call_tool(
-                name, p.get("arguments") or {}, principal=principal, context=tctx
-            )
-        except MCPLayerError as exc:
-            raise self._layer_error(exc, data={"name": name}) from None
+        call = self.layer.call_tool(
+            name, p.get("arguments") or {}, principal=principal, context=tctx
+        )
+        result = await self._through_layer(call, data={"name": name})
         return self.T.CallToolResult.model_validate(result.to_wire())
 
     async def _list_resources(self, ctx: Any, p: dict[str, Any], orig_call: OrigCall) -> Any:
@@ -435,8 +460,9 @@ class LowLevelBinding:
     async def _list_templates(self, ctx: Any, p: dict[str, Any], orig_call: OrigCall) -> Any:
         self._track(ctx)
         ours = self.layer.resource_templates_wire(self._principal(ctx))
-        return await self._merge(orig_call, ours, "resourceTemplates", "uriTemplate",
-                                 self.T.ListResourceTemplatesResult)
+        return await self._merge(
+            orig_call, ours, "resourceTemplates", "uriTemplate", self.T.ListResourceTemplatesResult
+        )
 
     async def _read_resource(self, ctx: Any, p: dict[str, Any], orig_call: OrigCall) -> Any:
         uri = str(p.get("uri", ""))
@@ -448,11 +474,9 @@ class LowLevelBinding:
         self._track(ctx)
         principal = self._principal(ctx)
         tctx = self._tool_context(ctx, principal)
-        try:
-            contents = await self.layer.read_resource(uri, principal=principal, context=tctx)
-        except MCPLayerError as exc:
-            code = INVALID_PARAMS if self._is_modern(ctx) else RESOURCE_NOT_FOUND
-            raise self._layer_error(exc, not_found_code=code, data={"uri": uri}) from None
+        code = INVALID_PARAMS if self._is_modern(ctx) else RESOURCE_NOT_FOUND
+        call = self.layer.read_resource(uri, principal=principal, context=tctx)
+        contents = await self._through_layer(call, not_found_code=code, data={"uri": uri})
         return self.T.ReadResourceResult.model_validate(
             {"contents": [c.to_wire() for c in contents]}
         )
@@ -471,18 +495,16 @@ class LowLevelBinding:
         self._track(ctx)
         principal = self._principal(ctx)
         tctx = self._tool_context(ctx, principal)
-        try:
-            result = await self.layer.get_prompt(
-                name, p.get("arguments") or {}, principal=principal, context=tctx
-            )
-        except MCPLayerError as exc:
-            raise self._layer_error(exc) from None
+        call = self.layer.get_prompt(
+            name, p.get("arguments") or {}, principal=principal, context=tctx
+        )
+        result = await self._through_layer(call)
         return self.T.GetPromptResult.model_validate(result.to_wire())
 
     async def _complete(self, ctx: Any, p: dict[str, Any], orig_call: OrigCall) -> Any:
         ref = p.get("ref") or {}
         argument = p.get("argument") or {}
-        ours = (ref.get("type") == "ref/prompt" and owns_prompt(self.layer, str(ref.get("name"))))
+        ours = ref.get("type") == "ref/prompt" and owns_prompt(self.layer, str(ref.get("name")))
         ours = ours or (
             ref.get("type") == "ref/resource" and owns_template(self.layer, str(ref.get("uri")))
         )
@@ -491,13 +513,13 @@ class LowLevelBinding:
                 return await orig_call()
             return self.T.CompleteResult.model_validate({"completion": {"values": []}})
         context = p.get("context") or {}
-        try:
-            completion = await self.layer.complete(
-                ref, argument, principal=self._principal(ctx),
-                context_arguments=context.get("arguments"),
-            )
-        except MCPLayerError as exc:
-            raise self._layer_error(exc) from None
+        call = self.layer.complete(
+            ref,
+            argument,
+            principal=self._principal(ctx),
+            context_arguments=context.get("arguments"),
+        )
+        completion = await self._through_layer(call)
         return self.T.CompleteResult.model_validate({"completion": completion})
 
     async def _subscribe(self, ctx: Any, p: dict[str, Any], orig_call: OrigCall) -> Any:
@@ -527,14 +549,7 @@ class LowLevelBinding:
     # ------------------------------------------------------------------
 
     async def _notify(self, session: Any, kind: str, uri: str | None) -> None:
-        if kind == "tools":
-            await session.send_tool_list_changed()
-        elif kind == "prompts":
-            await session.send_prompt_list_changed()
-        elif kind == "resources":
-            await session.send_resource_list_changed()
-        elif kind == "resource" and uri:
-            await session.send_resource_updated(uri)
+        await send_change(session, kind, uri)
 
     async def _publish(self, kind: str, uri: str | None) -> None:
         from mcp.shared.subscriptions import (

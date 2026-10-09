@@ -100,8 +100,9 @@ def create_highlevel_server(layer: "CloudGMCPLayer", *, name: str | None = None)
     if (sdk_major() or 0) >= 2:
         from mcp.server.mcpserver import MCPServer
 
-        return MCPServer(name or layer.name, instructions=layer.instructions or None,
-                         version=str(layer.version))
+        return MCPServer(
+            name or layer.name, instructions=layer.instructions or None, version=str(layer.version)
+        )
     from mcp.server.fastmcp import FastMCP
 
     return FastMCP(name or layer.name, instructions=layer.instructions or None)

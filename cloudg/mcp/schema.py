@@ -11,11 +11,24 @@ defaults::
         query: Annotated[str, Field(description="Substring match on name/ARN")] = "",
         limit: Annotated[int, Field(ge=1, le=500)] = 50,
     ) -> dict: ...
+
+A tool with many arguments can take them as one pydantic model instead:
+declare exactly one parameter after ``ctx``, named ``args`` and annotated
+with a :class:`pydantic.BaseModel` subclass. The model's fields become the
+same flat ``inputSchema`` the equivalent signature would produce, and the
+handler receives the validated model as ``args``::
+
+    class FindAssetsArgs(BaseModel):
+        query: Annotated[str, Field(description="Substring match on name/ARN")] = ""
+        limit: Annotated[int, Field(ge=1, le=500)] = 50
+
+    def find_assets(ctx, args: FindAssetsArgs) -> dict: ...
 """
 
 from __future__ import annotations
 
 import inspect
+import logging
 import typing
 from typing import Any, Callable
 
@@ -23,25 +36,69 @@ from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 from cloudg.mcp.core import InvalidArgumentsError
 
+logger = logging.getLogger("cloudg.mcp")
+
 _CTX_NAMES = {"ctx", "context"}
 _MODEL_ATTR = "__cloudg_mcp_args_model__"
+#: Name of the single parameter that carries an arguments model.
+ARGS_PARAM = "args"
+#: Validation model -> the handler's own arguments model (model-style handlers).
+_WRAPPED: dict[type[BaseModel], type[BaseModel]] = {}
+
+
+def _handler_params(fn: Callable[..., Any]) -> tuple[list[inspect.Parameter], dict[str, Any]]:
+    """``fn``'s parameters after the context, and its resolved type hints."""
+    try:
+        hints = typing.get_type_hints(fn, include_extras=True)
+    except Exception:  # unresolved forward refs: fall back to Any
+        hints = {}
+    params = list(inspect.signature(fn).parameters.values())
+    if params and params[0].name in _CTX_NAMES:
+        params = params[1:]
+    return params, hints
+
+
+def _args_model_of(
+    params: list[inspect.Parameter], hints: dict[str, Any]
+) -> type[BaseModel] | None:
+    """The model class of a ``(ctx, args: SomeModel)`` handler, else ``None``."""
+    if len(params) != 1 or params[0].name != ARGS_PARAM:
+        return None
+    annotation = hints.get(ARGS_PARAM)
+    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+        return annotation
+    return None
+
+
+def _strict_copy(model: type[BaseModel], name: str) -> type[BaseModel]:
+    """``model`` with unknown arguments refused, as for signature handlers."""
+    config = ConfigDict(**{**model.model_config, "extra": "forbid"})  # type: ignore[typeddict-item]
+    strict = type(name, (model,), {"model_config": config, "__module__": model.__module__})
+    _WRAPPED[strict] = model
+    return strict
 
 
 def _arguments_model(fn: Callable[..., Any]) -> type[BaseModel]:
     cached = getattr(fn, _MODEL_ATTR, None)
     if cached is not None:
         return cached
-
-    sig = inspect.signature(fn)
+    params, hints = _handler_params(fn)
+    args_model = _args_model_of(params, hints)
+    if args_model is not None:
+        model = _strict_copy(args_model, f"{fn.__name__}_arguments")
+    else:
+        model = _signature_model(fn, params, hints)
     try:
-        hints = typing.get_type_hints(fn, include_extras=True)
-    except Exception:  # unresolved forward refs: fall back to Any
-        hints = {}
+        setattr(fn, _MODEL_ATTR, model)
+    except (AttributeError, TypeError):  # builtins / bound methods: rebuilt per call
+        logger.debug("cannot cache the arguments model on %r", fn)
+    return model
 
+
+def _signature_model(
+    fn: Callable[..., Any], params: list[inspect.Parameter], hints: dict[str, Any]
+) -> type[BaseModel]:
     fields: dict[str, Any] = {}
-    params = list(sig.parameters.values())
-    if params and params[0].name in _CTX_NAMES:
-        params = params[1:]
     for p in params:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
@@ -49,16 +106,11 @@ def _arguments_model(fn: Callable[..., Any]) -> type[BaseModel]:
         default = ... if p.default is inspect.Parameter.empty else p.default
         fields[p.name] = (annotation, default)
 
-    model = create_model(  # type: ignore[call-overload]
+    return create_model(  # type: ignore[call-overload,no-any-return]
         f"{fn.__name__}_arguments",
         __config__=ConfigDict(extra="forbid", arbitrary_types_allowed=True),
         **fields,
     )
-    try:
-        setattr(fn, _MODEL_ATTR, model)
-    except (AttributeError, TypeError):  # builtins / bound methods
-        pass
-    return model
 
 
 def _strip_titles(node: Any) -> Any:
@@ -134,6 +186,10 @@ def validate_arguments(fn: Callable[..., Any], arguments: dict[str, Any] | None)
         ]
         summary = "; ".join(f"{e['loc'] or '<root>'}: {e['msg']}" for e in errors)
         raise InvalidArgumentsError(f"Invalid arguments: {summary}", data=errors) from None
+    wrapped = _WRAPPED.get(model)
+    if wrapped is not None:  # (ctx, args: Model) handler: hand over the model itself
+        values = {name: getattr(parsed, name) for name in model.model_fields}
+        return {ARGS_PARAM: wrapped.model_construct(parsed.model_fields_set, **values)}
     return {name: getattr(parsed, name) for name in model.model_fields}
 
 

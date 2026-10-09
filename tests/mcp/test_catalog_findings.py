@@ -53,7 +53,7 @@ async def test_list_findings_projection_pagination_errors(call):
     assert nxt["offset"] == 4
     assert "Valid fields" in await call.error("list_findings", fields=["evil"])
     assert "severity" in await call.error("list_findings", severities=["URGENT"])
-    assert "Did you mean" in await call.error("list_findings", resource="orderz-db")
+    assert "close match" in await call.error("list_findings", resource="orderz-db")
 
 
 async def test_get_finding(call, layer, workspace):
@@ -61,7 +61,9 @@ async def test_get_finding(call, layer, workspace):
     assert out["remediation"] == "Restrict 22 to the VPN."
     assert out["asset"]["id"] == "sg-admin"
     assert {(c["framework"], c["control_id"]) for c in out["controls"]} == {
-        ("CIS-AWS", "5.2"), ("PCI-DSS", "1.3.1")}
+        ("CIS-AWS", "5.2"),
+        ("PCI-DSS", "1.3.1"),
+    }
     res = await layer.call_tool("get_finding", {"finding_id": "f-ssh-open"})
     uris = {getattr(c, "uri", None) for c in res.content}
     assert {"cloudg://findings/f-ssh-open", "cloudg://assets/sg-admin"} <= uris
@@ -73,10 +75,17 @@ async def test_get_finding(call, layer, workspace):
     assert "list_findings" in await call.error("get_finding", finding_id="nope")
 
 
-@pytest.mark.parametrize("group_by,key", [
-    ("severity", "CRITICAL"), ("source_tool", "prowler"), ("framework", "CIS-AWS"),
-    ("asset_type", "SECURITY_GROUP"), ("account", "111111111111"), ("asset", "web-1"),
-])
+@pytest.mark.parametrize(
+    "group_by,key",
+    [
+        ("severity", "CRITICAL"),
+        ("source_tool", "prowler"),
+        ("framework", "CIS-AWS"),
+        ("asset_type", "SECURITY_GROUP"),
+        ("account", "111111111111"),
+        ("asset", "web-1"),
+    ],
+)
 async def test_findings_summary(call, group_by, key):
     out = await call("findings_summary", group_by=group_by)
     assert key in out["groups"] and out["groups"][key]["total"] >= 1
@@ -99,7 +108,7 @@ async def test_findings_for_asset(call):
     assert out["total"] == 0
     out = await call("findings_for_asset", ref="data-bucket", include_suppressed=True)
     assert out["total"] == 1
-    assert "Did you mean" in await call.error("findings_for_asset", ref="web-")
+    assert "close match" in await call.error("findings_for_asset", ref="web-")
 
 
 async def test_top_risks(call):
@@ -129,14 +138,38 @@ async def test_suppress_and_unsuppress(call, layer):
 
 
 def _trivy_report(path):
-    path.write_text(json.dumps({
-        "SchemaVersion": 2, "ArtifactName": "app:1", "ArtifactType": "container_image",
-        "Results": [{"Target": "app:1", "Vulnerabilities": [
-            {"VulnerabilityID": "CVE-2025-0001", "PkgName": "libx", "InstalledVersion": "1",
-             "Severity": "HIGH", "Title": "libx overflow", "Description": "d"},
-            {"VulnerabilityID": "CVE-2025-0002", "PkgName": "liby", "InstalledVersion": "1",
-             "Severity": "LOW", "Title": "liby leak", "Description": "d"}]}],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "SchemaVersion": 2,
+                "ArtifactName": "app:1",
+                "ArtifactType": "container_image",
+                "Results": [
+                    {
+                        "Target": "app:1",
+                        "Vulnerabilities": [
+                            {
+                                "VulnerabilityID": "CVE-2025-0001",
+                                "PkgName": "libx",
+                                "InstalledVersion": "1",
+                                "Severity": "HIGH",
+                                "Title": "libx overflow",
+                                "Description": "d",
+                            },
+                            {
+                                "VulnerabilityID": "CVE-2025-0002",
+                                "PkgName": "liby",
+                                "InstalledVersion": "1",
+                                "Severity": "LOW",
+                                "Title": "liby leak",
+                                "Description": "d",
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     return path
 
 
@@ -151,8 +184,13 @@ async def test_ingest_reports_into_active(call, sample_paths, workspace):
 
 async def test_ingest_reports_new_dataset_no_normalise(call, sample_paths, workspace):
     report = _trivy_report(sample_paths["root"] / "trivy.json")
-    out = await call("ingest_reports", reports={"trivy": [str(report), str(report) + ".x"]},
-                     dataset="scans", new_dataset=True, normalise=False)
+    out = await call(
+        "ingest_reports",
+        reports={"trivy": [str(report), str(report) + ".x"]},
+        dataset="scans",
+        new_dataset=True,
+        normalise=False,
+    )
     assert out["dataset"] == "scans" and out["findings_after"] == 2
     assert out["errors"][0]["path"].endswith(".x")
     assert workspace.active_name == "scans"
@@ -161,7 +199,8 @@ async def test_ingest_reports_new_dataset_no_normalise(call, sample_paths, works
 async def test_ingest_reports_errors(call):
     assert "Unsupported tool" in await call.error("ingest_reports", reports={"nmap": ["x"]})
     assert "outside the allowed roots" in await call.error(
-        "ingest_reports", reports={"trivy": ["/etc/hosts"]})
+        "ingest_reports", reports={"trivy": ["/etc/hosts"]}
+    )
 
 
 async def test_normalise_findings(call, workspace):

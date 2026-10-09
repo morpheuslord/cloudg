@@ -22,8 +22,9 @@ MODERN = "2026-07-28"
 ENVELOPE = {PROTOCOL_VERSION_META_KEY: MODERN, CLIENT_CAPABILITIES_META_KEY: {}}
 
 
-def _blocking(url: str, method: str, body: Any, headers: dict[str, str],
-              timeout: float) -> tuple[int, dict[str, str], bytes]:
+def _blocking(
+    url: str, method: str, body: Any, headers: dict[str, str], timeout: float
+) -> tuple[int, dict[str, str], bytes]:
     data = body if isinstance(body, bytes) or body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
@@ -33,9 +34,13 @@ def _blocking(url: str, method: str, body: Any, headers: dict[str, str],
         return exc.code, {k.lower(): v for k, v in exc.headers.items()}, exc.read()
 
 
-async def http(url: str, method: str = "POST", body: Any = None,
-               headers: dict[str, str] | None = None,
-               timeout: float = 10) -> tuple[int, dict[str, str], bytes]:
+async def http(
+    url: str,
+    method: str = "POST",
+    body: Any = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 10,
+) -> tuple[int, dict[str, str], bytes]:
     h = {"Accept": ACCEPT_BOTH}
     if body is not None:
         h["Content-Type"] = "application/json"
@@ -76,17 +81,29 @@ class Srv:
             msg["params"] = params
         return msg
 
-    async def initialize(self, version: str = "2025-11-25",
-                         headers: dict[str, str] | None = None) -> str:
-        status, hdrs, body = await http(self.url, body=self.rpc("initialize", {
-            "protocolVersion": version, "capabilities": {},
-            "clientInfo": {"name": "urllib", "version": "1"}}), headers=headers)
+    async def initialize(
+        self, version: str = "2025-11-25", headers: dict[str, str] | None = None
+    ) -> str:
+        status, hdrs, body = await http(
+            self.url,
+            body=self.rpc(
+                "initialize",
+                {
+                    "protocolVersion": version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "urllib", "version": "1"},
+                },
+            ),
+            headers=headers,
+        )
         assert status == 200, body
         assert json.loads(body)["result"]["protocolVersion"] == version
         sid = hdrs["mcp-session-id"]
-        status, _, body = await http(self.url, body={"jsonrpc": "2.0",
-                                                     "method": "notifications/initialized"},
-                                     headers={"Mcp-Session-Id": sid, **(headers or {})})
+        status, _, body = await http(
+            self.url,
+            body={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers={"Mcp-Session-Id": sid, **(headers or {})},
+        )
         assert status == 202 and body == b""
         return sid
 
@@ -123,19 +140,21 @@ async def test_session_lifecycle_json_and_sse(make_server: Callable[..., Any]) -
     assert [t["name"] for t in json.loads(body)["result"]["tools"]][:2] == ["echo", "stats"]
 
     # tools/call may stream: SSE with progress notifications, then the response
-    call = srv.rpc("tools/call", {"name": "slow", "arguments": {"steps": 2},
-                                  "_meta": {"progressToken": "t1"}})
+    call = srv.rpc(
+        "tools/call", {"name": "slow", "arguments": {"steps": 2}, "_meta": {"progressToken": "t1"}}
+    )
     status, hdrs, body = await http(srv.url, body=call, headers=headers)
     assert status == 200 and hdrs["content-type"].startswith("text/event-stream")
     msgs = sse_messages(body)
     assert [m.get("method") for m in msgs[:-1]].count("notifications/progress") == 2
-    assert msgs[-1]["id"] == call["id"] and msgs[-1]["result"]["structuredContent"] == {
-        "done": 2}
+    assert msgs[-1]["id"] == call["id"] and msgs[-1]["result"]["structuredContent"] == {"done": 2}
 
     # a client that only accepts JSON gets JSON
-    status, hdrs, body = await http(srv.url, body=srv.rpc("tools/call", {
-        "name": "echo", "arguments": {"text": "hi"}}),
-        headers={**headers, "Accept": "application/json"})
+    status, hdrs, body = await http(
+        srv.url,
+        body=srv.rpc("tools/call", {"name": "echo", "arguments": {"text": "hi"}}),
+        headers={**headers, "Accept": "application/json"},
+    )
     assert hdrs["content-type"].startswith("application/json")
     assert json.loads(body)["result"]["structuredContent"] == {"text": "hi"}
 
@@ -151,19 +170,25 @@ async def test_session_errors(make_server: Callable[..., Any]) -> None:
     sid = await srv.initialize("2025-06-18")
     status, _, _ = await http(srv.url, body=srv.rpc("tools/list"))
     assert status == 400  # missing Mcp-Session-Id
-    status, _, _ = await http(srv.url, body=srv.rpc("tools/list"),
-                              headers={"Mcp-Session-Id": "deadbeef"})
+    status, _, _ = await http(
+        srv.url, body=srv.rpc("tools/list"), headers={"Mcp-Session-Id": "deadbeef"}
+    )
     assert status == 404
-    status, _, _ = await http(srv.url, body=srv.rpc("tools/list"),
-                              headers={"Mcp-Session-Id": sid,
-                                       "MCP-Protocol-Version": "2025-11-25"})
+    status, _, _ = await http(
+        srv.url,
+        body=srv.rpc("tools/list"),
+        headers={"Mcp-Session-Id": sid, "MCP-Protocol-Version": "2025-11-25"},
+    )
     assert status == 400  # differs from the negotiated version
-    status, _, _ = await http(srv.url, body=srv.rpc("tools/list"),
-                              headers={"Mcp-Session-Id": sid,
-                                       "MCP-Protocol-Version": "1999-01-01"})
+    status, _, _ = await http(
+        srv.url,
+        body=srv.rpc("tools/list"),
+        headers={"Mcp-Session-Id": sid, "MCP-Protocol-Version": "1999-01-01"},
+    )
     assert status == 400
-    status, _, body = await http(srv.url, body=srv.rpc("tools/list"),
-                                 headers={"Mcp-Session-Id": sid})
+    status, _, body = await http(
+        srv.url, body=srv.rpc("tools/list"), headers={"Mcp-Session-Id": sid}
+    )
     assert status == 200 and "result" in json.loads(body)  # header optional
 
 
@@ -207,8 +232,12 @@ def test_origin_host_guard_rules() -> None:
     public = OriginHostGuard("0.0.0.0")
     assert public.check("mcp.example.com", None) is None
     assert public.check("mcp.example.com", "https://evil.example")[0] == 403
-    assert public.check("mcp.example.com", "https://mcp.example.com") is None  # same-origin
+    # DNS rebinding: with no Host allow-list the attacker's rebound name is
+    # both Host and Origin, so same-origin is not accepted there
+    assert public.check("attacker.example:8765", "http://attacker.example:8765")[0] == 403
     assert public.check("mcp.example.com", "http://localhost:3000") is None
+    pinned = OriginHostGuard("0.0.0.0", None, ["mcp.example.com"])
+    assert pinned.check("mcp.example.com", "https://mcp.example.com") is None  # same-origin
     custom = OriginHostGuard("0.0.0.0", ["https://app.example"], ["mcp.example.com"])
     assert custom.check("other.example", None)[0] == 421
     assert custom.check("mcp.example.com", "https://app.example") is None
@@ -217,14 +246,17 @@ def test_origin_host_guard_rules() -> None:
 
 async def test_custom_origin_and_cors(make_server: Callable[..., Any]) -> None:
     srv = await make_server(cors_origins=["https://app.example"])
-    status, hdrs, _ = await http(srv.url, method="OPTIONS",
-                                 headers={"Origin": "https://app.example"})
+    status, hdrs, _ = await http(
+        srv.url, method="OPTIONS", headers={"Origin": "https://app.example"}
+    )
     assert status == 204
     assert hdrs["access-control-allow-origin"] == "https://app.example"
     assert "mcp-session-id" in hdrs["access-control-allow-headers"].lower()
-    status, hdrs, _ = await http(srv.url, body=srv.rpc("initialize", {
-        "protocolVersion": "2025-11-25", "capabilities": {}}),
-        headers={"Origin": "https://app.example"})
+    status, hdrs, _ = await http(
+        srv.url,
+        body=srv.rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}}),
+        headers={"Origin": "https://app.example"},
+    )
     assert status == 200 and "mcp-session-id" in hdrs["access-control-expose-headers"].lower()
     plain = await make_server()
     status, _, _ = await http(plain.url, method="OPTIONS")
@@ -260,9 +292,15 @@ async def test_token_principal_reaches_the_layer(make_server: Callable[..., Any]
 
     srv.layer.use(spy)
     sid = await srv.initialize(headers={"Authorization": "Bearer tok"})
-    await http(srv.url, body=srv.rpc("tools/call", {"name": "echo", "arguments": {"text": "x"}}),
-               headers={"Mcp-Session-Id": sid, "Authorization": "Bearer tok",
-                        "Accept": "application/json"})
+    await http(
+        srv.url,
+        body=srv.rpc("tools/call", {"name": "echo", "arguments": {"text": "x"}}),
+        headers={
+            "Mcp-Session-Id": sid,
+            "Authorization": "Bearer tok",
+            "Accept": "application/json",
+        },
+    )
     assert seen and "auditor" in seen[0].roles and seen[0].id.startswith("token-")
 
 
@@ -271,8 +309,9 @@ async def test_token_principal_reaches_the_layer(make_server: Callable[..., Any]
 # ---------------------------------------------------------------------------
 
 
-def _read_stream_until(url: str, headers: dict[str, str], predicate: Callable[[list], bool],
-                       timeout: float) -> list[tuple[str | None, str]]:
+def _read_stream_until(
+    url: str, headers: dict[str, str], predicate: Callable[[list], bool], timeout: float
+) -> list[tuple[str | None, str]]:
     req = urllib.request.Request(url, method="GET", headers=headers)
     events: list[tuple[str | None, str]] = []
     deadline = time.monotonic() + timeout
@@ -295,30 +334,38 @@ async def test_get_stream_delivers_change_notifications(make_server: Callable[..
     srv = await make_server()
     sid = await srv.initialize()
     headers = {"Mcp-Session-Id": sid, "Accept": "text/event-stream"}
-    await http(srv.url, body=srv.rpc("resources/subscribe", {"uri": "test://info"}),
-               headers={"Mcp-Session-Id": sid})
+    await http(
+        srv.url,
+        body=srv.rpc("resources/subscribe", {"uri": "test://info"}),
+        headers={"Mcp-Session-Id": sid},
+    )
 
     def got_both(events: list) -> bool:
         methods = {json.loads(d).get("method") for _, d in events}
         return {"notifications/resources/updated", "notifications/tools/list_changed"} <= methods
 
-    reader = asyncio.create_task(asyncio.to_thread(_read_stream_until, srv.url, headers,
-                                                   got_both, 8))
+    reader = asyncio.create_task(
+        asyncio.to_thread(_read_stream_until, srv.url, headers, got_both, 8)
+    )
     for _ in range(100):
         if any(hs.stream_open for hs in srv.http._sessions.values()):
             break
         await asyncio.sleep(0.02)
     status, _, _ = await http(srv.url, method="GET", headers=headers)
     assert status == 409  # one standalone stream per session
-    await http(srv.url, body=srv.rpc("tools/call", {"name": "touch", "arguments": {}}),
-               headers={"Mcp-Session-Id": sid, "Accept": "application/json"})
+    await http(
+        srv.url,
+        body=srv.rpc("tools/call", {"name": "touch", "arguments": {}}),
+        headers={"Mcp-Session-Id": sid, "Accept": "application/json"},
+    )
     events = await reader
     assert got_both(events)
     # GET without a session / wrong Accept
     status, _, _ = await http(srv.url, method="GET", headers={"Accept": "text/event-stream"})
     assert status == 405
-    status, _, _ = await http(srv.url, method="GET",
-                              headers={"Mcp-Session-Id": sid, "Accept": "application/json"})
+    status, _, _ = await http(
+        srv.url, method="GET", headers={"Mcp-Session-Id": sid, "Accept": "application/json"}
+    )
     assert status == 406
 
 
@@ -357,9 +404,15 @@ async def test_legacy_sse_transport(make_server: Callable[..., Any]) -> None:
     endpoint = state["endpoint"]
     assert endpoint.startswith("/messages/?session_id=")
     post_url = srv.base + endpoint
-    status, _, body = await http(post_url, body={"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                                                 "params": {"protocolVersion": "2024-11-05",
-                                                            "capabilities": {}}})
+    status, _, body = await http(
+        post_url,
+        body={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {}},
+        },
+    )
     assert status == 202 and body == b""
     await http(post_url, body={"jsonrpc": "2.0", "method": "notifications/initialized"})
     await http(post_url, body={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
@@ -376,8 +429,7 @@ async def test_legacy_sse_transport(make_server: Callable[..., Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def modern_headers(method: str, name: str | None = None,
-                   version: str = MODERN) -> dict[str, str]:
+def modern_headers(method: str, name: str | None = None, version: str = MODERN) -> dict[str, str]:
     h = {"MCP-Protocol-Version": version, "Mcp-Method": method}
     if name is not None:
         h["Mcp-Name"] = name
@@ -401,21 +453,26 @@ async def test_modern_requests(make_server: Callable[..., Any]) -> None:
     assert (await rejected(msg, {"MCP-Protocol-Version": MODERN}))["code"] == -32020
     assert (await rejected(msg, {"Mcp-Method": "tools/list"}))["code"] == -32020
     assert (await rejected(msg, modern_headers("tools/list", version="2025-11-25")))[
-        "code"] == -32020
+        "code"
+    ] == -32020
     assert (await rejected(msg, modern_headers("prompts/list")))["code"] == -32020
 
     call = srv.rpc("tools/call", {"name": "echo", "arguments": {"text": "x"}, "_meta": ENVELOPE})
     json_only = {"Accept": "application/json"}
     assert (await rejected(call, {**modern_headers("tools/call"), **json_only}))[
-        "code"] == -32020  # Mcp-Name missing
+        "code"
+    ] == -32020  # Mcp-Name missing
     assert (await rejected(call, {**modern_headers("tools/call", "stats"), **json_only}))[
-        "code"] == -32020
-    status, _, body = await http(srv.url, body=call,
-                                 headers={**modern_headers("tools/call", "echo"), **json_only})
+        "code"
+    ] == -32020
+    status, _, body = await http(
+        srv.url, body=call, headers={**modern_headers("tools/call", "echo"), **json_only}
+    )
     assert status == 200 and json.loads(body)["result"]["structuredContent"] == {"text": "x"}
     encoded = "=?base64?ZWNobw==?="  # "echo"
-    status, _, _ = await http(srv.url, body=call,
-                              headers={**modern_headers("tools/call", encoded), **json_only})
+    status, _, _ = await http(
+        srv.url, body=call, headers={**modern_headers("tools/call", encoded), **json_only}
+    )
     assert status == 200
 
     no_caps = srv.rpc("tools/list", {"_meta": {PROTOCOL_VERSION_META_KEY: MODERN}})
@@ -425,8 +482,9 @@ async def test_modern_requests(make_server: Callable[..., Any]) -> None:
     err = await rejected(bad, modern_headers("tools/list", version="2099-01-01"))
     assert err["code"] == -32022 and err["data"]["supported"] == [MODERN]
 
-    status, _, body = await http(srv.url, body=srv.rpc("nope/nope", {"_meta": ENVELOPE}),
-                                 headers=modern_headers("nope/nope"))
+    status, _, body = await http(
+        srv.url, body=srv.rpc("nope/nope", {"_meta": ENVELOPE}), headers=modern_headers("nope/nope")
+    )
     assert status == 404 and json.loads(body)["error"]["code"] == -32601
     status, _, _ = await http(srv.url, body=[srv.rpc("tools/list", {"_meta": ENVELOPE})])
     assert status == 400
@@ -434,12 +492,17 @@ async def test_modern_requests(make_server: Callable[..., Any]) -> None:
 
 async def test_stateless_and_json_modes(make_server: Callable[..., Any]) -> None:
     srv = await make_server(stateless=True, json_response=True)
-    status, _, body = await http(srv.url, body=srv.rpc("tools/call", {
-        "name": "slow", "arguments": {"steps": 1}, "_meta": {"progressToken": 1}}),
-        headers={"MCP-Protocol-Version": "2025-06-18"})
+    status, _, body = await http(
+        srv.url,
+        body=srv.rpc(
+            "tools/call", {"name": "slow", "arguments": {"steps": 1}, "_meta": {"progressToken": 1}}
+        ),
+        headers={"MCP-Protocol-Version": "2025-06-18"},
+    )
     assert status == 200 and json.loads(body)["result"]["structuredContent"] == {"done": 1}
-    status, hdrs, body = await http(srv.url, body=srv.rpc("initialize", {
-        "protocolVersion": "2025-11-25", "capabilities": {}}))
+    status, hdrs, body = await http(
+        srv.url, body=srv.rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}})
+    )
     assert status == 200 and "mcp-session-id" not in hdrs
     status, _, _ = await http(srv.url, method="GET", headers={"Accept": "text/event-stream"})
     assert status == 405
@@ -464,9 +527,75 @@ async def test_idle_sessions_expire(make_server: Callable[..., Any]) -> None:
 async def test_max_sessions(make_server: Callable[..., Any]) -> None:
     srv = await make_server(max_sessions=1)
     await srv.initialize()
-    status, _, _ = await http(srv.url, body=srv.rpc("initialize", {
-        "protocolVersion": "2025-11-25", "capabilities": {}}))
+    status, _, _ = await http(
+        srv.url, body=srv.rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}})
+    )
     assert status == 503
+
+
+async def test_per_principal_session_cap_evicts_oldest_idle(
+    make_server: Callable[..., Any],
+) -> None:
+    srv = await make_server(max_sessions_per_principal=2)
+    first = await srv.initialize()
+    second = await srv.initialize()
+    third = await srv.initialize()  # evicts ``first``, the least recently used
+    assert set(srv.http._sessions) == {second, third}
+    status, _, _ = await http(srv.url, body=srv.rpc("ping"), headers={"Mcp-Session-Id": first})
+    assert status == 404
+    status, _, _ = await http(srv.url, body=srv.rpc("ping"), headers={"Mcp-Session-Id": third})
+    assert status == 200
+
+
+async def test_session_cap_refuses_when_every_session_streams(
+    make_server: Callable[..., Any],
+) -> None:
+    srv = await make_server(max_sessions_per_principal=1)
+    await srv.initialize()
+    for hs in srv.http._sessions.values():
+        hs.stream_open = True
+    status, _, body = await http(
+        srv.url, body=srv.rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}})
+    )
+    assert status == 503 and b"Too many sessions" in body
+
+
+async def test_slow_request_head_is_cut_off(make_server: Callable[..., Any]) -> None:
+    srv = await make_server(header_timeout=0.3)
+    host, port = srv.http.bound
+    reader, writer = await asyncio.open_connection(host, port)
+    writer.write(b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n")  # never finishes the head
+    await writer.drain()
+    started = time.monotonic()
+    assert await asyncio.wait_for(reader.read(), 5) == b""  # closed by the server
+    assert time.monotonic() - started < 4
+    writer.close()
+
+
+async def test_connection_cap(make_server: Callable[..., Any]) -> None:
+    srv = await make_server(max_connections=1)
+    host, port = srv.http.bound
+    _, held = await asyncio.open_connection(host, port)  # occupies the only slot
+    await asyncio.sleep(0.1)
+    reader, writer = await asyncio.open_connection(host, port)
+    reply = await asyncio.wait_for(reader.read(), 5)
+    assert reply.startswith(b"HTTP/1.1 503")
+    writer.close()
+    held.close()
+
+
+async def test_body_over_limit_is_refused_before_reading(make_server: Callable[..., Any]) -> None:
+    srv = await make_server(max_body_bytes=100)
+    host, port = srv.http.bound
+    reader, writer = await asyncio.open_connection(host, port)
+    writer.write(
+        b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json"
+        b"\r\nContent-Length: 1000000\r\n\r\n"
+    )  # no body sent at all
+    await writer.drain()
+    reply = await asyncio.wait_for(reader.read(), 5)
+    assert reply.startswith(b"HTTP/1.1 413")
+    writer.close()
 
 
 # ---------------------------------------------------------------------------

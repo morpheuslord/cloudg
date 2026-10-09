@@ -29,8 +29,10 @@ async def test_ontology_progress_reported(layer):
 
 
 async def test_sparql_select_ask_construct(call):
-    q = ("SELECT ?r ?name WHERE { ?s cmp:INTERNET_REACHABLE ?r . ?r cmp:hasName ?name } "
-         "ORDER BY ?name")
+    q = (
+        "SELECT ?r ?name WHERE { ?s cmp:INTERNET_REACHABLE ?r . ?r cmp:hasName ?name } "
+        "ORDER BY ?name"
+    )
     out = await call("sparql_query", query=q)
     assert out["query_type"] == "SelectQuery"
     names = {r["name"] for r in out["rows"]}
@@ -42,21 +44,25 @@ async def test_sparql_select_ask_construct(call):
     assert out["returned"] == 3 and out["truncated"] and "hint" in out
     out = await call("sparql_query", query="ASK { ?s a cm:RelationalDatabase }")
     assert out["answer"] is True
-    out = await call("sparql_query",
-                     query="CONSTRUCT { ?s cmp:hasName ?n } WHERE { ?s cmp:hasName ?n } LIMIT 2")
+    out = await call(
+        "sparql_query", query="CONSTRUCT { ?s cmp:hasName ?n } WHERE { ?s cmp:hasName ?n } LIMIT 2"
+    )
     assert out["returned"] == 2 and set(out["rows"][0]) == {"subject", "predicate", "object"}
     out = await call("sparql_query", query='SELECT ?from WHERE { ?from cmp:hasName "web-1" }')
     assert out["returned"] == 1  # a variable named ?from is fine
 
 
-@pytest.mark.parametrize("query,needle", [
-    ("INSERT DATA { cmr:x cmp:hasName 'x' }", "read-only"),
-    ("PREFIX ex: <http://e/> DELETE WHERE { ?s ?p ?o }", "read-only"),
-    ("DROP ALL", "read-only"),
-    ("SELECT ?s FROM <http://evil.example/data.ttl> WHERE { ?s ?p ?o }", "FROM"),
-    ("SELECT ?s WHERE { SERVICE <http://evil.example/sparql> { ?s ?p ?o } }", "SERVICE"),
-    ("SELEKT nonsense", "parse error"),
-])
+@pytest.mark.parametrize(
+    "query,needle",
+    [
+        ("INSERT DATA { cmr:x cmp:hasName 'x' }", "read-only"),
+        ("PREFIX ex: <http://e/> DELETE WHERE { ?s ?p ?o }", "read-only"),
+        ("DROP ALL", "read-only"),
+        ("SELECT ?s FROM <http://evil.example/data.ttl> WHERE { ?s ?p ?o }", "FROM"),
+        ("SELECT ?s WHERE { SERVICE <http://evil.example/sparql> { ?s ?p ?o } }", "SERVICE"),
+        ("SELEKT nonsense", "parse error"),
+    ],
+)
 async def test_sparql_rejections(call, query, needle):
     msg = await call.error("sparql_query", query=query)
     assert needle in msg
@@ -77,13 +83,20 @@ async def test_ontology_neighbourhood(call):
     assert deeper["returned"] >= out["returned"]
     small = await call("ontology_neighbourhood", ref="orders-db", hops=3, limit=2)
     assert small["truncated"] and small["returned"] == 2
-    assert "Did you mean" in await call.error("ontology_neighbourhood", ref="orders-dbx")
+    assert "close match" in await call.error("ontology_neighbourhood", ref="orders-dbx")
 
 
 async def test_relation_groups(call):
     out = await call("relation_groups")
-    assert set(out["groups"]) == {"NETWORK", "CONTAINMENT", "IAM", "DATA_FLOW", "SECURITY",
-                                  "COMPUTE", "GOVERNANCE"}
+    assert set(out["groups"]) == {
+        "NETWORK",
+        "CONTAINMENT",
+        "IAM",
+        "DATA_FLOW",
+        "SECURITY",
+        "COMPUTE",
+        "GOVERNANCE",
+    }
     assert out["groups"]["IAM"]["total"] >= 1
     out = await call("relation_groups", group="iam", limit=2)
     assert out["group"] == "IAM" and "CROSS_ACCOUNT_TRUST" in out["relation_types"]
@@ -108,8 +121,9 @@ async def test_rag_chunk_filters(call):
     assert "severity" in await call.error("rag_chunks", min_severity="NOPE")
 
 
-@pytest.mark.parametrize("fmt,ext", [("turtle", "ttl"), ("json-ld", "jsonld"), ("xml", "rdf"),
-                                     ("nt", "nt")])
+@pytest.mark.parametrize(
+    "fmt,ext", [("turtle", "ttl"), ("json-ld", "jsonld"), ("xml", "rdf"), ("nt", "nt")]
+)
 async def test_export_ontology(call, workspace, fmt, ext):
     out = await call("export_ontology", format=fmt, filename="onto")
     assert out["path"].endswith(f"onto.{ext}") and out["bytes"] > 100

@@ -381,8 +381,17 @@ async def test_privacy_status():
     assert "key" not in json.dumps(st["pseudonymisation"]).lower().replace("key_source", "")
 
 
+STRICT_WITH_PREVIEW = {
+    "extends": "strict",
+    "name": "strict-preview",
+    "rules": [{"name": "allow-preview", "allow_tools": ["preview_transform"]}],
+}
+
+
 async def test_preview_transform():
-    layer, _ = make_layer("strict")
+    # strict hides preview_transform (see test_preview_hidden_under_strict);
+    # a derived policy can grant it back
+    layer, _ = make_layer(STRICT_WITH_PREVIEW)
     sample = {"account": "123456789012", "note": "password=abcd1234", "ip": "0.0.0.0/0"}
     res = await layer.call_tool("preview_transform", {"data": sample})
     assert not res.is_error, res.content[0].text
@@ -464,3 +473,55 @@ def test_register_returns_registry_and_specs():
     assert reveal.sensitivity is Sensitivity.RESTRICTED
     assert reveal.annotations.read_only is True and reveal.annotations.destructive is False
     assert all(s.category == "privacy" for s in reg.tools.values())
+
+
+# ---------------------------------------------------------------------------
+# Fix round: preview isolation, audit scoping, no reveal without REVEAL
+# ---------------------------------------------------------------------------
+
+
+async def test_preview_hidden_under_strict_and_isolated_from_the_vault():
+    layer, _ = make_layer("strict")
+    assert "preview_transform" not in names(layer)
+    with pytest.raises(NotFoundError):
+        await layer.call_tool("preview_transform", {"data": "x"})
+    layer2, _ = make_layer(STRICT_WITH_PREVIEW)
+    real = (await layer2.call_tool("get_asset", {"asset_id": ARN})).structured["asset"]
+    prev = await layer2.call_tool("preview_transform", {"data": {"account_id": "123456789012"}})
+    guess = prev.structured["transformed"]["account_id"]
+    # a guess run through the preview does not produce the real pseudonym
+    assert guess != real["account_id"] and guess != "123456789012"
+
+
+async def test_privacy_audit_log_scoped_to_caller():
+    layer, _ = make_layer({"extends": "standard", "name": "aud", "audit": True})
+    alice, bob = Principal(id="alice"), Principal(id="bob")
+    await layer.call_tool("get_asset", {"asset_id": ARN}, principal=alice)
+    await layer.call_tool("list_assets", {}, principal=bob)
+    own = (await layer.call_tool("privacy_audit_log", {}, principal=bob)).structured
+    assert own["scope"] == "own"
+    assert {e["principal"] for e in own["entries"]} == {"bob"}
+    every = (await layer.call_tool("privacy_audit_log", {}, principal=ADMIN)).structured
+    assert every["scope"] == "all"
+    assert {"alice", "bob"} <= {e["principal"] for e in every["entries"]}
+
+
+async def test_no_reveal_without_the_capability():
+    """Input reversal hands real values to handlers only; every way back to
+    the caller is transformed again, and reveal_token stays out of reach."""
+    layer, seen = make_layer("strict")
+    tok = (await layer.call_tool("get_asset", {"asset_id": ARN})).structured["asset"]["arn"]
+    assert tok != ARN
+    text = (await layer.read_resource(f"cloudg://asset/{tok}"))[0].text
+    assert seen["template"] == ARN and ARN not in text and "123456789012" not in text
+    echo = await layer.call_tool("paths", {"source": tok, "targets": [tok]})
+    assert seen["paths"]["source"] == ARN
+    assert ARN not in echo.content[0].text and ARN not in json.dumps(echo.structured)
+    assert "reveal_token" not in names(layer) and "reveal_token" not in names(layer, ADMIN)
+    with pytest.raises(NotFoundError):
+        await layer.call_tool("reveal_token", {"token": tok}, principal=ADMIN)
+    soc, _ = make_layer("soc-analyst")
+    analyst = Principal(id="ann", roles={"analyst"})
+    assert "reveal_token" not in names(soc, analyst)
+    with pytest.raises(NotFoundError):
+        await soc.call_tool("reveal_token", {"token": tok}, principal=analyst)

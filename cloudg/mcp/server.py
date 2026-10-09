@@ -30,9 +30,12 @@ metrics) and is what ``cloudg mcp serve`` uses.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import sys
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
@@ -46,6 +49,7 @@ logger = logging.getLogger("cloudg.mcp.server")
 
 __all__ = [
     "FLAVORS",
+    "ServeOptions",
     "TRANSPORTS",
     "TokenAuthASGIMiddleware",
     "create_layer_from_options",
@@ -76,8 +80,11 @@ def read_only_registry(registry: Registry) -> Registry:
         if spec.capabilities & READ_ONLY_DENIED or spec.annotations.destructive:
             continue
         out.add(spec)
-    for other in (*registry.resources.values(), *registry.templates.values(),
-                  *registry.prompts.values()):
+    for other in (
+        *registry.resources.values(),
+        *registry.templates.values(),
+        *registry.prompts.values(),
+    ):
         out.add(other)
     return out
 
@@ -97,14 +104,67 @@ def _load_dataset(layer: "CloudGMCPLayer", spec: str) -> None:
     if load_dataset_file is not None and hasattr(ws, "add"):
         # Operator-supplied path: load it even if it lies outside the
         # workspace's allowed roots (those restrict what *tools* may open).
-        base = name or (target.parent.name if target.name == "inventory-map.json"
-                        else target.stem) or "dataset"
+        base = (
+            name
+            or (target.parent.name if target.name == "inventory-map.json" else target.stem)
+            or "dataset"
+        )
         unique = ws.unique_name(base) if hasattr(ws, "unique_name") and not name else base
         ws.add(load_dataset_file(target.resolve(), unique))
     elif hasattr(ws, "load"):
         ws.load(str(target), name or None)
     else:  # pragma: no cover (stub workspace)
         raise RuntimeError("This workspace cannot load datasets")
+
+
+def _resolve_config(config: Any, config_path: str | None) -> Any:
+    if config is None and config_path:
+        from cloudg.config import load_config
+
+        return load_config(config_path)
+    return config
+
+
+def _middleware_stack(
+    audit_log: str | Path | None,
+    metrics: bool,
+    max_concurrency: int | None,
+    cache_ttl: float | None,
+    extra: Sequence[Any],
+) -> tuple[list[Any], Any, Any]:
+    """``(stack, metrics middleware, cache middleware)`` for the CLI options."""
+    from cloudg.mcp.middleware import (
+        AuditLogMiddleware,
+        CachingMiddleware,
+        ConcurrencyLimitMiddleware,
+        MetricsMiddleware,
+    )
+
+    stack: list[Any] = []
+    if audit_log:
+        stack.append(AuditLogMiddleware(audit_log))
+    metrics_mw = MetricsMiddleware() if metrics else None
+    if metrics_mw is not None:
+        stack.append(metrics_mw)
+    if max_concurrency:
+        stack.append(ConcurrencyLimitMiddleware(max_concurrency))
+    cache_mw = CachingMiddleware(ttl=cache_ttl) if cache_ttl else None
+    if cache_mw is not None:
+        stack.append(cache_mw)
+    stack.extend(extra)
+    return stack, metrics_mw, cache_mw
+
+
+def _attach_middleware(layer: "CloudGMCPLayer", metrics_mw: Any, cache_mw: Any) -> None:
+    from cloudg.mcp.middleware import register_metrics_resource
+
+    if cache_mw is not None:
+        cache_mw.attach(layer)
+    if metrics_mw is not None and "cloudg://metrics" not in layer.registry.resources:
+        try:
+            register_metrics_resource(layer, metrics_mw)
+        except Exception:  # pragma: no cover (registry is shared / frozen)
+            logger.debug("could not register cloudg://metrics", exc_info=True)
 
 
 def create_layer_from_options(
@@ -143,41 +203,18 @@ def create_layer_from_options(
         max_concurrency: Cap concurrent tool calls.
         middleware: Extra middleware (innermost).
     """
-    from cloudg.mcp.layer import CloudGMCPLayer
-    from cloudg.mcp.middleware import (
-        AuditLogMiddleware,
-        CachingMiddleware,
-        ConcurrencyLimitMiddleware,
-        MetricsMiddleware,
-        register_metrics_resource,
-    )
+    from cloudg.mcp.layer import CloudGMCPLayer, LayerOptions
 
-    if config is None and config_path:
-        from cloudg.config import load_config
-
-        config = load_config(config_path)
     if registry is None:
         from cloudg.mcp.catalog import default_registry
 
         registry = default_registry()
     if read_only:
         registry = read_only_registry(registry)
-
-    stack: list[Any] = []
-    if audit_log:
-        stack.append(AuditLogMiddleware(audit_log))
-    metrics_mw = MetricsMiddleware() if metrics else None
-    if metrics_mw is not None:
-        stack.append(metrics_mw)
-    if max_concurrency:
-        stack.append(ConcurrencyLimitMiddleware(max_concurrency))
-    cache_mw = CachingMiddleware(ttl=cache_ttl) if cache_ttl else None
-    if cache_mw is not None:
-        stack.append(cache_mw)
-    stack.extend(middleware)
-
-    layer = CloudGMCPLayer(
-        config,
+    stack, metrics_mw, cache_mw = _middleware_stack(
+        audit_log, metrics, max_concurrency, cache_ttl, middleware
+    )
+    options = LayerOptions(
         workspace=workspace,
         policy=policy,
         registry=registry,
@@ -188,15 +225,9 @@ def create_layer_from_options(
         prefix=prefix,
         middleware=stack,
         default_timeout=default_timeout,
-        **layer_kwargs,
     )
-    if cache_mw is not None:
-        cache_mw.attach(layer)
-    if metrics_mw is not None and "cloudg://metrics" not in layer.registry.resources:
-        try:
-            register_metrics_resource(layer, metrics_mw)
-        except Exception:  # pragma: no cover (registry is shared / frozen)
-            logger.debug("could not register cloudg://metrics", exc_info=True)
+    layer = CloudGMCPLayer(_resolve_config(config, config_path), options=options, **layer_kwargs)
+    _attach_middleware(layer, metrics_mw, cache_mw)
     for spec in datasets:
         _load_dataset(layer, spec)
     return layer
@@ -207,17 +238,65 @@ def create_layer_from_options(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class ServeOptions:
+    """Every keyword argument of :func:`serve_async` / :func:`serve`.
+
+    Attributes:
+        flavor: ``auto`` | ``native`` | ``sdk`` | ``fastmcp``.
+        host / port / path: HTTP bind address and endpoint.
+        auth / auth_tokens: Bearer-token auth (``TokenAuth`` or
+            ``["TOKEN:role,role[:id]", "env:VAR:role"]``).
+        allowed_origins / allowed_hosts: DNS-rebinding allow-lists, enforced
+            the same way by every flavor (see
+            :class:`~cloudg.mcp.native.http.OriginHostGuard`).
+        cors_origins: Origins granted CORS (native flavor only).
+        json_response: Answer POSTs with plain JSON instead of SSE.
+        stateless: Session-less Streamable HTTP.
+        page_size: List page size (native flavor).
+        principal_resolver: Custom ``fn(RequestInfo) -> Principal``.
+        log_level: Level of the ``cloudg`` logger (stderr).
+        ready: Future resolved with the bound ``(host, port)`` once an HTTP
+            server listens (native flavor), for tests and embedding.
+    """
+
+    flavor: str = "auto"
+    host: str = "127.0.0.1"
+    port: int = 8765
+    path: str = "/mcp"
+    # secrets: kept out of repr() so logging the options cannot leak them
+    auth: TokenAuth | None = field(default=None, repr=False)
+    auth_tokens: Iterable[str] | None = field(default=None, repr=False)
+    allowed_origins: Sequence[str] | None = None
+    allowed_hosts: Sequence[str] | None = None
+    cors_origins: Sequence[str] = ()
+    json_response: bool = False
+    stateless: bool = False
+    page_size: int = 100
+    principal_resolver: PrincipalResolver | None = None
+    log_level: str = "INFO"
+    ready: "asyncio.Future[Any] | None" = None
+
+    @classmethod
+    def build(cls, options: "ServeOptions | None", kwargs: dict[str, Any]) -> "ServeOptions":
+        """``options`` updated with ``kwargs``; unknown keywords raise
+        :class:`TypeError` like a regular signature would."""
+        unknown = sorted(set(kwargs) - {f.name for f in dataclasses.fields(cls)})
+        if unknown:
+            raise TypeError(
+                f"serve_async() got unexpected keyword argument(s): {', '.join(unknown)}"
+            )
+        return dataclasses.replace(options or cls(), **kwargs)
+
+
 def resolve_flavor(flavor: str = "auto") -> str:
     if flavor not in FLAVORS:
         raise ValueError(f"Unknown flavor {flavor!r}; choose from {FLAVORS}")
     if flavor != "auto":
         return flavor
-    try:
-        import mcp.server.lowlevel  # noqa: F401
+    from cloudg.mcp.native._shared import sdk_installed
 
-        return "sdk"
-    except ImportError:
-        return "native"
+    return "sdk" if sdk_installed() else "native"
 
 
 _STDERR_HANDLER_FLAG = "_cloudg_mcp_stderr"
@@ -271,11 +350,14 @@ def validate_serve_options(
     if transport == "stdio":
         return resolved
     if cors_origins and resolved != "native":
-        raise ValueError("--cors-origin is only supported by the native flavor "
-                         "(use --flavor native)")
+        raise ValueError(
+            "--cors-origin is only supported by the native flavor (use --flavor native)"
+        )
     if resolved == "fastmcp" and transport == "sse" and (json_response or stateless):
-        raise ValueError("--json-response / --stateless apply to Streamable HTTP; the fastmcp "
-                         "flavor cannot combine them with --transport sse")
+        raise ValueError(
+            "--json-response / --stateless apply to Streamable HTTP; the fastmcp "
+            "flavor cannot combine them with --transport sse"
+        )
     return resolved
 
 
@@ -284,129 +366,94 @@ def serve(layer: "CloudGMCPLayer", transport: str = "stdio", **kwargs: Any) -> N
     try:
         asyncio.run(serve_async(layer, transport, **kwargs))
     except KeyboardInterrupt:  # pragma: no cover (interactive)
-        pass
+        logger.info("MCP server stopped (interrupted)")
 
 
 async def serve_async(
     layer: "CloudGMCPLayer",
     transport: str = "stdio",
     *,
-    flavor: str = "auto",
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    path: str = "/mcp",
-    auth: TokenAuth | None = None,
-    auth_tokens: Iterable[str] | None = None,
-    allowed_origins: Sequence[str] | None = None,
-    allowed_hosts: Sequence[str] | None = None,
-    cors_origins: Sequence[str] = (),
-    json_response: bool = False,
-    stateless: bool = False,
-    page_size: int = 100,
-    principal_resolver: PrincipalResolver | None = None,
-    log_level: str = "INFO",
-    ready: "asyncio.Future[Any] | None" = None,
+    options: ServeOptions | None = None,
+    **kwargs: Any,
 ) -> None:
     """Serve ``layer`` until the transport closes (stdio EOF) or cancelled.
 
-    Args:
-        transport: ``stdio`` | ``http`` | ``streamable-http`` | ``sse``.
-        flavor: ``auto`` | ``native`` | ``sdk`` | ``fastmcp``.
-        host / port / path: HTTP bind address and endpoint.
-        auth / auth_tokens: Bearer-token auth (``TokenAuth`` or
-            ``["TOKEN:role,role[:id]", "env:VAR:role"]``).
-        allowed_origins / allowed_hosts: DNS-rebinding allow-lists, enforced
-            the same way by every flavor (see
-            :class:`~cloudg.mcp.native.http.OriginHostGuard`). ``Origin`` is
-            always validated: loopback origins and same-origin requests are
-            accepted by default. ``Host`` is restricted to loopback names on a
-            loopback bind; on any other bind it is only checked when
-            ``allowed_hosts`` is given.
-        cors_origins: Origins granted CORS (native flavor only; refused
-            elsewhere).
-        json_response: Answer POSTs with plain JSON instead of SSE.
-        stateless: Session-less Streamable HTTP.
-        page_size: List page size (native flavor).
-        principal_resolver: Custom ``fn(RequestInfo) -> Principal``.
-        ready: Future resolved with the bound ``(host, port)`` once an HTTP
-            server listens (native flavor), for tests and embedding.
+    ``transport`` is ``stdio`` | ``http`` | ``streamable-http`` | ``sse``.
+    The other settings are the fields of :class:`ServeOptions`, passed as
+    ``options=`` or as keywords (``flavor``, ``host``, ``port``, ``path``,
+    ``auth``, ``auth_tokens``, ``allowed_origins``, ``allowed_hosts``,
+    ``cors_origins``, ``json_response``, ``stateless``, ``page_size``,
+    ``principal_resolver``, ``log_level``, ``ready``).
+
+    ``Origin`` is always validated: loopback origins are accepted by default,
+    and same-origin requests when the ``Host`` header is validated. ``Host``
+    is restricted to loopback names on a loopback bind; on any other bind it
+    is only checked when ``allowed_hosts`` is given.
     """
-    flavor = validate_serve_options(flavor, transport, cors_origins=cors_origins,
-                                    json_response=json_response, stateless=stateless)
-    _ensure_stderr_logging(log_level)
-    token_auth = _token_auth(auth, auth_tokens)
-    if transport == "stdio" and token_auth:
+    opts = ServeOptions.build(options, kwargs)
+    flavor = validate_serve_options(
+        opts.flavor,
+        transport,
+        cors_origins=opts.cors_origins,
+        json_response=opts.json_response,
+        stateless=opts.stateless,
+    )
+    _ensure_stderr_logging(opts.log_level)
+    opts = dataclasses.replace(opts, flavor=flavor, auth=_token_auth(opts.auth, opts.auth_tokens))
+    if transport == "stdio" and opts.auth:
         logger.info("auth tokens are ignored on stdio (the local user launched the server)")
-
+    serve_fn = {"native": _serve_native, "sdk": _serve_sdk}.get(flavor, _serve_fastmcp)
     try:
-        await _dispatch_serve(layer, flavor, transport, host=host, port=port, path=path,
-                              token_auth=token_auth, allowed_origins=allowed_origins,
-                              allowed_hosts=allowed_hosts, cors_origins=cors_origins,
-                              json_response=json_response, stateless=stateless,
-                              page_size=page_size, principal_resolver=principal_resolver,
-                              ready=ready, log_level=log_level)
+        await serve_fn(layer, transport, opts)
     finally:
-        # Persist pseudonyms issued during the session (policies with a vault
-        # path); atexit covers interpreter exits that skip this
-        save = getattr(layer.policy, "save_vault", None)
-        if save is not None:
-            try:
-                saved = save()
-                if saved:
-                    logger.info("pseudonym vault saved to %s", saved)
-            except Exception:
-                logger.warning("could not save the pseudonym vault", exc_info=True)
+        _save_vault(layer)
 
 
-async def _dispatch_serve(layer: "CloudGMCPLayer", flavor: str, transport: str, *, host: str,
-                          port: int, path: str, token_auth: Any, allowed_origins: Any,
-                          allowed_hosts: Any, cors_origins: Any, json_response: bool,
-                          stateless: bool, page_size: Any, principal_resolver: Any,
-                          ready: Any, log_level: Any) -> None:
-    if flavor == "native":
-        await _serve_native(layer, transport, host=host, port=port, path=path,
-                            auth=token_auth, allowed_origins=allowed_origins,
-                            allowed_hosts=allowed_hosts, cors_origins=cors_origins,
-                            json_response=json_response, stateless=stateless,
-                            page_size=page_size, principal_resolver=principal_resolver,
-                            ready=ready)
-    elif flavor == "sdk":
-        await _serve_sdk(layer, transport, host=host, port=port, path=path, auth=token_auth,
-                         allowed_origins=allowed_origins, allowed_hosts=allowed_hosts,
-                         json_response=json_response, stateless=stateless,
-                         principal_resolver=principal_resolver, log_level=log_level)
-    else:
-        await _serve_fastmcp(layer, transport, host=host, port=port, path=path, auth=token_auth,
-                             allowed_origins=allowed_origins, allowed_hosts=allowed_hosts,
-                             json_response=json_response, stateless=stateless,
-                             principal_resolver=principal_resolver, log_level=log_level)
+def _save_vault(layer: "CloudGMCPLayer") -> None:
+    """Persist pseudonyms issued during the session (policies with a vault
+    path); atexit covers interpreter exits that skip this."""
+    save = getattr(layer.policy, "save_vault", None)
+    if save is None:
+        return
+    try:
+        saved = save()
+        if saved:
+            logger.info("pseudonym vault saved to %s", saved)
+    except Exception:
+        logger.warning("could not save the pseudonym vault", exc_info=True)
 
 
-async def _serve_native(layer: "CloudGMCPLayer", transport: str, *, host: str, port: int,
-                        path: str, auth: TokenAuth | None, allowed_origins: Any,
-                        allowed_hosts: Any, cors_origins: Any, json_response: bool,
-                        stateless: bool, page_size: int,
-                        principal_resolver: PrincipalResolver | None,
-                        ready: "asyncio.Future[Any] | None") -> None:
+async def _serve_native(layer: "CloudGMCPLayer", transport: str, opts: ServeOptions) -> None:
     from cloudg.mcp.native import HTTPConfig, NativeHTTPServer, NativeMCPServer, run_stdio_async
 
-    server = NativeMCPServer(layer, page_size=page_size, principal_resolver=principal_resolver)
+    server = NativeMCPServer(
+        layer, page_size=opts.page_size, principal_resolver=opts.principal_resolver
+    )
     if transport == "stdio":
         await run_stdio_async(server)
         return
     config = HTTPConfig(
-        host=host, port=port, path=path, auth=auth,
-        allowed_origins=list(allowed_origins) if allowed_origins is not None else None,
-        allowed_hosts=list(allowed_hosts) if allowed_hosts is not None else None,
-        cors_origins=list(cors_origins), json_response=json_response, stateless=stateless,
+        host=opts.host,
+        port=opts.port,
+        path=opts.path,
+        auth=opts.auth,
+        allowed_origins=_listed(opts.allowed_origins),
+        allowed_hosts=_listed(opts.allowed_hosts),
+        cors_origins=list(opts.cors_origins),
+        json_response=opts.json_response,
+        stateless=opts.stateless,
         enable_sse=transport == "sse",
     )
     http = NativeHTTPServer(server, config)
     bound = await http.start()
     print(f"cloudg MCP server (native, {transport}) listening on {http.url}", file=sys.stderr)
-    if ready is not None and not ready.done():
-        ready.set_result(bound)
+    if opts.ready is not None and not opts.ready.done():
+        opts.ready.set_result(bound)
     await http.serve_forever()
+
+
+def _listed(values: Sequence[str] | None) -> list[str] | None:
+    return list(values) if values is not None else None
 
 
 # -- SDK flavor ---------------------------------------------------------------
@@ -428,8 +475,8 @@ def _security_settings() -> Any:
 
 
 class TokenAuthASGIMiddleware:
-    """ASGI middleware for SDK / fastmcp HTTP apps: DNS-rebinding guard plus
-    bearer-token auth.
+    """ASGI middleware for SDK / fastmcp HTTP apps: DNS-rebinding guard,
+    bearer-token auth and session binding.
 
     ``guard`` (an :class:`~cloudg.mcp.native.http.OriginHostGuard`) rejects
     bad ``Host`` (421) and ``Origin`` (403) headers exactly like the native
@@ -437,48 +484,83 @@ class TokenAuthASGIMiddleware:
     success the principal is stored in ``scope["cloudg.principal"]`` and
     ``scope["state"]["cloudg.principal"]``, where the adapters' default
     principal resolution finds it. Lifespan and non-HTTP scopes pass through.
+
+    Session binding: the ``Mcp-Session-Id`` the app issues is remembered
+    with the authenticated principal's id (the last ``max_bound_sessions``
+    ids), and a request presenting that id as another principal gets 404,
+    as on the native server. Ids issued over the legacy HTTP+SSE transport
+    travel in the event stream, not a header, so they are not bound here.
     """
 
-    def __init__(self, app: Any, auth: TokenAuth | None, guard: Any = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        auth: TokenAuth | None,
+        guard: Any = None,
+        *,
+        max_bound_sessions: int = 10000,
+    ) -> None:
         self.app = app
         self.auth = auth
         self.guard = guard
+        self.max_bound_sessions = max_bound_sessions
+        self._owners: OrderedDict[str, str] = OrderedDict()
 
     @staticmethod
-    async def _reject(send: Any, status: int, message: str,
-                      extra: list[tuple[bytes, bytes]] | None = None) -> None:
-        body = json.dumps({"jsonrpc": "2.0", "id": None,
-                           "error": {"code": -32600, "message": message}}).encode()
-        await send({"type": "http.response.start", "status": status, "headers": [
+    async def _reject(
+        send: Any, status: int, message: str, extra: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": message}}
+        ).encode()
+        headers = [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode()),
             *(extra or []),
-        ]})
+        ]
+        await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": body})
+
+    def _bind_send(self, send: Any, owner: str) -> Any:
+        """``send`` that records the session id a response issues."""
+
+        async def recording_send(message: dict[str, Any]) -> None:
+            if message.get("type") == "http.response.start":
+                for key, value in message.get("headers") or ():
+                    if bytes(key).lower() == b"mcp-session-id":
+                        self._owners[bytes(value).decode("latin-1")] = owner
+                        while len(self._owners) > self.max_bound_sessions:
+                            self._owners.popitem(last=False)
+            await send(message)
+
+        return recording_send
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http" or not (self.auth or self.guard):
             await self.app(scope, receive, send)
             return
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
-                   for k, v in scope.get("headers", [])}
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+        }
         if self.guard is not None:
             rejected = self.guard.check(headers.get("host"), headers.get("origin"))
             if rejected is not None:
                 await self._reject(send, *rejected)
                 return
-        if not self.auth:
-            await self.app(scope, receive, send)
-            return
-        principal = self.auth.authenticate(headers.get("authorization"))
-        if principal is None and self.auth.required:
-            await self._reject(send, 401, "Unauthorized",
-                               [(b"www-authenticate", b'Bearer realm="cloudg-mcp"')])
+        principal = self.auth.authenticate(headers.get("authorization")) if self.auth else None
+        if principal is None and self.auth and self.auth.required:
+            challenge = [(b"www-authenticate", b'Bearer realm="cloudg-mcp"')]
+            await self._reject(send, 401, "Unauthorized", challenge)
             return
         if principal is not None:
             scope[PRINCIPAL_SCOPE_KEY] = principal
             scope.setdefault("state", {})[PRINCIPAL_SCOPE_KEY] = principal
-        await self.app(scope, receive, send)
+        owner = principal.id if principal is not None else ""
+        sid = headers.get("mcp-session-id")
+        if sid and self._owners.get(sid, owner) != owner:
+            await self._reject(send, 404, "Session not found")
+            return
+        await self.app(scope, receive, self._bind_send(send, owner))
 
 
 def _sdk_major() -> int:
@@ -487,88 +569,107 @@ def _sdk_major() -> int:
     return major_version("mcp") or 1
 
 
-async def _serve_sdk(layer: "CloudGMCPLayer", transport: str, *, host: str, port: int,
-                     path: str, auth: TokenAuth | None, allowed_origins: Any, allowed_hosts: Any,
-                     json_response: bool, stateless: bool,
-                     principal_resolver: PrincipalResolver | None, log_level: str) -> None:
-    from cloudg.mcp.adapters import build_server
+async def _sdk_stdio(server: Any, major: int) -> None:
+    from mcp.server.stdio import stdio_server
 
-    server = build_server(layer, "lowlevel", principal_resolver=principal_resolver)
-    major = _sdk_major()
-    if transport == "stdio":
-        from mcp.server.stdio import stdio_server
-
-        if major >= 2:  # 2.x stdio_server() diverts fd 1 to stderr itself
-            async with stdio_server() as (read, write):
-                await server.run(read, write, server.create_initialization_options())
-            return
-        import io
-
-        import anyio
-
-        from cloudg.mcp.native.stdio import protected_stdout
-
-        with protected_stdout() as proto_out:
-            out = anyio.wrap_file(io.TextIOWrapper(proto_out, encoding="utf-8",
-                                                   line_buffering=True))
-            async with stdio_server(stdout=out) as (read, write):
-                await server.run(read, write, server.create_initialization_options())
+    if major >= 2:  # 2.x stdio_server() diverts fd 1 to stderr itself
+        async with stdio_server() as (read, write):
+            await server.run(read, write, server.create_initialization_options())
         return
+    import io
 
-    import uvicorn
+    import anyio
+
+    from cloudg.mcp.native.stdio import protected_stdout
+
+    with protected_stdout() as proto_out:
+        text = io.TextIOWrapper(proto_out, encoding="utf-8", line_buffering=True)
+        async with stdio_server(stdout=anyio.wrap_file(text)) as (read, write):
+            await server.run(read, write, server.create_initialization_options())
+
+
+def _sdk_v1_app(server: Any, opts: ServeOptions, security: Any, routes: list[Any]) -> Any:
+    """Starlette app hosting an mcp 1.x Streamable HTTP session manager."""
+    from contextlib import asynccontextmanager
+
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=opts.json_response,
+        stateless=opts.stateless,
+        security_settings=security,
+    )
+
+    async def handle(scope: Any, receive: Any, send: Any) -> None:
+        await manager.handle_request(scope, receive, send)
+
+    @asynccontextmanager
+    async def lifespan(_: Any) -> Any:
+        async with manager.run():
+            yield
+
+    endpoint = Route(opts.path, endpoint=_asgi_endpoint(handle), methods=["GET", "POST", "DELETE"])
+    return Starlette(routes=[*routes, endpoint], lifespan=lifespan)
+
+
+def _sse_routes(server: Any, security: Any) -> list[Any]:
+    """The deprecated HTTP+SSE endpoints (``/sse`` + ``/messages/``)."""
+    from mcp.server.sse import SseServerTransport
     from starlette.routing import Mount, Route
 
+    sse = SseServerTransport("/messages/", security_settings=security)
+
+    async def sse_endpoint(scope: Any, receive: Any, send: Any) -> None:
+        async with sse.connect_sse(scope, receive, send) as (read, write):
+            await server.run(read, write, server.create_initialization_options())
+
+    return [
+        Route("/sse", endpoint=_asgi_endpoint(sse_endpoint), methods=["GET"]),
+        Mount("/messages/", app=sse.handle_post_message),
+    ]
+
+
+async def _serve_sdk(layer: "CloudGMCPLayer", transport: str, opts: ServeOptions) -> None:
+    from cloudg.mcp.adapters import build_server
+
+    server = build_server(layer, "lowlevel", principal_resolver=opts.principal_resolver)
+    major = _sdk_major()
+    if transport == "stdio":
+        await _sdk_stdio(server, major)
+        return
     security = _security_settings()
+    routes = _sse_routes(server, security) if transport == "sse" else []
     if major >= 2:
         app = server.streamable_http_app(
-            streamable_http_path=path, json_response=json_response, stateless_http=stateless,
-            transport_security=security, host=host,
+            streamable_http_path=opts.path,
+            json_response=opts.json_response,
+            stateless_http=opts.stateless,
+            transport_security=security,
+            host=opts.host,
         )
-        lifespan_owner = None
-    else:
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-
-        manager = StreamableHTTPSessionManager(
-            app=server, json_response=json_response, stateless=stateless,
-            security_settings=security,
-        )
-
-        async def handle(scope: Any, receive: Any, send: Any) -> None:
-            await manager.handle_request(scope, receive, send)
-
-        lifespan_owner = manager
-        app = None
-    routes: list[Any] = []
-    if transport == "sse":
-        from mcp.server.sse import SseServerTransport
-
-        sse = SseServerTransport("/messages/", security_settings=security)
-
-        async def sse_endpoint(scope: Any, receive: Any, send: Any) -> None:
-            async with sse.connect_sse(scope, receive, send) as (read, write):
-                await server.run(read, write, server.create_initialization_options())
-
-        routes += [Route("/sse", endpoint=_asgi_endpoint(sse_endpoint), methods=["GET"]),
-                   Mount("/messages/", app=sse.handle_post_message)]
-    if app is None:
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def lifespan(_: Any) -> Any:
-            async with lifespan_owner.run():  # type: ignore[union-attr]
-                yield
-
-        app = Starlette(routes=[*routes, Route(path, endpoint=_asgi_endpoint(handle),
-                                                methods=["GET", "POST", "DELETE"])],
-                        lifespan=lifespan)
-    elif routes:
         app.router.routes[:0] = routes
-    asgi = TokenAuthASGIMiddleware(app, auth, _guard(host, allowed_origins, allowed_hosts))
-    print(f"cloudg MCP server (mcp SDK {major}.x, {transport}) listening on "
-          f"http://{host}:{port}{path}", file=sys.stderr)
-    config = uvicorn.Config(asgi, host=host, port=port, log_level=log_level.lower(),
-                            lifespan="on")
+    else:
+        app = _sdk_v1_app(server, opts, security, routes)
+    print(
+        f"cloudg MCP server (mcp SDK {major}.x, {transport}) listening on "
+        f"http://{opts.host}:{opts.port}{opts.path}",
+        file=sys.stderr,
+    )
+    await _run_uvicorn(app, opts)
+
+
+async def _run_uvicorn(app: Any, opts: ServeOptions) -> None:
+    """Serve an SDK / fastmcp ASGI app behind the cloudg guard and auth."""
+    import uvicorn
+
+    guard = _guard(opts.host, opts.allowed_origins, opts.allowed_hosts)
+    asgi = TokenAuthASGIMiddleware(app, opts.auth, guard)
+    config = uvicorn.Config(
+        asgi, host=opts.host, port=opts.port, log_level=opts.log_level.lower(), lifespan="on"
+    )
     await uvicorn.Server(config).serve()
 
 
@@ -586,44 +687,46 @@ def _asgi_endpoint(fn: Any) -> Any:
 # -- fastmcp flavor -------------------------------------------------------------
 
 
-async def _serve_fastmcp(layer: "CloudGMCPLayer", transport: str, *, host: str, port: int,
-                         path: str, auth: TokenAuth | None, allowed_origins: Any,
-                         allowed_hosts: Any, json_response: bool, stateless: bool,
-                         principal_resolver: PrincipalResolver | None, log_level: str) -> None:
+def _fastmcp_http_kwargs(server: Any, transport: str, opts: ServeOptions) -> dict[str, Any]:
     import inspect
 
+    kind = "sse" if transport == "sse" else "http"
+    accepted = set(inspect.signature(server.http_app).parameters)
+    kwargs: dict[str, Any] = {"transport": kind}
+    if kind == "http":
+        kwargs["path"] = opts.path
+        for name, value in (
+            ("json_response", opts.json_response),
+            ("stateless_http", opts.stateless),
+        ):
+            if value:
+                if name not in accepted:  # pragma: no cover (all known fastmcp accept them)
+                    raise ValueError(f"this fastmcp version cannot serve {name}")
+                kwargs[name] = value
+    if "host_origin_protection" in accepted:
+        # the cloudg guard enforces Host / Origin, identically to the other
+        # flavors; fastmcp's own check would double-filter
+        kwargs["host_origin_protection"] = False
+    return kwargs
+
+
+async def _serve_fastmcp(layer: "CloudGMCPLayer", transport: str, opts: ServeOptions) -> None:
     from cloudg.mcp.adapters import build_server
 
-    server = build_server(layer, "fastmcp", principal_resolver=principal_resolver)
+    server = build_server(layer, "fastmcp", principal_resolver=opts.principal_resolver)
     if transport == "stdio":
         try:
             await server.run_async(transport="stdio", show_banner=False)
         except TypeError:  # older fastmcp without show_banner
             await server.run_async(transport="stdio")
         return
-    import uvicorn
-
-    kind = "sse" if transport == "sse" else "http"
-    accepted = set(inspect.signature(server.http_app).parameters)
-    kwargs: dict[str, Any] = {"transport": kind}
-    if kind == "http":
-        kwargs["path"] = path
-        for name, value in (("json_response", json_response), ("stateless_http", stateless)):
-            if value:
-                if name not in accepted:  # pragma: no cover (all known fastmcp accept them)
-                    raise ValueError(f"this fastmcp version cannot serve {name}")
-                kwargs[name] = value
-    if "host_origin_protection" in accepted:
-        # the cloudg guard below enforces Host / Origin, identically to the
-        # other flavors; fastmcp's own check would double-filter
-        kwargs["host_origin_protection"] = False
-    app = server.http_app(**kwargs)
-    asgi = TokenAuthASGIMiddleware(app, auth, _guard(host, allowed_origins, allowed_hosts))
-    print(f"cloudg MCP server (fastmcp, {transport}) listening on http://{host}:{port}{path}",
-          file=sys.stderr)
-    config = uvicorn.Config(asgi, host=host, port=port, log_level=log_level.lower(),
-                            lifespan="on")
-    await uvicorn.Server(config).serve()
+    app = server.http_app(**_fastmcp_http_kwargs(server, transport, opts))
+    print(
+        f"cloudg MCP server (fastmcp, {transport}) listening on "
+        f"http://{opts.host}:{opts.port}{opts.path}",
+        file=sys.stderr,
+    )
+    await _run_uvicorn(app, opts)
 
 
 def _guard(host: str, allowed_origins: Any, allowed_hosts: Any) -> Any:

@@ -25,7 +25,7 @@ async def test_terraform_preview(call):
     assert out["assets_considered"] == 2
     out = await call("terraform_preview", asset_types=["S3_BUCKET"])
     assert out["assets_considered"] == 3
-    assert "Did you mean" in await call.error("terraform_preview", refs=["web-11"])
+    assert "close match" in await call.error("terraform_preview", refs=["web-11"])
 
 
 async def test_export_terraform(call, workspace):
@@ -36,8 +36,16 @@ async def test_export_terraform(call, workspace):
     assert "escapes" in await call.error("export_terraform", subdir="../../etc")
 
 
-@pytest.mark.parametrize("fmt,key", [("json", "json"), ("html", "html"), ("graphml", "graphml"),
-                                     ("inventory", "map"), ("asset_map", "asset_map")])
+@pytest.mark.parametrize(
+    "fmt,key",
+    [
+        ("json", "json"),
+        ("html", "html"),
+        ("graphml", "graphml"),
+        ("inventory", "map"),
+        ("asset_map", "asset_map"),
+    ],
+)
 async def test_export_report(call, workspace, fmt, key):
     out = await call("export_report", format=fmt, subdir=f"r-{fmt}")
     path = Path(out["files"][key])
@@ -83,17 +91,31 @@ class FakeEngine:
         self.calls.append(("collect",))
         self._phase("collection")
         inv = sample_estate.build_inventory()
-        return api.CollectionResult(assets=inv.assets, edges=inv.edges, coverage=inv.coverage,
-                                    providers_scanned=self.config.providers,
-                                    regions_scanned={"aws": ["us-east-1"]}, duration_ms=3)
+        return api.CollectionResult(
+            assets=inv.assets,
+            edges=inv.edges,
+            coverage=inv.coverage,
+            providers_scanned=self.config.providers,
+            regions_scanned={"aws": ["us-east-1"]},
+            duration_ms=3,
+        )
 
-    async def scan(self, assets, edges, iac_dir=None, images=None, profile=None,
-                   output_dir="./reports"):
+    async def scan(
+        self, assets, edges, iac_dir=None, images=None, profile=None, output_dir="./reports"
+    ):
         self.calls.append(("scan", iac_dir, images, str(output_dir)))
         self._phase("scanning")
-        return [Finding(id="f-scan-1", resource_id="web-2", severity=Severity.HIGH,
-                        title="Scanner says no", description="d", source_tool="prowler",
-                        compliance_frameworks=["CIS-AWS"])]
+        return [
+            Finding(
+                id="f-scan-1",
+                resource_id="web-2",
+                severity=Severity.HIGH,
+                title="Scanner says no",
+                description="d",
+                source_tool="prowler",
+                compliance_frameworks=["CIS-AWS"],
+            )
+        ]
 
     async def run_pipeline(self, output_dir="./reports"):
         self.calls.append(("run_pipeline", str(output_dir)))
@@ -102,12 +124,22 @@ class FakeEngine:
         from cloudg.schema.models import ScanResult
 
         inv = sample_estate.build_inventory()
-        sr = ScanResult(assets=inv.assets, edges=inv.edges, findings=sample_estate.findings(),
-                        compliance=sample_estate.compliance())
-        return api.PipelineResult(assets=inv.assets, edges=inv.edges, findings=sr.findings,
-                                  scan_result=sr, providers_scanned=["aws"],
-                                  report_paths={"json": Path(output_dir) / "findings.json"},
-                                  attack_paths=[["a", "b"]], errors=[])
+        sr = ScanResult(
+            assets=inv.assets,
+            edges=inv.edges,
+            findings=sample_estate.findings(),
+            compliance=sample_estate.compliance(),
+        )
+        return api.PipelineResult(
+            assets=inv.assets,
+            edges=inv.edges,
+            findings=sr.findings,
+            scan_result=sr,
+            providers_scanned=["aws"],
+            report_paths={"json": Path(output_dir) / "findings.json"},
+            attack_paths=[["a", "b"]],
+            errors=[],
+        )
 
 
 @pytest.fixture
@@ -135,12 +167,18 @@ def no_credentials(monkeypatch):
     return seen
 
 
-@pytest.mark.parametrize("tool,args", [
-    ("map_inventory", {}), ("collect_assets", {"providers": ["aws", "gcp"]}),
-    ("run_pipeline", {}), ("run_scanners", {"scanners": ["prowler"]}),
-])
-async def test_live_tools_fail_fast_without_credentials(call, fake_engine, no_credentials,
-                                                        tool, args):
+@pytest.mark.parametrize(
+    "tool,args",
+    [
+        ("map_inventory", {}),
+        ("collect_assets", {"providers": ["aws", "gcp"]}),
+        ("run_pipeline", {}),
+        ("run_scanners", {"scanners": ["prowler"]}),
+    ],
+)
+async def test_live_tools_fail_fast_without_credentials(
+    call, fake_engine, no_credentials, tool, args
+):
     res = await call.raw(tool, **args)
     assert res.is_error
     text = res.content[0].text
@@ -178,10 +216,17 @@ def test_aws_check_reports_missing_profile_and_chain(monkeypatch, tmp_path):
 
     empty = tmp_path / "empty"
     empty.write_text("")
-    for var in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
-                "AWS_ROLE_ARN", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-                "AWS_CONTAINER_CREDENTIALS_FULL_URI"):
+    for var in (
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AWS_CONFIG_FILE", str(empty))
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(empty))
@@ -189,8 +234,10 @@ def test_aws_check_reports_missing_profile_and_chain(monkeypatch, tmp_path):
     assert "could not be found" in _check_aws(AWSConfig(profile="nope"))
     assert "no credentials found" in _check_aws(AWSConfig())
     assert _check_aws(AWSConfig(access_key_id="AKIAEXAMPLE", secret_access_key="x")) is None
-    missing = AWSConfig(role_arn="arn:aws:iam::111111111111:role/r",
-                        web_identity_token_file=str(tmp_path / "missing"))
+    missing = AWSConfig(
+        role_arn="arn:aws:iam::111111111111:role/r",
+        web_identity_token_file=str(tmp_path / "missing"),
+    )
     assert "does not exist" in _check_aws(missing)
 
 
@@ -203,10 +250,17 @@ def _progress_ctx(layer):
 
 async def test_map_inventory(layer, fake_engine):
     ctx, seen = _progress_ctx(layer)
-    res = await layer.call_tool("map_inventory", {"providers": ["AWS"], "regions": ["eu-west-1"],
-                                                  "services": ["network"],
-                                                  "tagging_sweep": False, "name": "live1"},
-                                context=ctx)
+    res = await layer.call_tool(
+        "map_inventory",
+        {
+            "providers": ["AWS"],
+            "regions": ["eu-west-1"],
+            "services": ["network"],
+            "tagging_sweep": False,
+            "name": "live1",
+        },
+        context=ctx,
+    )
     assert not res.is_error, res.content[0].text
     out = res.structured
     assert out["dataset"] == "live1" and out["active"] and out["summary"]["total_assets"] > 40
@@ -239,8 +293,9 @@ async def test_collect_assets(call, fake_engine, layer):
 async def test_run_scanners(call, fake_engine, workspace, sample_paths):
     iac = sample_paths["root"] / "iac"
     iac.mkdir()
-    out = await call("run_scanners", scanners=["prowler", "iam"], iac_dir=str(iac),
-                     images=["nginx:1"])
+    out = await call(
+        "run_scanners", scanners=["prowler", "iam"], iac_dir=str(iac), images=["nginx:1"]
+    )
     assert out["new_findings"] == 1 and out["findings_after"] >= out["findings_before"]
     eng = fake_engine.instances[-1]
     assert eng.config.scanners.enabled == ["prowler", "iam"]
@@ -248,7 +303,8 @@ async def test_run_scanners(call, fake_engine, workspace, sample_paths):
     assert iac_dir == str(iac.resolve()) and images == ["nginx:1"]
     assert outdir == str(workspace.output_root / "scans")
     assert "f-scan-1" in workspace.get().findings_by_id or any(
-        f.title == "Scanner says no" for f in workspace.get().findings)
+        f.title == "Scanner says no" for f in workspace.get().findings
+    )
     # offline scanners have no cloud scope, so no cooldown applies
     out = await call("run_scanners", scanners=["iam"], normalise=False)
     assert out["findings_after"] == out["findings_before"] + 1
@@ -280,24 +336,37 @@ async def test_list_capabilities(call, layer):
     assert "find_assets" in {t["name"] for t in out["categories"]["inventory"]}
     assert "orient" in out["workflows"] and "security_posture_review" in out["prompts"]
     live = {t["name"]: t for t in out["categories"]["live"]}
-    assert live["map_inventory"]["open_world"] and "cloud_access" in \
-        live["map_inventory"]["capabilities"]
+    assert (
+        live["map_inventory"]["open_world"]
+        and "cloud_access" in live["map_inventory"]["capabilities"]
+    )
 
 
 async def test_list_capabilities_respects_prefix_and_filters(workspace):
     from cloudg.mcp.layer import CloudGMCPLayer
 
-    layer = CloudGMCPLayer(policy="open", workspace=workspace, prefix="cg_",
-                           exclude_categories=["live"])
+    layer = CloudGMCPLayer(
+        policy="open", workspace=workspace, prefix="cg_", exclude_categories=["live"]
+    )
     res = await layer.call_tool("cg_list_capabilities", {})
     out = res.structured
     assert "live" not in out["categories"]
     assert all(t["name"].startswith("cg_") for ts in out["categories"].values() for t in ts)
 
 
-@pytest.mark.parametrize("section", ["all", "asset_types", "edge_types", "severities",
-                                     "relation_types", "relation_groups",
-                                     "compliance_statuses", "providers"])
+@pytest.mark.parametrize(
+    "section",
+    [
+        "all",
+        "asset_types",
+        "edge_types",
+        "severities",
+        "relation_types",
+        "relation_groups",
+        "compliance_statuses",
+        "providers",
+    ],
+)
 async def test_describe_schema(call, section):
     out = await call("describe_schema", section=section)
     assert out
@@ -340,14 +409,21 @@ async def test_meta_works_without_dataset(tmp_path):
     from cloudg.mcp.layer import CloudGMCPLayer
     from cloudg.mcp.state import Workspace
 
-    layer = CloudGMCPLayer(policy="open", workspace=Workspace(allowed_roots=[tmp_path],
-                                                              output_dir=tmp_path))
-    for name, args in [("describe_schema", {}), ("explain_asset_type", {"asset_type": "EC2"}),
-                       ("list_frameworks", {}), ("list_capabilities", {})]:
+    layer = CloudGMCPLayer(
+        policy="open", workspace=Workspace(allowed_roots=[tmp_path], output_dir=tmp_path)
+    )
+    for name, args in [
+        ("describe_schema", {}),
+        ("explain_asset_type", {"asset_type": "EC2"}),
+        ("list_frameworks", {}),
+        ("list_capabilities", {}),
+    ]:
         res = await layer.call_tool(name, args)
         assert not res.is_error, name
-    assert "in_active_dataset" not in (await layer.call_tool(
-        "explain_asset_type", {"asset_type": "EC2"})).structured
+    assert (
+        "in_active_dataset"
+        not in (await layer.call_tool("explain_asset_type", {"asset_type": "EC2"})).structured
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +477,7 @@ def test_live_scopes():
     cfg.aws.accounts = ["111111111111", "222222222222"]
     cfg.azure.subscription_ids = ["sub-1"]
     cfg.gcp.organization_id = "42"
-    assert live_scopes(cfg) == ["aws/111111111111", "aws/222222222222", "azure/sub-1",
-                                "gcp/org:42"]
+    assert live_scopes(cfg) == ["aws/111111111111", "aws/222222222222", "azure/sub-1", "gcp/org:42"]
     cfg2 = CloudGConfig(providers=["aws"])
     cfg2.aws.profile = "prod"
     assert live_scopes(cfg2) == ["aws/profile:prod"]
@@ -459,8 +534,7 @@ async def test_force_requires_admin_or_operator(layer, fake_engine, clock):
     res = await layer.call_tool("collect_assets", {"force": True}, principal=admin)
     assert not res.is_error and len(fake_engine.instances) == 2
     op = Principal(id="ops", roles={"operator"})
-    assert not (await layer.call_tool("collect_assets", {"force": True},
-                                      principal=op)).is_error
+    assert not (await layer.call_tool("collect_assets", {"force": True}, principal=op)).is_error
 
 
 async def test_name_validated_before_preflight_and_engine(call, fake_engine, no_credentials):
@@ -482,14 +556,21 @@ async def test_throttling_summary_in_result(call, fake_engine, clock, monkeypatc
 
     async def throttled(self, *a, **kw):
         inv = await orig(self, *a, **kw)
-        inv.throttling = {"totals": {"throttled": 7}, "messages": ["ec2 slowed"],
-                          "skipped": {"aws/rds": "circuit open"}, "scopes": {"x": 1}}
+        inv.throttling = {
+            "totals": {"throttled": 7},
+            "messages": ["ec2 slowed"],
+            "skipped": {"aws/rds": "circuit open"},
+            "scopes": {"x": 1},
+        }
         return inv
 
     monkeypatch.setattr(FakeEngine, "map_inventory", throttled)
     out = await call("map_inventory")
-    assert out["throttling"] == {"totals": {"throttled": 7}, "messages": ["ec2 slowed"],
-                                 "skipped": {"aws/rds": "circuit open"}}
+    assert out["throttling"] == {
+        "totals": {"throttled": 7},
+        "messages": ["ec2 slowed"],
+        "skipped": {"aws/rds": "circuit open"},
+    }
 
 
 async def test_rate_limit_status_tool_and_resource(call, layer, fake_engine, clock):

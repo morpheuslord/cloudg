@@ -74,6 +74,7 @@ class Catalog:
         for kind, args, kwargs, fn in self._specs:
             getattr(reg, kind)(*args, **kwargs)(fn)
 
+
 DatasetArg = Annotated[
     str, Field(description="Dataset name (see list_datasets). Empty = the active dataset.")
 ]

@@ -32,34 +32,59 @@ def _sdk_major() -> int:
         return 0
 
 
-def run_raw(lines: list[Any], flavor: str = "native", timeout: float = 60) -> tuple[
-        list[dict[str, Any]], str, int]:
+def run_raw(
+    lines: list[Any], flavor: str = "native", timeout: float = 60
+) -> tuple[list[dict[str, Any]], str, int]:
     payload = "".join((m if isinstance(m, str) else json.dumps(m)) + "\n" for m in lines)
     proc = subprocess.run(
         [sys.executable, "-c", SERVER_CODE, flavor],
-        input=payload.encode(), capture_output=True, cwd=ROOT, timeout=timeout,
+        input=payload.encode(),
+        capture_output=True,
+        cwd=ROOT,
+        timeout=timeout,
     )
     out_lines = [ln for ln in proc.stdout.decode().splitlines() if ln.strip()]
     return [json.loads(ln) for ln in out_lines], proc.stderr.decode(), proc.returncode
 
 
-INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                   "clientInfo": {"name": "raw", "version": "1"}}}
+INIT = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "raw", "version": "1"},
+    },
+}
 INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 
 
 def test_raw_stdio_session_and_stdout_purity() -> None:
-    messages, stderr, code = run_raw([
-        INIT,
-        INITIALIZED,
-        "this is not json",
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-         "params": {"name": "noisy", "arguments": {}}},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-         "params": {"name": "slow", "arguments": {"steps": 2}, "_meta": {"progressToken": 7}}},
-        {"jsonrpc": "2.0", "id": 4, "method": "ping"},
-    ])
+    messages, stderr, code = run_raw(
+        [
+            INIT,
+            INITIALIZED,
+            "this is not json",
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "noisy", "arguments": {}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "slow",
+                    "arguments": {"steps": 2},
+                    "_meta": {"progressToken": 7},
+                },
+            },
+            {"jsonrpc": "2.0", "id": 4, "method": "ping"},
+        ]
+    )
     assert code == 0
     # every stdout line is a JSON-RPC message; stray prints went to stderr
     assert all(m.get("jsonrpc") == "2.0" for m in messages)
@@ -78,12 +103,20 @@ def test_raw_stdio_session_and_stdout_purity() -> None:
 @pytest.mark.parametrize("flavor", ["sdk", "fastmcp"])
 def test_raw_stdio_framework_flavors_keep_stdout_clean(flavor: str) -> None:
     pytest.importorskip("mcp" if flavor == "sdk" else "fastmcp")
-    messages, stderr, code = run_raw([
-        INIT, INITIALIZED,
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-         "params": {"name": "echo", "arguments": {"text": "x"}}},
-        {"jsonrpc": "2.0", "id": 3, "method": "ping"},
-    ], flavor=flavor)
+    messages, stderr, code = run_raw(
+        [
+            INIT,
+            INITIALIZED,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "echo", "arguments": {"text": "x"}},
+            },
+            {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+        ],
+        flavor=flavor,
+    )
     assert code == 0, stderr
     assert all(m.get("jsonrpc") == "2.0" for m in messages)
     by_id = {m["id"]: m for m in messages if m.get("id") is not None}
@@ -94,13 +127,25 @@ def test_raw_stdio_framework_flavors_keep_stdout_clean(flavor: str) -> None:
 
 
 def test_raw_stdio_cancellation_and_eof() -> None:
-    messages, _, code = run_raw([
-        INIT, INITIALIZED,
-        {"jsonrpc": "2.0", "id": "long", "method": "tools/call",
-         "params": {"name": "sleepy", "arguments": {"seconds": 30}}},
-        {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "long"}},
-        {"jsonrpc": "2.0", "id": 5, "method": "ping"},
-    ], timeout=30)
+    messages, _, code = run_raw(
+        [
+            INIT,
+            INITIALIZED,
+            {
+                "jsonrpc": "2.0",
+                "id": "long",
+                "method": "tools/call",
+                "params": {"name": "sleepy", "arguments": {"seconds": 30}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": "long"},
+            },
+            {"jsonrpc": "2.0", "id": 5, "method": "ping"},
+        ],
+        timeout=30,
+    )
     assert code == 0
     ids = [m.get("id") for m in messages]
     assert "long" not in ids and 5 in ids
@@ -113,8 +158,9 @@ async def test_sdk_client_over_stdio(flavor: str, mode: str) -> None:
     mcp = pytest.importorskip("mcp")
     if _sdk_major() < 2:
         pytest.skip("needs the mcp 2.x Client")
-    params = mcp.StdioServerParameters(command=sys.executable, args=["-c", SERVER_CODE, flavor],
-                                       cwd=str(ROOT))
+    params = mcp.StdioServerParameters(
+        command=sys.executable, args=["-c", SERVER_CODE, flavor], cwd=str(ROOT)
+    )
     async with mcp.Client(params, mode=mode) as client:
         assert client.protocol_version == ("2025-11-25" if mode == "legacy" else "2026-07-28")
         names = [t.name for t in (await client.list_tools()).tools]
@@ -141,12 +187,29 @@ def test_module_entry_point_serves_custom_registry() -> None:
         Policy.load(None)
     except Exception as exc:  # the default profile ships with the privacy work
         pytest.skip(f"default policy not loadable yet: {exc}")
-    payload = json.dumps(INIT) + "\n" + json.dumps(INITIALIZED) + "\n" + json.dumps(
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n"
+    payload = (
+        json.dumps(INIT)
+        + "\n"
+        + json.dumps(INITIALIZED)
+        + "\n"
+        + json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        + "\n"
+    )
     proc = subprocess.run(
-        [sys.executable, "-m", "cloudg.mcp", "serve", "--flavor", "native",
-         "--registry", "tests.mcp._adapter_testkit:build_registry"],
-        input=payload.encode(), capture_output=True, cwd=ROOT, timeout=60,
+        [
+            sys.executable,
+            "-m",
+            "cloudg.mcp",
+            "serve",
+            "--flavor",
+            "native",
+            "--registry",
+            "tests.mcp._adapter_testkit:build_registry",
+        ],
+        input=payload.encode(),
+        capture_output=True,
+        cwd=ROOT,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr.decode()
     lines = [json.loads(ln) for ln in proc.stdout.decode().splitlines() if ln.strip()]
@@ -163,9 +226,21 @@ def test_cloudg_cli_banner_stays_off_stdout() -> None:
         pytest.skip(f"default policy not loadable yet: {exc}")
     payload = json.dumps(INIT) + "\n"
     proc = subprocess.run(
-        [sys.executable, "-m", "cloudg.cli", "mcp", "serve", "--flavor", "native",
-         "--registry", "tests.mcp._adapter_testkit:build_registry"],
-        input=payload.encode(), capture_output=True, cwd=ROOT, timeout=60,
+        [
+            sys.executable,
+            "-m",
+            "cloudg.cli",
+            "mcp",
+            "serve",
+            "--flavor",
+            "native",
+            "--registry",
+            "tests.mcp._adapter_testkit:build_registry",
+        ],
+        input=payload.encode(),
+        capture_output=True,
+        cwd=ROOT,
+        timeout=60,
     )
     stdout = proc.stdout.decode().strip().splitlines()
     assert stdout and all(json.loads(ln)["jsonrpc"] == "2.0" for ln in stdout)

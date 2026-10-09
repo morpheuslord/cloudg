@@ -15,6 +15,8 @@
 #   secrets + credential IDs            -> redacted, private keys dropped
 #   restricted-sensitivity primitives   -> hidden
 #   cloud_access, exec, write_fs, reveal -> denied for everyone
+#   preview_transform                   -> hidden (previews use a throw-away vault
+#                                          anyway, so they cannot confirm guesses)
 name: strict
 extends: standard
 description: >-
@@ -22,6 +24,7 @@ description: >-
   primitives, deny cloud access / exec / file writes / reveal.
 max_sensitivity: confidential
 deny_capabilities: [cloud_access, exec, write_fs, reveal]
+deny_tools: [preview_transform]
 rules:
   - name: never-reveal
     description: Explicit deny - wins over any role grant inherited from standard.

@@ -42,9 +42,14 @@ async def test_ontology_turtle_resource(layer):
     assert contents[0].mime_type == "text/turtle" and "@prefix" in contents[0].text
 
 
-@pytest.mark.parametrize("fmt,mime", [("json-ld", "application/ld+json"),
-                                      ("nt", "application/n-triples"),
-                                      ("xml", "application/rdf+xml")])
+@pytest.mark.parametrize(
+    "fmt,mime",
+    [
+        ("json-ld", "application/ld+json"),
+        ("nt", "application/n-triples"),
+        ("xml", "application/rdf+xml"),
+    ],
+)
 async def test_ontology_template(layer, fmt, mime):
     contents = await layer.read_resource(f"cloudg://ontology/{fmt}")
     assert contents[0].mime_type == mime and contents[0].text
@@ -79,16 +84,22 @@ async def test_asset_templates(layer):
     assert ext["external"] is True
     fs = await read_json(layer, "cloudg://assets/sg-admin/findings")
     assert fs["findings"][0]["id"] == "f-ssh-open"
-    with pytest.raises(NotFoundError, match="Did you mean"):
+    with pytest.raises(NotFoundError, match="close match") as exc:
         await layer.read_resource("cloudg://assets/web-9")
+    assert "web-1" not in exc.value.message
+    assert "web-1" in {s["name"] for s in exc.value.data["suggestions"]}
 
 
 async def test_tool_links_resolve(layer):
     """Every resource link a tool returns can actually be read."""
-    for name, args in [("get_asset", {"ref": "web-1"}),
-                       ("get_finding", {"finding_id": "f-ssh-open"}),
-                       ("dataset_summary", {}), ("compliance_summary", {}),
-                       ("ontology_stats", {}), ("workspace_status", {})]:
+    for name, args in [
+        ("get_asset", {"ref": "web-1"}),
+        ("get_finding", {"finding_id": "f-ssh-open"}),
+        ("dataset_summary", {}),
+        ("compliance_summary", {}),
+        ("ontology_stats", {}),
+        ("workspace_status", {}),
+    ]:
         res = await layer.call_tool(name, args)
         links = [c for c in res.content if getattr(c, "uri", None)]
         assert links, name
@@ -157,16 +168,22 @@ async def test_resources_without_dataset(tmp_path):
     from cloudg.mcp.layer import CloudGMCPLayer
     from cloudg.mcp.state import Workspace
 
-    layer = CloudGMCPLayer(policy="open", workspace=Workspace(allowed_roots=[tmp_path],
-                                                              output_dir=tmp_path))
+    layer = CloudGMCPLayer(
+        policy="open", workspace=Workspace(allowed_roots=[tmp_path], output_dir=tmp_path)
+    )
     ws = await read_json(layer, "cloudg://workspace")
     assert ws["datasets"] == []
     with pytest.raises(NotFoundError, match="load_dataset"):
         await layer.read_resource("cloudg://graph/d3")
-    assert (await layer.complete({"type": "ref/resource", "uri": "cloudg://assets/{+ref}"},
-                                 {"name": "ref", "value": "w"}))["values"] == []
-    fw = await layer.complete({"type": "ref/resource", "uri": "cloudg://compliance/{framework}"},
-                              {"name": "framework", "value": "cis"})
+    assert (
+        await layer.complete(
+            {"type": "ref/resource", "uri": "cloudg://assets/{+ref}"}, {"name": "ref", "value": "w"}
+        )
+    )["values"] == []
+    fw = await layer.complete(
+        {"type": "ref/resource", "uri": "cloudg://compliance/{framework}"},
+        {"name": "framework", "value": "cis"},
+    )
     assert fw["values"]  # falls back to the shipped rulesets
 
 
@@ -181,14 +198,18 @@ async def test_unknown_resource(layer):
 
 
 async def complete(layer, uri, var, value, **ctx_args):
-    out = await layer.complete({"type": "ref/resource", "uri": uri},
-                               {"name": var, "value": value}, context_arguments=ctx_args)
+    out = await layer.complete(
+        {"type": "ref/resource", "uri": uri},
+        {"name": var, "value": value},
+        context_arguments=ctx_args,
+    )
     return out["values"]
 
 
 async def test_completions(layer, workspace, sample_dataset):
-    assert await complete(layer, "cloudg://datasets/{dataset}/summary", "dataset", "sa") == \
-        ["sample"]
+    assert await complete(layer, "cloudg://datasets/{dataset}/summary", "dataset", "sa") == [
+        "sample"
+    ]
     vals = await complete(layer, "cloudg://assets/{+ref}", "ref", "web")
     assert vals[:3] == ["web-1", "web-2", "web-acl"] or {"web-1", "web-2"} <= set(vals)
     assert "web-alb" in vals or "web-tg" in vals
@@ -198,16 +219,20 @@ async def test_completions(layer, workspace, sample_dataset):
     assert "sg-admin" in vals and "bastion-admin" in vals
     vals = await complete(layer, "cloudg://findings/{finding_id}", "finding_id", "f-ss")
     assert vals == ["f-ssh-open"]
-    assert await complete(layer, "cloudg://findings/severity/{severity}", "severity", "h") == \
-        ["HIGH"]
+    assert await complete(layer, "cloudg://findings/severity/{severity}", "severity", "h") == [
+        "HIGH"
+    ]
     vals = await complete(layer, "cloudg://compliance/{framework}", "framework", "cis")
     assert set(vals) == {"CIS-AWS", "CIS-Azure", "CIS-GCP"}
-    assert await complete(layer, "cloudg://docs/{topic}", "topic", "edge") == \
-        ["edges", "edge-types"]
+    assert await complete(layer, "cloudg://docs/{topic}", "topic", "edge") == [
+        "edges",
+        "edge-types",
+    ]
     assert await complete(layer, "cloudg://graph/{format}", "format", "c") == ["cytoscape"]
     assert await complete(layer, "cloudg://ontology/{format}", "format", "j") == ["json-ld"]
-    assert "EC2" in await complete(layer, "cloudg://schema/asset-types/{asset_type}",
-                                   "asset_type", "ec")
+    assert "EC2" in await complete(
+        layer, "cloudg://schema/asset-types/{asset_type}", "asset_type", "ec"
+    )
     # context argument picks the dataset
     other = sample_dataset.copy("other")
     other.assets = [a for a in other.assets if a.id != "web-2"]
@@ -220,8 +245,15 @@ async def test_ambiguous_names_complete_to_ids(layer, workspace):
     from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
 
     ds = workspace.get()
-    ds.assets.append(CloudAsset(id="dup-web-1", name="web-1", asset_type=AssetType.EC2,
-                                provider=CloudProvider.AWS, arn="arn:aws:ec2:x:2:instance/i-dup"))
+    ds.assets.append(
+        CloudAsset(
+            id="dup-web-1",
+            name="web-1",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            arn="arn:aws:ec2:x:2:instance/i-dup",
+        )
+    )
     ds.invalidate()
     vals = await complete(layer, "cloudg://assets/{+ref}", "ref", "web-1")
     assert "arn:aws:ec2:x:2:instance/i-dup" in vals and "web-1" not in vals

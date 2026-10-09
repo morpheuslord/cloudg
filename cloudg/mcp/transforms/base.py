@@ -35,6 +35,12 @@ class TransformContext:
     # dropped, truncation...). The layer returns it under
     # ``_meta["cloudg/transforms"]`` so clients can tell data was altered.
     report: dict[str, Any] = field(default_factory=dict)
+    # Input direction: every ``(real, token)`` pair the Depseudonymizer
+    # reversed (vault tokens and aliases). Never reported to the client; the
+    # layer passes it to :func:`~cloudg.mcp.transforms.repseudonymize` so a
+    # real value restored for the handler cannot leak back out of the same
+    # call (error messages, notifications...).
+    restored: list[tuple[str, str]] = field(default_factory=list, repr=False)
 
     def count(self, key: str, n: int = 1) -> None:
         self.report[key] = self.report.get(key, 0) + n

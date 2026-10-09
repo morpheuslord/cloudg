@@ -40,6 +40,11 @@ from cloudg.mcp.core import (
 )
 from cloudg.mcp.transforms.base import TransformContext
 
+try:  # the transforms package's helper, when this cloudg has it
+    from cloudg.mcp.transforms import repseudonymize as _shared_repseudonymize
+except ImportError:  # pragma: no cover (older transforms package)
+    _shared_repseudonymize = None
+
 if TYPE_CHECKING:  # pragma: no cover
     from cloudg.mcp.context import Principal
 
@@ -166,6 +171,7 @@ class OutputScope:
         self.principal = principal
         self.kind = kind
         self.pipeline = policy.output_pipeline(spec, principal)
+        self._pairs: list[tuple[str, str]] = []
         self._swap: dict[str, str] = {}
         self._swap_re: re.Pattern[str] | None = None
 
@@ -178,10 +184,9 @@ class OutputScope:
         for real, token in pairs:
             if len(real) >= _MIN_RESTORED_LEN and token and real != token:
                 self._swap[real] = token
+                self._pairs.append((real, token))
         if self._swap:
-            alternatives = "|".join(
-                re.escape(r) for r in sorted(self._swap, key=len, reverse=True)
-            )
+            alternatives = "|".join(re.escape(r) for r in sorted(self._swap, key=len, reverse=True))
             self._swap_re = re.compile(f"(?<![A-Za-z0-9])(?:{alternatives})(?![A-Za-z0-9])")
 
     def apply(self, value: Any) -> tuple[Any, dict[str, Any]]:
@@ -195,9 +200,17 @@ class OutputScope:
             vault=self.policy.vault,
         )
         out = self.pipeline.apply(value, tctx)
-        if self._swap_re is not None:
-            out = self._reswap(out)
+        if self._pairs:
+            out = self.repseudonymize(out)
         return out, tctx.report
+
+    def repseudonymize(self, value: Any) -> Any:
+        """``value`` with every restored real value replaced by its token."""
+        if not self._pairs:
+            return value
+        if _shared_repseudonymize is not None:
+            return _shared_repseudonymize(value, self._pairs)
+        return self._reswap(value)
 
     def __call__(self, value: Any) -> Any:
         return self.apply(value)[0]
@@ -349,7 +362,9 @@ def _content_block(scope: OutputScope, c: Any, report: dict, context: Any) -> An
 # ---------------------------------------------------------------------------
 
 
-def _shape_tool_object(scope: OutputScope, result: ToolResult) -> tuple[ToolResult, dict]:
+def _shape_tool_object(scope: OutputScope, result: ToolResult) -> tuple[Any, dict]:
+    """Transform a handler-built :class:`ToolResult` in place; returns the
+    link context (its structured payload or texts) and the report."""
     report: dict[str, Any] = {}
     context = result.structured
     if result.structured is not None:
@@ -360,7 +375,7 @@ def _shape_tool_object(scope: OutputScope, result: ToolResult) -> tuple[ToolResu
     if result.meta:
         result.meta, r = scope.apply(result.meta)
         merge_report(report, r)
-    return result, context
+    return context, report
 
 
 def shape_tool_result(
@@ -369,8 +384,8 @@ def shape_tool_result(
     """Normalise a tool handler's return value into a transformed
     :class:`ToolResult` and the transform report."""
     if isinstance(raw, ToolResult):
-        report: dict[str, Any] = {}
-        result, context = _shape_tool_object(scope, raw)
+        result = raw
+        context, report = _shape_tool_object(scope, result)
     else:
         data = jsonable(raw)
         context = data if isinstance(data, dict) else {"result": data}

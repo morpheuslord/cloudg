@@ -19,10 +19,24 @@ CATEGORY = "export"
 R, FS = Capability.READ_STATE, Capability.WRITE_FS
 
 ReportFormat = Literal["json", "html", "inventory", "graphml", "asset_map"]
-SubDir = Annotated[str, Field(
-    pattern=r"^[A-Za-z0-9_.\-/]{0,200}$",
-    description="Sub-directory of the workspace output directory ('' = the directory itself).",
-)]
+ReportFormatArg = Annotated[
+    ReportFormat,
+    Field(
+        description=(
+            "json: findings.json (assets, findings, compliance, D3 graph); html: interactive "
+            "report.html; inventory: inventory-map.json + .graphml + graph + dependencies; "
+            "graphml: the graph only; asset_map: asset-map.json + compliance-map.json "
+            "(inventory x findings)."
+        )
+    ),
+]
+SubDir = Annotated[
+    str,
+    Field(
+        pattern=r"^[A-Za-z0-9_.\-/]{0,200}$",
+        description="Sub-directory of the workspace output directory ('' = the directory itself).",
+    ),
+]
 
 
 def _select(ds: Dataset, refs: list[str] | None, asset_types: list[str] | None) -> list[CloudAsset]:
@@ -35,13 +49,22 @@ def _select(ds: Dataset, refs: list[str] | None, asset_types: list[str] | None) 
 
 
 def _scan_result(ds: Dataset) -> ScanResult:
-    return ScanResult(assets=ds.assets, edges=ds.edges, findings=ds.findings,
-                      compliance=ds.compliance)
+    return ScanResult(
+        assets=ds.assets, edges=ds.edges, findings=ds.findings, compliance=ds.compliance
+    )
+
 
 CATALOG = Catalog()
 
-@CATALOG.tool(title="Terraform preview", category=CATEGORY, sensitivity=Sensitivity.INTERNAL,
-          read_only=True, idempotent=True, open_world=False)
+
+@CATALOG.tool(
+    title="Terraform preview",
+    category=CATEGORY,
+    sensitivity=Sensitivity.INTERNAL,
+    read_only=True,
+    idempotent=True,
+    open_world=False,
+)
 def terraform_preview(
     ctx: Any,
     refs: Annotated[list[str] | None, Field(description="Only these assets (refs).")] = None,
@@ -55,12 +78,23 @@ def terraform_preview(
 
     ds = ws_dataset(ctx, dataset)
     assets = _select(ds, refs, asset_types)
-    return {"dataset": ds.name, "assets_considered": len(assets),
-            **TerraformExporter().preview(assets)}
+    return {
+        "dataset": ds.name,
+        "assets_considered": len(assets),
+        **TerraformExporter().preview(assets),
+    }
 
-@CATALOG.tool(title="Export Terraform", category=CATEGORY, sensitivity=Sensitivity.CONFIDENTIAL,
-          capabilities={R, FS}, read_only=False, destructive=False, idempotent=True,
-          open_world=False)
+
+@CATALOG.tool(
+    title="Export Terraform",
+    category=CATEGORY,
+    sensitivity=Sensitivity.CONFIDENTIAL,
+    capabilities={R, FS},
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=False,
+)
 def export_terraform(
     ctx: Any,
     subdir: SubDir = "terraform",
@@ -78,20 +112,29 @@ def export_terraform(
     ids = {a.id for a in assets}
     out = ctx.workspace.output_path(subdir)
     paths = TerraformExporter(output_dir=out).export(
-        assets, [e for e in ds.edges if e.source_id in ids or e.target_id in ids])
-    return {"dataset": ds.name, "output_dir": str(out), "resources": len(assets),
-            "files": {k: str(v) for k, v in paths.items()}}
+        assets, [e for e in ds.edges if e.source_id in ids or e.target_id in ids]
+    )
+    return {
+        "dataset": ds.name,
+        "output_dir": str(out),
+        "resources": len(assets),
+        "files": {k: str(v) for k, v in paths.items()},
+    }
 
-@CATALOG.tool(title="Export report", category=CATEGORY, sensitivity=Sensitivity.CONFIDENTIAL,
-          capabilities={R, FS}, read_only=False, destructive=False, idempotent=True,
-          open_world=False)
+
+@CATALOG.tool(
+    title="Export report",
+    category=CATEGORY,
+    sensitivity=Sensitivity.CONFIDENTIAL,
+    capabilities={R, FS},
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    open_world=False,
+)
 def export_report(
     ctx: Any,
-    format: Annotated[ReportFormat, Field(description=(
-        "json: findings.json (assets, findings, compliance, D3 graph); html: interactive "
-        "report.html; inventory: inventory-map.json + .graphml + graph + dependencies; "
-        "graphml: the graph only; asset_map: asset-map.json + compliance-map.json "
-        "(inventory x findings)."))] = "json",
+    format: ReportFormatArg = "json",  # pylint: disable=redefined-builtin  # MCP argument name
     subdir: SubDir = "",
     dataset: DatasetArg = "",
 ) -> dict:
@@ -104,14 +147,16 @@ def export_report(
     if format == "json":
         from cloudg.renderers.json_export import JSONExporter
 
-        p = JSONExporter(output_dir=str(out)).export(_scan_result(ds),
-                                                     graph_json=ds.builder.to_d3_json())
+        p = JSONExporter(output_dir=str(out)).export(
+            _scan_result(ds), graph_json=ds.builder.to_d3_json()
+        )
         files["json"] = str(p)
     elif format == "html":
         from cloudg.renderers.html_report import HTMLReportGenerator
 
         p = HTMLReportGenerator(output_dir=str(out)).generate(
-            _scan_result(ds), graph_json=ds.builder.to_d3_json())
+            _scan_result(ds), graph_json=ds.builder.to_d3_json()
+        )
         files["html"] = str(p)
     elif format == "inventory":
         files.update({k: str(v) for k, v in ds.inventory_view().export(out).items()})
@@ -121,8 +166,12 @@ def export_report(
         from cloudg.inventory.mapper import InventoryMapper
 
         mapper = InventoryMapper(ctx.workspace.config)
-        files.update({k: str(v) for k, v in mapper.export_merged(
-            ds.inventory_view(), ds.findings, out).items()})
+        files.update(
+            {
+                k: str(v)
+                for k, v in mapper.export_merged(ds.inventory_view(), ds.findings, out).items()
+            }
+        )
     return {"dataset": ds.name, "format": format, "output_dir": str(out), "files": files}
 
 

@@ -55,8 +55,9 @@ async def test_audit_log_hashes_values_and_records_outcomes(tmp_path: Path) -> N
     layer = build_layer(middleware=[audit])
     analyst = Principal(id="alice", roles={"analyst"})
 
-    await layer.call_tool("echo", {"text": "arn:aws:iam::123456789012:role/secret"},
-                          principal=analyst)
+    await layer.call_tool(
+        "echo", {"text": "arn:aws:iam::123456789012:role/secret"}, principal=analyst
+    )
     await layer.call_tool("fail", {})
     await layer.read_resource("test://items/alpha")
     await layer.get_prompt("greet", {"name": "Bob"})
@@ -69,8 +70,9 @@ async def test_audit_log_hashes_values_and_records_outcomes(tmp_path: Path) -> N
     assert echo["kind"] == "tool" and echo["name"] == "echo" and echo["outcome"] == "ok"
     assert echo["principal"] == {"id": "alice", "roles": ["analyst"]}
     assert echo["argument_keys"] == ["text"]
-    expected = hmac.new(b"pepper", json.dumps("arn:aws:iam::123456789012:role/secret")
-                        .encode(), hashlib.sha256).hexdigest()[:16]
+    expected = hmac.new(
+        b"pepper", json.dumps("arn:aws:iam::123456789012:role/secret").encode(), hashlib.sha256
+    ).hexdigest()[:16]
     assert echo["argument_hashes"]["text"] == expected
     assert echo["sensitivity"] == "public" and echo["duration_ms"] >= 0
     assert fail["outcome"] == "error" and fail["error"]["code"] == "handler_error"
@@ -199,9 +201,14 @@ def _completion_info(layer: Any) -> Any:
     from cloudg.mcp.layer import CallInfo
 
     principal = Principal(id="c")
-    return CallInfo("completion", "greet", layer.registry.prompts["greet"],
-                    {"argument": "name", "value": "secret-partial", "context": {}},
-                    principal, layer.context(principal))
+    return CallInfo(
+        "completion",
+        "greet",
+        layer.registry.prompts["greet"],
+        {"argument": "name", "value": "secret-partial", "context": {}},
+        principal,
+        layer.context(principal),
+    )
 
 
 async def test_completion_calls_are_audited_metered_never_cached() -> None:
@@ -219,9 +226,11 @@ async def test_completion_calls_are_audited_metered_never_cached() -> None:
 
     info = _completion_info(layer)
     for _ in range(2):
+
         async def chain(i: Any) -> Any:
-            return await audit(i, lambda a: metrics(a, lambda b: limiter(
-                b, lambda c: cache(c, terminal))))
+            return await audit(
+                i, lambda a: metrics(a, lambda b: limiter(b, lambda c: cache(c, terminal)))
+            )
 
         assert (await chain(info))["values"] == ["alpha"]
     assert len(calls) == 2  # never served from cache

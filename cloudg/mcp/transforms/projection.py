@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from cloudg.mcp.core import render_json
@@ -57,6 +58,7 @@ class _Patterns:
                     segs.append(s)
             self.segs.append(segs)
         self._memo: dict[tuple[State, str], State] = {}
+        self._done: dict[State, bool] = {}
         self.initial: State = self._closure({(i, 0) for i in range(len(self.segs))})
 
     def __bool__(self) -> bool:
@@ -98,46 +100,64 @@ class _Patterns:
         return out
 
     def complete(self, states: State) -> bool:
-        return any(pos == len(self.segs[pi]) for pi, pos in states)
+        hit = self._done.get(states)
+        if hit is None:
+            hit = any(pos == len(self.segs[pi]) for pi, pos in states)
+            if len(self._done) > 20_000:
+                self._done.clear()
+            self._done[states] = hit
+        return hit
+
+
+@dataclass(frozen=True)
+class ProjectionOptions:
+    """Options of :class:`Projection` (see the module docstring)."""
+
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    allow_keys: tuple[str, ...] | None = None
+    allow_keys_by_sensitivity: dict[str, tuple[str, ...]] | None = None
+    max_depth: int | None = None
+    max_list: int | None = None
+    max_string: int | None = None
+    drop_nulls: bool = False
+    drop_empty: bool = False
+    max_chars: int | None = None
+    list_marker: bool = True
+    min_list: int = 1
+    min_string: int = 64
+
+
+Limits = tuple[Any, Any, Any]
 
 
 class Projection:
-    """Shape output data. See the module docstring for the options."""
+    """Shape output data. See the module docstring for the options (keyword
+    arguments, or one :class:`ProjectionOptions`)."""
 
     name = "project"
 
-    def __init__(
-        self,
-        *,
-        include: Iterable[str] = (),
-        exclude: Iterable[str] = (),
-        allow_keys: Iterable[str] | None = None,
-        allow_keys_by_sensitivity: dict[str, Iterable[str]] | None = None,
-        max_depth: int | None = None,
-        max_list: int | None = None,
-        max_string: int | None = None,
-        drop_nulls: bool = False,
-        drop_empty: bool = False,
-        max_chars: int | None = None,
-        list_marker: bool = True,
-        min_list: int = 1,
-        min_string: int = 64,
-    ) -> None:
-        self.include = _Patterns(include)
-        self.exclude = _Patterns(exclude)
-        self.allow_keys = self._key_globs(allow_keys)
+    def __init__(self, options: ProjectionOptions | None = None, **kwargs: Any) -> None:
+        for k in ("include", "exclude", "allow_keys"):
+            if kwargs.get(k) is not None:
+                kwargs[k] = tuple(kwargs[k])
+        opts = replace(options, **kwargs) if options is not None else ProjectionOptions(**kwargs)
+        self.options = opts
+        self.include = _Patterns(opts.include)
+        self.exclude = _Patterns(opts.exclude)
+        self.allow_keys = self._key_globs(opts.allow_keys)
         self.allow_by_sensitivity = {
-            str(k): self._key_globs(v) for k, v in (allow_keys_by_sensitivity or {}).items()
+            str(k): self._key_globs(v) for k, v in (opts.allow_keys_by_sensitivity or {}).items()
         }
-        self.max_depth = max_depth
-        self.max_list = max_list
-        self.max_string = max_string
-        self.drop_nulls = drop_nulls
-        self.drop_empty = drop_empty
-        self.max_chars = max_chars
-        self.list_marker = list_marker
-        self.min_list = max(0, min_list)
-        self.min_string = max(8, min_string)
+        self.max_depth = opts.max_depth
+        self.max_list = opts.max_list
+        self.max_string = opts.max_string
+        self.drop_nulls = opts.drop_nulls
+        self.drop_empty = opts.drop_empty
+        self.max_chars = opts.max_chars
+        self.list_marker = opts.list_marker
+        self.min_list = max(0, opts.min_list)
+        self.min_string = max(8, opts.min_string)
 
     @staticmethod
     def _key_globs(globs: Iterable[str] | None) -> re.Pattern[str] | None:
@@ -155,14 +175,14 @@ class Projection:
             sens = getattr(getattr(spec, "sensitivity", None), "value", None)
             if sens in self.allow_by_sensitivity:
                 allow = self.allow_by_sensitivity[sens]
-        stats: dict[str, int] = {}
+        stats: dict[str, Any] = {}
         limits = (self.max_depth, self.max_list, self.max_string)
         if isinstance(value, str):
-            out: Any = self._shape_str(value, self.max_string, stats)
+            out: Any = _shape_str(value, self.max_string, stats)
         else:
             out = self._run(value, allow, limits, stats)
         if self.max_chars:
-            out = self._fit(value, out, allow, limits, stats, ctx)
+            out = _Budget(self, allow, stats).fit(value, out, limits, ctx)
         if stats:
             sec = ctx.report.setdefault("projection", {})
             for k, v in stats.items():
@@ -172,109 +192,17 @@ class Projection:
                     sec[k] = v
         return out
 
-    def _run(
-        self, value: Any, allow: Any, limits: tuple[Any, Any, Any], stats: dict[str, int]
-    ) -> Any:
+    def _run(self, value: Any, allow: Any, limits: Limits, stats: dict[str, Any]) -> Any:
         inc = self.include.initial if self.include else None
         exc = self.exclude.initial if self.exclude else None
-        out = self._walk(value, inc, exc, 0, allow, limits, stats)
+        out = _Shaper(self, allow, limits, stats).walk(value, inc, exc, 0)
         if out is _MISSING:
             return {} if isinstance(value, dict) else ([] if isinstance(value, list) else None)
         return out
 
-    # ------------------------------------------------------------------
-
-    def _shape_str(self, s: str, max_string: int | None, stats: dict[str, int]) -> str:
-        if max_string is not None and len(s) > max_string:
-            stats["strings_truncated"] = stats.get("strings_truncated", 0) + 1
-            return f"{s[:max_string]}… [+{len(s) - max_string} chars]"
-        return s
-
-    def _walk(
-        self,
-        v: Any,
-        inc: State | None,
-        exc: State | None,
-        depth: int,
-        allow: Any,
-        limits: tuple[Any, Any, Any],
-        stats: dict[str, int],
-    ) -> Any:
-        if exc is not None and exc and self.exclude.complete(exc):
-            stats["excluded"] = stats.get("excluded", 0) + 1
-            return _MISSING
-        if inc is not None and self.include.complete(inc):
-            inc = None  # whole subtree included
-        max_depth, max_list, max_string = limits
-        if isinstance(v, dict):
-            if inc is not None and not inc:
-                return _MISSING
-            if max_depth is not None and depth >= max_depth and v:
-                stats["depth_limited"] = stats.get("depth_limited", 0) + 1
-                return f"<dict: {len(v)} keys>"
-            out: dict[Any, Any] = {}
-            for k, x in v.items():
-                ks = str(k)
-                if allow is not None and not allow.match(ks):
-                    stats["keys_dropped"] = stats.get("keys_dropped", 0) + 1
-                    continue
-                child_inc = self.include.advance(inc, ks) if inc is not None else None
-                if child_inc is not None and not child_inc:
-                    continue
-                child_exc = self.exclude.advance(exc, ks) if exc else exc
-                res = self._walk(x, child_inc, child_exc, depth + 1, allow, limits, stats)
-                if res is _MISSING:
-                    continue
-                if res is None and self.drop_nulls:
-                    continue
-                if self.drop_empty and res in ("", [], {}):
-                    continue
-                out[k] = res
-            if inc is not None and not out:
-                return _MISSING
-            return out
-        if isinstance(v, (list, tuple)):
-            if inc is not None and not inc:
-                return _MISSING
-            if max_depth is not None and depth >= max_depth and v:
-                stats["depth_limited"] = stats.get("depth_limited", 0) + 1
-                return f"<list: {len(v)} items>"
-            items = list(v)
-            extra = 0
-            if max_list is not None and len(items) > max_list:
-                extra = len(items) - max_list
-                items = items[:max_list]
-                stats["lists_truncated"] = stats.get("lists_truncated", 0) + 1
-            out_list = []
-            for i, x in enumerate(items):
-                si = str(i)
-                child_inc = self.include.advance(inc, si) if inc is not None else None
-                if child_inc is not None and not child_inc:
-                    continue
-                child_exc = self.exclude.advance(exc, si) if exc else exc
-                res = self._walk(x, child_inc, child_exc, depth + 1, allow, limits, stats)
-                if res is _MISSING:
-                    continue
-                if res is None and self.drop_nulls:
-                    continue
-                if self.drop_empty and res in ("", [], {}):
-                    continue
-                out_list.append(res)
-            if inc is not None and not out_list:
-                return _MISSING
-            if extra and self.list_marker:
-                out_list.append(f"… {extra} more items")
-            return out_list
-        # scalar
-        if inc is not None:
-            return _MISSING
-        if isinstance(v, str):
-            return self._shape_str(v, max_string, stats)
-        return v
-
-    # ------------------------------------------------------------------
-    # Budget guard
-    # ------------------------------------------------------------------
+    # Kept for callers of the old private helper
+    def _shape_str(self, s: str, max_string: int | None, stats: dict[str, Any]) -> str:
+        return _shape_str(s, max_string, stats)
 
     @staticmethod
     def _size(v: Any) -> int:
@@ -287,57 +215,165 @@ class Projection:
         except (TypeError, ValueError):  # pragma: no cover
             return len(str(v))
 
-    def _fit(
-        self,
-        original: Any,
-        shaped: Any,
-        allow: Any,
-        limits: tuple[Any, Any, Any],
-        stats: dict[str, int],
-        ctx: TransformContext,
-    ) -> Any:
-        budget = int(self.max_chars or 0)
-        size = self._size(shaped)
-        if size <= budget:
+
+def _bump(stats: dict[str, Any], key: str) -> None:
+    stats[key] = stats.get(key, 0) + 1
+
+
+def _shape_str(s: str, max_string: int | None, stats: dict[str, Any]) -> str:
+    if max_string is not None and len(s) > max_string:
+        _bump(stats, "strings_truncated")
+        return f"{s[:max_string]}… [+{len(s) - max_string} chars]"
+    return s
+
+
+class _Shaper:
+    """One projection walk with fixed key allowlist and limits."""
+
+    __slots__ = ("p", "allow", "max_depth", "max_list", "max_string", "stats")
+
+    def __init__(self, p: Projection, allow: Any, limits: Limits, stats: dict[str, Any]) -> None:
+        self.p = p
+        self.allow = allow
+        self.max_depth, self.max_list, self.max_string = limits
+        self.stats = stats
+
+    def walk(self, v: Any, inc: State | None, exc: State | None, depth: int) -> Any:
+        p = self.p
+        if exc and p.exclude.complete(exc):
+            _bump(self.stats, "excluded")
+            return _MISSING
+        if inc is not None and p.include.complete(inc):
+            inc = None  # whole subtree included
+        if isinstance(v, (dict, list, tuple)):
+            return self.container(v, inc, exc, depth)
+        if inc is not None:
+            return _MISSING
+        if isinstance(v, str):
+            return _shape_str(v, self.max_string, self.stats)
+        return v
+
+    def container(self, v: Any, inc: State | None, exc: State | None, depth: int) -> Any:
+        if inc is not None and not inc:
+            return _MISSING
+        is_dict = isinstance(v, dict)
+        if self.max_depth is not None and depth >= self.max_depth and v:
+            _bump(self.stats, "depth_limited")
+            return f"<dict: {len(v)} keys>" if is_dict else f"<list: {len(v)} items>"
+        if is_dict:
+            out: Any = self.walk_dict(v, inc, exc, depth)
+        else:
+            out = self.walk_list(v, inc, exc, depth)
+        if inc is not None and not out:
+            return _MISSING
+        return out
+
+    def child(self, x: Any, seg: str, inc: State | None, exc: State | None, depth: int) -> Any:
+        """Shape one dict value / list item; ``_MISSING`` when it is left out."""
+        p = self.p
+        child_inc = p.include.advance(inc, seg) if inc is not None else None
+        if child_inc is not None and not child_inc:
+            return _MISSING
+        child_exc = p.exclude.advance(exc, seg) if exc else exc
+        res = self.walk(x, child_inc, child_exc, depth + 1)
+        if (res is None and p.drop_nulls) or (p.drop_empty and res in ("", [], {})):
+            return _MISSING
+        return res
+
+    def walk_dict(self, v: dict[Any, Any], inc: Any, exc: Any, depth: int) -> dict[Any, Any]:
+        out: dict[Any, Any] = {}
+        allow = self.allow
+        for k, x in v.items():
+            ks = str(k)
+            if allow is not None and not allow.match(ks):
+                _bump(self.stats, "keys_dropped")
+                continue
+            res = self.child(x, ks, inc, exc, depth)
+            if res is not _MISSING:
+                out[k] = res
+        return out
+
+    def walk_list(self, v: Any, inc: Any, exc: Any, depth: int) -> list[Any]:
+        items = list(v)
+        extra = 0
+        if self.max_list is not None and len(items) > self.max_list:
+            extra = len(items) - self.max_list
+            items = items[: self.max_list]
+            _bump(self.stats, "lists_truncated")
+        out = []
+        for i, x in enumerate(items):
+            res = self.child(x, str(i), inc, exc, depth)
+            if res is not _MISSING:
+                out.append(res)
+        if extra and self.p.list_marker and (inc is None or out):
+            out.append(f"… {extra} more items")
+        return out
+
+
+class _Budget:
+    """The ``max_chars`` size guard: tighten list / string limits (then
+    depth) until the rendered result fits."""
+
+    def __init__(self, p: Projection, allow: Any, stats: dict[str, Any]) -> None:
+        self.p = p
+        self.allow = allow
+        self.stats = stats
+        self.budget = int(p.max_chars or 0)
+
+    def fit(self, original: Any, shaped: Any, limits: Limits, ctx: TransformContext) -> Any:
+        size = Projection._size(shaped)
+        if size <= self.budget:
             return shaped
-        first = size
         if isinstance(original, str):
-            out = original[: max(0, budget - 40)] + f"… [+{len(original) - budget + 40} chars]"
-            stats["budget"] = {
-                "max_chars": budget,
-                "original_chars": first,  # type: ignore
-                "final_chars": len(out),
-            }
-            return out
+            return self._fit_string(original, size)
+        first = size
+        out, size, final = self._tighten(original, size, limits)
+        self.stats["budget"] = {
+            "max_chars": self.budget,
+            "original_chars": first,
+            "final_chars": size,
+            **final,
+        }
+        if size > self.budget:
+            ctx.report["truncated"] = True
+        return out
+
+    def _fit_string(self, original: str, first: int) -> str:
+        budget = self.budget
+        out = original[: max(0, budget - 40)] + f"… [+{len(original) - budget + 40} chars]"
+        self.stats["budget"] = {
+            "max_chars": budget,
+            "original_chars": first,
+            "final_chars": len(out),
+        }
+        return out
+
+    def _tighten(self, original: Any, size: int, limits: Limits) -> tuple[Any, int, dict]:
+        p, budget = self.p, self.budget
         depth, max_list, max_string = limits
         longest = _longest_list(original)
         cur_list = min(max_list or longest, longest)
         cur_str = max_string or 4000
-        out = shaped
+        out: Any = None
         for _ in range(24):
             ratio = budget / max(size, 1)
-            cur_list = max(self.min_list, min(cur_list - 1, int(cur_list * ratio * 0.9)))
-            if size > budget * 4 or cur_list <= self.min_list:
-                cur_str = max(self.min_string, min(cur_str - 1, int(cur_str * max(ratio, 0.25))))
-            if cur_list <= self.min_list and cur_str <= self.min_string:
+            cur_list = max(p.min_list, min(cur_list - 1, int(cur_list * ratio * 0.9)))
+            if size > budget * 4 or cur_list <= p.min_list:
+                cur_str = max(p.min_string, min(cur_str - 1, int(cur_str * max(ratio, 0.25))))
+            if cur_list <= p.min_list and cur_str <= p.min_string:
                 depth = max(1, (depth or _depth(original)) - 1)
-            trial_stats: dict[str, int] = {}
-            out = self._run(original, allow, (depth, cur_list, cur_str), trial_stats)
-            size = self._size(out)
-            if size <= budget or (depth == 1 and cur_list <= self.min_list):
-                stats.update(trial_stats)
+            trial_stats: dict[str, Any] = {}
+            out = p._run(original, self.allow, (depth, cur_list, cur_str), trial_stats)
+            size = Projection._size(out)
+            if size <= budget or (depth == 1 and cur_list <= p.min_list):
+                self.stats.update(trial_stats)
                 break
-        stats["budget"] = {  # type: ignore[assignment]
-            "max_chars": budget,
-            "original_chars": first,
-            "final_chars": size,
+        final = {
             "max_list": cur_list,
             "max_string": cur_str,
             **({"max_depth": depth} if depth else {}),
         }
-        if size > budget:
-            ctx.report["truncated"] = True
-        return out
+        return out, size, final
 
 
 def _longest_list(v: Any) -> int:

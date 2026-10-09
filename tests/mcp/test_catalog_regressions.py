@@ -12,17 +12,20 @@ from cloudg.mcp.state import detect_kind, load_dataset_file
 # -- 1. ARN tails split on ":" as well as "/" ---------------------------------
 
 
-@pytest.mark.parametrize("ref,asset_id", [
-    ("function:api-handler", "api-handler"),
-    ("secret:orders-db-credentials-AbC", "db-secret"),
-    ("orders-db-credentials-AbC", "db-secret"),
-    ("db:orders-db", "orders-db"),
-    ("log-group:/aws/lambda/api-handler", "log-group"),
-    ("instance/i-0web1", "web-1"),
-    ("i-0web1", "web-1"),
-    ("role/deploy-role", "deploy-role"),
-    ("key/1111-2222", "kms-main"),
-])
+@pytest.mark.parametrize(
+    "ref,asset_id",
+    [
+        ("function:api-handler", "api-handler"),
+        ("secret:orders-db-credentials-AbC", "db-secret"),
+        ("orders-db-credentials-AbC", "db-secret"),
+        ("db:orders-db", "orders-db"),
+        ("log-group:/aws/lambda/api-handler", "log-group"),
+        ("instance/i-0web1", "web-1"),
+        ("i-0web1", "web-1"),
+        ("role/deploy-role", "deploy-role"),
+        ("key/1111-2222", "kms-main"),
+    ],
+)
 async def test_arn_tail_refs(call, ref, asset_id):
     assert (await call("get_asset", ref=ref))["id"] == asset_id
 
@@ -39,10 +42,15 @@ def test_ref_description_examples_resolve(sample_dataset):
 
 
 async def test_snapshot_refuses_existing_name(call, workspace):
-    await call("load_dataset", path=str(workspace.allowed_roots[0] / "report"), name="report",
-               activate=False)
-    msg = await call.error("snapshot_dataset", new_name="report", dataset="sample")
-    assert "already exists" in msg and "report-2" in msg and "replace=true" in msg
+    await call(
+        "load_dataset",
+        path=str(workspace.allowed_roots[0] / "report"),
+        name="report",
+        activate=False,
+    )
+    msg, data = await call.error_data("snapshot_dataset", new_name="report", dataset="sample")
+    assert "already exists" in msg and "replace=true" in msg
+    assert data["suggested"] == "report-2" and "report-2" not in msg
     assert len(workspace.get("report").findings) == 12  # untouched
     out = await call("snapshot_dataset", new_name="report", dataset="sample", replace=True)
     assert out["assets"] == len(workspace.get("sample").assets)
@@ -52,8 +60,7 @@ async def test_load_dataset_refuses_existing_name(call, sample_paths, workspace)
     msg = await call.error("load_dataset", path=str(sample_paths["report"]), name="sample")
     assert "already exists" in msg
     assert workspace.get("sample").kind == "inventory"
-    out = await call("load_dataset", path=str(sample_paths["report"]), name="sample",
-                     replace=True)
+    out = await call("load_dataset", path=str(sample_paths["report"]), name="sample", replace=True)
     assert out["kind"] == "report"
 
 
@@ -67,27 +74,59 @@ async def test_workspace_add_defaults_to_refusing(workspace, sample_dataset):
 
 
 def _trivy(path):
-    path.write_text(json.dumps({
-        "SchemaVersion": 2, "ArtifactName": "app:1", "ArtifactType": "container_image",
-        "Results": [{"Target": "app:1", "Vulnerabilities": [
-            {"VulnerabilityID": "CVE-2025-0001", "PkgName": "libx", "InstalledVersion": "1",
-             "Severity": "HIGH", "Title": "libx overflow", "Description": "d"}]}]}))
+    path.write_text(
+        json.dumps(
+            {
+                "SchemaVersion": 2,
+                "ArtifactName": "app:1",
+                "ArtifactType": "container_image",
+                "Results": [
+                    {
+                        "Target": "app:1",
+                        "Vulnerabilities": [
+                            {
+                                "VulnerabilityID": "CVE-2025-0001",
+                                "PkgName": "libx",
+                                "InstalledVersion": "1",
+                                "Severity": "HIGH",
+                                "Title": "libx overflow",
+                                "Description": "d",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     return path
 
 
 async def test_ingest_new_dataset_activation(call, sample_paths, workspace):
     report = _trivy(sample_paths["root"] / "t.json")
-    out = await call("ingest_reports", reports={"trivy": [str(report)]}, dataset="scans",
-                     new_dataset=True, activate=False)
+    out = await call(
+        "ingest_reports",
+        reports={"trivy": [str(report)]},
+        dataset="scans",
+        new_dataset=True,
+        activate=False,
+    )
     assert out["active"] == "sample" and workspace.active_name == "sample"
-    out = await call("ingest_reports", reports={"trivy": [str(report)]}, dataset="scans2",
-                     new_dataset=True)
+    out = await call(
+        "ingest_reports", reports={"trivy": [str(report)]}, dataset="scans2", new_dataset=True
+    )
     assert out["active"] == "scans2"
-    msg = await call.error("ingest_reports", reports={"trivy": [str(report)]},
-                           dataset="sample", new_dataset=True)
+    msg = await call.error(
+        "ingest_reports", reports={"trivy": [str(report)]}, dataset="sample", new_dataset=True
+    )
     assert "already exists" in msg
-    out = await call("ingest_reports", reports={"trivy": [str(report)]}, dataset="sample",
-                     new_dataset=True, replace=True, activate=False)
+    out = await call(
+        "ingest_reports",
+        reports={"trivy": [str(report)]},
+        dataset="sample",
+        new_dataset=True,
+        replace=True,
+        activate=False,
+    )
     assert out["findings_after"] == 1
 
 
@@ -99,8 +138,11 @@ async def test_normalise_keeps_loaded_compliance(call, workspace):
     await call("normalise_findings")
     after = {(c.framework, c.control_id) for c in workspace.get().compliance}
     assert before <= after
-    cis = next(f for f in (await call("compliance_summary", framework="CIS-AWS"))["frameworks"]
-               if f["framework"] == "CIS-AWS")
+    cis = next(
+        f
+        for f in (await call("compliance_summary", framework="CIS-AWS"))["frameworks"]
+        if f["framework"] == "CIS-AWS"
+    )
     assert cis["controls_evaluated"] >= 4 and cis["controls_passing"] >= 1
     out = await call("control_status", framework="CIS-AWS", control_id="5.2")
     assert out["status"] == "FAIL" and out["findings"][0]["id"] == "f-ssh-open"
@@ -117,16 +159,34 @@ def test_merge_compliance_rules():
     from cloudg.schema.models import ComplianceResult, ComplianceStatus
 
     old = [
-        ComplianceResult(framework="F", control_id="1", control_title="kept",
-                         status=ComplianceStatus.FAIL, finding_ids=["a", "gone"]),
-        ComplianceResult(framework="F", control_id="2", status=ComplianceStatus.FAIL,
-                         finding_ids=["gone"]),
+        ComplianceResult(
+            framework="F",
+            control_id="1",
+            control_title="kept",
+            status=ComplianceStatus.FAIL,
+            finding_ids=["a", "gone"],
+        ),
+        ComplianceResult(
+            framework="F", control_id="2", status=ComplianceStatus.FAIL, finding_ids=["gone"]
+        ),
         ComplianceResult(framework="F", control_id="3", status=ComplianceStatus.PASS),
-        ComplianceResult(framework="F", control_id="4", control_title="real title",
-                         status=ComplianceStatus.FAIL, finding_ids=["b"]),
+        ComplianceResult(
+            framework="F",
+            control_id="4",
+            control_title="real title",
+            status=ComplianceStatus.FAIL,
+            finding_ids=["b"],
+        ),
     ]
-    new = [ComplianceResult(framework="F", control_id="4", control_title="F - 4",
-                            status=ComplianceStatus.FAIL, finding_ids=["c"])]
+    new = [
+        ComplianceResult(
+            framework="F",
+            control_id="4",
+            control_title="F - 4",
+            status=ComplianceStatus.FAIL,
+            finding_ids=["c"],
+        )
+    ]
     out = {c.control_id: c for c in merge_compliance(old, new, {"a", "b", "c"})}
     assert set(out) == {"1", "3", "4"}  # 2 lost all its findings
     assert out["1"].finding_ids == ["a"]
@@ -135,8 +195,16 @@ def test_merge_compliance_rules():
 
 # -- 6. Prowler OCSF output is refused clearly ----------------------------------
 
-OCSF = [{"message": "x", "finding_info": {"title": "t", "uid": "u"}, "class_uid": 2004,
-         "severity_id": 3, "status_code": "FAIL", "metadata": {"product": {"name": "Prowler"}}}]
+OCSF = [
+    {
+        "message": "x",
+        "finding_info": {"title": "t", "uid": "u"},
+        "class_uid": 2004,
+        "severity_id": 3,
+        "status_code": "FAIL",
+        "metadata": {"product": {"name": "Prowler"}},
+    }
+]
 
 
 def test_ocsf_detected_and_refused(tmp_path):
@@ -159,8 +227,7 @@ def test_ocsf_detected_and_refused(tmp_path):
 
 def test_asff_still_detected(tmp_path):
     f = tmp_path / "asff.json"
-    f.write_text(json.dumps([{"SchemaVersion": "2018-10-08", "ProductArn": "arn:x",
-                              "Title": "t"}]))
+    f.write_text(json.dumps([{"SchemaVersion": "2018-10-08", "ProductArn": "arn:x", "Title": "t"}]))
     assert detect_kind(f) == "prowler"
 
 
@@ -175,15 +242,16 @@ async def test_ingest_reports_reports_ocsf_per_path(call, sample_paths):
 
 
 async def test_find_paths_truncated_only_when_more_exist(call):
-    every = await call("find_paths", source="web-1", target="web-2", mode="undirected",
-                       max_paths=50)
+    every = await call(
+        "find_paths", source="web-1", target="web-2", mode="undirected", max_paths=50
+    )
     n = every["total_found"]
     assert not every["truncated"] and n >= 2
-    exact = await call("find_paths", source="web-1", target="web-2", mode="undirected",
-                       max_paths=n)
+    exact = await call("find_paths", source="web-1", target="web-2", mode="undirected", max_paths=n)
     assert exact["total_found"] == n and not exact["truncated"]
-    fewer = await call("find_paths", source="web-1", target="web-2", mode="undirected",
-                       max_paths=n - 1)
+    fewer = await call(
+        "find_paths", source="web-1", target="web-2", mode="undirected", max_paths=n - 1
+    )
     assert fewer["truncated"] and len(fewer["paths"]) == n - 1
 
 
@@ -202,29 +270,39 @@ async def test_dependency_tree_truncated_only_when_pruned(call):
 
 async def test_ontology_class_consistent(call, layer):
     tool = await call("explain_asset_type", asset_type="RDS_INSTANCE")
-    res = json.loads((await layer.read_resource("cloudg://schema/asset-types/RDS_INSTANCE"))[0]
-                     .text)
+    res = json.loads(
+        (await layer.read_resource("cloudg://schema/asset-types/RDS_INSTANCE"))[0].text
+    )
     assert tool["ontology_class"] == res["ontology_class"] == "cm:RelationalDatabase"
 
 
-@pytest.mark.parametrize("uri,mime", [
-    ("cloudg://graph/d3", "application/json"),
-    ("cloudg://graph/cytoscape", "application/json"),
-    ("cloudg://graph/graphml", "application/graphml+xml"),
-    ("cloudg://ontology/turtle", "text/turtle"),
-    ("cloudg://ontology/json-ld", "application/ld+json"),
-])
+@pytest.mark.parametrize(
+    "uri,mime",
+    [
+        ("cloudg://graph/d3", "application/json"),
+        ("cloudg://graph/cytoscape", "application/json"),
+        ("cloudg://graph/graphml", "application/graphml+xml"),
+        ("cloudg://ontology/turtle", "text/turtle"),
+        ("cloudg://ontology/json-ld", "application/ld+json"),
+    ],
+)
 async def test_format_resources_report_their_mime(layer, uri, mime):
     assert (await layer.read_resource(uri))[0].mime_type == mime
 
 
-@pytest.mark.parametrize("name,args", [
-    ("security_posture_review", {}), ("investigate_asset", {"ref": "web-1"}),
-    ("blast_radius_assessment", {"ref": "kms-main"}), ("incident_triage",
-                                                        {"finding_id": "f-ssh-open"}),
-    ("compliance_gap_analysis", {"framework": "CIS-AWS"}), ("remediation_plan", {}),
-    ("change_impact_analysis", {"ref": "sg-app"}), ("executive_summary", {}),
-])
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("security_posture_review", {}),
+        ("investigate_asset", {"ref": "web-1"}),
+        ("blast_radius_assessment", {"ref": "kms-main"}),
+        ("incident_triage", {"finding_id": "f-ssh-open"}),
+        ("compliance_gap_analysis", {"framework": "CIS-AWS"}),
+        ("remediation_plan", {}),
+        ("change_impact_analysis", {"ref": "sg-app"}),
+        ("executive_summary", {}),
+    ],
+)
 async def test_prompt_embedded_uris_serve_that_content(layer, name, args):
     from cloudg.mcp.core import EmbeddedResource
 
@@ -236,8 +314,9 @@ async def test_prompt_embedded_uris_serve_that_content(layer, name, args):
         assert json.loads(e.resource.text) == served, e.resource.uri
 
 
-async def test_prompt_on_inactive_dataset_does_not_embed_active_uris(layer, workspace,
-                                                                     sample_dataset):
+async def test_prompt_on_inactive_dataset_does_not_embed_active_uris(
+    layer, workspace, sample_dataset
+):
     from cloudg.mcp.core import EmbeddedResource
 
     workspace.add(sample_dataset.copy("other"), activate=False)
@@ -250,11 +329,19 @@ async def test_completion_has_more(layer, workspace):
     from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
 
     ds = workspace.get()
-    ds.assets += [CloudAsset(id=f"bulk-{i}", name=f"bulk-{i:03d}", asset_type=AssetType.EC2,
-                             provider=CloudProvider.AWS) for i in range(150)]
+    ds.assets += [
+        CloudAsset(
+            id=f"bulk-{i}",
+            name=f"bulk-{i:03d}",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+        )
+        for i in range(150)
+    ]
     ds.invalidate()
-    out = await layer.complete({"type": "ref/resource", "uri": "cloudg://assets/{+ref}"},
-                               {"name": "ref", "value": "bulk"})
+    out = await layer.complete(
+        {"type": "ref/resource", "uri": "cloudg://assets/{+ref}"}, {"name": "ref", "value": "bulk"}
+    )
     assert out["total"] == 150 and out["hasMore"] is True and len(out["values"]) == 100
 
 
@@ -277,7 +364,11 @@ async def test_reachability_preview_ids_are_stable(call, workspace):
     a = await call("reachability_findings")
     b = await call("reachability_findings")
     assert [i["id"] for i in a["items"]] == [i["id"] for i in b["items"]]
-    assert all(i["id"].startswith("reach-") for i in a["items"])
+    # The analyser's own deterministic ids (uuid5 of rule + asset key) are kept
+    from cloudg.graph.reachability import ReachabilityAnalyzer
+
+    native = {f.id for f in ReachabilityAnalyzer(workspace.get().graph.copy()).generate_findings()}
+    assert {i["id"] for i in a["items"]} <= native
     added = await call("reachability_findings", add_to_dataset=True)
     ids = {f.id for f in workspace.get().findings}
     assert {i["id"] for i in added["items"]} <= ids

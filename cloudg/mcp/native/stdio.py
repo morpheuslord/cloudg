@@ -107,83 +107,109 @@ async def _serve(
     principal: Principal | None,
     grace: float,
 ) -> None:
-    loop = asyncio.get_running_loop()
-    inbox: asyncio.Queue[Any] = asyncio.Queue()
-    outbox: asyncio.Queue[Any] = asyncio.Queue()
+    await _StdioLoop(server, stdin, stdout, principal, grace).serve()
 
-    def reader() -> None:
+
+class _StdioLoop:
+    """One stdio connection: a reader thread feeding an inbox, a single
+    writer task draining an outbox, and the session in between."""
+
+    def __init__(
+        self,
+        server: NativeMCPServer,
+        stdin: IO[bytes],
+        stdout: IO[bytes],
+        principal: Principal | None,
+        grace: float,
+    ) -> None:
+        self.server = server
+        self.stdin = stdin
+        self.stdout = stdout
+        self.grace = grace
+        self.loop = asyncio.get_running_loop()
+        self.inbox: asyncio.Queue[Any] = asyncio.Queue()
+        self.outbox: asyncio.Queue[Any] = asyncio.Queue()
+        self.pending: set[asyncio.Task[Any]] = set()
+        self.session = server.create_session(
+            transport="stdio", send=self.send, principal=principal or Principal.local()
+        )
+
+    # -- I/O ---------------------------------------------------------------
+
+    def _read(self) -> None:
         try:
-            for line in iter(stdin.readline, b""):
-                loop.call_soon_threadsafe(inbox.put_nowait, line)
+            for line in iter(self.stdin.readline, b""):
+                self.loop.call_soon_threadsafe(self.inbox.put_nowait, line)
         except Exception:  # closed / broken pipe
             logger.debug("stdin reader stopped", exc_info=True)
         finally:
             with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(inbox.put_nowait, _EOF)
+                self.loop.call_soon_threadsafe(self.inbox.put_nowait, _EOF)
 
-    def write(data: bytes) -> None:
-        stdout.write(data)
-        flush = getattr(stdout, "flush", None)
+    def _write(self, data: bytes) -> None:
+        self.stdout.write(data)
+        flush = getattr(self.stdout, "flush", None)
         if flush:
             flush()
 
-    async def writer() -> None:
+    async def _writer(self) -> None:
         while True:
-            item = await outbox.get()
+            item = await self.outbox.get()
             if item is _EOF:
                 return
             try:
-                await asyncio.to_thread(write, (dumps(item) + "\n").encode("utf-8"))
+                await asyncio.to_thread(self._write, (dumps(item) + "\n").encode("utf-8"))
             except (BrokenPipeError, ValueError, OSError):
                 logger.debug("stdout closed; dropping message")
 
-    async def send(message: dict[str, Any]) -> None:
-        await outbox.put(message)
+    async def send(self, message: dict[str, Any]) -> None:
+        await self.outbox.put(message)
 
-    session = server.create_session(
-        transport="stdio", send=send, principal=principal or Principal.local()
-    )
-    writer_task = asyncio.create_task(writer())
-    threading.Thread(target=reader, name="cloudg-mcp-stdin", daemon=True).start()
-    pending: set[asyncio.Task[Any]] = set()
+    # -- messages ------------------------------------------------------------
 
-    async def run(msg: Any) -> None:
-        response = await session.handle(msg)
+    async def _run(self, msg: Any) -> None:
+        response = await self.session.handle(msg)
         if response is not None:
-            await send(response)  # type: ignore[arg-type]
+            await self.send(response)  # type: ignore[arg-type]
 
-    try:
-        while True:
-            line = await inbox.get()
-            if line is _EOF:
-                break
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                msg = json.loads(text)
-            except (ValueError, UnicodeDecodeError):
-                await send(error_response(None, PARSE_ERROR, "Parse error"))
-                continue
-            concurrent = isinstance(msg, list) or (
-                is_request(msg) and msg.get("method") != "initialize"
-            )
-            if concurrent:
-                task = asyncio.create_task(run(msg))
-                pending.add(task)
-                task.add_done_callback(pending.discard)
-            else:  # initialize, notifications, responses: in order
-                await run(msg)
-    finally:
-        server.close_listens()
-        if pending:
-            _, still = await asyncio.wait(pending, timeout=grace)
+    async def _accept(self, line: bytes) -> None:
+        text = line.strip()
+        if not text:
+            return
+        try:
+            msg = json.loads(text)
+        except (ValueError, UnicodeDecodeError):
+            await self.send(error_response(None, PARSE_ERROR, "Parse error"))
+            return
+        if isinstance(msg, list) or (is_request(msg) and msg.get("method") != "initialize"):
+            task = asyncio.create_task(self._run(msg))
+            self.pending.add(task)
+            task.add_done_callback(self.pending.discard)
+        else:  # initialize, notifications, responses: in order
+            await self._run(msg)
+
+    async def serve(self) -> None:
+        writer_task = asyncio.create_task(self._writer())
+        threading.Thread(target=self._read, name="cloudg-mcp-stdin", daemon=True).start()
+        try:
+            while True:
+                line = await self.inbox.get()
+                if line is _EOF:
+                    break
+                await self._accept(line)
+        finally:
+            await self._shutdown(writer_task)
+
+    async def _shutdown(self, writer_task: asyncio.Task[Any]) -> None:
+        self.server.close_listens()
+        if self.pending:
+            _, still = await asyncio.wait(self.pending, timeout=self.grace)
             for task in still:
                 task.cancel()
             if still:
                 await asyncio.gather(*still, return_exceptions=True)
-        session.close()
-        await server.aclose()
-        await outbox.put(_EOF)
+        self.session.close()
+        await self.server.aclose()
+        await self.outbox.put(_EOF)
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(writer_task, timeout=grace)
+            await asyncio.wait_for(writer_task, timeout=self.grace)

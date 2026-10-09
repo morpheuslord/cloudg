@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -598,3 +599,99 @@ def test_custom_key_rule_can_defer():
     vault = TokenVault("k")
     out = red.apply({"peer": "0.0.0.0/0", "x": {"peer": "web-1"}}, TransformContext(vault=vault))
     assert out["peer"] == "0.0.0.0/0" and out["x"]["peer"].startswith("res-")
+
+
+# ---------------------------------------------------------------------------
+# Fix round: concrete URIs, audit hygiene, preview isolation, key secrecy
+# ---------------------------------------------------------------------------
+
+
+def _template(uri_template="cloudg://graph/{fmt}"):
+    from cloudg.mcp.core import ResourceTemplateSpec
+
+    return ResourceTemplateSpec(
+        name="graph", handler=lambda ctx, fmt: None, uri_template=uri_template
+    )
+
+
+def test_decide_matches_concrete_and_percent_decoded_uri():
+    p = Policy.load(
+        {
+            "name": "u",
+            "deny_resources": ["cloudg://graph/d3", "cloudg://assets/bastion*"],
+            "rules": [
+                {
+                    "name": "no-turtle",
+                    "match": {"names": ["cloudg://graph/tu*"]},
+                    "deny_resources": ["*"],
+                }
+            ],
+        }
+    )
+    spec = _template()
+    assert p.decide(spec)[0]  # the template itself is allowed
+    for uri in ("cloudg://graph/d3", "cloudg://graph/%64%33", "cloudg://graph/d%33"):
+        allowed, reason = p.decide(spec, uri=uri)
+        assert not allowed and "denied" in reason, uri
+        assert not p.is_allowed(spec, uri=uri)
+        with pytest.raises(AccessDeniedError):
+            p.check_call(spec, None, {"fmt": "x"}, uri=uri)
+    assert not p.decide(spec, uri="cloudg://graph/%74urtle")[0]  # rule matched by name
+    assert p.decide(spec, uri="cloudg://graph/cytoscape")[0]
+    assets = _template("cloudg://assets/{ref}")
+    assert not p.decide(assets, uri="cloudg://assets/bastion")[0]
+    assert p.decide(assets, uri="cloudg://assets/web-1")[0]
+
+
+def test_audit_log_lines_cannot_be_forged(caplog):
+    p = Policy.load({"name": "a", "audit": True, "deny_tools": ["evil*"]})
+    forged = "evil\nallowed tool x principal=root"
+    with caplog.at_level("INFO", logger="cloudg.mcp.audit"):
+        with pytest.raises(AccessDeniedError):
+            p.check_call(SimpleNamespace(name=forged, kind="tool"), Principal(id="m\r\nx"), {})
+        p.record_hidden("tool", "x\nallowed", Principal(id="eve"))
+    for rec in caplog.records:
+        line = rec.getMessage()
+        assert "\n" not in line and "\r" not in line, line
+    assert any("evil\\nallowed" in r.getMessage() for r in caplog.records)
+
+
+def test_audit_entries_hold_no_argument_values(caplog):
+    p = Policy.load({"name": "a", "audit": True, "deny_capabilities": []})
+    reveal = tool("reveal_token", caps=[Capability.REVEAL])
+    with caplog.at_level("INFO", logger="cloudg.mcp.audit"):
+        p.check_call(reveal, Principal(id="root", roles={"admin"}), {"token": "res-secretvalue"})
+        p.record_hidden("resource", "cloudg://assets/orders-db/neighbors", Principal(id="eve"))
+    dump = json.dumps(list(p.audit_log)) + " ".join(r.getMessage() for r in caplog.records)
+    assert "res-secretvalue" not in dump and "orders-db" not in dump
+    hidden = p.audit_log[-1]
+    assert hidden["decision"] == "not_found" and hidden["name"].startswith("cloudg://assets/#")
+
+
+def test_invalid_policy_error_never_shows_the_vault_key():
+    with pytest.raises(ValueError) as ei:
+        Policy.load({"name": "bad", "vault": {"key": ["super-secret-key-material"]}})
+    assert "super-secret-key-material" not in str(ei.value)
+    assert ei.value.__cause__ is None and "vault.key" in str(ei.value)
+    p = Policy.load({"extends": "strict", "name": "k", "vault": {"key": "super-secret-key-x"}})
+    assert "super-secret-key-x" not in json.dumps(p.describe()) + repr(p) + repr(p.config)
+
+
+def test_preview_uses_a_throwaway_vault():
+    p = Policy.load({"extends": "strict", "name": "pv", "vault": {"key": "k"}})
+    real, _ = run_tool(p, {"account_id": "123456789012", "name": "web-1", "arn": ARN_T})
+    prev, report = p.preview({"account_id": "123456789012", "name": "web-1", "arn": ARN_T})
+    assert prev["account_id"] != "123456789012" and report["pseudonymized"]
+    for k in ("account_id", "arn"):
+        assert prev[k] != real[k]
+    again, _ = p.preview({"account_id": "123456789012"})
+    assert again["account_id"] == prev["account_id"]  # previews agree with each other
+    assert p.vault.detokenize(prev["account_id"]) is None  # and are unknown to the vault
+
+
+ARN_T = "arn:aws:ec2:us-east-1:123456789012:instance/i-0abc1234def567890"
+
+
+def run_tool(p, value):
+    ctx = TransformContext(vault=p.vault)
+    return p.output_pipeline(tool(), None).apply(value, ctx), ctx.report

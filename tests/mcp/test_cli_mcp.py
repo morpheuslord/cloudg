@@ -56,11 +56,17 @@ def test_tools_json_and_table() -> None:
 def test_layer_options() -> None:
     names = [t["name"] for t in json.loads(run("tools", "--json", "--read-only", *REG).stdout)]
     assert "touch" not in names and "echo" in names  # destructive tool dropped
-    names = [t["name"] for t in json.loads(
-        run("tools", "--json", "--prefix", "cg_", "--exclude-tool", "fail", *REG).stdout)]
+    names = [
+        t["name"]
+        for t in json.loads(
+            run("tools", "--json", "--prefix", "cg_", "--exclude-tool", "fail", *REG).stdout
+        )
+    ]
     assert "cg_echo" in names and "cg_fail" not in names
-    names = [t["name"] for t in json.loads(
-        run("tools", "--json", "--include-category", "admin", *REG).stdout)]
+    names = [
+        t["name"]
+        for t in json.loads(run("tools", "--json", "--include-category", "admin", *REG).stdout)
+    ]
     assert names == ["touch"]
     bad = CliRunner().invoke(mcp_group, ["tools", "--registry", "no.such.module:x"])
     assert bad.exit_code == 2
@@ -84,9 +90,11 @@ def test_call_and_read(tmp_path: Path) -> None:
     args_file = tmp_path / "args.json"
     args_file.write_text('{"text": "file"}')
     assert json.loads(run("call", "echo", "--args", f"@{args_file}", *REG).stdout) == {
-        "text": "file"}
-    assert json.loads(run("call", "echo", "--args", "-", *REG,
-                          input='{"text": "stdin"}').stdout) == {"text": "stdin"}
+        "text": "file"
+    }
+    assert json.loads(
+        run("call", "echo", "--args", "-", *REG, input='{"text": "stdin"}').stdout
+    ) == {"text": "stdin"}
 
     failed = run("call", "fail", *REG)
     assert failed.exit_code == 1 and "boom" in failed.stdout
@@ -104,8 +112,17 @@ def test_call_and_read(tmp_path: Path) -> None:
 
 
 def test_call_as_principal_with_roles() -> None:
-    result = run("call", "echo", "--args", '{"text": "r"}', "--role", "analyst",
-                 "--principal-id", "cli-user", *REG)
+    result = run(
+        "call",
+        "echo",
+        "--args",
+        '{"text": "r"}',
+        "--role",
+        "analyst",
+        "--principal-id",
+        "cli-user",
+        *REG,
+    )
     assert result.exit_code == 0
 
 
@@ -118,15 +135,35 @@ def test_audit_log_option(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("client", ["claude-desktop", "claude-code", "cursor", "vscode"])
 def test_config_snippets(client: str) -> None:
-    stdio = json.loads(run("config", "--client", client, "--policy", "strict",
-                           "--read-only", "--command", "cloudg-mcp serve").stdout)
+    stdio = json.loads(
+        run(
+            "config",
+            "--client",
+            client,
+            "--policy",
+            "strict",
+            "--read-only",
+            "--command",
+            "cloudg-mcp serve",
+        ).stdout
+    )
     servers = stdio["servers" if client == "vscode" else "mcpServers"]
     entry = servers["cloudg"]
     assert entry["command"] == "cloudg-mcp"
     assert entry["args"] == ["serve", "--policy", "strict", "--read-only"]
-    http = json.loads(run("config", "--client", client, "--transport", "http",
-                          "--url", "http://127.0.0.1:9000/mcp",
-                          "--token-env", "CLOUDG_TOKEN").stdout)
+    http = json.loads(
+        run(
+            "config",
+            "--client",
+            client,
+            "--transport",
+            "http",
+            "--url",
+            "http://127.0.0.1:9000/mcp",
+            "--token-env",
+            "CLOUDG_TOKEN",
+        ).stdout
+    )
     entry = http["servers" if client == "vscode" else "mcpServers"]["cloudg"]
     text = json.dumps(entry)
     assert "http://127.0.0.1:9000/mcp" in text and "CLOUDG_TOKEN" in text
@@ -140,14 +177,26 @@ def test_client_config_defaults() -> None:
 
 
 def test_serve_validates_auth_tokens() -> None:
-    result = CliRunner().invoke(mcp_group, ["serve", "--transport", "http",
-                                            "--auth-token", "env:CLOUDG_UNSET_VAR_X", *REG])
+    result = CliRunner().invoke(
+        mcp_group, ["serve", "--transport", "http", "--auth-token", "env:CLOUDG_UNSET_VAR_X", *REG]
+    )
     assert result.exit_code == 2
 
 
 def test_serve_refuses_unsupported_flavor_options() -> None:
-    result = CliRunner().invoke(mcp_group, ["serve", "--transport", "http", "--flavor", "sdk",
-                                            "--cors-origin", "https://a.example", *REG])
+    result = CliRunner().invoke(
+        mcp_group,
+        [
+            "serve",
+            "--transport",
+            "http",
+            "--flavor",
+            "sdk",
+            "--cors-origin",
+            "https://a.example",
+            *REG,
+        ],
+    )
     assert result.exit_code == 2 and "native flavor" in result.output
 
 
@@ -161,3 +210,39 @@ def test_main_cli_keeps_stdout_machine_readable() -> None:
     from cloudg.ui import console
 
     assert console.stderr is False  # restored for the other commands
+
+
+def test_serve_refuses_empty_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from click.testing import CliRunner
+
+    served: list[Any] = []
+    monkeypatch.setattr("cloudg.mcp.server.serve", lambda *a, **k: served.append((a, k)))
+    runner = CliRunner()
+    result = runner.invoke(mcp_group, ["serve", "--transport", "http", "--auth-token", ""])
+    assert result.exit_code == 2 and "empty token" in result.output
+    result = runner.invoke(
+        mcp_group, ["serve", "--transport", "http"], env={"CLOUDG_MCP_AUTH_TOKENS": " "}
+    )
+    assert result.exit_code == 2 and "empty token" in result.output
+    assert served == []
+    result = runner.invoke(mcp_group, ["serve", "--transport", "http", "--auth-token", "t:r"])
+    assert result.exit_code == 0, result.output
+    assert served[0][1]["options"].auth_tokens == ["t:r"]
+
+
+def test_registry_reference_is_validated() -> None:
+    from click.testing import CliRunner
+
+    runner = CliRunner()
+    for ref, message in (
+        ("../evil:x", "dotted Python names"),
+        (".rel:x", "dotted Python names"),
+        ("os:_exit", "public name"),
+        ("os:path", "not a cloudg"),
+    ):
+        result = runner.invoke(mcp_group, ["tools", "--registry", ref])
+        assert result.exit_code == 2 and message in result.output, (ref, result.output)
+    result = runner.invoke(
+        mcp_group, ["tools", "--json", "--registry", "cloudg.mcp.catalog:default_registry"]
+    )
+    assert result.exit_code == 0
