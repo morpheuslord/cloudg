@@ -1,0 +1,23 @@
+<h2 id="commands">Commands</h2>
+<div class="table-wrap">
+<table class="table">
+  <thead><tr><th>Command</th><th>Group</th><th>What it does</th></tr></thead>
+  <tbody>
+  {% for group, p, cmd in page.extra.rows %}
+  <tr><td class="mono strong nowrap"><a href="{{ site.href(p.url) }}">{{ p.title }}</a></td><td class="muted nowrap">{{ group }}</td><td>{{ cmd.short_help if cmd else p.description }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<h2 id="global-options">Global options</h2>
+<pre class="usage"><code>{{ page.extra.root.usage }}</code></pre>
+<div class="table-wrap">
+<table class="table opt-table">
+  <thead><tr><th class="col-flag">Flag</th><th>Value</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+  {% for o in page.extra.root.options %}
+  <tr><td class="mono strong">{{ o.flags|wbr(" / ") }}</td><td class="mono">{{ o.value|wbr("|") }}</td><td class="mono">{{ o.default }}</td><td>{{ o.help }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

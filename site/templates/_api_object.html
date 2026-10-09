@@ -1,0 +1,68 @@
+{% macro params_table(params, cls='') %}
+<div class="table-wrap"><table class="table param-table {{ cls }}">
+  <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+  {% for p in params %}
+  <tr><td class="mono strong">{{ p.name }}</td><td class="mono">{{ p.type }}</td><td class="mono">{{ p.default or ('required' if not p.name.startswith('*') else '') }}</td><td>{{ inline(p.description)|safe }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endmacro %}
+<section class="api-object" id="{{ obj.name.lower() if multi else 'object' }}">
+  {% if multi %}
+  <div class="api-subhead">
+    <span class="tag tag-neutral mono">{{ obj.kind }}</span><span class="mono muted">{{ obj.module }}</span>
+    {% if obj.source_file %}<a class="mono src-link" href="{{ blob(obj.source_line) }}" rel="noopener">{{ obj.source_file }}:{{ obj.source_line }}</a>{% endif %}
+  </div>
+  <h2 class="mono api-name" id="{{ obj.name.lower() }}-name">{{ obj.name }}<a class="h-anchor" href="#{{ obj.name.lower() }}" aria-label="Link to {{ obj.name }}">#</a></h2>
+  {% endif %}
+  <pre class="signature"><code>{% if obj.kind in ('class', 'dataclass', 'model', 'enum') %}<span class="k">class</span> {% elif obj.kind == 'async' %}<span class="k">async def</span> {% elif obj.kind == 'function' %}<span class="k">def</span> {% endif %}{{ obj.signature }}{% if obj.bases and obj.kind != 'class' %}({{ obj.bases|join(', ') }}){% endif %}</code></pre>
+  {% if multi and obj.doc.summary %}<p>{{ inline(obj.doc.summary)|safe }}</p>{% endif %}
+  {% if obj.doc.body %}{{ md(obj.doc.body)|safe }}{% endif %}
+  {% if obj.params and obj.kind in ('class', 'dataclass', 'function', 'async') and obj.kind != 'dataclass' %}
+  {{ params_table(obj.params) }}
+  {% endif %}
+  {% if obj.returns and obj.kind in ('function', 'async') %}
+  <p class="returns"><span class="label">Returns</span> <code>{{ obj.returns }}</code>{% if obj.doc.returns %}: {{ inline(obj.doc.returns)|safe }}{% endif %}</p>
+  {% endif %}
+  {% if obj.doc.raises %}
+  <p class="returns"><span class="label">Raises</span> {% for exc, why in obj.doc.raises %}<code>{{ exc }}</code> {{ inline(why)|safe }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if obj.doc.examples %}{{ code(obj.doc.examples, 'python title="Example (from the docstring)"')|safe }}{% endif %}
+  {% if obj.fields %}
+  <h{{ 3 if multi else 2 }} id="{{ obj.name.lower() ~ '-fields' if multi else 'fields' }}" class="api-section">Fields</h{{ 3 if multi else 2 }}>
+  <div class="table-wrap"><table class="table param-table">
+    <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+    {% for f in obj.fields %}
+    <tr id="{{ obj.name }}.{{ f.name }}"><td class="mono strong">{{ f.name }}</td><td class="mono">{{ f.type }}</td><td class="mono">{{ f.default }}</td><td>{{ inline(f.description)|safe }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  {% if obj.enum_values %}
+  <h{{ 3 if multi else 2 }} id="{{ obj.name.lower() ~ '-values' if multi else 'values' }}" class="api-section">Values</h{{ 3 if multi else 2 }}>
+  <div class="enum-grid">
+    {% for name, value in obj.enum_values %}<div class="enum-cell"><span class="mono strong">{{ name }}</span><span class="mono muted">{{ value }}</span></div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if obj.members %}
+  <h{{ 3 if multi else 2 }} id="{{ obj.name.lower() ~ '-members' if multi else 'members' }}" class="api-section">{{ 'Methods' if obj.kind == 'class' else 'Members' }}</h{{ 3 if multi else 2 }}>
+  {% for m in obj.members %}
+  <div class="member" id="{{ obj.name }}.{{ m.name }}">
+    <div class="member-sig">
+      {% if m.kind in ('async', 'property', 'classmethod', 'staticmethod', 'attribute') %}<span class="tag {{ 'tag-accent' if m.kind == 'async' else 'tag-neutral' }} mono">{{ m.kind }}</span>{% endif %}
+      <code class="sig">{{ m.signature }}</code>
+      <a class="h-anchor" href="#{{ obj.name }}.{{ m.name }}" aria-label="Link to {{ m.name }}">#</a>
+      {% if m.source_line %}<a class="member-src mono" href="{{ blob(m.source_line) }}" rel="noopener">L{{ m.source_line }}</a>{% endif %}
+    </div>
+    {% if m.doc.summary %}<p>{{ inline(m.doc.summary)|safe }}</p>{% endif %}
+    {% if m.doc.body %}{{ md(m.doc.body)|safe }}{% endif %}
+    {% if m.params %}{{ params_table(m.params, 'param-table--member') }}{% endif %}
+    {% if m.returns and m.kind != 'property' and m.returns != 'None' %}<p class="returns"><span class="label">Returns</span> <code>{{ m.returns }}</code>{% if m.doc.returns %}: {{ inline(m.doc.returns)|safe }}{% endif %}</p>{% endif %}
+    {% if m.doc.raises %}<p class="returns"><span class="label">Raises</span> {% for exc, why in m.doc.raises %}<code>{{ exc }}</code> {{ inline(why)|safe }}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    {% if m.doc.examples %}{{ code(m.doc.examples, 'python')|safe }}{% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+</section>

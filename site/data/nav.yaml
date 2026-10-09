@@ -1,0 +1,195 @@
+# Site map. Each tab has a sidebar made of groups; each group lists pages.
+#
+#   page: <path>           hand-written page, read from site/content/<path>.md
+#   split: docs/FILE.md    one page per "##" section of a long reference document
+#                          (sections over split_h3_kb are split again at "###")
+#   generated: <kind>      built from code: cli-index, api-index, config, mcp-tools-index
+#
+# Paths are URLs under the site base, without slashes at either end.
+
+tabs:
+  - id: guides
+    label: Guides
+    root: guides/introduction
+    groups:
+      - title: Start
+        items:
+          - {title: Introduction, page: guides/introduction}
+          - {title: Installation, page: guides/installation}
+          - {title: Quickstart, page: guides/quickstart}
+          - {title: The pipeline, page: guides/pipeline}
+      - title: Mapping
+        items:
+          - {title: Inventory mapping, page: guides/inventory-mapping}
+          - {title: Dependencies & blast radius, page: guides/dependencies}
+          - {title: AWS Organizations, page: guides/aws-organizations}
+      - title: Scanning
+        items:
+          - {title: Running scanners, page: guides/running-scanners}
+          - {title: Ingesting existing output, page: guides/ingesting}
+          - {title: Compliance frameworks, page: guides/compliance}
+      - title: Analyse
+        items:
+          - {title: "Graph, ontology & RAG", page: guides/graph-ontology-rag}
+          - {title: Reports, page: guides/reports}
+      - title: Operate
+        items:
+          - {title: Authentication, page: guides/authentication}
+          - {title: Rate limits & throttling, page: guides/rate-limits}
+          - {title: Docker, page: guides/docker}
+          - {title: CI and automation, page: guides/ci-automation}
+          - {title: Python recipes, page: guides/python-recipes}
+
+  - id: cli
+    label: CLI
+    root: cli
+    groups:
+      - title: Overview
+        items:
+          - {title: All commands, generated: cli-index, path: cli}
+      - title: Pipeline
+        items:
+          - {title: cloudg run, page: cli/run}
+          - {title: cloudg collect, page: cli/collect}
+          - {title: cloudg scan, page: cli/scan}
+          - {title: cloudg report, page: cli/report}
+      - title: Inventory
+        items:
+          - {title: cloudg map, page: cli/map}
+          - {title: cloudg deps, page: cli/deps}
+          - {title: cloudg ingest, page: cli/ingest}
+      - title: MCP
+        items:
+          - {title: cloudg mcp serve, page: cli/mcp-serve}
+          - {title: cloudg mcp config, page: cli/mcp-config}
+          - {title: cloudg mcp tools, page: cli/mcp-tools}
+          - {title: cloudg mcp resources, page: cli/mcp-resources}
+          - {title: cloudg mcp prompts, page: cli/mcp-prompts}
+          - {title: cloudg mcp call, page: cli/mcp-call}
+          - {title: cloudg mcp read, page: cli/mcp-read}
+      - title: Shared
+        items:
+          - {title: Provider & region flags, page: cli/provider-flags}
+          - {title: Auth flags, page: cli/auth-flags}
+          - {title: Output flags, page: cli/output-flags}
+
+  - id: api
+    label: Python API
+    root: api
+    groups:
+      - title: Overview
+        items:
+          - {title: Python API, generated: api-index, path: api}
+      - title: Engine
+        items:
+          - {title: CloudGEngine, page: api/cloudgengine}
+          - {title: CloudGConfig, page: api/cloudgconfig}
+          - {title: Result objects, page: api/results}
+          - {title: Event hooks, page: api/event-hooks}
+      - title: Inventory
+        items:
+          - {title: InventoryMapper, page: api/inventorymapper}
+          - {title: InventoryResult, page: api/inventoryresult}
+          - {title: RelationshipLinker, page: api/relationshiplinker}
+          - {title: DependencyGraph, page: api/dependencygraph}
+      - title: Graph
+        items:
+          - {title: GraphBuilder, page: api/graphbuilder}
+          - {title: ReachabilityAnalyzer, page: api/reachabilityanalyzer}
+          - {title: CloudOntology, page: api/cloudontology}
+          - {title: RAGExporter, page: api/ragexporter}
+      - title: Findings
+        items:
+          - {title: FindingsNormaliser, page: api/findingsnormaliser}
+          - {title: parse_report, page: api/parse-report}
+          - {title: Data models, page: api/models}
+      - title: Extend
+        items:
+          - {title: Entry points, page: api/entry-points}
+          - {title: cloudg.resilience, page: api/resilience}
+          - {title: CloudGMCPLayer, page: api/mcp-layer}
+
+  - id: mcp
+    label: MCP server
+    root: mcp
+    groups:
+      - title: Start
+        items:
+          - {title: Overview, page: mcp/index, path: mcp}
+          - {title: Connect a client, page: mcp/connect}
+      - title: Server
+        split: docs/MCP.md
+        prefix: mcp/server
+        skip: [Contents]
+      - title: Tools
+        split: docs/MCP_TOOLS.md
+        prefix: mcp/tools
+        skip: [Tool reference]
+      - title: Privacy & policy
+        split: docs/MCP_PRIVACY.md
+        prefix: mcp/privacy
+        skip: [Contents]
+      - title: Internals
+        split: docs/MCP_INTERNALS.md
+        prefix: mcp/internals
+        skip: [Contents]
+
+  - id: reference
+    label: Reference
+    root: reference/config/providers
+    groups:
+      - title: config.yaml
+        generated: config
+        prefix: reference/config
+      - title: Outputs
+        items:
+          - {title: Output files, page: reference/output-files}
+      - title: Inventory structures
+        split: docs/INVENTORY_REFERENCE.md
+        prefix: reference/inventory
+        skip: [Contents]
+      - title: Catalogs
+        split: docs/INVENTORY_CATALOG.md
+        prefix: reference/catalog
+        skip: [Contents]
+      - title: Inventory internals
+        split: docs/INVENTORY_INTERNALS.md
+        prefix: reference/internals
+        skip: [Contents]
+      - title: Resilience internals
+        split: docs/RESILIENCE.md
+        prefix: reference/resilience
+        skip: [Contents]
+
+  - id: changelog
+    label: Changelog
+    root: changelog
+
+# Links from the old one-page handbook (index.html#anchor) to their new homes.
+redirects:
+  install: guides/installation
+  pipeline: guides/pipeline
+  run: cli/run
+  collect-scan: cli/collect
+  map: guides/inventory-mapping
+  deps: guides/dependencies
+  ingest: guides/ingesting
+  report: cli/report
+  inputs: guides/ingesting#input-requirements
+  outputs: reference/output-files
+  models: api/models
+  inventory-docs: reference/inventory
+  config: reference/config/providers
+  ratelimit: guides/rate-limits
+  api: api
+  recipes: guides/python-recipes
+  plugins: api/entry-points
+  auth: guides/authentication
+  docker: guides/docker
+  mcp: mcp
+  mcp-serve: cli/mcp-serve
+  mcp-embed: mcp/server/in-process-use
+  mcp-policies: mcp/privacy/built-in-profiles
+  mcp-catalog: mcp/tools/tool-index
+  mcp-cli: cli/mcp-serve
+  changelog: changelog

@@ -2,6 +2,14 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## Unreleased
+
+Documentation:
+
+- The handbook at morpheuslord.github.io/cloudg is now a site of separate pages instead of one long `docs/index.html`. Guides, the CLI, the Python API, the MCP server, the reference documents and this changelog each have their own tab and sidebar. `site/build.py` builds it: the CLI options tables come from the click definitions, the API pages from the docstrings, the config pages from `config.yaml` and the `CloudGConfig` models, and the long `docs/*.md` references are split into one page per section. Writing rules for new pages are in `site/AUTHORING.md`.
+- New guides cover installation, the pipeline phase by phase, authentication for each provider, AWS Organizations, scanners and ingest input formats, compliance mapping, reports, the graph, ontology and RAG exports, rate limits, Docker, CI and Python recipes. Code samples are complete scripts, and processes are drawn as diagrams.
+- Search (Ctrl K or /), a dark theme, linked code tabs and copy buttons work without a server. Links to the old `index.html#anchor` sections redirect to the new pages.
+
 ## 0.6.0 (2026-10-09)
 
 Two additions and a round of graph fixes. cloudg is now a Model Context Protocol server, so AI agents can query an inventory map, its graph, findings, compliance and ontology under an access and privacy policy. Every cloud API call now goes through a shared rate limiter that slows down when a provider throttles, so an organization-wide map (or an agent asking for one too often) no longer fails or hammers the APIs.

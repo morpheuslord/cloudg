@@ -1,0 +1,51 @@
+<svg class="hero-graph" viewBox="-60 10 660 420" role="img" aria-hidden="true">
+  <path class="hg-cloud" d="M118 128a26 26 0 0 1-2-52a34 34 0 0 1 64-12a28 28 0 0 1 38 26a22 22 0 0 1-4 38z" transform="translate(-300 -120) scale(4)"/>
+  <g class="hg-edges">
+    <line x1="250" y1="240" x2="380" y2="330"/>
+    <line x1="250" y1="350" x2="380" y2="330"/>
+    <line x1="250" y1="240" x2="380" y2="220"/>
+    <line x1="380" y1="220" x2="490" y2="250"/>
+    <line x1="490" y1="250" x2="330" y2="125"/>
+    <line x1="330" y1="125" x2="380" y2="220"/>
+    <line x1="380" y1="330" x2="490" y2="340"/>
+    <line class="hg-dash" x1="150" y1="200" x2="130" y2="300"/>
+    <line class="hg-dash" x1="150" y1="200" x2="250" y2="240"/>
+    <line class="hg-dash" x1="150" y1="200" x2="250" y2="350"/>
+  </g>
+  <g class="hg-hot">
+    <line x1="-10" y1="300" x2="130" y2="300"/>
+    <line x1="130" y1="300" x2="250" y2="240"/>
+    <line x1="130" y1="300" x2="250" y2="350"/>
+  </g>
+  <g class="hg-elabel">
+    <text x="262" y="214">ASSUMES_ROLE</text>
+    <text x="428" y="225">GRANTS_ACCESS</text>
+    <text x="398" y="178">INVOKES</text>
+    <text x="58" y="262">PROTECTS</text>
+    <text x="-6" y="290" class="hg-hot-t">INTERNET_EXPOSED</text>
+  </g>
+  <g class="hg-nodes">
+    <rect x="-18" y="292" width="16" height="16" class="hg-red"/>
+    <circle cx="130" cy="300" r="9" class="hg-red"/>
+    <circle cx="250" cy="240" r="9"/>
+    <circle cx="250" cy="350" r="9"/>
+    <rect x="143" y="193" width="14" height="14"/>
+    <circle cx="380" cy="330" r="9"/>
+    <rect x="373" y="213" width="14" height="14"/>
+    <circle cx="490" cy="250" r="9"/>
+    <circle cx="330" cy="125" r="9"/>
+    <rect x="483" y="333" width="14" height="14"/>
+  </g>
+  <g class="hg-labels">
+    <text x="-30" y="330">0.0.0.0/0</text>
+    <text x="104" y="328">alb/web</text>
+    <text x="222" y="270">i-web-1</text>
+    <text x="222" y="380">i-web-2</text>
+    <text x="96" y="190">sg-web</text>
+    <text x="350" y="360">rds/orders</text>
+    <text x="352" y="252">role/app</text>
+    <text x="470" y="280">s3/assets</text>
+    <text x="300" y="155">fn/resize</text>
+    <text x="466" y="370">kms/data</text>
+  </g>
+</svg>

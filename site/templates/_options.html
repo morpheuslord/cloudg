@@ -1,0 +1,17 @@
+<h2 id="options">Options</h2>
+<div class="table-wrap">
+<table class="table opt-table">
+  <thead><tr><th class="col-flag">Flag</th><th>Value</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+  {% for o in cmd.options %}
+  <tr id="opt-{{ o.anchor }}">
+    <td class="mono strong">{{ o.flags|wbr(" / ") }}{% if o.required %} <span class="tag tag-accent">required</span>{% endif %}{% if o.is_argument %} <span class="tag tag-neutral">argument</span>{% endif %}</td>
+    <td class="mono">{{ o.value|wbr("|") }}</td>
+    <td class="mono">{{ o.default }}</td>
+    <td>{{ o.help }}{% if o.multiple %} <span class="muted">Repeatable.</span>{% endif %}{% if o.envvar %} <span class="muted">Env: <code>{{ o.envvar }}</code></span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="table-note">Generated from the click definition in <a href="{{ site.blob(cmd.source_file, cmd.source_line, site.git_ref) }}" rel="noopener"><code>{{ cmd.source_file }}</code></a>, so it matches <code>cloudg {{ cmd.path }} --help</code>.{% if page.tab == 'cli' and cmd.path in ('run', 'collect', 'scan', 'map') %} Credentials can come from flags, <code>config.yaml</code> or the environment: see <a href="{{ site.href('cli/auth-flags') }}">Auth flags</a>.{% endif %}</p>

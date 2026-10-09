@@ -1,0 +1,11 @@
+<h2 id="reference">Reference</h2>
+{% for title, items in page.extra.groups %}
+<div class="api-group">
+  <h3 class="api-group-title">{{ title }}</h3>
+  <div class="api-group-items">
+  {% for p in items %}
+    <a class="api-card" href="{{ site.href(p.url) }}"><span class="api-card-name{% if p.mono_title %} mono{% endif %}">{{ p.title }}</span><span class="api-card-desc">{{ p.description }}</span></a>
+  {% endfor %}
+  </div>
+</div>
+{% endfor %}

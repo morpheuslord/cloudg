@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="shell{% if page.kind == 'config' %} shell--no-toc{% endif %}">
+  <aside class="sidebar" id="sidebar" aria-label="{{ page.tab|capitalize }} navigation" data-sidebar>
+    <nav class="sidebar-inner">
+      {% for g in sidebar %}
+      <div class="side-group">
+        <div class="side-title"><span class="mono">{{ g.num }}</span>{{ g.title }}</div>
+        {% for p in g.pages if p.in_sidebar %}
+        <a href="{{ site.href(p.url) }}" class="side-link{% if p.url == page.url or (page.extra.get('parent') and page.extra.parent.url == p.url) %} is-active{% endif %}{% if p.kind in ('cli','api') and p.title.startswith('cloudg ') %} mono-ish{% endif %}"{% if p.url == page.url %} aria-current="page"{% endif %}>{{ p.nav_title or p.title }}</a>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </nav>
+  </aside>
+  <div class="scrim" data-scrim hidden></div>
+  <main id="main" class="content" tabindex="-1">
+    <article class="article{% if page.kind == 'config' %} article--wide{% endif %}" data-pagefind-body>
+      {% if page.crumbs %}
+      <nav class="crumbs" aria-label="Breadcrumb">
+        {% for c in page.crumbs %}<span>{{ c }}</span><span aria-hidden="true">/</span>{% endfor %}<span class="crumb-here">{{ page.title }}</span>
+      </nav>
+      {% endif %}
+      {% if page.kind == 'api' and page.extra.get('kind_tag') %}
+      <div class="api-head">
+        <span class="tag tag-neutral mono">{{ page.extra.kind_tag }}</span>
+        <span class="mono muted">{{ page.extra.module }}</span>
+        {% if page.source %}<a class="mono src-link" href="{{ site.edit_url(page) }}" rel="noopener">{{ page.source }}:{{ page.source_line }}</a>{% endif %}
+      </div>
+      {% endif %}
+      {% if page.extra.get('kicker') %}<div class="kicker mono">{{ page.extra.kicker }}</div>{% endif %}
+      <h1 class="page-title{% if page.mono_title %} mono-title{% endif %}"{% if page.extra.get('title_anchor') %} id="{{ page.extra.title_anchor }}"{% endif %}>{{ page.title }}</h1>
+      {% if page.lede %}<p class="lede">{{ page.lede|safe }}</p>{% endif %}
+      {% if page.meta or (page.kind == 'guide' and page.tab == 'guides') %}
+      <div class="meta-strip">
+        {% for label, value in page.meta %}
+        <div class="meta-cell"><div class="meta-label">{{ label }}</div><div class="meta-value">{{ value|safe }}</div></div>
+        {% endfor %}
+        <a class="meta-cell meta-edit" href="{{ site.edit_url(page) }}" rel="noopener">{{ icon('pencil', 16)|safe }}Edit on GitHub</a>
+      </div>
+      {% endif %}
+      {% set toc = page.headings|selectattr('level', 'in', [2, 3])|list %}
+      {% if toc|length > 1 %}
+      <details class="toc-inline">
+        <summary>{{ icon('list', 16)|safe }}{{ page.toc_label }}</summary>
+        <nav aria-label="{{ page.toc_label }}">
+          {% for h in toc %}<a href="#{{ h.id }}" class="toc-l{{ h.level }}">{{ h.text }}</a>{% endfor %}
+        </nav>
+      </details>
+      {% endif %}
+      <div class="prose">
+        {{ page.body|safe }}
+      </div>
+      <div class="feedback" data-feedback>
+        <span class="feedback-q">Did this page help?</span>
+        <button type="button" class="btn btn-secondary" data-feedback-yes>Yes</button>
+        <a class="btn btn-secondary" rel="noopener" data-feedback-no href="https://github.com/morpheuslord/cloudg/issues/new?title={{ ('Docs: ' ~ page.title)|urlencode }}&body={{ ('Page: https://morpheuslord.github.io' ~ site.href(page.url) ~ '\n\nWhat was missing or wrong?\n')|urlencode }}">No</a>
+        <span class="feedback-thanks" hidden>Thanks. If something was missing, <a href="https://github.com/morpheuslord/cloudg/issues/new" rel="noopener">open an issue</a>.</span>
+        <span class="feedback-ver">{% if page.since %}Last changed in v{{ page.since }}{% else %}Docs for v{{ site.version }}{% endif %}</span>
+      </div>
+      {% if page.prev or page.next %}
+      <nav class="pager" aria-label="Previous and next page">
+        {% if page.prev %}<a class="pager-prev" href="{{ site.href(page.prev.url) }}"><span class="pager-label">{{ icon('arrow-left', 14)|safe }}Previous</span><span class="pager-title">{{ page.prev.nav_title or page.prev.title }}</span></a>{% else %}<span></span>{% endif %}
+        {% if page.next %}<a class="pager-next" href="{{ site.href(page.next.url) }}"><span class="pager-label">Next{{ icon('arrow-right', 14)|safe }}</span><span class="pager-title">{{ page.next.nav_title or page.next.title }}</span></a>{% endif %}
+      </nav>
+      {% endif %}
+    </article>
+  </main>
+  {% if page.kind != 'config' %}
+  <aside class="toc" aria-label="{{ page.toc_label }}">
+    <div class="toc-inner">
+      {% if toc %}
+      <div class="toc-title">{{ page.toc_label }}</div>
+      <nav class="toc-links" data-toc>
+        {% for h in toc %}<a href="#{{ h.id }}" class="toc-l{{ h.level }}{% if page.kind == 'api' and '.' in h.id %} mono{% endif %}">{{ h.text }}</a>{% endfor %}
+      </nav>
+      {% endif %}
+      <div class="toc-foot">
+        {% if page.source %}<a href="{{ site.edit_url(page) }}" rel="noopener">{{ icon('pencil', 14)|safe }}{% if page.source_line %}View source{% else %}Edit this page{% endif %}</a>{% endif %}
+        <a href="https://github.com/morpheuslord/cloudg/issues/new?title={{ ('Docs: ' ~ page.title)|urlencode }}" rel="noopener">{{ icon('triangle-alert', 14)|safe }}Report an issue</a>
+        <a href="#main" class="toc-top">{{ icon('arrow-left', 14)|safe }}Back to top</a>
+      </div>
+    </div>
+  </aside>
+  {% endif %}
+</div>
+{% endblock %}
