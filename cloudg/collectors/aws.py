@@ -59,13 +59,13 @@ def _get_aio_config(max_attempts: int | None = None, mode: str | None = None) ->
         return Config(retries=retries)
 
 
-def _default_client_config() -> Any:
+def _default_client_config(retries: dict[str, Any] | None = None) -> Any:
     """Session-wide default for clients created without ``config=``: the
     configured retries only (botocore's default timeouts are kept)."""
     try:
         from aiobotocore.config import AioConfig
 
-        return AioConfig(retries=_retries())
+        return AioConfig(retries=dict(retries) if retries else _retries())
     except ImportError:  # pragma: no cover (aiobotocore always ships with aioboto3)
         return None
 
@@ -92,7 +92,13 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
         self._region = region
         self._account_id = account_id
         self._aioboto3_session: Any = None
-        self._aio_config = _get_aio_config()
+        # Read the governor's retry settings once: a later reconfiguration
+        # (another run with a different config) must not change the retries
+        # of a collector that is already running.
+        self._retry_settings = _retries()
+        self._aio_config = _get_aio_config(
+            self._retry_settings["max_attempts"], self._retry_settings["mode"]
+        )
         self.coverage = CollectionCoverage(provider="aws", region=region, account_id=account_id)
 
     def _get_aio_session(self) -> Any:
@@ -131,7 +137,7 @@ class AsyncAWSCollector(CoreServiceCollectorsMixin, ExtendedServiceCollectorsMix
                 self._aioboto3_session,
                 account_id=self._account_id,
                 region=self._region,
-                default_config=_default_client_config(),
+                default_config=_default_client_config(self._retry_settings),
             )
         return self._aioboto3_session
 
