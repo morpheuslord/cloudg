@@ -1,40 +1,183 @@
 name: Publish
 
-# Runs when a GitHub release is published, or manually from the Actions tab.
 # Publishes the Python package to PyPI (trusted publishing / OIDC: no API
 # token secret needed, but the publisher must be registered once on PyPI,
 # see notes at the bottom) and the Docker image to GitHub Container Registry.
+#
+# Automatic: publishing a GitHub release builds the release tag, takes the
+# version from the tag (v0.6.0 -> 0.6.0), publishes to PyPI and pushes the
+# image as :<version> and :latest.
+#
+# Manual (Actions tab -> Publish -> Run workflow): choose what to build and
+# where it goes. Examples:
+#   - rebuild only the image of a release from a fixed main:
+#       ref=main, version=0.6.0, targets=docker
+#   - publish a tag to PyPI only:
+#       ref=v0.6.1, targets=pypi
+# PyPI uploads skip files that already exist, so re-running is safe.
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build: a tag (v0.6.0), a branch (main) or a commit SHA"
+        required: true
+        default: main
+      version:
+        description: "Version to publish (0.6.0). Empty: taken from the ref when it is a vX.Y.Z tag, else from pyproject.toml"
+        required: false
+        default: ""
+      targets:
+        description: "Where to publish"
+        required: true
+        type: choice
+        options: [all, pypi, docker]
+        default: all
+      tag_latest:
+        description: "Also tag the Docker image :latest"
+        required: true
+        type: boolean
+        default: true
+      extra_tags:
+        description: "Extra Docker image tags, comma-separated (for example: 0.6,stable)"
+        required: false
+        default: ""
 
 # Least-privilege default for every job; the publish and docker jobs declare
 # the extra scopes they need themselves.
 permissions:
   contents: read
 
+# Never publish the same version from two runs at once
+concurrency:
+  group: publish-${{ github.event_name == 'release' && github.ref_name || inputs.ref }}
+  cancel-in-progress: false
+
 jobs:
+  plan:
+    # Resolves the run's parameters once, for both trigger types. Inputs only
+    # reach the shell through environment variables and are validated here.
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.plan.outputs.ref }}
+      version: ${{ steps.plan.outputs.version }}
+      pypi: ${{ steps.plan.outputs.pypi }}
+      docker: ${{ steps.plan.outputs.docker }}
+      image_tags: ${{ steps.plan.outputs.image_tags }}
+    steps:
+      - name: Resolve ref and targets
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          IN_REF: ${{ inputs.ref }}
+          IN_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "release" ]; then
+            REF="$RELEASE_TAG"; TARGETS=all
+          else
+            REF="$IN_REF"; TARGETS="$IN_TARGETS"
+          fi
+          if ! printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$'; then
+            echo "::error::Invalid ref: $REF"; exit 1
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ steps.refs.outputs.ref }}
+
+      - name: Resolve version and image tags
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ steps.refs.outputs.ref }}
+          TARGETS: ${{ steps.refs.outputs.targets }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_LATEST: ${{ inputs.tag_latest }}
+          IN_EXTRA: ${{ inputs.extra_tags }}
+        run: |
+          set -euo pipefail
+          SEMVER='^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.+-]*)?$'
+          VERSION="$IN_VERSION"
+          if [ -z "$VERSION" ] && printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+            VERSION="${REF#v}"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq "$SEMVER"; then
+            echo "::error::Invalid version: $VERSION"; exit 1
+          fi
+
+          LATEST=true
+          if [ "$EVENT" != "release" ]; then LATEST="$IN_LATEST"; fi
+          IMAGE=ghcr.io/morpheuslord/cloudg
+          TAGS="$IMAGE:$VERSION"
+          if [ "$LATEST" = "true" ]; then TAGS="$TAGS,$IMAGE:latest"; fi
+          if [ -n "${IN_EXTRA:-}" ]; then
+            IFS=',' read -ra EXTRA <<< "$IN_EXTRA"
+            for t in "${EXTRA[@]}"; do
+              t="$(printf '%s' "$t" | tr -d '[:space:]')"
+              [ -z "$t" ] && continue
+              if ! printf '%s' "$t" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+                echo "::error::Invalid image tag: $t"; exit 1
+              fi
+              TAGS="$TAGS,$IMAGE:$t"
+            done
+          fi
+
+          PYPI=false; DOCKER=false
+          case "$TARGETS" in
+            all) PYPI=true; DOCKER=true ;;
+            pypi) PYPI=true ;;
+            docker) DOCKER=true ;;
+            *) echo "::error::Invalid targets: $TARGETS"; exit 1 ;;
+          esac
+
+          {
+            echo "ref=$REF"
+            echo "version=$VERSION"
+            echo "pypi=$PYPI"
+            echo "docker=$DOCKER"
+            echo "image_tags=$TAGS"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Publish plan"
+            echo "- ref: \`$REF\` ($(git rev-parse --short HEAD))"
+            echo "- version: \`$VERSION\`"
+            echo "- PyPI: $PYPI"
+            echo "- Docker: $DOCKER ($TAGS)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.pypi == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.ref }}
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           cache-dependency-glob: pyproject.toml
 
-      - name: Set version from release tag
-        # The release tag is the source of truth: v0.4.0 builds 0.4.0
-        # no matter what pyproject.toml says, so a stale version can
-        # never collide with a file already on PyPI.
-        if: github.ref_type == 'tag'
+      - name: Stamp the version
+        # The planned version is the source of truth, so a stale
+        # pyproject.toml can never collide with a file already on PyPI.
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           sed -i "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" cloudg/__init__.py
-          echo "Building version $VERSION from tag $GITHUB_REF_NAME"
+          echo "Building version $VERSION"
 
       - name: Build wheel and sdist
         run: uv build
@@ -46,20 +189,21 @@ jobs:
           /tmp/smoke/bin/python -c "import cloudg; print('cloudg', cloudg.__version__)"
           /tmp/smoke/bin/cloudg --version
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
 
   publish:
-    needs: build
+    needs: [plan, build]
+    if: needs.plan.outputs.pypi == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       # Required for PyPI trusted publishing (OIDC)
       id-token: write # nosemgrep: codacy.yaml.security.hard-coded-tokens -- OIDC permission scope, not a token value
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -72,13 +216,25 @@ jobs:
           skip-existing: true
 
   docker:
+    needs: plan
+    if: needs.plan.outputs.docker == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       # Required to push to GitHub Container Registry
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - name: Stamp the version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          sed -i "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" cloudg/__init__.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -88,19 +244,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image version tag
-        id: version
-        # v0.3.1 -> 0.3.1; manual runs from a branch tag as that branch name
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build and push image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/morpheuslord/cloudg:latest
-            ghcr.io/morpheuslord/cloudg:${{ steps.version.outputs.version }}
+          tags: ${{ needs.plan.outputs.image_tags }}
 
 # One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
 #   Project name:  cloudg
