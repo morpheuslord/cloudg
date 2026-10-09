@@ -94,7 +94,10 @@ def _fetch_page(client: Any, request: Any, max_retries: int, sleep: Callable[[fl
     """One ``resources`` call, retrying throttled (429) responses.
 
     Waits at least the server's Retry-After / quota-reset hint, otherwise
-    exponential back-off (2s, 4s, ... capped at 30s).
+    exponential back-off (2s, 4s, ... capped at 30s). Clients built by
+    :func:`default_graph_client_factory` already retry 429 in their
+    azure-core pipeline (and report every attempt), so a 429 that reaches
+    this function from them is final and is not retried again.
     """
     gov = get_governor()
     # Clients from default_graph_client_factory pace every HTTP attempt in
@@ -108,19 +111,19 @@ def _fetch_page(client: Any, request: Any, max_retries: int, sleep: Callable[[fl
         try:
             response = client.resources(request)
         except Exception as exc:
-            if _status_code(exc) == 429:
+            if not paced_by_client and _status_code(exc) == 429:
                 hint = retry_after(exc)
                 gov.on_throttle(_GRAPH_SCOPE, hint, str(exc)[:200])
                 if attempt < max_retries:
                     attempt += 1
                     gov.record_retry(_GRAPH_SCOPE)
+                    # The limiter, paused for the hint, waits it out when enabled
                     delay = min(2.0**attempt, 30.0)
-                    if paced_by_client or not gov.provider_enabled("azure"):
-                        # Otherwise the limiter, paused for the hint, waits it out
+                    if not gov.provider_enabled("azure"):
                         delay = max(delay, min(hint or 0.0, 300.0))
                     sleep(delay)
                     continue
-                gov.on_gave_up(_GRAPH_SCOPE, f"throttled: Resource Graph query: {str(exc)[:150]}")
+            gov.on_final_error(_GRAPH_SCOPE, exc, "Resource Graph query")
             raise
         gov.on_success(_GRAPH_SCOPE)
         return response

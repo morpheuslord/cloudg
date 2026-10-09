@@ -22,10 +22,12 @@ from cloudg.cli_run_helpers import (
     _collect_assets,
     _export_rag_phase,
     _graph_phase,
+    RunProducts,
     _post_scan_phases,
     _scanner_phase,
     _terraform_phase,
 )
+
 
 @click.command()
 @click.option(
@@ -141,7 +143,7 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     # Phase 2: Graph Analysis
     graph, graph_json, reachability_findings = _graph_phase(cfg, assets, edges, output_dir)
 
-    # Phase 2b: Semantic Ontology — deferred to after scanner phase
+    # Phase 2b: Semantic Ontology, deferred to after the scanner phase
     # (so security/compliance findings can be included in the ontology)
 
     # Phase 2c: RAG Export
@@ -163,17 +165,8 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
         output_dir,
     )
 
-    # Phases 3b–5: ontology, RAG update, normalisation, reports, summary
-    _post_scan_phases(
-        cfg,
-        kwargs,
-        assets,
-        edges,
-        graph,
-        graph_json,
-        reachability_findings,
-        scanner_findings,
-        iam_findings,
-        coverage_records,
-        output_dir,
+    # Phases 3b to 5: ontology, RAG update, normalisation, reports, summary
+    products = RunProducts(
+        assets, edges, graph, graph_json, reachability_findings, coverage_records
     )
+    _post_scan_phases(cfg, kwargs, products, scanner_findings, iam_findings, output_dir)

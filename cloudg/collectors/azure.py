@@ -127,6 +127,15 @@ def first_subscription_id(credential: Any) -> str | None:
     return subs[0]["subscription_id"] if subs else None
 
 
+def _rule_values(rule: dict[str, Any], plural: str, singular: str | None = None) -> list[str]:
+    """Distinct non-empty values of an NSG rule's list field, falling back to
+    its single-value field (``source_address_prefixes`` / ``..._prefix``)."""
+    values = [str(v) for v in rule.get(plural) or [] if v]
+    if not values and singular and rule.get(singular):
+        values = [str(rule[singular])]
+    return list(dict.fromkeys(values))
+
+
 def _resource_group_name(resource_id: str | None) -> str | None:
     parts = (resource_id or "").split("/")
     for i, part in enumerate(parts[:-1]):
@@ -215,9 +224,10 @@ class AzureCollector(BaseCollector):
             logger.error("Failed to collect Azure %s: %s", name, exc)
             self.service_errors[name] = describe_error(exc)
             if is_throttle(exc):
-                get_governor().on_gave_up(
-                    azure_scope_of_error(exc, self._subscription_id, name),
-                    f"throttled: Azure {name}: {str(exc)[:150]}",
+                # on_final_error skips calls that were never sent and prefers
+                # the scope carried by cloudg's own errors
+                get_governor().on_final_error(
+                    azure_scope_of_error(exc, self._subscription_id, name), exc, f"Azure {name}"
                 )
         return []
 
@@ -352,24 +362,20 @@ class AzureCollector(BaseCollector):
     ) -> list[NetworkEdge]:
         if str(rule.get("access") or "").lower() != "allow":
             return []
-        sources = [str(s) for s in rule.get("source_address_prefixes") or [] if s]
-        if not sources and rule.get("source_address_prefix"):
-            sources = [str(rule["source_address_prefix"])]
-        asgs = [str(a) for a in rule.get("source_application_security_groups") or [] if a]
-        ports = [str(p) for p in rule.get("destination_port_ranges") or [] if p]
-        if not ports and rule.get("destination_port_range"):
-            ports = [str(rule["destination_port_range"])]
+        sources = _rule_values(rule, "source_address_prefixes", "source_address_prefix")
+        asgs = _rule_values(rule, "source_application_security_groups")
+        ports = _rule_values(rule, "destination_port_ranges", "destination_port_range")
+        suffix = " (default)" if rule.get("default") else ""
         common: dict[str, Any] = {
             "target_id": nsg.id,
             "edge_type": EdgeType.SECURITY_GROUP_RULE,
-            "port_range": ",".join(dict.fromkeys(ports)) or None,
+            "port_range": ",".join(ports) or None,
             "protocol": str(rule.get("protocol") or "ALL"),
             "direction": "ingress",
-            "description": f"NSG rule {rule.get('name')}"
-            + (" (default)" if rule.get("default") else ""),
+            "description": f"NSG rule {rule.get('name')}{suffix}",
         }
-        edges = [NetworkEdge(source_id=src, cidr=src, **common) for src in dict.fromkeys(sources)]
-        for asg in dict.fromkeys(asgs):
+        edges = [NetworkEdge(source_id=src, cidr=src, **common) for src in sources]
+        for asg in asgs:
             edges.append(
                 NetworkEdge(
                     source_id=by_arn.get(asg.lower(), asg),
@@ -381,23 +387,25 @@ class AzureCollector(BaseCollector):
             edges.append(NetworkEdge(source_id="*", cidr="*", **common))
         return edges
 
-    async def collect_edges(self) -> list[NetworkEdge]:
-        """Collect Azure network edges from NSG rules and VNet containment."""
-        assets = self._cached_assets or await self.collect()
-        edges: list[NetworkEdge] = []
+    def _nsg_edges(self, assets: list[CloudAsset]) -> list[NetworkEdge]:
+        """SECURITY_GROUP_RULE edges of every allow rule of every NSG."""
         by_arn = {a.arn.lower(): a.id for a in assets if a.arn}
-
+        edges: list[NetworkEdge] = []
         for nsg in (a for a in assets if a.asset_type == AssetType.NSG):
             for rule in nsg.metadata.get("ingress_rules", []) or []:
                 try:
                     edges.extend(self._rule_edges(nsg, rule, by_arn))
                 except Exception:
                     logger.debug("Skipping NSG rule %s on %s", rule, nsg.name, exc_info=True)
+        return edges
 
-        # Containment edges: VNet contains Subnet
+    @staticmethod
+    def _vnet_edges(assets: list[CloudAsset]) -> list[NetworkEdge]:
+        """Containment edges: VNet contains Subnet."""
         vnet_assets = {
             a.arn.lower(): a.id for a in assets if a.asset_type == AssetType.VNET and a.arn
         }
+        edges: list[NetworkEdge] = []
         for asset in assets:
             vnet_id = asset.metadata.get("vnet_id")
             if isinstance(vnet_id, str) and vnet_id.lower() in vnet_assets:
@@ -409,6 +417,11 @@ class AzureCollector(BaseCollector):
                         relationship="VPC_CONTAINS_SUBNET",
                     )
                 )
+        return edges
 
+    async def collect_edges(self) -> list[NetworkEdge]:
+        """Collect Azure network edges from NSG rules and VNet containment."""
+        assets = self._cached_assets or await self.collect()
+        edges = self._nsg_edges(assets) + self._vnet_edges(assets)
         logger.info("Collected %d Azure edges", len(edges))
         return edges

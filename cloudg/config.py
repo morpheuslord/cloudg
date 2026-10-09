@@ -496,6 +496,12 @@ class RateLimitConfig(BaseModel):
     live_caller_window_seconds: float = Field(
         default=3600.0, gt=0, description="Window of live_caller_max_operations"
     )
+    live_operation_timeout_seconds: float | None = Field(
+        default=3600.0,
+        gt=0,
+        description="A live collection running longer is cancelled and its scopes freed "
+        "(None: no limit)",
+    )
 
     @model_validator(mode="before")
     @classmethod

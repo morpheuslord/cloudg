@@ -39,8 +39,10 @@ __all__ = [
     "ResilienceError",
     "RetryBudgetExhaustedError",
     "classify",
+    "classify_strict",
     "describe_error",
     "error_code",
+    "is_provider_answer",
     "is_throttle",
     "parse_retry_after",
     "retry_after",
@@ -420,7 +422,7 @@ def _classify_shape(exc: BaseException, status: int | None) -> ErrorKind | None:
     return None
 
 
-def _classify_one(exc: BaseException) -> ErrorKind | None:
+def _classify_one(exc: BaseException, use_text: bool = True) -> ErrorKind | None:
     if isinstance(exc, (CircuitOpenError, RetryBudgetExhaustedError)):
         return ErrorKind.THROTTLED
     if isinstance(exc, DeadlineExceededError):
@@ -434,9 +436,30 @@ def _classify_one(exc: BaseException) -> ErrorKind | None:
         kind = _classify_shape(exc, status)
     if kind is None and (status is not None or code):
         # A real provider answer that is neither throttling nor transient
-        throttled = _THROTTLE_TEXT_RE.search(f"{message or ''} {exc}")
+        throttled = use_text and _THROTTLE_TEXT_RE.search(f"{message or ''} {exc}")
         kind = ErrorKind.THROTTLED if throttled else ErrorKind.FATAL
     return kind
+
+
+def classify_strict(exc: BaseException) -> ErrorKind | None:
+    """Like :func:`classify`, but from error codes, exception classes and
+    HTTP statuses only (no message text matching); None when none of them
+    says anything."""
+    for err in _causes(exc):
+        kind = _classify_one(err, use_text=False)
+        if kind is not None:
+            return kind
+    return None
+
+
+def is_provider_answer(exc: BaseException) -> bool:
+    """True when ``exc`` carries a provider HTTP status or error code, i.e. the
+    request reached the service and it answered (as opposed to errors
+    raised locally, including cloudg's own :class:`ResilienceError`)."""
+    return any(
+        not isinstance(err, ResilienceError) and (status_code(err) is not None or error_code(err))
+        for err in _causes(exc)
+    )
 
 
 def classify(exc: BaseException) -> ErrorKind:

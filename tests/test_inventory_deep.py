@@ -336,6 +336,38 @@ class TestMapperHelpers:
         assert {r["target"] for r in kept.metadata["relations"]} == {"x", "y"}
         assert new_edges[0].source_id == rich.id
 
+    def test_deduplicate_keeps_parallel_rule_edges(self):
+        """Rule edges between the same nodes that differ in port / protocol /
+        CIDR are parallel rules, not duplicates (regression: they collapsed to
+        the first one whenever any asset was merged)."""
+        sg = _asset("sg", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:1:sg/sg-1")
+        dup = _asset("sg", AssetType.SECURITY_GROUP, arn="arn:aws:ec2:us-east-1:1:sg/sg-1")
+        world = _asset("internet", AssetType.SECURITY_GROUP, arn="0.0.0.0/0")
+
+        def rule(port: str, target: str, protocol: str = "tcp") -> NetworkEdge:
+            return NetworkEdge(
+                source_id=world.id,
+                target_id=target,
+                edge_type=EdgeType.SECURITY_GROUP_RULE,
+                port_range=port,
+                protocol=protocol,
+                cidr="0.0.0.0/0",
+            )
+
+        edges = [
+            rule("22", sg.id),
+            rule("443", sg.id),
+            rule("443", dup.id),  # the same rule seen through the duplicate copy
+            rule("53", sg.id, "udp"),
+        ]
+        _, new_edges = deduplicate([sg, dup, world], edges)
+        assert sorted((e.port_range, e.protocol) for e in new_edges) == [
+            ("22", "tcp"),
+            ("443", "tcp"),
+            ("53", "udp"),
+        ]
+        assert all(e.target_id == sg.id for e in new_edges)
+
     def test_account_hierarchy_contains_only_top_level(self):
         vpc = _asset("vpc", AssetType.VPC, arn="arn:aws:ec2:us-east-1:111111111111:vpc/vpc-1")
         subnet = _asset(

@@ -193,11 +193,18 @@ class BreakerRegistry:
         self.configure(settings or {})
 
     def configure(self, settings: dict[str, dict[str, Any]]) -> None:
+        """Apply per-provider settings; only the breakers of providers whose
+        settings changed are dropped (the others keep their state)."""
         with self._lock:
             new = {p: _BreakerSettings(**s) for p, s in settings.items()}
-            if new != self._settings:
-                self._settings = new
-                self._breakers.clear()
+            changed = {
+                p for p in set(new) | set(self._settings) if new.get(p) != self._settings.get(p)
+            }
+            self._settings = new
+            if changed:
+                self._breakers = {
+                    k: b for k, b in self._breakers.items() if k.split("/", 1)[0] not in changed
+                }
 
     def get(self, scope: Any) -> CircuitBreaker:
         key = str(scope)

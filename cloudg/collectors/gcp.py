@@ -42,7 +42,7 @@ from cloudg.collectors.gcp_assets import (
     to_plain,
 )
 from cloudg.coverage import CollectionCoverage, ServiceStatus
-from cloudg.resilience.errors import ErrorKind, classify, describe_error, is_throttle
+from cloudg.resilience.errors import describe_error
 from cloudg.resilience.gcp import RetryCounter, gcp_retry, gcp_scope, paced
 from cloudg.resilience.governor import get_governor
 from cloudg.inventory.catalogs import asset_type_map, load_catalog
@@ -237,10 +237,7 @@ class GCPCollector(BaseCollector):
                 for item in paced(result, scope, request.get("page_size"), counter=counter):
                     items.append(to_plain(item))
         except Exception as exc:
-            if is_throttle(exc):
-                gov.on_gave_up(scope, f"throttled: {scope.operation}: {str(exc)[:150]}")
-            elif classify(exc) is ErrorKind.TRANSIENT:
-                gov.on_failure(scope)
+            gov.on_final_error(scope, exc, str(scope.operation))
             return items, exc
         gov.on_success(scope)
         return items, None

@@ -264,40 +264,9 @@ def build_azure_credential(cfg: Any) -> Any:
             "azure-identity is required for Azure. Install with: pip install cloudg[azure]"
         ) from exc
 
-    tenant_id = getattr(cfg, "tenant_id", None) or os.environ.get("AZURE_TENANT_ID")
-    client_id = getattr(cfg, "client_id", None) or os.environ.get("AZURE_CLIENT_ID")
-    client_secret = getattr(cfg, "client_secret", None) or os.environ.get("AZURE_CLIENT_SECRET")
-    certificate_path = getattr(cfg, "certificate_path", None)
-    federated_token_file = getattr(cfg, "federated_token_file", None) or os.environ.get(
-        "AZURE_FEDERATED_TOKEN_FILE"
-    )
-
-    # 1. Workload identity federation (AKS, GitHub Actions OIDC)
-    if tenant_id and client_id and federated_token_file:
-        logger.info("Azure auth: workload identity federation (client %s)", client_id)
-        return identity.WorkloadIdentityCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            token_file_path=federated_token_file,
-        )
-
-    # 2. Service principal with secret
-    if tenant_id and client_id and client_secret:
-        logger.info("Azure auth: service principal (client %s)", client_id)
-        return identity.ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-
-    # 3. Service principal with certificate
-    if tenant_id and client_id and certificate_path:
-        logger.info("Azure auth: service principal certificate (client %s)", client_id)
-        return identity.CertificateCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            certificate_path=certificate_path,
-        )
+    explicit = _azure_service_principal(identity, cfg)
+    if explicit is not None:
+        return explicit
 
     # 4. Managed identity (inherited from the VM / App Service / AKS node)
     if getattr(cfg, "use_managed_identity", False):
@@ -313,6 +282,54 @@ def build_azure_credential(cfg: Any) -> Any:
     # 5. Default chain (env, managed identity, CLI, PowerShell)
     logger.info("Azure auth: DefaultAzureCredential chain")
     return identity.DefaultAzureCredential()
+
+
+def _azure_setting(cfg: Any, name: str, env: str | None = None) -> Any:
+    """``cfg.<name>``, else the environment variable ``env``."""
+    value = getattr(cfg, name, None)
+    if not value and env:
+        value = os.environ.get(env)
+    return value
+
+
+def _azure_service_principal(identity: Any, cfg: Any) -> Any:
+    """Workload identity, secret or certificate credential of the configured
+    app registration (None when the settings for none of them are complete)."""
+    tenant_id = _azure_setting(cfg, "tenant_id", "AZURE_TENANT_ID")
+    client_id = _azure_setting(cfg, "client_id", "AZURE_CLIENT_ID")
+    if not (tenant_id and client_id):
+        return None
+    client_secret = _azure_setting(cfg, "client_secret", "AZURE_CLIENT_SECRET")
+    certificate_path = _azure_setting(cfg, "certificate_path")
+    federated_token_file = _azure_setting(cfg, "federated_token_file", "AZURE_FEDERATED_TOKEN_FILE")
+
+    # 1. Workload identity federation (AKS, GitHub Actions OIDC)
+    if federated_token_file:
+        logger.info("Azure auth: workload identity federation (client %s)", client_id)
+        return identity.WorkloadIdentityCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            token_file_path=federated_token_file,
+        )
+
+    # 2. Service principal with secret
+    if client_secret:
+        logger.info("Azure auth: service principal (client %s)", client_id)
+        return identity.ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+    # 3. Service principal with certificate
+    if certificate_path:
+        logger.info("Azure auth: service principal certificate (client %s)", client_id)
+        return identity.CertificateCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            certificate_path=certificate_path,
+        )
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────

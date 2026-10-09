@@ -64,6 +64,7 @@ _NS_RE = re.compile(r"/providers/Microsoft\.([A-Za-z0-9.]+)", re.IGNORECASE)
 LOW_REMAINING_READS = 25
 
 _SLOT_KEY = "cloudg_bulkhead_slot"
+_RETRIES_KEY = "cloudg_retries"
 _THROTTLE_STATUSES = frozenset({429, 503})
 _TRANSIENT_STATUSES = frozenset({408, 500, 502, 504})
 #: Longest limiter sleep on an event loop thread (the token is still taken), as for AWS
@@ -120,6 +121,17 @@ def _context_get(request: Any, key: str) -> Any:
         return None
 
 
+def _count_retry(request: Any) -> int | None:
+    """Number of this retry of the request (1 for the first), kept in its
+    pipeline context, which azure-core reuses across retries."""
+    try:
+        attempt = int(request.context.get(_RETRIES_KEY) or 0) + 1
+        request.context[_RETRIES_KEY] = attempt
+    except Exception:  # a request without a usable context: count unknown
+        return None
+    return attempt
+
+
 def _status_hint(headers: Any) -> float | None:
     """Server-requested delay of a 429/503 (Retry-After, else the quota reset)."""
     hint = parse_retry_after(_header(headers, "Retry-After"))
@@ -129,7 +141,9 @@ def _status_hint(headers: Any) -> float | None:
     return hint
 
 
-def _on_retryable_status(gov: Governor, scope: Scope, status: int, headers: Any) -> None:
+def _on_retryable_status(
+    gov: Governor, scope: Scope, status: int, headers: Any, attempt: int | None
+) -> None:
     """Feedback for a 429/503 (throttling) or 408/5xx (transient) answer.
 
     azure-core's RetryPolicy retries these: each retry costs a token of the
@@ -141,7 +155,7 @@ def _on_retryable_status(gov: Governor, scope: Scope, status: int, headers: Any)
         gov.on_throttle(scope, _status_hint(headers), message)
     else:
         gov.record_transient(scope, message)
-    if not gov.try_retry(scope):
+    if not gov.try_retry(scope, attempt):
         raise RetryBudgetExhaustedError(
             f"retry budget of azure exhausted; not retrying HTTP {status} from {scope.service}",
             scope=scope,
@@ -242,10 +256,14 @@ class _ThrottleHooks:
         status = getattr(http, "status_code", 200) or 200
         headers = getattr(http, "headers", None) or {}
         if status in _THROTTLE_STATUSES or status in _TRANSIENT_STATUSES:
-            _on_retryable_status(self.gov, scope, status, headers)
+            _on_retryable_status(self.gov, scope, status, headers, _count_retry(request))
         elif status < 400:
             self.gov.on_success(scope)
             _slow_down_from_quota_headers(self.gov, scope, headers)
+        else:
+            # A non-retryable answer (403, 404, 409, ...): the service is
+            # reachable, which closes a half-open breaker
+            self.gov.on_answered(scope)
 
 
 def _make_policy_class() -> type | None:

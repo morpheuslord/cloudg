@@ -97,7 +97,7 @@ def gcp_retry(
                 f"{str(exc)[:150]}",
                 scope=scope,
             ) from exc
-        if not gov.try_retry(scope):
+        if not gov.try_retry(scope, tally.count):
             raise RetryBudgetExhaustedError(
                 f"retry budget of gcp exhausted; not retrying {scope.operation}: {str(exc)[:150]}",
                 scope=scope,
@@ -132,7 +132,9 @@ def paced(
     Pagers fetch the next page when the previous one is exhausted, so a
     token is taken every ``page_size`` items, just before that fetch.
     Approximate when the server returns short pages (it never under-counts
-    by more than one page per short page).
+    by more than one page per short page). Further pages are rate limited
+    only: the breaker was checked once for the whole listing, so a listing
+    that is a half-open breaker's probe is not rejected by its own breaker.
     """
     gov = governor or get_governor()
     iterator = iter(items)
@@ -140,7 +142,6 @@ def paced(
     every = page_size if page_size and page_size > 0 else 0
     while True:
         if every and count and count % every == 0 and gov.provider_enabled("gcp"):
-            gov.check(scope)
             gov.limiter.acquire_sync(scope)
             gov.record_call(scope)
         try:

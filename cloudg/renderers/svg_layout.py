@@ -99,7 +99,7 @@ class HierarchicalLayoutMixin:
                 continue
             name = f"{group_label} ({len(group_assets)})"
             sy = self._layout_sidebar_group(
-                name, colour, group_assets, sidebar_x, sidebar_w, sy, positions, containers
+                (name, colour), group_assets, (sidebar_x, sidebar_w), sy, positions, containers
             )
 
         # Any remaining sidebar types
@@ -108,7 +108,12 @@ class HierarchicalLayoutMixin:
                 continue
             name = f"{type_key} ({len(remaining)})"
             sy = self._layout_sidebar_group(
-                name, _COLOURS["other"], remaining, sidebar_x, sidebar_w, sy, positions, containers
+                (name, _COLOURS["other"]),
+                remaining,
+                (sidebar_x, sidebar_w),
+                sy,
+                positions,
+                containers,
             )
 
     def _collect_sidebar_assets(
@@ -271,16 +276,19 @@ class HierarchicalLayoutMixin:
 
     def _layout_sidebar_group(
         self,
-        name: str,
-        colour: str,
+        header: tuple[str, str],
         group_assets: list[CloudAsset],
-        sidebar_x: float,
-        sidebar_w: float,
+        column: tuple[float, float],
         sy: float,
         positions: dict[str, tuple[float, float]],
         containers: list[dict[str, Any]],
     ) -> float:
-        """Place one sidebar group header plus its assets and return the next y."""
+        """Place one sidebar group header plus its assets and return the next y.
+
+        ``header`` is the group's (name, colour), ``column`` the sidebar's (x, width).
+        """
+        name, colour = header
+        sidebar_x, sidebar_w = column
         node_r = 18
         node_spacing = 55
 

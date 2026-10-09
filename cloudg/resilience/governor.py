@@ -14,7 +14,11 @@ Per-run numbers are isolated with :func:`~cloudg.resilience.stats.stats_scope`.
 ``get_governor()`` returns it; ``configure(config)`` applies a
 :class:`~cloudg.config.CloudGConfig` (or its ``ratelimit`` section) and is
 idempotent, so every entry point (``MultiAccountCollector``,
-``InventoryMapper``) can call it.
+``InventoryMapper``) can call it. Applying the same settings again changes
+nothing; a provider whose settings differ gets fresh buckets, breakers and
+retry budget, while bulkhead slots already held stay counted. The settings
+are process-wide: use one rate-limit config per process (the last one
+applied wins for every client of that process).
 """
 
 from __future__ import annotations
@@ -25,6 +29,14 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from cloudg.resilience.breaker import BreakerRegistry
+from cloudg.resilience.errors import (
+    CircuitOpenError,
+    ErrorKind,
+    ResilienceError,
+    RetryBudgetExhaustedError,
+    classify,
+    is_provider_answer,
+)
 from cloudg.resilience import limiter as _limiter
 from cloudg.resilience.limiter import (
     LimitSpec,
@@ -39,12 +51,17 @@ __all__ = [
     "Governor",
     "RetryBudget",
     "RetrySettings",
+    "FREE_RETRIES_PER_CALL",
     "configure",
     "get_governor",
     "reset_governor",
 ]
 
 PROVIDERS = ("aws", "azure", "gcp")
+
+#: Retries of one call that never draw on the retry budget, so a budget
+#: spent by an earlier degraded period still lets every call retry a little
+FREE_RETRIES_PER_CALL = 2
 
 
 @dataclass(frozen=True)
@@ -199,8 +216,8 @@ class Governor:
         with self._lock:
             self.enabled = enabled
             self.ratelimit = ratelimit
-            if retry != self._retry:
-                self._budgets.clear()
+            for provider in [p for p in self._budgets if retry.get(p) != self._retry.get(p)]:
+                del self._budgets[provider]
             self._retry = retry
         self.limiter.configure(limits)
         self.breakers.configure(breaker_settings)
@@ -308,21 +325,64 @@ class Governor:
             for s in self._targets():
                 s.record_breaker_trip(scope.service_scope)
 
-    def try_retry(self, scope: Scope) -> bool:
+    def try_retry(self, scope: Scope, attempt: int | None = None) -> bool:
         """Take one token from the provider's retry budget (False: retrying
-        is no longer allowed). Always True when the provider is disabled."""
+        is no longer allowed). Always True when the provider is disabled,
+        and for the first :data:`FREE_RETRIES_PER_CALL` retries of a call
+        when ``attempt`` (1 for the first retry) is known."""
         if not self.provider_enabled(scope.provider):
+            return True
+        if attempt is not None and 0 < attempt <= FREE_RETRIES_PER_CALL:
             return True
         return self.budget(scope.provider).try_consume()
 
-    def on_gave_up(self, scope: Scope, reason: str) -> None:
-        """Throttling outlasted every retry: count it and open breakers if needed."""
-        self.on_failure(scope)
+    def record_gave_up(self, scope: Scope, reason: str) -> None:
+        """Count a call that was given up on (stats and the run's ledger only)."""
         for s in self._targets():
             s.record_gave_up(scope.service_scope, reason)
         ledger = current_ledger()
         if ledger is not None:
             ledger.add_gave_up(reason)
+
+    def on_gave_up(self, scope: Scope, reason: str) -> None:
+        """Throttling outlasted every retry: count it and open breakers if needed."""
+        self.on_failure(scope)
+        self.record_gave_up(scope, reason)
+
+    def on_answered(self, scope: Scope) -> None:
+        """The service answered with a non-retryable error (AccessDenied,
+        validation, not found): it is reachable, which closes a half-open
+        breaker. Rates and the retry budget are left alone."""
+        if self.provider_enabled(scope.provider):
+            self.breakers.get(self.breaker_scope(scope)).record_success()
+
+    def on_final_error(self, scope: Scope, exc: BaseException, what: str) -> None:
+        """Record how a call that raised ``exc`` (after its retries) ended.
+
+        - CircuitOpenError: nothing (the call was never sent, and
+          :meth:`check` already counted the rejection);
+        - RetryBudgetExhaustedError: counted as given up, without a breaker
+          failure (the budget, not the service, stopped the retries);
+        - throttling: given up (breaker failure); transient: breaker failure;
+        - a provider's FATAL answer: :meth:`on_answered`.
+
+        The scope carried by cloudg's own errors wins over ``scope``.
+        """
+        if isinstance(exc, CircuitOpenError):
+            return
+        own = getattr(exc, "scope", None) if isinstance(exc, ResilienceError) else None
+        target = own if isinstance(own, Scope) else scope
+        reason = f"throttled: {what}: {str(exc)[:150]}"
+        if isinstance(exc, RetryBudgetExhaustedError):
+            self.record_gave_up(target, reason)
+            return
+        kind = classify(exc)
+        if kind is ErrorKind.THROTTLED:
+            self.on_gave_up(target, reason)
+        elif kind is ErrorKind.TRANSIENT:
+            self.on_failure(target)
+        elif is_provider_answer(exc):
+            self.on_answered(target)
 
     def summary(self, stats: ResilienceStats | None = None) -> dict[str, Any]:
         """Stats (the run's, or lifetime) plus tripped breakers and slowed buckets."""

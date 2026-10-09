@@ -38,6 +38,7 @@ from cloudg.resilience.errors import (
     DeadlineExceededError,
     ErrorKind,
     classify,
+    is_provider_answer,
     retry_after,
 )
 from cloudg.resilience.governor import Governor, get_governor
@@ -100,9 +101,7 @@ def backoff_delays(
 class _Attempts:
     """Retry bookkeeping shared by the async and sync loops."""
 
-    def __init__(
-        self, gov: Governor, scope: Scope, policy: RetryPolicy, clock: Clock
-    ):
+    def __init__(self, gov: Governor, scope: Scope, policy: RetryPolicy, clock: Clock):
         settings = gov.retry_settings(scope.provider)
         self.gov = gov
         self.scope = scope
@@ -142,6 +141,8 @@ class _Attempts:
         """Classify ``exc``; return the delay before retrying, or re-raise it."""
         kind = classify(exc)
         if kind is ErrorKind.FATAL:
+            if is_provider_answer(exc):
+                self.gov.on_answered(self.scope)  # reachable: closes a half-open breaker
             raise exc
         hint = retry_after(exc)
         message = str(exc)[:300]
@@ -154,7 +155,7 @@ class _Attempts:
                 raise exc
         if self.retries >= self.max_retries:
             self._give_up(kind, exc, "retries exhausted")
-        if self.policy.use_budget and not self.gov.budget(self.scope.provider).try_consume():
+        if self.policy.use_budget and not self.gov.try_retry(self.scope, self.retries + 1):
             self._give_up(kind, exc, "retry budget exhausted")
         self.previous = decorrelated_jitter(self.previous, self.base, self.cap)
         delay = max(self.previous, hint or 0.0)

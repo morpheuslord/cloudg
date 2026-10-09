@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -465,23 +466,32 @@ def _render_run_reports(
     ui.artifact("HTML", html_path)
 
 
+@dataclass
+class RunProducts:
+    """What the collection and graph phases of ``cloudg run`` produced."""
+
+    assets: list[Any]
+    edges: list[Any]
+    graph: Any
+    graph_json: dict[str, Any]
+    reachability_findings: list[Any]
+    coverage_records: list[Any] = field(default_factory=list)
+
+
 def _post_scan_phases(
     cfg: CloudGConfig,
     kwargs: dict[str, Any],
-    assets: list[Any],
-    edges: list[Any],
-    graph: Any,
-    graph_json: dict[str, Any],
-    reachability_findings: list[Any],
+    products: RunProducts,
     scanner_findings: list[Any],
     iam_findings: list[Any],
-    coverage_records: list[Any],
     output_dir: Path,
 ) -> None:
     """Run everything after the scanner phase: ontology, RAG update,
     normalisation, report rendering and the results summary."""
     from cloudg.normaliser import FindingsNormaliser
 
+    assets, edges = products.assets, products.edges
+    reachability_findings = products.reachability_findings
     # Combine all findings for downstream phases
     all_security_findings = scanner_findings + iam_findings + reachability_findings
     console.print()
@@ -493,7 +503,7 @@ def _post_scan_phases(
 
     # Also update RAG export with all findings
     if kwargs["rag_export"] and cfg.rag.enabled:
-        _update_rag_export(cfg, assets, edges, graph, all_security_findings, output_dir)
+        _update_rag_export(cfg, assets, edges, products.graph, all_security_findings, output_dir)
 
     # Phase 4: Normalise (with external rulesets)
     ui.phase("Phase 4 · Normalisation")
@@ -505,15 +515,15 @@ def _post_scan_phases(
     ui.success(f"[metric]{len(scan_result.findings)}[/] normalised findings")
 
     # Phase 5: Render
-    _render_run_reports(scan_result, graph_json, assets, edges, output_dir)
+    _render_run_reports(scan_result, products.graph_json, assets, edges, output_dir)
 
     # Summary
     ui.section("Results")
     ui.summary_table(scan_result.summary)
 
     # Coverage summary
-    if coverage_records:
-        ui.coverage_table(coverage_records)
+    if products.coverage_records:
+        ui.coverage_table(products.coverage_records)
 
     console.print()
     ui.success(f"All reports saved to [path]{output_dir}[/]")

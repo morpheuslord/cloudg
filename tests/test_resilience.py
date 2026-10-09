@@ -43,7 +43,7 @@ from cloudg.resilience import (
     stats_scope,
 )
 from cloudg.resilience.breaker import BreakerState
-from cloudg.resilience.governor import provider_limits_from_config
+from cloudg.resilience.governor import FREE_RETRIES_PER_CALL, provider_limits_from_config
 from cloudg.resilience.limiter import DECREASE_FACTOR, INCREASE_INTERVAL, INCREASE_STEP
 
 
@@ -576,7 +576,7 @@ class TestCallWithResilience:
     def test_retry_budget(self):
         clock = FakeClock()
         gov = _governor(clock, retry_budget=1)
-        fn = Flaky(*(AWSError("Throttling") for _ in range(3)))
+        fn = Flaky(*(AWSError("Throttling") for _ in range(6)))
         with pytest.raises(AWSError):
             run(
                 call_with_resilience(
@@ -587,7 +587,8 @@ class TestCallWithResilience:
                     clock=clock,
                 )  # fmt: skip
             )
-        assert fn.calls == 2  # one retry allowed by the budget
+        # FREE_RETRIES_PER_CALL retries never touch the budget, then one more from it
+        assert fn.calls == 1 + FREE_RETRIES_PER_CALL + 1
 
     def test_deadline(self):
         clock = FakeClock()
@@ -1367,15 +1368,29 @@ class TestAWSHookControls:
             ctx = {"client_region": "us-east-1"}
             await hooks.before_call(model=_op("sqs", "ListQueues"), context=ctx)
             request_dict = {"context": ctx}
-            await hooks.needs_retry(response=throttled, attempts=1, request_dict=request_dict)
-            with pytest.raises(RetryBudgetExhaustedError):
-                await hooks.needs_retry(response=throttled, attempts=2, request_dict=request_dict)
-            hooks.after_call_error(exception=RetryBudgetExhaustedError("x"), context=ctx)
+            # The first FREE_RETRIES_PER_CALL retries are free, the next one is budgeted
+            last = FREE_RETRIES_PER_CALL + 1
+            for attempt in range(1, last + 1):
+                await hooks.needs_retry(
+                    response=throttled, attempts=attempt, request_dict=request_dict
+                )
+            with pytest.raises(RetryBudgetExhaustedError) as raised:
+                await hooks.needs_retry(
+                    response=throttled, attempts=last + 1, request_dict=request_dict
+                )
+            hooks.after_call_error(exception=raised.value, context=ctx)
 
         with stats_scope() as stats:
             run(main())
         totals = stats.totals()
-        assert totals["retries"] == 1 and totals["gave_up"] == 1
+        assert totals["retries"] == FREE_RETRIES_PER_CALL + 1 and totals["gave_up"] == 1
+        # The budget, not the service, ended the retries: no breaker failure
+        assert (
+            gov.breakers.get(Scope("aws", "123456789012", "us-east-1", "sqs")).snapshot()[
+                "consecutive_failures"
+            ]
+            == 0
+        )
 
     def test_budget_exhaustion_end_to_end(self, aws_env):
         import boto3
@@ -1395,7 +1410,8 @@ class TestAWSHookControls:
             collector = AsyncAWSCollector(boto3.Session(), "us-east-1", "123456789012")
             hits = _throttle_operation(collector._get_aio_session(), "DescribeVpcs")
             run(collector._run_service_collector("vpc", collector._collect_vpcs()))
-        assert hits["n"] == 2  # first attempt + the single budgeted retry
+        # first attempt + the free retries + the single budgeted retry
+        assert hits["n"] == 1 + FREE_RETRIES_PER_CALL + 1
         status = {s.service: s for s in collector.coverage.services}
         assert status["vpc"].error.startswith("throttled")
         assert "retry budget" in status["vpc"].error
@@ -1497,14 +1513,18 @@ class TestAzurePolicyControls:
 
         gov = Governor(RateLimitConfig.model_validate({"azure": {"retry_budget": 1}}))
         policy = throttle_policy(self.SUB, gov)
-        req = self._request()
-        policy.on_request(req)
-        policy.on_response(req, self._response(429))  # budgeted retry
-        req = self._request()
+        req = self._request()  # azure-core sends the same request on every retry
+        for _ in range(FREE_RETRIES_PER_CALL + 1):  # free retries, then the budgeted one
+            policy.on_request(req)
+            policy.on_response(req, self._response(429))
         policy.on_request(req)
         with pytest.raises(RetryBudgetExhaustedError):
             policy.on_response(req, self._response(500))
         assert gov.limiter.bulkhead(Scope("azure", self.SUB)).in_use == 0
+        # A new request gets its free retries again, budget or not
+        fresh = self._request()
+        policy.on_request(fresh)
+        policy.on_response(fresh, self._response(429))
 
     def test_low_remaining_reads_pauses_whole_subscription(self):
         from cloudg.resilience.azure import throttle_policy
@@ -1567,7 +1587,8 @@ class TestGCPRetryControls:
 
         gov = Governor(RateLimitConfig.model_validate({"gcp": {"retry_budget": 1}}))
         retry = gcp_retry(Scope("gcp", "projects/p", None, "cloudasset"), governor=gov)
-        retry._on_error(gexc.ResourceExhausted("q"))
+        for _ in range(FREE_RETRIES_PER_CALL + 1):  # free retries, then the budgeted one
+            retry._on_error(gexc.ResourceExhausted("q"))
         with pytest.raises(RetryBudgetExhaustedError):
             retry._on_error(gexc.ResourceExhausted("q"))
 
@@ -1624,3 +1645,240 @@ def test_refusal_suggests_dataset_covering_the_providers():
     assert _latest_live_dataset(ctx, ["aws", "gcp"]) == "both"
     assert _latest_live_dataset(ctx, ["azure"]) is None  # none rather than a wrong one
     assert _latest_live_dataset(ctx) == "live-forced"
+
+
+# ---------------------------------------------------------------------------
+# Audit fixes: stuck breakers, leaked slots, retry scope, guard lifetimes
+# ---------------------------------------------------------------------------
+
+
+class TestHalfOpenBreaker:
+    def test_unreported_probe_is_given_up_after_a_cooldown(self):
+        clock = FakeClock()
+        br = CircuitBreaker("x", threshold=1, cooldown=10, clock=clock)
+        br.record_failure()
+        clock.advance(10)
+        assert br.allow()  # the probe
+        assert not br.allow()  # probe in flight, never reports back
+        assert br.retry_after() == pytest.approx(10)
+        clock.advance(10)
+        assert br.state is BreakerState.HALF_OPEN
+        assert br.allow()  # a new probe instead of a breaker stuck forever
+
+    def test_fatal_provider_answer_closes_half_open_breaker(self):
+        clock = FakeClock()
+        gov = _governor(clock, breaker_threshold=1)
+        scope = Scope("aws", "1", "r", "sqs")
+        gov.on_gave_up(scope, "throttled")
+        clock.advance(30)
+        fn = Flaky(AWSError("AccessDenied", "not authorized", 403))
+        with pytest.raises(AWSError):
+            run(call_with_resilience(fn.coro, scope=scope, governor=gov, clock=clock))
+        assert gov.breakers.get(gov.breaker_scope(scope)).state is BreakerState.CLOSED
+
+    def test_local_fatal_error_is_not_health(self):
+        clock = FakeClock()
+        gov = _governor(clock, breaker_threshold=1)
+        scope = Scope("aws", "1", "r", "sqs")
+        gov.on_gave_up(scope, "throttled")
+        clock.advance(30)
+        with pytest.raises(ValueError):
+            run(call_with_resilience(Flaky(ValueError("bug")).coro, scope=scope, governor=gov))
+        assert gov.breakers.get(gov.breaker_scope(scope)).state is BreakerState.HALF_OPEN
+
+    def test_final_error_skips_calls_that_were_never_sent(self):
+        from cloudg.resilience import RetryBudgetExhaustedError
+
+        gov = _governor(FakeClock(), breaker_threshold=1)
+        scope = Scope("aws", "1", "r", "sqs")
+        breaker = gov.breakers.get(gov.breaker_scope(scope))
+        gov.on_final_error(scope, CircuitOpenError("open", scope=scope), "x")
+        gov.on_final_error(scope, RetryBudgetExhaustedError("spent", scope=scope), "x")
+        assert breaker.state is BreakerState.CLOSED
+        gov.on_final_error(scope, AWSError("Throttling", "Rate exceeded"), "x")
+        assert breaker.state is BreakerState.OPEN
+
+    def test_gcp_probe_listing_is_not_rejected_by_its_own_breaker(self):
+        from cloudg.resilience.gcp import paced
+
+        clock = FakeClock()
+        gov = Governor(
+            RateLimitConfig.model_validate({"gcp": {"breaker_threshold": 1}}), clock=clock
+        )
+        scope = Scope("gcp", "projects/p", None, "cloudasset", "ListAssets")
+        gov.on_gave_up(scope, "throttled")
+        clock.advance(60)
+        gov.check(scope)  # the listing is the half-open probe
+        assert list(paced(range(7), scope, 2, governor=gov)) == list(range(7))
+        gov.on_success(scope)
+        assert gov.breakers.get(gov.breaker_scope(scope)).state is BreakerState.CLOSED
+
+
+class TestWithRetryScope:
+    def _calls(self, *errors):
+        from cloudg.retry import with_retry
+
+        fn = Flaky(*errors)
+
+        @with_retry(max_attempts=3, base_delay=0.0, max_delay=0.0)
+        async def call():
+            return fn()
+
+        try:
+            run(call())
+        except Exception:  # the test inspects the call count
+            pass
+        return fn.calls
+
+    def test_does_not_retry_own_resilience_errors(self):
+        from cloudg.resilience import DeadlineExceededError, RetryBudgetExhaustedError
+
+        assert self._calls(CircuitOpenError("open", retry_after=60)) == 1
+        assert self._calls(RetryBudgetExhaustedError("spent")) == 1
+        assert self._calls(DeadlineExceededError("late")) == 1
+
+    def test_does_not_retry_on_message_text_or_plain_server_errors(self):
+        assert self._calls(ValueError("Rate limit window parameter invalid")) == 1
+        assert self._calls(AzureError(500)) == 1
+        assert self._calls(AWSError("AccessDenied", "not authorized", 403)) == 1
+
+    def test_retries_main_cases_and_provider_throttling(self):
+        assert self._calls(ConnectionError("reset")) == 2
+        assert self._calls(AWSError("ThrottlingException")) == 2
+        assert self._calls(AzureError(429)) == 2
+
+
+class TestAWSErrorFlavours:
+    def test_resilience_errors_are_client_errors(self):
+        from botocore.exceptions import ClientError
+
+        from cloudg.resilience import RetryBudgetExhaustedError
+        from cloudg.resilience.aws import AWSCircuitOpenError, AWSRetryBudgetExhaustedError
+
+        scope = Scope("aws", "1", "us-east-1", "ec2", "DescribeVpcs")
+        err = AWSCircuitOpenError("circuit open", 12.0, scope)
+        assert isinstance(err, ClientError) and isinstance(err, CircuitOpenError)
+        assert err.response["Error"]["Code"] == "Throttling"
+        assert err.operation_name == "DescribeVpcs"
+        assert err.retry_after == 12.0 and err.scope == scope
+        assert classify(err) is ErrorKind.THROTTLED
+        budget = AWSRetryBudgetExhaustedError("spent", scope=scope)
+        assert isinstance(budget, ClientError) and isinstance(budget, RetryBudgetExhaustedError)
+
+    def test_open_circuit_raises_client_error_from_hooks(self):
+        from botocore.exceptions import ClientError
+
+        gov = Governor(RateLimitConfig.model_validate({"aws": {"breaker_threshold": 1}}))
+        hooks = _aws_hooks(gov)
+        gov.on_gave_up(Scope("aws", "123456789012", "us-east-1", "ec2", "DescribeVpcs"), "x")
+
+        async def main():
+            with pytest.raises(ClientError):
+                await hooks.before_call(model=_op(), context={"client_region": "us-east-1"})
+
+        run(main())
+
+
+class TestSlotsAndReconfiguration:
+    def test_slot_released_when_its_task_is_cancelled(self):
+        from cloudg.resilience import Bulkhead
+        from cloudg.resilience.limiter import Slot
+
+        bulkhead = Bulkhead(1)
+        holder = {}
+
+        async def call():
+            bulkhead.try_acquire()
+            holder["slot"] = Slot(bulkhead)  # kept alive: no GC release
+            holder["slot"].bind_to_current_task()
+            await asyncio.sleep(10)
+
+        async def main():
+            task = asyncio.ensure_future(call())
+            await asyncio.sleep(0)
+            assert bulkhead.in_use == 1
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+            assert bulkhead.in_use == 0 and holder["slot"].released
+
+        run(main())
+
+    def test_reconfigure_keeps_held_slots_and_unchanged_breakers(self):
+        gov = Governor(RateLimitConfig.model_validate({"aws": {"max_concurrency": 2}}))
+        aws = Scope("aws", "1", "r", "sqs")
+        gcp = Scope("gcp", "projects/p", None, "cloudasset")
+        bulkhead = gov.limiter.bulkhead(aws)
+        assert bulkhead.try_acquire()
+        gcp_breaker = gov.breakers.get(gov.breaker_scope(gcp))
+        gov.configure(RateLimitConfig.model_validate({"aws": {"max_concurrency": 1}}))
+        assert gov.limiter.bulkhead(aws) is bulkhead and bulkhead.in_use == 1
+        assert not bulkhead.try_acquire()  # the held slot counts against the new cap
+        assert gov.breakers.get(gov.breaker_scope(gcp)) is gcp_breaker
+
+
+class TestGuardLifetimes:
+    def test_settings_object_and_unknown_keywords(self):
+        from cloudg.resilience import GuardSettings
+
+        guard = LiveOperationGuard(GuardSettings(cooldown_seconds=5), max_concurrent_total=3)
+        assert guard.cooldown_seconds == 5 and guard.max_concurrent_total == 3
+        with pytest.raises(TypeError):
+            LiveOperationGuard(cooldown=5)
+
+    def test_factory_raising_synchronously_frees_its_scope(self):
+        guard = LiveOperationGuard(cooldown_seconds=0)
+
+        def factory():
+            raise RuntimeError("boom")
+
+        async def main():
+            with pytest.raises(RuntimeError):
+                await guard.run("k", factory, scopes=["aws/1"])
+            assert guard.status()["active_total"] == 0 and not guard.in_flight("k")
+
+        run(main())
+
+    def test_operation_timeout(self):
+        from cloudg.resilience import LiveOperationTimeout
+
+        guard = LiveOperationGuard(cooldown_seconds=0)
+
+        async def main():
+            with pytest.raises(LiveOperationTimeout) as raised:
+                await guard.run("k", lambda: asyncio.sleep(10), scopes=["aws/1"], timeout=0.05)
+            assert raised.value.to_dict()["reason"] == "timeout"
+            assert guard.status()["active_total"] == 0
+
+        run(main())
+
+    def test_abandoned_operation_is_cancelled(self):
+        guard = LiveOperationGuard(cooldown_seconds=0)
+        started = []
+
+        async def work():
+            started.append(1)
+            await asyncio.sleep(10)
+
+        async def main():
+            callers = [
+                asyncio.ensure_future(guard.run("k", work, scopes=["aws/1"])) for _ in range(2)
+            ]
+            await asyncio.sleep(0.01)
+            assert guard.joined == 1 and guard.status()["active_total"] == 1
+            callers[0].cancel()
+            await asyncio.sleep(0.01)
+            assert guard.in_flight("k")  # one caller still waits
+            callers[1].cancel()
+            await asyncio.gather(*callers, return_exceptions=True)
+            await asyncio.sleep(0.01)
+            assert not guard.in_flight("k") and guard.status()["active_total"] == 0
+
+        run(main())
+        assert started == [1]
+
+    def test_from_config_reads_operation_timeout(self):
+        guard = LiveOperationGuard.from_config(
+            RateLimitConfig.model_validate({"live_operation_timeout_seconds": 30})
+        )
+        assert guard.operation_timeout == 30

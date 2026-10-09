@@ -59,6 +59,7 @@ __all__ = [
     "LiveOperationBusy",
     "LiveOperationGuard",
     "LiveOperationRejected",
+    "LiveOperationTimeout",
     "operation_key",
 ]
 
@@ -113,6 +114,12 @@ class CallerQuotaExceeded(LiveOperationRejected):
     reason = "quota"
 
 
+class LiveOperationTimeout(LiveOperationRejected):
+    """The live operation ran longer than ``operation_timeout_seconds`` and was cancelled."""
+
+    reason = "timeout"
+
+
 def operation_key(*parts: Any) -> str:
     """A stable key for single-flight dedupe from arbitrary JSON-able parts."""
     blob = json.dumps(parts, sort_keys=True, default=str, separators=(",", ":"))
@@ -137,6 +144,7 @@ class GuardSettings:
     caller_window_seconds: float = 3600.0
     cooldown_after_failure: bool = True
     provider_cooldowns: Mapping[str, float] | None = None
+    operation_timeout_seconds: float | None = None
 
 
 _SETTING_NAMES = frozenset(f.name for f in fields(GuardSettings))
@@ -161,7 +169,13 @@ class LiveOperationGuard:
         cooldown_after_failure: Also cool down after a failed operation
             (default True: a failure is often throttling).
         provider_cooldowns: Per-provider cooldown overrides (``{"aws": 300}``).
+        operation_timeout_seconds: Cancel a live operation that runs longer
+            (None: no limit); its callers get :class:`LiveOperationTimeout`.
         clock: Monotonic clock (injectable for tests).
+
+    A running operation is also cancelled when every caller waiting for it
+    has gone (each was cancelled, e.g. by a client or tool timeout), so an
+    abandoned operation cannot keep its scopes busy.
     """
 
     def __init__(
@@ -186,9 +200,12 @@ class LiveOperationGuard:
         self.caller_window_seconds = max(1.0, float(cfg.caller_window_seconds))
         self.cooldown_after_failure = cfg.cooldown_after_failure
         self.provider_cooldowns = {k: float(v) for k, v in (cfg.provider_cooldowns or {}).items()}
+        timeout = cfg.operation_timeout_seconds
+        self.operation_timeout = float(timeout) if timeout and timeout > 0 else None
         self._clock = clock
         self._inflight: dict[Hashable, asyncio.Task[Any]] = {}
         self._inflight_scopes: dict[Hashable, list[str]] = {}
+        self._waiting: dict[asyncio.Future[Any], int] = {}
         self._active: dict[str, int] = {}
         self._active_total = 0
         self._last_done: dict[str, float] = {}
@@ -211,6 +228,7 @@ class LiveOperationGuard:
                 ("max_concurrent_total", "live_max_concurrent_total"),
                 ("caller_max_operations", "live_caller_max_operations"),
                 ("caller_window_seconds", "live_caller_window_seconds"),
+                ("operation_timeout_seconds", "live_operation_timeout_seconds"),
             ):
                 value = getattr(rl, attr, None)
                 if value is not None:
@@ -363,6 +381,7 @@ class LiveOperationGuard:
         caller: str | None = None,
         bypass_cooldown: bool = False,
         wait: bool = False,
+        timeout: float | None = None,
     ) -> T:
         """Run ``factory()`` as live operation ``key`` under the guard's rules.
 
@@ -375,41 +394,72 @@ class LiveOperationGuard:
             caller: Identity for per-caller quotas (None: no quota).
             bypass_cooldown: Skip the cooldown check (operator override).
             wait: Wait for a free slot instead of raising LiveOperationBusy.
+            timeout: Seconds the operation may run (default:
+                ``operation_timeout_seconds``); ignored when joining one
+                that is already running.
 
         Raises:
             CooldownActive, LiveOperationBusy, CallerQuotaExceeded: refused;
+            LiveOperationTimeout: the operation ran out of time;
             anything ``factory()`` raises, for every joined caller.
         """
         existing = self._inflight.get(key)
+        if existing is None:
+            scope_list = [str(s) for s in scopes]
+            self._admit(scope_list, caller, bypass_cooldown, check_busy=not wait)
+            if wait and not self._has_capacity(scope_list):
+                await self._await_capacity(key, scope_list)
+                existing = self._inflight.get(key)
+                if existing is None:
+                    self._admit(scope_list, caller, bypass_cooldown, check_busy=False)
         if existing is not None:
             self.joined += 1
-            return await asyncio.shield(existing)
+            return await self._join(existing)
+        return await self._join(self._start(key, factory, scope_list, caller, timeout))
 
-        scope_list = [str(s) for s in scopes]
-        self._admit(scope_list, caller, bypass_cooldown, check_busy=not wait)
-        if wait and not self._has_capacity(scope_list):
-            while not self._has_capacity(scope_list) and key not in self._inflight:
-                await self._freed_event().wait()
-            existing = self._inflight.get(key)
-            if existing is not None:
-                self.joined += 1
-                return await asyncio.shield(existing)
-            self._admit(scope_list, caller, bypass_cooldown, check_busy=False)
+    async def _await_capacity(self, key: Hashable, scopes: list[str]) -> None:
+        """Wait until ``scopes`` have a free slot or operation ``key`` started."""
+        while not self._has_capacity(scopes) and key not in self._inflight:
+            await self._freed_event().wait()
 
-        # Admitted: account for it before the first await so racing callers see it
+    def _start(
+        self,
+        key: Hashable,
+        factory: Callable[[], Awaitable[T]],
+        scopes: list[str],
+        caller: str | None,
+        timeout: float | None,
+    ) -> "asyncio.Future[T]":
+        """Account for an admitted operation and start it as a shared task.
+
+        Synchronous, so racing callers see the accounting before any await.
+        """
         if caller and self.caller_max_operations:
             self._callers.setdefault(caller, deque()).append(self._clock())
-        for s in scope_list:
+        for s in scopes:
             self._active[s] = self._active.get(s, 0) + 1
         self._active_total += 1
         self.started += 1
-        task = asyncio.ensure_future(_await(factory))
+        limit = self.operation_timeout if timeout is None else timeout
+        task = asyncio.ensure_future(_await(factory, limit, scopes))
         # The release runs as a done callback, so the slots are freed even
         # when the task is cancelled before its first step (loop shutdown)
-        task.add_done_callback(functools.partial(self._release, key, scope_list))
+        task.add_done_callback(functools.partial(self._release, key, scopes))
         self._inflight[key] = task
-        self._inflight_scopes[key] = scope_list
-        return await asyncio.shield(task)
+        self._inflight_scopes[key] = scopes
+        return task
+
+    async def _join(self, task: "asyncio.Future[T]") -> T:
+        """Await the shared ``task``; the last caller to give up cancels it."""
+        self._waiting[task] = self._waiting.get(task, 0) + 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            left = self._waiting.pop(task, 1) - 1
+            if left > 0:
+                self._waiting[task] = left
+            elif not task.done():
+                task.cancel()  # nobody is waiting for the result any more
 
     def _release(self, key: Hashable, scopes: list[str], task: "asyncio.Task[Any]") -> None:
         """Free the slots of a finished operation and start its cooldown."""
@@ -427,6 +477,18 @@ class LiveOperationGuard:
         self._wake_waiters()
 
 
-async def _await(factory: Callable[[], Awaitable[T]]) -> T:
-    """Run ``factory()`` inside the task, so a factory that raises does so there."""
-    return await factory()
+async def _await(
+    factory: Callable[[], Awaitable[T]], timeout: float | None, scopes: list[str]
+) -> T:
+    """Run ``factory()`` inside the task (so a factory that raises does so
+    there), cancelled after ``timeout`` seconds."""
+    if timeout is None:
+        return await factory()
+    try:
+        return await asyncio.wait_for(factory(), timeout)
+    except asyncio.TimeoutError:
+        raise LiveOperationTimeout(
+            f"live operation did not finish within {timeout:.0f}s and was cancelled; "
+            "retry later or use the cached dataset",
+            scopes=scopes,
+        ) from None

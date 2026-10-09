@@ -45,11 +45,25 @@ import asyncio
 import logging
 from typing import Any
 
-from cloudg.resilience.errors import ErrorKind, RetryBudgetExhaustedError, classify, retry_after
+from cloudg.resilience.errors import (
+    CircuitOpenError,
+    ErrorKind,
+    ResilienceError,
+    RetryBudgetExhaustedError,
+    classify,
+    retry_after as server_retry_after,
+)
 from cloudg.resilience.governor import Governor, get_governor
 from cloudg.resilience.limiter import Scope, Slot
 
+try:
+    from botocore.exceptions import ClientError as _ClientError
+except ImportError:  # pragma: no cover - botocore is a core dependency
+    _ClientError = None
+
 __all__ = [
+    "AWSCircuitOpenError",
+    "AWSRetryBudgetExhaustedError",
     "MAX_INLINE_WAIT",
     "botocore_retries",
     "install_aws_hooks",
@@ -64,6 +78,33 @@ MAX_INLINE_WAIT = 1.0
 _SCOPE_KEY = "cloudg_scope"
 _SLOT_KEY = "cloudg_bulkhead_slot"
 _MARK = "_cloudg_resilience_hooks"
+
+
+def _aws_flavour(base: type[ResilienceError]) -> type[ResilienceError]:
+    """``base`` that is also a botocore ClientError (code ``Throttling``), so
+    code calling instrumented clients inside ``except ClientError`` keeps
+    working. Plain ``base`` when botocore is not importable."""
+    if _ClientError is None:
+        return base
+
+    def __init__(
+        self: Any, message: str, retry_after: float | None = None, scope: Any = None
+    ) -> None:
+        operation = getattr(scope, "operation", None) or "unknown"
+        _ClientError.__init__(
+            self, {"Error": {"Code": "Throttling", "Message": message}}, operation
+        )
+        self.retry_after = retry_after
+        self.scope = scope
+
+    doc = f"{base.__doc__} Also a botocore ClientError (code Throttling)."
+    return type(f"AWS{base.__name__}", (base, _ClientError), {"__init__": __init__, "__doc__": doc})
+
+
+#: CircuitOpenError raised by instrumented boto3 / aioboto3 clients
+AWSCircuitOpenError = _aws_flavour(CircuitOpenError)
+#: RetryBudgetExhaustedError raised by instrumented boto3 / aioboto3 clients
+AWSRetryBudgetExhaustedError = _aws_flavour(RetryBudgetExhaustedError)
 
 
 def botocore_retries(governor: Governor | None = None) -> dict[str, Any]:
@@ -155,7 +196,10 @@ class _Hooks:
         scope = self._scope(model, context)
         if scope is None:
             return None
-        gov.check(scope)  # CircuitOpenError propagates out of the API call
+        try:
+            gov.check(scope)
+        except CircuitOpenError as exc:  # propagates out of the API call
+            raise AWSCircuitOpenError(str(exc), exc.retry_after, exc.scope) from None
         gov.record_call(scope)
         return scope
 
@@ -168,7 +212,7 @@ class _Hooks:
             return None, None, None
         kind, err = _response_kind(response, caught)
         if kind is ErrorKind.THROTTLED and err is not None:
-            self.gov.on_throttle(scope, retry_after(err), str(err)[:300])
+            self.gov.on_throttle(scope, server_retry_after(err), str(err)[:300])
         elif kind is ErrorKind.TRANSIENT and err is not None:
             self.gov.record_transient(scope, str(err)[:300])
         return scope, kind, err
@@ -183,8 +227,8 @@ class _Hooks:
             attempts
         ):
             return False
-        if not self.gov.try_retry(scope):
-            raise RetryBudgetExhaustedError(
+        if not self.gov.try_retry(scope, attempts):
+            raise AWSRetryBudgetExhaustedError(
                 f"retry budget of {scope.provider} exhausted; not retrying "
                 f"{scope.operation}: {str(err)[:150]}",
                 scope=scope,
@@ -225,32 +269,18 @@ class _Hooks:
         scope = self._stored(context=context)
         if scope is None:
             return
-        gov = self.gov
         status = getattr(http_response, "status_code", 200) or 200
         if status < 300:
-            gov.on_success(scope)
-            return
-        if not isinstance(parsed, dict):
-            return
-        err = _ParsedError(parsed)
-        kind = classify(err)
-        if kind is ErrorKind.THROTTLED:
-            gov.on_gave_up(
-                scope, f"throttled: {scope.operation} {str(err)[:150]} (retries exhausted)"
-            )
-        elif kind is ErrorKind.TRANSIENT:
-            gov.on_failure(scope)
+            self.gov.on_success(scope)
+        elif isinstance(parsed, dict):
+            err = _ParsedError(parsed)
+            self.gov.on_final_error(scope, err, f"{scope.operation} (retries exhausted)")
 
     def after_call_error(self, exception: Any = None, context: Any = None, **_: Any) -> None:
         self._release(context)
         scope = self._stored(context=context)
-        if scope is None or exception is None:
-            return
-        kind = classify(exception)
-        if kind is ErrorKind.THROTTLED:
-            self.gov.on_gave_up(scope, f"throttled: {scope.operation} {str(exception)[:150]}")
-        elif kind is ErrorKind.TRANSIENT:
-            self.gov.on_failure(scope)
+        if scope is not None and isinstance(exception, BaseException):
+            self.gov.on_final_error(scope, exception, str(scope.operation))
 
     def _more_attempts(self, attempts: Any) -> bool:
         # botocore's retries.max_attempts counts retries after the first attempt
@@ -266,7 +296,9 @@ class _AsyncHooks(_Hooks):
             bulkhead = gov.limiter.bulkhead(scope)
             await bulkhead.acquire()
             if isinstance(context, dict):
-                context[_SLOT_KEY] = Slot(bulkhead)
+                slot = context[_SLOT_KEY] = Slot(bulkhead)
+                # after-call-error does not fire for a cancelled call
+                slot.bind_to_current_task()
             else:  # pragma: no cover - botocore always passes a dict
                 bulkhead.release()
         return None

@@ -365,7 +365,9 @@ class Bulkhead:
     def __init__(self, limit: int) -> None:
         self.limit = max(1, int(limit))
         self._in_use = 0
-        self._lock = threading.Lock()
+        # Reentrant: Slot.__del__ may release from a garbage collection that
+        # runs while this thread holds the lock
+        self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._waiters: list[tuple[Any, asyncio.Future[None]]] = []
 
@@ -373,6 +375,14 @@ class Bulkhead:
     def in_use(self) -> int:
         with self._lock:
             return self._in_use
+
+    def set_limit(self, limit: int) -> None:
+        """Change the cap; slots already held stay valid, waiters re-check."""
+        with self._lock:
+            self.limit = max(1, int(limit))
+            waiters, self._waiters = self._waiters, []
+            self._cond.notify_all()
+        _wake(waiters)
 
     def try_acquire(self) -> bool:
         with self._lock:
@@ -408,12 +418,7 @@ class Bulkhead:
             self._in_use = max(0, self._in_use - 1)
             waiters, self._waiters = self._waiters, []
             self._cond.notify()
-        # Wake every async waiter; each re-checks for a free slot
-        for loop, fut in waiters:
-            try:
-                loop.call_soon_threadsafe(_resolve, fut)
-            except RuntimeError:  # loop closed: nobody is left to wake there
-                logger.debug("Bulkhead waiter on a closed event loop dropped")
+        _wake(waiters)
 
     @contextlib.asynccontextmanager
     async def hold(self) -> AsyncIterator[None]:
@@ -432,6 +437,15 @@ class Bulkhead:
             self.release()
 
 
+def _wake(waiters: list[tuple[Any, "asyncio.Future[None]"]]) -> None:
+    """Wake async bulkhead waiters; each re-checks for a free slot."""
+    for loop, fut in waiters:
+        try:
+            loop.call_soon_threadsafe(_resolve, fut)
+        except RuntimeError:  # loop closed: nobody is left to wake there
+            logger.debug("Bulkhead waiter on a closed event loop dropped")
+
+
 def _resolve(fut: "asyncio.Future[None]") -> None:
     if not fut.done():
         fut.set_result(None)
@@ -443,25 +457,51 @@ class Slot:
     The SDK hooks keep it in the request context and release it on the
     response and error paths. When neither runs (a cancelled task, an
     exception raised between the SDK's events) the slot is released when
-    the request context, and with it the Slot, is garbage collected.
+    the task it was bound to finishes (:meth:`bind_to_current_task`) or,
+    at the latest, when the request context, and with it the Slot, is
+    garbage collected.
     """
 
-    __slots__ = ("_bulkhead", "_done", "_lock")
+    __slots__ = ("_bulkhead", "_done", "_lock", "_task", "__weakref__")
 
     def __init__(self, bulkhead: Bulkhead) -> None:
         self._bulkhead = bulkhead
         self._done = False
-        self._lock = threading.Lock()
+        # Reentrant: release() may run from __del__ while this thread is
+        # already inside release() (a garbage collection triggered there)
+        self._lock = threading.RLock()
+        self._task: Any = None
 
     @property
     def released(self) -> bool:
         return self._done
+
+    def bind_to_current_task(self) -> None:
+        """Also release the slot when the running asyncio task finishes
+        (covers a call cancelled between the SDK's events)."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:  # no running loop
+            return
+        if task is None or task.done():
+            return
+        self._task = task
+        task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, _task: Any) -> None:
+        self.release()
 
     def release(self) -> None:
         with self._lock:
             if self._done:
                 return
             self._done = True
+            task, self._task = self._task, None
+        if task is not None:
+            try:
+                task.remove_done_callback(self._on_task_done)
+            except Exception as exc:  # a finished or foreign-loop task
+                logger.debug("Could not unbind a bulkhead slot from its task: %r", exc)
         self._bulkhead.release()
 
     def __del__(self) -> None:
@@ -515,7 +555,10 @@ class RateLimiter:
             self._limits = merged
             if changed:
                 self._buckets = {k: b for k, b in self._buckets.items() if k[0] not in changed}
-                self._bulkheads = {k: b for k, b in self._bulkheads.items() if k[0] not in changed}
+                # Bulkheads are kept (their held slots stay counted); only the cap moves
+                for key, bulkhead in self._bulkheads.items():
+                    if key[0] in changed:
+                        bulkhead.set_limit(merged[key[0]].max_concurrency)
 
     def limits(self, provider: str) -> ProviderLimits:
         with self._lock:

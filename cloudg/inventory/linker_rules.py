@@ -208,7 +208,9 @@ class RuleLinksMixin:
                     "NAT_TRANSLATED" if route.get("NatGatewayId") else "TRANSIT_ROUTED",
                 )
         for assoc in md.get("associations", []) or []:
-            self._add(edges, asset.id, self._res(assoc.get("SubnetId"), asset), EdgeType.ATTACHED_TO)
+            self._add(
+                edges, asset.id, self._res(assoc.get("SubnetId"), asset), EdgeType.ATTACHED_TO
+            )
 
     def _rule_attachments(self, asset: CloudAsset, edges: list[NetworkEdge]) -> None:
         """Internet gateway -> VPC, and ENI / EBS / EIP -> instance attachment."""

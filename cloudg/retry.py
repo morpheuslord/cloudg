@@ -1,10 +1,13 @@
 """Retry decorator with exponential backoff and jitter.
 
 Backwards-compatible shim: :func:`with_retry` keeps its public signature and
-behaviour, and now also retries anything :func:`cloudg.resilience.classify`
-recognises as throttling / transient (Azure 429s, GCP ResourceExhausted,
-botocore connection errors, ...) and never sleeps less than the server's
-``Retry-After``. New code should use :mod:`cloudg.resilience`
+behaviour, and now also retries provider answers that
+:func:`cloudg.resilience.classify_strict` recognises as throttling from
+their error code, exception class or HTTP status (Azure 429s, GCP
+ResourceExhausted, ...; never from message text alone), and never sleeps
+less than the server's ``Retry-After``. cloudg's own resilience errors
+(an open circuit, a spent retry budget, a missed deadline) are re-raised at
+once. New code should use :mod:`cloudg.resilience`
 (``call_with_resilience``), which adds shared adaptive rate limiting,
 circuit breakers, retry budgets and telemetry.
 """
@@ -21,11 +24,14 @@ from typing import Any, Callable, Type
 # callers of cloudg.retry (listed in __all__)
 from cloudg.resilience import (
     ErrorKind,
+    ResilienceError,
     RetryPolicy,
     Scope,
     call_with_resilience,
     call_with_resilience_sync,
     classify,
+    classify_strict,
+    is_provider_answer,
     retry_after,
 )
 
@@ -65,6 +71,26 @@ AWS_RETRYABLE_CODES = {
 }
 
 
+def _is_retryable(
+    exc: Exception, retry_exceptions: tuple[Type[Exception], ...], aws_codes: set[str]
+) -> bool:
+    """The retry decision of :func:`with_retry` for one error."""
+    if isinstance(exc, ResilienceError):
+        return False  # cloudg already decided: circuit open, budget spent, deadline
+    if isinstance(exc, retry_exceptions):
+        return True
+    # AWS-specific error codes, from the response or (for wrapped errors) the text
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        if response.get("Error", {}).get("Code", "") in aws_codes:
+            return True
+    exc_str = str(exc)
+    if any(code in exc_str for code in aws_codes):
+        return True
+    # Provider-aware throttling, only for real provider answers
+    return is_provider_answer(exc) and classify_strict(exc) is ErrorKind.THROTTLED
+
+
 def with_retry(
     max_attempts: int = 5,
     base_delay: float = 1.0,
@@ -99,25 +125,9 @@ def with_retry(
                     return await func(*args, **kwargs)
                 except Exception as exc:
                     last_exception = exc
-
-                    # Check if this is a retryable exception
-                    is_retryable = isinstance(exc, retry_exceptions)
-
-                    # Check for AWS-specific error codes
-                    if not is_retryable and hasattr(exc, "response"):
-                        error_code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
-                        is_retryable = error_code in aws_codes
-
-                    # Also retry on botocore ClientError with retryable codes
-                    if not is_retryable:
-                        exc_str = str(exc)
-                        is_retryable = any(code in exc_str for code in aws_codes)
-
-                    # Provider-aware throttling / transient classification
-                    if not is_retryable:
-                        is_retryable = classify(exc) is not ErrorKind.FATAL
-
-                    if not is_retryable or attempt == max_attempts:
+                    if attempt == max_attempts or not _is_retryable(
+                        exc, retry_exceptions, aws_codes
+                    ):
                         raise
 
                     # Exponential backoff with full jitter

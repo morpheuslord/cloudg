@@ -203,16 +203,17 @@ class MultiAccountCollector:
 
         async with self._semaphore:
             try:
-                session = self._aws_session(account_id, region, cfg, coverage)
+                # Blocking boto3 calls (AssumeRole, GetCallerIdentity) run in a
+                # worker thread: their rate-limit waits must not stall the loop
+                session = await asyncio.to_thread(
+                    self._aws_session, account_id, region, cfg, coverage
+                )
                 if session is None:
                     return [], []
 
                 # Resolve account ID if not provided
                 if not account_id:
-                    try:
-                        account_id = session.client("sts").get_caller_identity().get("Account")
-                    except Exception:
-                        account_id = "unknown"
+                    account_id = await asyncio.to_thread(_caller_account, session)
 
                 collector = self._build_aws_collector(session, region, account_id, is_primary)
                 assets, edges, duration_ms = await self._timed_collect(collector)
@@ -526,3 +527,12 @@ class MultiAccountCollector:
             duration_ms=duration_ms,
             error="; ".join(f"{s.service}: {s.error}" for s in degraded) or None,
         )
+
+
+def _caller_account(session: Any) -> str | None:
+    """The account of ``session``'s credentials ("unknown" when STS fails)."""
+    try:
+        return session.client("sts").get_caller_identity().get("Account")
+    except Exception as exc:
+        logger.debug("GetCallerIdentity failed: %s", exc)
+        return "unknown"
