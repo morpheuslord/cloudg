@@ -52,9 +52,11 @@ pip install cloudg[mcp]       # + the official MCP SDK (mcp>=1.30,<3), see MCP s
 pip install cloudg[all]       # every provider SDK and the MCP SDK
 ```
 
+There is also a `full` extra (`diagrams`, `weasyprint`, `policy-sentry`), which `install.sh` and `install.bat` try to install. No code path uses `diagrams` or `weasyprint`, and the IAM linter only checks whether `policy_sentry` can be imported, so the extra changes nothing in the output today.
+
 The cloud SDKs are optional extras, pulled in only when you collect from that provider. The core package alone ships the graph engine, the ontology builder, the findings normaliser, the report renderers and `cloudg ingest`. That is enough to aggregate existing scan results on a machine with no cloud access at all.
 
-The external scanners are separate executables, not Python dependencies: [Prowler](https://github.com/prowler-cloud/prowler) (`pip install prowler`), [ScoutSuite](https://github.com/nccgroup/ScoutSuite) (`pip install scoutsuite`), [Checkov](https://github.com/bridgecrewio/checkov) (`pip install checkov`) and [Trivy](https://trivy.dev/) (binary install). Install whichever subset you want. cloudg checks `PATH` at run time and skips anything missing with a warning; the rest of the pipeline is unaffected. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up all of them plus the cloud CLIs, and the Docker image bundles the four scanner binaries.
+The external scanners are separate executables, not Python dependencies: [Prowler](https://github.com/prowler-cloud/prowler) (`pip install prowler`), [ScoutSuite](https://github.com/nccgroup/ScoutSuite) (`pip install scoutsuite`), [Checkov](https://github.com/bridgecrewio/checkov) (`pip install checkov`) and [Trivy](https://trivy.dev/) (binary install). Install whichever subset you want. cloudg checks `PATH` at run time and skips anything missing with a warning; the rest of the pipeline is unaffected. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up all of them plus the cloud CLIs. The Docker image bundles Prowler, Checkov and Trivy, but not ScoutSuite (see [Docker](#docker)).
 
 Requires Python 3.11 or newer.
 
@@ -339,7 +341,7 @@ All commands write into the output directory (`./reports` by default).
 | `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | the graph in three formats |
 | `ontology.ttl`, `ontology.jsonld` | RDF ontology, 64 inferred relation types, SPARQL-queryable |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks, one JSON object per line |
-| `terraform/*.tf.json`, `terraform/import.sh` | Terraform recreation of live infrastructure, 25+ asset types |
+| `terraform/*.tf.json`, `terraform/import_commands.sh` | Terraform recreation of live infrastructure, 25+ asset types |
 | `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, summary (`cloudg map`) |
 | `inventory-dependencies.json` | shared dependencies, blast radius, cross-account edges, security service coverage (`cloudg map`) |
 | `inventory-organization.json` | AWS Organization / Control Tower topology (`cloudg map --org`) |
@@ -457,7 +459,7 @@ The aggregate container the normaliser returns and the renderers consume: `asset
 
 ## Configuration
 
-`config.yaml` mirrors every CLI flag and adds persistent settings; pass it with `-c` or keep it next to where you run. Everything is optional, defaults are sensible. The shipped [config.yaml](https://github.com/morpheuslord/cloudg/blob/main/config.yaml) documents each field inline. The structure, with defaults:
+`config.yaml` mirrors every CLI flag and adds persistent settings. It is read only when you pass it with `-c` / `--config`: no command looks for a `config.yaml` in the working directory, so without the flag cloudg runs on the defaults. Everything is optional, defaults are sensible. The shipped [config.yaml](https://github.com/morpheuslord/cloudg/blob/main/config.yaml) documents each field inline. The structure, with defaults:
 
 ```yaml
 providers: [aws]                # aws, azure, gcp; several at once is fine
@@ -622,12 +624,12 @@ Hook signatures:
 
 | Hook | Signature | Fires |
 |---|---|---|
-| `on_phase_start` | `(phase: str) -> None` | at each phase: `collection`, `scanning`, `ingest`, `analysis`, `normalisation`, `reporting` |
+| `on_phase_start` | `(phase: str) -> None` | at each phase: `collection`, `inventory_mapping`, `scanning`, `ingest`, `analysis`, `normalisation`, `reporting` |
 | `on_collection_complete` | `(result: CollectionResult) -> None` | after collection |
 | `on_finding` | `(finding: Finding) -> None` | once per finding, after scan or ingest |
 | `on_scan_complete` | `(findings: list[Finding]) -> None` | after scan or ingest |
 | `on_analysis_complete` | `(result: AnalysisResult) -> None` | after analysis |
-| `on_error` | `(phase: str, exc: Exception) -> None` | on any phase failure |
+| `on_error` | `(phase: str, exc: Exception) -> None` | when `collection`, `inventory_mapping`, `normalisation` or `reporting` fails, when the graph analysis inside the scan phase fails (`graph_analysis`), or when one of the analysis steps `graph_build`, `ontology`, `rag_export`, `terraform` fails |
 
 Exceptions raised inside a hook are swallowed, so a broken callback cannot take the pipeline down.
 
@@ -729,7 +731,7 @@ Modules the pipeline uses internally that are equally useful standalone:
 | `cloudg.graph.ports` | `parse_port_ranges`, `edge_port_ranges`, `port_in_ranges`, `is_internet_source` | the port and edge rules the builder, the reachability analysis and the ontology share: `port_range` strings parsed into numeric ranges, filter rule and egress checks, internet sources |
 | `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers 64 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
 | `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
-| `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |
+| `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import_commands.sh`; `preview(assets)` reports mappable coverage first |
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
 | `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone; no engine, no credentials |
 | `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
@@ -1080,7 +1082,7 @@ Under `strict` the names, account ids and ARNs come back pseudonymised; passing 
 | `cloudg mcp read URI` | Read a resource in-process |
 | `cloudg mcp config` | Print a client configuration snippet |
 
-All of them except `config` accept `--policy`, `--dataset [NAME=]PATH` (repeatable), `--prefix`, `--include-category` / `--exclude-category`, `--include-tool` / `--exclude-tool`, `--read-only` (drops tools that touch the cloud, run processes or write files), `--audit-log FILE`, `--timeout` and `--registry MODULE:ATTR`.
+All of them except `config` accept `--policy`, `--dataset [NAME=]PATH` (repeatable), `--prefix`, `--include-category` / `--exclude-category`, `--include-tool` / `--exclude-tool`, `--read-only` (drops tools that touch the cloud, run processes or write files, and the destructive `unload_dataset`), `--audit-log FILE`, `--timeout` and `--registry MODULE:ATTR`.
 
 ### Catalog
 
@@ -1215,7 +1217,7 @@ GCP: a credentials file via `--gcp-credentials-file` (service account key JSON o
 
 ## Docker
 
-The image bundles all four scanner binaries, so it is the shortest path to the full pipeline:
+The image bundles Prowler, Checkov and Trivy, so it is the shortest path to the pipeline:
 
 ```bash
 docker pull ghcr.io/morpheuslord/cloudg:latest
@@ -1223,6 +1225,8 @@ docker compose run --rm cloudg run -p aws --regions us-east-1
 ```
 
 Or build locally with `docker build -t cloudg:latest .`
+
+ScoutSuite is not in the image, so `cloudg run` skips it with a warning; run ScoutSuite elsewhere and pass its report to `cloudg ingest --scoutsuite`, or build on top of the image. The image installs the `aws`, `azure` and `gcp` extras but not `mcp`, so `cloudg mcp serve` there uses the native flavor; the `sdk` flavor needs `pip install "cloudg[mcp]"`.
 
 ---
 

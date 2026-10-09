@@ -249,7 +249,8 @@ VS Code (`--client vscode`) uses a `servers` key and an explicit type:
 }
 ```
 
-Save it as `.vscode/mcp.json`.
+Save it as `.vscode/mcp.json`. The hint on stderr also offers the other place VS Code reads:
+add the entry under `"mcp"` in `settings.json`.
 
 To bake options into the launch command, pass them to `config`. Dataset paths are resolved
 to absolute paths, because the client starts the server from a working directory you do not
@@ -530,13 +531,13 @@ output can be piped.
 |---|---|---|---|
 | `-c, --config PATH` | the parent `cloudg -c` config, else `CloudGConfig()` | | cloudg `config.yaml` for providers, credentials and the report directory |
 | `--policy NAME_OR_FILE` | `standard` | `CLOUDG_MCP_POLICY` | Built-in profile (`open`, `standard`, `strict`, `read_only`, `airgapped`, `audit`, `soc-analyst`), a `.yaml`/`.yml`/`.json` file, or inline JSON starting with `{` |
-| `--dataset [NAME=]PATH` | none | | Preload a dataset; repeatable. The name defaults to the parent directory for `inventory-map.json`, else the file stem |
+| `--dataset [NAME=]PATH` | none | | Preload a dataset; repeatable. The name defaults to the parent directory for `inventory-map.json`, else the file stem. With several, the last one loaded is the active dataset |
 | `--prefix TEXT` | `""` | | Prepended to every tool and prompt name. At most 64 characters from `A-Za-z0-9_.-`; anything else stops with `Error: Invalid prefix ...` |
 | `--include-category CAT` | all | | Only expose these categories; repeatable; applies to tools, resources, templates and prompts |
 | `--exclude-category CAT` | none | | Hide categories; repeatable |
 | `--include-tool NAME` | all | | Only expose these tools; repeatable; resources and prompts are unaffected |
 | `--exclude-tool NAME` | none | | Hide tools; repeatable |
-| `--read-only` | off | | Drop tools that have the `write_fs`, `cloud_access` or `exec` capability or are annotated destructive. Loading datasets and other in-memory changes stay available |
+| `--read-only` | off | | Drop tools that have the `write_fs`, `cloud_access` or `exec` capability or are annotated destructive. Loading datasets and other in-memory changes stay available, except `unload_dataset`, which is annotated destructive. Under `standard` that leaves 65 tools, one fewer than the `read_only` profile's 66 |
 | `--audit-log FILE` | off | `CLOUDG_MCP_AUDIT_LOG` | Append a JSONL audit trail (section 14.2), created with mode 0600 |
 | `--timeout SECONDS` | 300 | | Default per-call tool timeout. Tools with their own `timeout_seconds` (the live tools use 3600 and 7200) keep theirs. `0` disables the default |
 | `--registry MODULE:ATTR` | built-in catalog | | Serve a custom `Registry`, or a zero-argument callable returning one. `MODULE` must be a dotted Python module name and `ATTR` an attribute name; `ATTR` defaults to `default_registry`. The module is imported and the callable is run, so the value is operator code and must never come from an untrusted source. Anything that does not resolve to a `Registry` stops the server |
@@ -665,8 +666,17 @@ How many tools each built-in profile lists for the local user, and how many keep
 | `airgapped` | 69 | 0 | `reveal_token`, the four collecting and scanning tools |
 | `read_only` | 66 | 0 | `reveal_token`, the four collecting and scanning tools, `export_ontology`, `export_report`, `export_terraform` |
 | `audit` | 66 | 0 | same as `read_only` |
-| `strict` | 64 | 0 | as `read_only`, plus `get_asset_metadata`, `privacy_audit_log` |
-| `soc-analyst` | 64 | 0 | same as `strict` |
+| `strict` | 61 | 0 | as `read_only`, plus `get_asset_metadata`, `privacy_audit_log`, `sparql_query`, `subgraph_export`, `preview_transform` |
+| `soc-analyst` | 62 | 0 | as `strict`, but `preview_transform` stays |
+
+Of the five tools `strict` hides on top of `read_only`, the first four are RESTRICTED, so its
+`confidential` ceiling removes them. `preview_transform` is not RESTRICTED: `strict.yaml`
+lists it in `deny_tools`.
+`soc-analyst` has the same ceiling but no such deny, so it keeps that tool. Within
+`soc-analyst`, `--role analyst` lists 60 tools (it also loses `rate_limit_status` and
+`terraform_preview`), `--role lead` 70 (only the four collecting and scanning tools are
+hidden) and `--role collector` 69 (the five RESTRICTED tools, `reveal_token` among them,
+are hidden).
 
 `rate_limit_status` is in the `live` category but reads only local state, so every profile
 keeps it.
@@ -2372,7 +2382,7 @@ In-process, the same failures raise. From the catalog:
 
 ```text
 read_resource("cloudg://nope")                     NotFoundError -32602 "Unknown resource: cloudg://nope"
-read_resource("cloudg://assets/does-not-exist")    ReferenceNotFoundError -32602 "No asset matches 'does-not-exist' in dataset 'prod'. ..." data={"suggestions": []}
+read_resource("cloudg://assets/does-not-exist")    ReferenceNotFoundError -32602 "No asset matches the reference in this dataset. ..." data={"value": "does-not-exist", "dataset": "prod", "suggestions": []}
 get_prompt("investigate_asset", {})               InvalidArgumentsError -32602 "Missing required prompt arguments: ref"
 ```
 
