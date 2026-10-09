@@ -1003,7 +1003,7 @@ Each strategy on `{"msg": "alice@corp.com from 10.0.1.5 at 2024-05-01T12:30:00Z 
 | redact | `[REDACTED:email] from [REDACTED:private_ip] at [REDACTED:timestamp] key [REDACTED:aws_access_key_id]` |
 | mask | `**********.com from ****.1.5 at ****************:00Z key ****************MPLE` |
 | hash | `email:c3c19eba12fe from private_ip:a8a9b1877e8b at timestamp:75a8629ea56f key aws_access_key_id:938ed3107d92` |
-| pseudonymize | `user-f53165f9@d-a9aaafa8bb.example from 10.54.186.36 at timestamp-0d629c0ac1 key AKIABJFS5E4VXQMFWEOA` |
+| pseudonymize | `user-f53165f9@d-a9aaafa8bb.example from 10.54.186.36 at timestamp-0d629c0ac1 key AKIA` followed by 16 pseudonymous characters |
 | generalize | `*@corp.com from 10.0.1.0/24 at 2024-05-01 key <aws_access_key_id>` |
 | drop | the `msg` field is gone: `{"other": 1}` |
 | keep | unchanged |
@@ -1409,7 +1409,7 @@ Measured with key `docs-example-key`:
 | hostname (only service labels) | `s3.amazonaws.com` | unchanged |
 | resource_name (AWS id) | `i-0abc1234def567890` | `i-ccc5e66b39a18abd0` |
 | resource_name | `web-1` | `res-3c1f1e6b50` |
-| aws_access_key_id | `AKIAIOSFODNN7EXAMPLE` | `AKIABJFS5E4VXQMFWEOA` |
+| aws_access_key_id | `AKIAIOSFODNN7EXAMPLE` | `AKIA` plus 16 pseudonymous upper-case letters and digits (same shape, not a usable key) |
 | mac_address | `00:1A:2B:3C:4D:5E` | `7A:21:08:5D:DD:CF` |
 | person, tag_value | `alice`, `payments` | `person-97eed0ceb8`, `tag-3f91de21dd` |
 | cloudg_uri | `cloudg://assets/web-1` | `cloudg://assets/res-3c1f1e6b50` |

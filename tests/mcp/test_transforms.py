@@ -48,16 +48,20 @@ from cloudg.mcp.transforms import (
     strip_invisible,
 )
 from cloudg.mcp.transforms.annotation import UNTRUSTED_NOTICE
+from tests.mcp.fake_secrets import (
+    AWS_KEY_ID,
+    AWS_ROLE_UNIQUE_ID,
+    AWS_SECRET,
+    AWS_TEMP_KEY_ID,
+    JWT,
+    OPENSSH_PRIVATE_KEY,
+    RSA_PRIVATE_KEY,
+    SAS_SIGNATURE,
+    SAS_URL,
+    SLACK_TOKEN,
+)
 
-AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-PEM = (
-    "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1x8b0aB3cdEfGh\nabcDEF123==\n"
-    "-----END RSA PRIVATE KEY-----"
-)
-JWT = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
-    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-)
+PEM = RSA_PRIVATE_KEY
 AZ_ID = (
     "/subscriptions/1b2c3d4e-1111-2222-3333-444455556666/resourceGroups/prod-rg/providers/"
     "Microsoft.Compute/virtualMachines/web-vm-01"
@@ -101,11 +105,7 @@ def scan(text: str) -> list[tuple[str, str]]:
     "text, entity, value",
     [
         (PEM, "private_key", PEM),
-        (
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----",
-            "private_key",
-            None,
-        ),
+        (OPENSSH_PRIVATE_KEY, "private_key", None),
         (f"auth {JWT}", "jwt", JWT),
         ("postgres://admin:hunter22@db.internal:5432/app", "password", "hunter22"),
         ("Server=tcp:x.database.windows.net;Password=S3cr3t!x;", "password", "S3cr3t!x"),
@@ -113,17 +113,13 @@ def scan(text: str) -> list[tuple[str, str]]:
         ('config: {"api_key": "zq81Lm2Xp0"}', "secret_value", "zq81Lm2Xp0"),
         ("Authorization: Bearer abcdefghijklmnop1234", "secret_value", "abcdefghijklmnop1234"),
         ("ghp_" + "a" * 36, "api_token", None),
-        ("xoxb-1234567890-abcdefghij", "api_token", None),
+        (SLACK_TOKEN, "api_token", None),
         ("AIza" + "B" * 35, "api_token", None),
         ("sk_live_" + "x1" * 10, "api_token", None),
-        (
-            "https://acct.blob.core.windows.net/c?sv=2020&sig=AbCdEf0123456789%2BxyzQQ",
-            "secret_value",
-            "AbCdEf0123456789%2BxyzQQ",
-        ),
-        ("AKIAIOSFODNN7EXAMPLE", "aws_access_key_id", "AKIAIOSFODNN7EXAMPLE"),
-        ("ASIAY34FZKBOKMUTVV7A", "aws_access_key_id", "ASIAY34FZKBOKMUTVV7A"),
-        ("AROAJ2UCCR6DPCEXAMPLE", None, None),
+        (SAS_URL, "secret_value", SAS_SIGNATURE),
+        (AWS_KEY_ID, "aws_access_key_id", AWS_KEY_ID),
+        (AWS_TEMP_KEY_ID, "aws_access_key_id", AWS_TEMP_KEY_ID),
+        (AWS_ROLE_UNIQUE_ID, None, None),
         (ARN, "aws_arn", ARN),
         ("arn:aws-us-gov:s3:::bucket/key", "aws_arn", "arn:aws-us-gov:s3:::bucket/key"),
         (AZ_ID, "azure_resource_id", AZ_ID),
@@ -269,7 +265,7 @@ def test_redact_mask_drop_and_report(vault):
             "kms_key_id": "abc",
             "has_password": True,
             "user_data": "IyEvYmluL2Jhc2gKZWNobyBoaQ==",
-            "creds": {"AccessKeyId": "AKIAIOSFODNN7EXAMPLE"},
+            "creds": {"AccessKeyId": AWS_KEY_ID},
             "ssh": PEM,
             "note": f"conn postgres://u:p4ssw0rd@db.internal/x and {JWT}",
         }
@@ -594,8 +590,8 @@ def test_other_formats(vault):
     assert re.fullmatch(r"h-[0-9a-f]{10}\.us-east-1\.elb\.amazonaws\.com", host)
     assert vault.tokenize("s3.amazonaws.com", "hostname") == "s3.amazonaws.com"
     assert re.fullmatch(r"host-[0-9a-f]{8}\.example", vault.tokenize("db.corp.com", "hostname"))
-    akid = vault.tokenize("AKIAIOSFODNN7EXAMPLE", "aws_access_key_id")
-    assert re.fullmatch(r"AKIA[A-Z2-7]{16}", akid) and akid != "AKIAIOSFODNN7EXAMPLE"
+    akid = vault.tokenize(AWS_KEY_ID, "aws_access_key_id")
+    assert re.fullmatch(r"AKIA[A-Z2-7]{16}", akid) and akid != AWS_KEY_ID
     mac = vault.tokenize("00:1A:2B:3C:4D:5E", "mac_address")
     assert re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}", mac) and int(mac[:2], 16) & 2
     guid = vault.tokenize("9F86D081-884C-4D63-9A2B-1C5E3F0A7B21", "azure_tenant_id")
