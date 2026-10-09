@@ -1448,3 +1448,24 @@ def test_total_failure_is_reported_as_failed():
     status = _status(collector)
     assert status["firehose"] == ServiceStatus.FAILED
     assert status["apprunner"] == ServiceStatus.FAILED
+
+
+def test_composite_alarm_rule_children_parsing():
+    from cloudg.inventory.aws_services.application._common import alarm_rule_children
+
+    rule = 'ALARM("cpu-high") OR ALARM(mem) AND NOT OK( "disk" ) OR INSUFFICIENT_DATA(q)'
+    assert alarm_rule_children(rule) == ["cpu-high", "mem", "disk", "q"]
+    # Blank and quote-only references produce no child
+    assert alarm_rule_children('OK(" ") AND ALARM()') == []
+    assert alarm_rule_children("") == []
+
+
+def test_composite_alarm_rule_parsing_is_linear_on_hostile_rules():
+    import time
+
+    from cloudg.inventory.aws_services.application._common import alarm_rule_children
+
+    for hostile in ("INSUFFICIENT_DATA(" + " " * 200_000, "OK(" * 70_000, "(" * 200_000):
+        started = time.perf_counter()
+        alarm_rule_children(hostile)
+        assert time.perf_counter() - started < 2.0
