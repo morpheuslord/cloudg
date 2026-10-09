@@ -901,7 +901,9 @@ class TestPortRelations:
         ],
     )
     def test_azure_collector_rules(self, protocol, ports, expected):
-        nsg = CloudAsset(id="nsg", name="nsg", asset_type=AssetType.NSG, provider=CloudProvider.AZURE)
+        nsg = CloudAsset(
+            id="nsg", name="nsg", asset_type=AssetType.NSG, provider=CloudProvider.AZURE
+        )
         rule = {
             "name": "r",
             "access": "Allow",

@@ -353,6 +353,49 @@ def _triple_evidence(triple: dict[str, str]) -> str:
     return f" [{', '.join(parts)}]"
 
 
+def _relation_group_lines(
+    group: RelationGroup, triples: list[dict[str, str]], type_counts: dict[str, int]
+) -> list[str]:
+    """Content lines of a relation-group chunk: totals, distribution, triples."""
+    content_lines = [
+        f"Relation Group: {group.value}",
+        f"Total relations: {len(triples)}",
+        "",
+        "Relation type distribution:",
+    ]
+    for rt_name, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+        content_lines.append(f"  {rt_name}: {count}")
+
+    content_lines.append("\nTriples:")
+    for t in triples[:50]:  # Cap for chunk size
+        content_lines.append(
+            f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
+        )
+    if len(triples) > 50:
+        content_lines.append(f"  ... and {len(triples) - 50} more")
+    return content_lines
+
+
+def _write_export(out: Path, all_chunks: list[RAGChunk], counts: dict[str, int]) -> dict[str, Path]:
+    """Write the JSONL chunks and the metadata index; return both paths."""
+    # Write JSONL (one JSON object per line, the usual vector DB input)
+    chunks_path = out / "rag_chunks.jsonl"
+    with open(chunks_path, "w") as f:
+        for chunk in all_chunks:
+            f.write(json.dumps(chunk.to_dict(), default=str) + "\n")
+
+    index = {
+        "total_chunks": len(all_chunks),
+        **counts,
+        "chunk_ids": [c.chunk_id for c in all_chunks],
+        "chunk_types": list({c.chunk_type for c in all_chunks}),
+    }
+    index_path = out / "rag_metadata_index.json"
+    with open(index_path, "w") as f:
+        json.dump(index, f, indent=2)
+    return {"chunks": chunks_path, "index": index_path}
+
+
 # ---------------------------------------------------------------------------
 # RAG Exporter
 # ---------------------------------------------------------------------------
@@ -559,29 +602,10 @@ class RAGExporter:
         triples: list[dict[str, str]],
     ) -> RAGChunk:
         """Assemble content and metadata for one relation-group chunk."""
-        content_lines = [
-            f"Relation Group: {group.value}",
-            f"Total relations: {len(triples)}",
-            "",
-        ]
-
-        # Summarise relation type distribution
         type_counts: dict[str, int] = defaultdict(int)
         for t in triples:
             type_counts[t["predicate"]] += 1
-
-        content_lines.append("Relation type distribution:")
-        for rt_name, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            content_lines.append(f"  {rt_name}: {count}")
-
-        content_lines.append("\nTriples:")
-        for t in triples[:50]:  # Cap for chunk size
-            content_lines.append(
-                f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
-            )
-
-        if len(triples) > 50:
-            content_lines.append(f"  ... and {len(triples) - 50} more")
+        content_lines = _relation_group_lines(group, triples, type_counts)
 
         metadata = {
             "relation_group": group.value,
@@ -627,38 +651,19 @@ class RAGExporter:
         out.mkdir(parents=True, exist_ok=True)
 
         assets_by_id = {a.id: a for a in assets}
-        all_chunks: list[RAGChunk] = []
-
-        # Strategy 1
         entity_chunks = self.export_entity_chunks(assets, edges, findings)
-        all_chunks.extend(entity_chunks)
-
-        # Strategy 2
         community_chunks = self.export_community_chunks(graph, assets_by_id, findings)
-        all_chunks.extend(community_chunks)
-
-        # Strategy 3
         relation_chunks = self.export_relation_chunks(edges, assets_by_id)
-        all_chunks.extend(relation_chunks)
-
-        # Write JSONL (one JSON object per line, the usual vector DB input)
-        chunks_path = out / "rag_chunks.jsonl"
-        with open(chunks_path, "w") as f:
-            for chunk in all_chunks:
-                f.write(json.dumps(chunk.to_dict(), default=str) + "\n")
-
-        # Write metadata index
-        index = {
-            "total_chunks": len(all_chunks),
-            "entity_chunks": len(entity_chunks),
-            "community_chunks": len(community_chunks),
-            "relation_group_chunks": len(relation_chunks),
-            "chunk_ids": [c.chunk_id for c in all_chunks],
-            "chunk_types": list({c.chunk_type for c in all_chunks}),
-        }
-        index_path = out / "rag_metadata_index.json"
-        with open(index_path, "w") as f:
-            json.dump(index, f, indent=2)
+        all_chunks = [*entity_chunks, *community_chunks, *relation_chunks]
+        paths = _write_export(
+            out,
+            all_chunks,
+            {
+                "entity_chunks": len(entity_chunks),
+                "community_chunks": len(community_chunks),
+                "relation_group_chunks": len(relation_chunks),
+            },
+        )
 
         logger.info(
             "RAG export complete: %d chunks (%d entity, %d community, %d relation) -> %s",
@@ -668,8 +673,4 @@ class RAGExporter:
             len(relation_chunks),
             out,
         )
-
-        return {
-            "chunks": chunks_path,
-            "index": index_path,
-        }
+        return paths

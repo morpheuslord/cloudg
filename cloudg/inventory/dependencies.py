@@ -436,8 +436,8 @@ def cross_account_edges(assets: list[CloudAsset], edges: list[NetworkEdge]) -> l
     return out
 
 
-def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dict[str, Any]:
-    """Which security services run where, and which workloads no scanner covers."""
+def _service_matrix(assets: list[CloudAsset]) -> dict[str, dict[str, dict[str, bool]]]:
+    """``account -> region -> security service -> enabled`` for the service assets."""
     matrix: dict[str, dict[str, dict[str, bool]]] = {}
     for a in assets:
         svc = a.metadata.get("security_service")
@@ -446,7 +446,13 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         acct = a.account_id or "unknown"
         cell = matrix.setdefault(acct, {}).setdefault(a.region, {})
         cell[svc] = cell.get(svc, False) or bool(a.metadata.get("enabled"))
+    return matrix
 
+
+def _unscanned_workloads(
+    assets: list[CloudAsset], edges: list[NetworkEdge]
+) -> list[dict[str, Any]]:
+    """Scannable workloads no enabled vulnerability scanner MONITORS."""
     scanners = {
         a.id
         for a in assets
@@ -456,7 +462,7 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         e.target_id for e in edges if e.edge_type == EdgeType.MONITORS and e.source_id in scanners
     }
     scannable = (AssetType.EC2, AssetType.CONTAINER_REGISTRY, AssetType.LAMBDA_FUNCTION)
-    unscanned = [
+    return [
         {
             "name": a.name,
             "arn": a.arn,
@@ -467,13 +473,24 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
         for a in assets
         if a.asset_type in scannable and a.id not in scanned
     ]
+
+
+def _unprotected_entry_points(
+    assets: list[CloudAsset], edges: list[NetworkEdge]
+) -> list[dict[str, Any]]:
+    """Internet-facing load balancers, APIs and CDNs no WAF PROTECTS."""
     protectable = (AssetType.LOAD_BALANCER, AssetType.API_GATEWAY, AssetType.CLOUDFRONT)
     protected = {e.target_id for e in edges if e.edge_type == EdgeType.PROTECTS}
-    unprotected = [
+    return [
         {"name": a.name, "arn": a.arn, "type": a.asset_type.value, "account_id": a.account_id}
         for a in assets
         if a.asset_type in protectable and a.is_internet_exposed and a.id not in protected
     ]
+
+
+def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dict[str, Any]:
+    """Which security services run where, and which workloads no scanner covers."""
+    matrix = _service_matrix(assets)
     gaps = sorted(
         f"{acct}/{region}: {svc}"
         for acct, regions in matrix.items()
@@ -484,6 +501,6 @@ def security_coverage(assets: list[CloudAsset], edges: list[NetworkEdge]) -> dic
     return {
         "services_by_account_region": matrix,
         "gaps": gaps,
-        "workloads_without_vulnerability_scanning": unscanned,
-        "internet_facing_without_waf": unprotected,
+        "workloads_without_vulnerability_scanning": _unscanned_workloads(assets, edges),
+        "internet_facing_without_waf": _unprotected_entry_points(assets, edges),
     }

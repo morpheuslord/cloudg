@@ -357,7 +357,9 @@ class TestFindingIds:
         assert len(by_title) == 3
 
     def test_assets_without_arn_are_keyed_by_id(self):
-        assets = [CloudAsset(id="db", name="db", asset_type=T.RDS_INSTANCE, provider=CloudProvider.AWS)]
+        assets = [
+            CloudAsset(id="db", name="db", asset_type=T.RDS_INSTANCE, provider=CloudProvider.AWS)
+        ]
         edges = [_edge(INTERNET, "db", E.INTERNET_EXPOSED, cidr=INTERNET)]
         (finding,) = _analyzer(assets, edges).generate_findings()
         assert finding.id == finding_id(RULE_SENSITIVE_EXPOSURE, "db")
@@ -450,7 +452,9 @@ class TestAzureInternetSources:
     def test_ssh_from_internet_tag_is_reported(self, source):
         assets = [_asset("nsg", T.NSG), _asset("vm", T.VIRTUAL_MACHINE)]
         edges = [
-            _edge(source, "nsg", E.SECURITY_GROUP_RULE, cidr=source, port_range="22", protocol="Tcp"),
+            _edge(
+                source, "nsg", E.SECURITY_GROUP_RULE, cidr=source, port_range="22", protocol="Tcp"
+            ),
             _edge("vm", "nsg", E.ATTACHED_TO),
         ]
         by_resource = {}
