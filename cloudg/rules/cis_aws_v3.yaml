@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────────
-# CIS AWS Foundations Benchmark v3.0 — Control ID Mappings
+# CIS AWS Foundations Benchmark v3.0: Control ID Mappings
 # Source: CIS AWS Foundations Benchmark v3.0 (public)
 #
 # These mappings are used to tag findings from scanners that
 # don't emit their own compliance control IDs.
-# Prowler, Checkov etc. already emit these natively — this file
+# Prowler, Checkov etc. already emit these natively; this file
 # is the FALLBACK for untagged findings only.
 # ─────────────────────────────────────────────────────────────────
 

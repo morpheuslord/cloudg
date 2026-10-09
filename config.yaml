@@ -218,13 +218,15 @@ ratelimit:
     # burst: 40
     # account_max_rps: null        # aggregate per account (off by default)
     # global_max_rps: null         # aggregate for all of AWS (off by default)
-    # max_concurrency: 128         # in-flight HTTP requests per account (AWS hooks)
+    # max_concurrency: 128         # API calls in flight per account (AWS hooks; botocore's
+                                   # retries of a call reuse its slot)
     adaptive: true                 # halve on throttle, recover additively
     # min_rps: 0.2                 # adaptive floor
     breaker_threshold: 5           # calls failing on throttling (after retries) -> open circuit
     breaker_cooldown_seconds: 60   # open circuit rejects calls this long, then probes
     retry_budget: 500              # botocore retries allowed before cloudg stops retrying
-                                   # (each success refunds 0.1)
+                                   # (each success refunds 0.1; the first two retries
+                                   # of every call are free)
     # Not used by the AWS hooks (botocore owns per-call retries and timeouts:
     # aws.max_retries / aws.retry_mode above); only for call_with_resilience:
     # max_retries: 8
@@ -259,6 +261,7 @@ ratelimit:
   live_max_concurrent_total: 2     # concurrent live collections overall
   live_caller_max_operations: 0    # per caller per window (0 = unlimited)
   live_caller_window_seconds: 3600
+  # live_operation_timeout_seconds: 3600  # cancel a live collection running longer (null: no limit)
 
 # ── General ──
 log_file: null             # null = console only; set path for file logging

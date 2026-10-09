@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────
-# Cloud Custodian — AWS Security Policies
+# Cloud Custodian: AWS Security Policies
 # ─────────────────────────────────────────────────────────────────
 # Detection-only policies (notify, never remediate) covering the most
 # common AWS misconfigurations. Aligned with CIS AWS Foundations

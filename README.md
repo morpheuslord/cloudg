@@ -138,7 +138,7 @@ The [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md) co
 
 ### Rate limits
 
-Mapping a whole AWS Organization means thousands of API calls per account, so every call cloudg makes goes through a shared rate limiter with per-service limits at or below what each provider publishes. A throttled API gets slowed down for every client at once, Retry-After is honoured, requests in flight are capped per account, retries draw from one budget per provider, and an API that stays throttled is skipped for a while by a circuit breaker. The map does not fail over it: coverage says `throttled: ...` and the result carries a `throttling` summary. Limits are tunable under `ratelimit` in `config.yaml`; see [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
+Mapping a whole AWS Organization means thousands of API calls per account, so every call cloudg makes goes through a shared rate limiter with per-service limits at or below what each provider publishes. A throttled API gets slowed down for every client at once, Retry-After is honoured, requests in flight are capped per account, retries beyond the first two of each call draw from one budget per provider, and an API that stays throttled is skipped for a while by a circuit breaker. The map does not fail over it: coverage says `throttled: ...` and the result carries a `throttling` summary. Limits are tunable under `ratelimit` in `config.yaml`; see [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
 
 ---
 
@@ -201,9 +201,9 @@ graph LR
 
 Collection runs all providers concurrently with asyncio, iterating accounts and regions per provider (regions are auto-discovered when you pass `--regions all`). Assets and network edges go into a directed graph, where BFS from the internet node over network-flow edges finds exposed resources and blast radius scoring estimates what an attacker could reach from each node.
 
-The same inventory feeds three other exports. The ontology module infers about 62 typed relations (`exposed_to_internet`, `assumes_role`, `encrypted_by`, `hosted_in_vpc` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
+The same inventory feeds three other exports. The ontology module infers 64 typed relations (`INTERNET_REACHABLE`, `ROLE_ASSUMES_ROLE`, `ENCRYPTED_BY_KMS`, `VPC_CONTAINS_SUBNET` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
 
-Scanner findings are deduplicated in two passes (within a scanner by scanner, check ID and resource; across scanners only when both the normalised title and the underlying check semantics in `rules/check_equivalence.yaml` match), then rescored against CVSS and mapped to compliance controls.
+Scanner findings are deduplicated in two passes (within a scanner by scanner, check ID and resource; across scanners only when both the normalised title and the underlying check semantics in `cloudg/rules/check_equivalence.yaml` match), then rescored against CVSS and mapped to compliance controls.
 
 ---
 
@@ -340,7 +340,7 @@ Much more of cloudg is public, importable API than the CLI suggests. The [Python
 |---|---|
 | `cloudg.inventory.InventoryMapper` / `RelationshipLinker` | scanner-free inventory maps and metadata-derived relationship edges |
 | `cloudg.graph.builder.GraphBuilder` | NetworkX graph, attack paths, centrality/blast-radius metrics, D3/Cytoscape/GraphML export |
-| `cloudg.graph.ontology.CloudOntology` | RDF ontology (~62 typed relations), SPARQL-queryable, Turtle/JSON-LD |
+| `cloudg.graph.ontology.CloudOntology` | RDF ontology (64 typed relations), SPARQL-queryable, Turtle/JSON-LD |
 | `cloudg.graph.rag_export.RAGExporter` | retrieval-ready JSONL chunks of the infrastructure for LLM pipelines |
 | `cloudg.renderers.terraform_export.TerraformExporter` | `.tf.json` recreation of live infrastructure plus `import.sh` |
 | `cloudg.ingest.parse_report` and the scanner classes | every scanner's parser, usable standalone |
@@ -361,7 +361,7 @@ mycloud = "my_package.collector:MyCollector"
 
 ```bash
 uv pip install -e ".[all,dev]"
-pytest             # about 1,300 tests, moto-mocked AWS included
+pytest             # about 1,650 tests, moto-mocked AWS included
 ruff check cloudg/ tests/
 uv build           # wheel + sdist for PyPI
 ```

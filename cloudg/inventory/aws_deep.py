@@ -1,4 +1,4 @@
-"""Deep AWS inventory collector — full-account resource enumeration.
+"""Deep AWS inventory collector: full-account resource enumeration.
 
 Extends the standard :class:`AsyncAWSCollector` with:
 
@@ -14,7 +14,7 @@ Extends the standard :class:`AsyncAWSCollector` with:
   Analyzer, WAF, Network Firewall, Shield, CloudTrail, Detective), and
   platform/data/DNS/deployment services.
 - A catch-all sweep over the Resource Groups Tagging API, which returns
-  every taggable resource in the region — so services without a dedicated
+  every taggable resource in the region, so services without a dedicated
   collector still appear on the map instead of silently missing.
 
 Global services (IAM, S3, CloudFront, Route 53, Shield, CloudFront-scope
@@ -414,7 +414,7 @@ class AWSDeepInventoryCollector(
                         )
                     )
 
-            # Attachments (VPCs, VPNs, peerings — possibly in other accounts)
+            # Attachments (VPCs, VPNs, peerings, possibly in other accounts)
             try:
                 await self._link_tgw_attachments(ec2, assets)
             except Exception as exc:

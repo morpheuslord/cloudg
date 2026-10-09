@@ -1,4 +1,4 @@
-"""SVG topology map renderer using svgwrite — hierarchical VPC/Subnet layout."""
+"""SVG topology map renderer using svgwrite: hierarchical VPC/Subnet layout."""
 
 from __future__ import annotations
 
@@ -225,7 +225,7 @@ class SVGRenderer(HierarchicalLayoutMixin):
         """Draw all resource nodes at their calculated positions."""
         node_group = dwg.g(id="nodes")
         for asset in assets:
-            # Skip VPC and SUBNET — they're drawn as containers
+            # Skip VPC and SUBNET: they're drawn as containers
             if asset.asset_type in (AssetType.VPC, AssetType.VNET, AssetType.SUBNET):
                 continue
             pos = positions.get(asset.id)
@@ -377,7 +377,7 @@ class SVGRenderer(HierarchicalLayoutMixin):
         self, dwg: Drawing, node_g: Any, asset: CloudAsset, x: float, y: float, r: int
     ) -> None:
         """Draw the name label and type badge below a node."""
-        # Label — truncate long names
+        # Label: truncate long names
         label = asset.name[:18] + "…" if len(asset.name) > 18 else asset.name
         node_g.add(
             dwg.text(

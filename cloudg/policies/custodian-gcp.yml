@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────
-# Cloud Custodian — GCP Security & Governance Policies
+# Cloud Custodian: GCP Security & Governance Policies
 # ─────────────────────────────────────────────────────────────────
 # Detection-only policies for common GCP misconfigurations. Aligned
 # with CIS GCP Foundation Benchmark v3.0 where noted.

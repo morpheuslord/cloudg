@@ -326,7 +326,7 @@ def _transform_dynamodb(asset: CloudAsset) -> dict[str, Any]:
     }
     if m.get("billing_mode"):
         attrs["billing_mode"] = m["billing_mode"]
-    # DynamoDB needs at least a hash key — use placeholder if not known
+    # DynamoDB needs at least a hash key; use a placeholder if not known
     attrs["hash_key"] = "id"
     attrs["attribute"] = [{"name": "id", "type": "S"}]
     return attrs
@@ -394,10 +394,10 @@ class TerraformExporter:
     """Generates Terraform .tf.json from collected CloudG assets.
 
     Produces:
-    - provider.tf.json — provider configuration
-    - variables.tf.json — parameterised values
-    - main.tf.json — all resource definitions
-    - import_commands.sh — terraform import commands for each resource
+    - provider.tf.json: provider configuration
+    - variables.tf.json: parameterised values
+    - main.tf.json: all resource definitions
+    - import_commands.sh: terraform import commands for each resource
     """
 
     def __init__(self, output_dir: str | Path = "./reports/terraform") -> None:
@@ -606,7 +606,7 @@ class TerraformExporter:
         """Generate import_commands.sh with terraform import commands."""
         lines = [
             "#!/usr/bin/env bash",
-            "# CloudG — Terraform Import Commands",
+            "# CloudG: Terraform Import Commands",
             "# Generated from collected cloud assets",
             "# Run: chmod +x import_commands.sh && ./import_commands.sh",
             "",

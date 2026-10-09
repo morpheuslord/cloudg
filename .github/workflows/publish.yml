@@ -1,7 +1,7 @@
 name: Publish
 
 # Runs when a GitHub release is published, or manually from the Actions tab.
-# Publishes the Python package to PyPI (trusted publishing / OIDC — no API
+# Publishes the Python package to PyPI (trusted publishing / OIDC: no API
 # token secret needed, but the publisher must be registered once on PyPI,
 # see notes at the bottom) and the Docker image to GitHub Container Registry.
 

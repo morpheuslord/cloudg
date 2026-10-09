@@ -477,7 +477,7 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
     <tr><td><code>findings.json</code></td><td>the machine-readable result, structure below; round-trips through <code>cloudg report -i</code></td></tr>
     <tr><td><code>raw-findings.json</code></td><td>pre-normalisation findings from <code>scan</code> and <code>ingest</code></td></tr>
     <tr><td><code>topology.svg / .graphml / -cytoscape.json</code></td><td>the graph in three formats</td></tr>
-    <tr><td><code>ontology.ttl / .jsonld</code></td><td>RDF ontology, around 62 inferred relation types, SPARQL-queryable</td></tr>
+    <tr><td><code>ontology.ttl / .jsonld</code></td><td>RDF ontology, 64 inferred relation types, SPARQL-queryable</td></tr>
     <tr><td><code>rag_chunks.jsonl</code></td><td>retrieval-ready chunks, one JSON object per line</td></tr>
     <tr><td><code>terraform/*.tf.json</code></td><td>Terraform recreation of live infrastructure with an <code>import.sh</code></td></tr>
     <tr><td><code>inventory-map.json / .graphml</code>, <code>inventory-graph.json</code></td><td>scanner-independent inventory map: assets, interconnections, summary (<code>cloudg map</code>)</td></tr>
@@ -499,6 +499,7 @@ trivy fs --format json --scanners vuln,misconfig,secret ./iac &gt; trivy-fs.json
   <h3>Finding</h3>
   <div class="tablewrap"><table>
     <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+    <tr><td><code>id</code></td><td><code>str</code></td><td>a random UUID; reachability findings use a UUID5 of the rule and the asset's ARN (or asset ID), so they keep their id from scan to scan</td></tr>
     <tr><td><code>resource_id</code>, <code>resource_arn</code></td><td><code>str</code></td><td>internal ID and cloud-native identifier</td></tr>
     <tr><td><code>severity</code></td><td><code>Severity</code></td><td>CRITICAL, HIGH, MEDIUM, LOW, INFO</td></tr>
     <tr><td><code>title</code>, <code>description</code></td><td><code>str</code></td><td>scanner tags are stripped for cross-scanner comparison</td></tr>
@@ -568,7 +569,7 @@ config.scanners.enabled = [<span class="c">"prowler"</span>, <span class="c">"ia
     <li>A throttled scope is halved for every client using it and paused for the server's Retry-After, then recovers by 5% of its ceiling every five seconds without throttling.</li>
     <li>At most 128 requests are in flight per AWS account, 16 per Azure subscription or GCP project (<code>max_concurrency</code>).</li>
     <li>A service, or an EC2 action, still failing after its retries five times in a row is skipped for 60 seconds by a circuit breaker; then one probe call goes through. A throttled <code>DescribeSubnets</code> does not block <code>DescribeVpcs</code>.</li>
-    <li>Retries use decorrelated jitter and never undercut Retry-After. botocore, azure-core and google-api-core keep doing their own retrying, configured by cloudg and reporting back to it, and all of them stop when the provider's shared retry budget is spent.</li>
+    <li>Retries use decorrelated jitter and never undercut Retry-After. botocore, azure-core and google-api-core keep doing their own retrying, configured by cloudg and reporting back to it. Once the provider's shared retry budget is spent, every call still gets its first two retries and no more.</li>
   </ul>
   <p>Throttling never fails a map. A service that stayed throttled shows up in coverage as FAILED or PARTIAL with an error starting <code>throttled:</code>, and the run's numbers land in <code>InventoryResult.throttling</code>, in <code>summary["throttling"]</code> and in <code>inventory-map.json</code>:</p>
   <pre><code>aws/123456789012/us-east-1/ec2: throttled 11x, slowed to 5.0 rps, 10 retries, 1 calls gave up</code></pre>
@@ -625,7 +626,7 @@ edges = RelationshipLinker(assets).link()               <span class="c"># works 
     <tr><th>Module</th><th>From code</th></tr>
     <tr><td><code>cloudg.inventory</code></td><td><code>InventoryMapper</code>, <code>RelationshipLinker</code>, and the three deep collectors, all standalone</td></tr>
     <tr><td><code>cloudg.graph.builder</code></td><td><code>GraphBuilder</code>: attack paths, lateral movement, centrality / blast-radius metrics, D3 / Cytoscape / GraphML export</td></tr>
-    <tr><td><code>cloudg.graph.ontology</code></td><td><code>CloudOntology</code>: ~62 typed RDF relations, SPARQL-queryable, Turtle / JSON-LD</td></tr>
+    <tr><td><code>cloudg.graph.ontology</code></td><td><code>CloudOntology</code>: 64 typed RDF relations, SPARQL-queryable, Turtle / JSON-LD</td></tr>
     <tr><td><code>cloudg.graph.rag_export</code></td><td><code>RAGExporter</code>: retrieval-ready JSONL chunks of the infrastructure for LLM pipelines</td></tr>
     <tr><td><code>cloudg.renderers.terraform_export</code></td><td><code>TerraformExporter</code>: <code>.tf.json</code> recreation plus <code>import.sh</code>, with a coverage <code>preview()</code></td></tr>
     <tr><td><code>cloudg.normaliser</code></td><td><code>FindingsNormaliser</code>: dedupe, cross-scanner merge, CVSS rescore, compliance mapping on any findings list</td></tr>
@@ -703,7 +704,7 @@ myscanner = <span class="c">"my_package.scanner:MyScanner"</span>
 
 <span class="k">[project.entry-points."cloudg.collectors"]</span>
 mycloud = <span class="c">"my_package.collector:MyCollector"</span></code></pre>
-  <p>After <code>pip install</code>, the name works in <code>scanners.enabled</code> and <code>--scanners</code>. If your scanner emits a stable check ID in <code>source_finding_id</code>, add it to <code>rules/check_equivalence.yaml</code> so its findings merge with equivalent checks from other tools.</p>
+  <p>After <code>pip install</code>, the name works in <code>scanners.enabled</code> and <code>--scanners</code>. If your scanner emits a stable check ID in <code>source_finding_id</code>, add it to <code>cloudg/rules/check_equivalence.yaml</code> so its findings merge with equivalent checks from other tools.</p>
 </section>
 
 <section id="auth">
@@ -781,11 +782,11 @@ res.structured[<span class="c">"items"</span>]                     <span class="
     <tr><th>Profile</th><th>In short</th><th>Tools (local user)</th></tr>
     <tr><td><code>open</code></td><td>no restrictions and no transforms, for trusted local use</td><td>74</td></tr>
     <tr><td><code>standard</code></td><td>secrets redacted, private keys dropped, credential ids masked, attacker-controllable text fenced, secrets in arguments refused; <code>reveal_token</code> only for <code>admin</code> and <code>privacy-admin</code></td><td>73</td></tr>
-    <tr><td><code>strict</code></td><td>as standard, plus pseudonymised identifiers, IPs, e-mails and tag values, rate limits on every tool, and no live, export or restricted tools</td><td>64</td></tr>
+    <tr><td><code>strict</code></td><td>as standard, plus pseudonymised identifiers, IPs, e-mails and tag values, rate limits on every tool, and no live, export or restricted tools</td><td>61</td></tr>
     <tr><td><code>read_only</code></td><td>as standard, without cloud access, processes or file writes</td><td>66</td></tr>
     <tr><td><code>airgapped</code></td><td>as standard, without cloud access or processes</td><td>69</td></tr>
     <tr><td><code>audit</code></td><td>as read_only, every call logged, risk annotations inline</td><td>66</td></tr>
-    <tr><td><code>soc-analyst</code></td><td>role-based example: analysts see pseudonyms, the <code>lead</code> role sees clear values</td><td>64; <code>analyst</code> 61, <code>lead</code> 70</td></tr>
+    <tr><td><code>soc-analyst</code></td><td>role-based example: analysts see pseudonyms, the <code>lead</code> role sees clear values</td><td>62; <code>analyst</code> 60, <code>lead</code> 70</td></tr>
   </table></div>
   <p>Pseudonyms round-trip: an agent can pass a pseudonymised ARN back as an argument and the input pipeline reverses it. Set <code>CLOUDG_MCP_VAULT_KEY</code> to keep them stable across restarts; a policy with <code>vault.path</code> also saves the vault when the server shuts down. <code>reveal_token</code>, for the roles allowed to use it, turns a pseudonym or an alias back into the real value. Policies extend each other and carry per-role rules, sensitivity ceilings, per-principal rate limits and transform pipelines; the details are in <a href="https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md">MCP_PRIVACY.md</a>.</p>
   <p>The four live tools (<code>map_inventory</code>, <code>collect_assets</code>, <code>run_scanners</code>, <code>run_pipeline</code>) use the server's own cloud credentials, whoever calls. They check those credentials first (<code>preflight</code>, at most 25 seconds), then run under the live operation guard: identical concurrent calls share one run, a scope collected in the last two minutes is refused with <code>retry_after_seconds</code> and a loaded live dataset of the same providers to use instead, and at most one live operation runs per scope and two overall. <code>admin</code> and <code>operator</code> can pass <code>force=true</code> to skip the cooldown. Each live tool's answer reports any throttling during its run. <code>rate_limit_status</code> and <code>cloudg://ratelimit</code> show the state; see <a href="#ratelimit">Rate limits</a>.</p>
@@ -828,10 +829,11 @@ res.structured[<span class="c">"items"</span>]                     <span class="
   <p>Every release, newest first. The full detail lives in <a href="https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
 
   <div class="release">
-    <span class="tag">0.6.0</span> <span class="date">2026-10-08</span>
+    <span class="tag">0.6.0</span> <span class="date">2026-10-09</span>
     <h3>MCP server and throttling resilience</h3>
     <p>cloudg is now a Model Context Protocol server. <code>cloudg mcp serve</code> (also <code>cloudg-mcp</code>) exposes 74 tools, 13 resources, 11 resource templates and 11 prompts over stdio or streamable HTTP, on both MCP protocol eras (2024-11-05 to 2025-11-25, and 2026-07-28), with a dependency-free native server or the official SDK. The same layer mounts into an existing MCP SDK or fastmcp server, or runs in-process. Seven policy profiles control access and transform the data on its way out: redaction, pseudonyms that round-trip, fencing of attacker-controllable text, projection and annotation. Live collections check credentials first and run under a guard with single-flight, cooldowns and concurrency caps.</p>
     <p>Every cloud API call now goes through <code>cloudg.resilience</code>: shared adaptive token buckets per account, region and service, concurrency caps, Retry-After, circuit breakers per service (per action for EC2) and retries bounded by a shared budget. Throttled services are recorded in coverage as <code>throttled: ...</code> instead of failing the map, and <code>InventoryResult.throttling</code> reports what happened. New <code>ratelimit</code> config section; <code>aws.max_retries</code> and <code>aws.retry_mode</code> are now honoured. New <code>mcp</code> extra (<code>mcp&gt;=1.30,&lt;3</code>), included in <code>all</code>.</p>
+    <p>The graph analysis reports different results for the same estate. Internet exposure follows network-flow edges only (rules, routes, peering, load balancer targets, attachments to security groups, VPC and subnet containment), so an IAM grant or an API Gateway invoking a Lambda function no longer makes a resource internet-exposed. Entry points are <code>0.0.0.0/0</code>, <code>::/0</code> and the Azure <code>Internet</code>, <code>Any</code> and <code>*</code> sources. Sensitive ports are matched as numbers, so all-traffic rules, Azure <code>*</code> and comma lists report SSH and RDP, <code>2200-2300</code> no longer counts as port 22, and egress rules report nothing. Security groups, NSGs, NACLs and target groups are no longer reported as unexpected exposed resources. Finding ids are a hash of the rule and the asset's ARN, the same on every scan. <code>GraphBuilder</code> merges parallel rules between the same two nodes instead of keeping only the last one, which had hidden SSH open to the world behind a later rule for port 443. AWS security group rule edges point at the security group asset. In the ontology, containment and protection relations now point the right way and match both endpoint types, a generic <code>CONTAINS</code> relation brings the total to 64, port relations are read from the parsed ranges, and <code>ENCRYPTED_BY_KMS</code> links an asset to its key. The ontology and RAG exports attach findings to assets by ID, ARN, unique name or unique ARN tail.</p>
   </div>
 
   <div class="release">

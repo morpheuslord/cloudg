@@ -123,7 +123,7 @@ def _run_scan_jobs(jobs: list[tuple[str, str, Any]]) -> list[Any]:
                 try:
                     findings = future.result(timeout=3600)
                     all_findings.extend(findings)
-                    ui.task_done(progress, task_id, f"{name} — {len(findings)} findings")
+                    ui.task_done(progress, task_id, f"{name}: {len(findings)} findings")
                 except Exception as exc:
                     ui.task_failed(progress, task_id, f"{name} failed: {exc}")
     return all_findings
@@ -165,7 +165,7 @@ def _parse_ingest_reports(reports: dict[str, list[str]]) -> tuple[list[Any], dic
             try:
                 findings = parse_report(tool, path)
             except (ValueError, FileNotFoundError) as exc:
-                ui.warn(f"{tool}: skipping {path} — {exc}")
+                ui.warn(f"{tool}: skipping {path} ({exc})")
                 continue
             count += len(findings)
             all_findings.extend(findings)

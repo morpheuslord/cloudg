@@ -1,7 +1,7 @@
 """Scanner-independent infrastructure inventory mapping.
 
 This package maps everything deployed (or default) in a cloud account and
-how it interlinks — without running any security scanner — across every
+how it interlinks, without running any security scanner, across every
 account of an AWS Organization / Control Tower landing zone when asked.
 Its output can later be merged with scanner findings to build asset and
 compliance maps, and queried for interdependencies (DependencyGraph).

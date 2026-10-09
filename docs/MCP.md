@@ -393,7 +393,10 @@ flowchart TD
    policy's audit trail (`policy.record_rejection`), so the entry `check_call` made as
    "allowed" does not stand. See [MCP_PRIVACY.md](MCP_PRIVACY.md).
 8. `validate_arguments(handler, arguments)` validates and coerces the arguments with a
-   pydantic model generated from the handler's signature. Unknown keys are rejected
+   pydantic model generated from the handler's signature. A handler with many arguments can
+   declare them as one pydantic model instead, in a single parameter named `args` after
+   `ctx` (`def find_assets(ctx, args: FindAssetsArgs)`); the published `inputSchema` and the
+   validation are the same as for the flat signature. Unknown keys are rejected
    (`extra="forbid"`), defaults are filled in, and `"5"` becomes `5` for an `int` parameter.
    A failure raises `InvalidArgumentsError` with pydantic's error list as `data`.
 9. The handler runs. Coroutine functions are awaited on the server's event loop. Plain
@@ -536,7 +539,7 @@ output can be piped.
 | `--read-only` | off | | Drop tools that have the `write_fs`, `cloud_access` or `exec` capability or are annotated destructive. Loading datasets and other in-memory changes stay available |
 | `--audit-log FILE` | off | `CLOUDG_MCP_AUDIT_LOG` | Append a JSONL audit trail (section 14.2), created with mode 0600 |
 | `--timeout SECONDS` | 300 | | Default per-call tool timeout. Tools with their own `timeout_seconds` (the live tools use 3600 and 7200) keep theirs. `0` disables the default |
-| `--registry MODULE:ATTR` | built-in catalog | | Serve a custom `Registry`, or a zero-argument callable returning one. `ATTR` defaults to `default_registry` |
+| `--registry MODULE:ATTR` | built-in catalog | | Serve a custom `Registry`, or a zero-argument callable returning one. `MODULE` must be a dotted Python module name and `ATTR` an attribute name; `ATTR` defaults to `default_registry`. The module is imported and the callable is run, so the value is operator code and must never come from an untrusted source. Anything that does not resolve to a `Registry` stops the server |
 
 `--dataset` paths are trusted: they are loaded even when they lie outside the workspace's
 allowed roots, because the operator typed them. The roots only restrict what tools may open.
@@ -573,8 +576,8 @@ cloudg mcp serve [OPTIONS]
 | `--port` | `8765` | | HTTP port |
 | `--path` | `/mcp` | | Streamable HTTP endpoint |
 | `--flavor` | `auto` | | `auto`, `native`, `sdk` or `fastmcp` (section 7) |
-| `--auth-token TOKEN[:ROLES[:ID]]` | none | `CLOUDG_MCP_AUTH_TOKENS` (whitespace-separated specs) | Require `Authorization: Bearer TOKEN` on HTTP. `ROLES` is a comma list; the principal also gets `default`. `TOKEN` may be `env:VARNAME`. A token that contains `:` needs the full `TOKEN:ROLES:ID` form (6.3). Repeatable. Ignored on stdio |
-| `--allowed-origin PATTERN` | loopback origins | | Allowed browser `Origin` values (`fnmatch` patterns, `*` for any), replacing the default. Same-origin requests are always accepted. Checked on every bind and by every flavor; repeatable |
+| `--auth-token TOKEN[:ROLES[:ID]]` | none | `CLOUDG_MCP_AUTH_TOKENS` (whitespace-separated specs) | Require `Authorization: Bearer TOKEN` on HTTP. `ROLES` is a comma list; the principal also gets `default`. `TOKEN` may be `env:VARNAME`. A token that contains `:` needs the full `TOKEN:ROLES:ID` form (6.3). An empty token, given directly or through an unset variable, stops the server before it starts. Repeatable. Ignored on stdio |
+| `--allowed-origin PATTERN` | loopback origins | | Allowed browser `Origin` values (`fnmatch` patterns, `*` for any), replacing the default. A same-origin request is accepted too, but only when the `Host` header was validated (loopback bind, or `--allowed-host` given). Checked on every bind and by every flavor; repeatable |
 | `--allowed-host PATTERN` | loopback names when bound to loopback | | Allowed `Host` values. Without it, a non-loopback bind does not check `Host` (`Origin` still is); repeatable |
 | `--cors-origin ORIGIN` | none | | Grant CORS to this browser origin; repeatable. Native flavor only: with `sdk` or `fastmcp` the server refuses to start |
 | `--json-response` | off | | Answer POSTs with JSON, never SSE. The fastmcp flavor accepts it for `http` only and refuses it with `--transport sse` |
@@ -594,6 +597,10 @@ $ cloudg mcp serve --transport http --flavor sdk --cors-origin http://x
 Error: --cors-origin is only supported by the native flavor (use --flavor native)
 $ cloudg mcp serve --transport sse --flavor fastmcp --json-response
 Error: --json-response / --stateless apply to Streamable HTTP; the fastmcp flavor cannot combine them with --transport sse
+$ cloudg mcp serve --transport http --auth-token ''
+Error: Invalid value for --auth-token: an empty token was given (is the variable it comes from unset?)
+$ cloudg mcp serve --registry os.path
+Error: Invalid value for --registry: cannot import 'os.path': module 'posixpath' has no attribute 'default_registry'
 ```
 
 When the server stops, it calls `policy.save_vault()`, which writes the pseudonym vault to the
@@ -684,13 +691,22 @@ $ cloudg mcp call get_asset --dataset prod=inventory/inventory-map.json --args '
   "content": [
     {
       "type": "text",
-      "text": "No asset matches 'bastoin' in dataset 'prod'. Did you mean: 'bastion', 'bastion-admin'? Use find_assets(query=...) to search by name, ARN or tag."
+      "text": "No asset matches the reference in this dataset. 2 close matches, see suggestions in the error data. Use find_assets(query=...) to search by name, ARN or tag."
     }
   ],
   "isError": true,
   "_meta": {
     "cloudg/error_code": -32602,
-    "cloudg/error_data": {"suggestions": ["bastion", "bastion-admin"]}
+    "cloudg/error_data": {
+      "value": "bastoin",
+      "dataset": "prod",
+      "suggestions": [
+        {"id": "bastion", "name": "bastion", "arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0bast",
+         "type": "EC2", "account_id": "111111111111", "dataset": "prod"},
+        {"id": "admin-role", "name": "bastion-admin", "arn": "arn:aws:iam::111111111111:role/bastion-admin",
+         "type": "IAM_ROLE", "account_id": "111111111111", "dataset": "prod"}
+      ]
+    }
   }
 }
 $ echo $?
@@ -738,7 +754,7 @@ url, command, serve_args, token_env) -> dict` if you generate configs from code.
 | Variable | Read by | Meaning |
 |---|---|---|
 | `CLOUDG_MCP_POLICY` | `Policy.load(None)`, the `--policy` option | Policy used when none is given: profile name, file path or inline JSON |
-| `CLOUDG_MCP_ALLOWED_ROOTS` | `Workspace()` | `os.pathsep`-separated directories that tools may read and write (default: the current directory and the configured report directory) |
+| `CLOUDG_MCP_ALLOWED_ROOTS` | `Workspace()` | `os.pathsep`-separated directories that tools may read and write (default: the current directory and the configured report directory, leaving out `/` and the home directory) |
 | `CLOUDG_MCP_VAULT_KEY` | the pseudonym vault | HMAC key for pseudonyms. Without it a random key is generated per process, so pseudonyms change on every restart. Details in [MCP_PRIVACY.md](MCP_PRIVACY.md) |
 | `CLOUDG_MCP_AUDIT_LOG` | `--audit-log` | JSONL audit file |
 | `CLOUDG_MCP_AUDIT_SALT` | `AuditLogMiddleware` | HMAC key for argument hashes in the audit log. Without it the key is random per process, and hashes cannot be compared across restarts |
@@ -823,21 +839,22 @@ Requests are checked in this order; the first failing check answers:
 
 | Check | Status | When |
 |---|---|---|
+| Open connections | 503, connection closed | More than `HTTPConfig.max_connections` (512) at once |
+| Request line and headers | 400, or 431 above 64 KiB of headers | The connection is dropped without an answer when they take longer than `header_timeout` (30 seconds, also the keep-alive idle limit) |
+| Body | 413 above 4 MiB (`HTTPConfig.max_body_bytes`) | Content-Length or chunked. The connection is dropped when the body takes longer than `body_timeout` (120 seconds) |
 | `Host` header against the allow-list | 421 | Default list: `localhost`, `127.0.0.1` and `[::1]`, with or without a port, applied when bound to a loopback address, where a request without `Host` is refused too. On other binds the check is off unless you pass `--allowed-host` |
-| `Origin` header against the allow-list | 403 | Only when `Origin` is present. Default: `http(s)://localhost`, `127.0.0.1` and `[::1]` with any port, whatever the bind address. `--cors-origin` values are added. A same-origin request (Origin `host:port` equal to `Host`) is always accepted |
+| `Origin` header against the allow-list | 403 | Only when `Origin` is present. Default: `http(s)://localhost`, `127.0.0.1` and `[::1]` with any port, whatever the bind address. `--cors-origin` values are added. A same-origin request (Origin `host:port` equal to `Host`) is accepted when the `Host` check above is on. On a non-loopback bind without `--allowed-host` it is refused: a DNS-rebinding attacker controls both headers there, so a matching pair proves nothing |
 | `OPTIONS` preflight | 204 with CORS headers, or 405 when CORS is off | |
 | `/healthz` | 200 `{"status":"ok"}` | Before authentication |
 | Bearer token | 401 with `WWW-Authenticate: Bearer realm="cloudg-mcp"` | When tokens are configured and the header is missing or wrong |
-| Request line and headers | 400, or 431 above 64 KiB of headers | |
-| Body size | 413 above 4 MiB (`HTTPConfig.max_body_bytes`) | Content-Length or chunked |
+| Method and path | 405 for other methods on the endpoint, 404 for any other path | |
 | `Content-Type: application/json` | 415 | POST |
 | `Accept` | 406 | When it lists neither JSON nor SSE (an empty `Accept` counts as both) |
 | JSON parse | 400 with -32700 | |
 | 2026-07-28 envelope and headers | 400 with -32020, -32602 or -32022 | See 6.4 |
 | `MCP-Protocol-Version` (handshake era) | 400 | Unsupported value, or different from the version the session negotiated |
 | Session | 400 without `Mcp-Session-Id`, 404 unknown or another principal's | Not in stateless mode |
-| Session cap | 503 | More than 1000 live sessions |
-| Any other path | 404; other methods on the endpoint 405 | |
+| Session caps | 503 | More than 1000 live sessions (`max_sessions`). A principal at `max_sessions_per_principal` (100) has its least recently used idle session ended to make room, and gets 503 only when all of them are streaming |
 
 Sessions (handshake era, not `--stateless`): the `initialize` response carries
 `Mcp-Session-Id` (32 random hex characters). Later requests must send it. A session is bound
@@ -1117,7 +1134,7 @@ data: {"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri
 The verified end-to-end matrix with the official SDK client (`mcp.Client` from mcp 2.3.0,
 launching `cloudg mcp serve` over stdio): `mode="auto"` negotiated 2026-07-28 against both the
 native and the SDK flavor, and `mode="legacy"` negotiated 2025-11-25 against the SDK flavor.
-In every run the client listed 73 tools under `standard` (64 under `strict`), 14 resources
+In every run the client listed 73 tools under `standard` (61 under `strict` today), 14 resources
 (the catalog's 13 plus `cloudg://metrics`), 11 templates and 11 prompts, and the ARN
 returned by `find_assets` (pseudonymized under `strict`) worked as the `ref` of a follow-up
 `get_asset` call.
@@ -1148,6 +1165,8 @@ Which serve options each flavor honors:
 | `--stateless` | yes | yes (affects handshake-era sessions only) | yes for `http`; refused with `sse` |
 | `--page-size` | yes | no (one page) | no |
 | `/healthz` | yes | no | no |
+| Session id bound to the principal that opened it (another principal presenting it gets 404) | yes | yes (streamable HTTP; ids issued over the legacy SSE transport are not bound) | yes (same) |
+| Per-principal session cap, connection cap, header and body timeouts (`HTTPConfig`) | yes | no (uvicorn's own limits) | no (uvicorn's own limits) |
 
 The flavors share one DNS-rebinding check, `cloudg.mcp.native.http.OriginHostGuard`. The
 native server runs it itself; for the SDK and fastmcp flavors it sits in
@@ -1156,7 +1175,10 @@ switched off so requests are not filtered twice. The rules, identical everywhere
 
 - `Origin` is checked on every bind. A request without `Origin` (non-browser clients) passes;
   otherwise the origin must match `--allowed-origin` (default: loopback origins on any port)
-  or be same-origin, meaning its `host:port` equals the `Host` header. Failure: 403.
+  or be same-origin, meaning its `host:port` equals the `Host` header. Same-origin counts only
+  when the `Host` header itself was validated (a loopback bind, or `--allowed-host`): on a
+  public bind without `--allowed-host` a DNS-rebinding attacker controls both headers.
+  Failure: 403.
 - `Host` is checked against `--allowed-host` when given. Without it, a loopback bind accepts
   only loopback names (and refuses a missing `Host`), and any other bind does not check it,
   since the server cannot know which names it is reached by. Failure: 421.
@@ -1217,7 +1239,7 @@ layer.register_into(server, *, prefix=None, include=None, principal_resolver=Non
 | Argument | Meaning |
 |---|---|
 | `server` | An `mcp.server.mcpserver.MCPServer` (mcp 2.x), an `mcp.server.fastmcp.FastMCP` (mcp 1.x), an `mcp.server.lowlevel.Server` (1.x or 2.x), a `fastmcp.FastMCP` (2.x, 3.x, 4.x), or the layer's own `NativeMCPServer` (returned unchanged) |
-| `prefix` | Sets `layer.prefix`; tool and prompt names become `prefix + name`. Resource URIs are never prefixed (they already start with `cloudg://`) |
+| `prefix` | Sets the layer's prefix through `layer.set_prefix()`, which raises `ValueError` for anything but up to 64 of `A-Za-z0-9_.-`; tool and prompt names become `prefix + name`. The prefix belongs to the layer, so mounting one layer twice with different prefixes logs a warning and renames it everywhere: use one layer per prefix. Resource URIs are never prefixed (they already start with `cloudg://`) |
 | `include` | Subset of `{"tools", "resources", "templates", "prompts", "completions", "logging", "subscriptions"}`; default all. Anything else raises `ValueError` |
 | `principal_resolver` | `fn(RequestInfo) -> Principal or None`; `None` falls back to the default resolver (8.8) |
 | `list_changed` | Advertise `listChanged` capabilities on SDK servers so clients act on change notifications |
@@ -1614,12 +1636,11 @@ guide.
   `ValueError: Invalid prefix 'cloudg:': use up to 64 of A-Z a-z 0-9 _ . -`. Exposed names
   must also match `^[A-Za-z0-9_.-]{1,128}$`.
 
-`register_into(prefix=...)` sets `layer.prefix` on the shared layer object directly, so
-mounting one layer into two servers with different prefixes leaves both using the last one.
-Build one layer per prefix. That path also skips the constructor's check: `register_into(layer,
-server, prefix="bad:")` was accepted, and the failure only came when the tool list was rendered
-(`ValueError: Invalid exposed tool name 'bad:echo'`). Prefer passing the prefix to
-`CloudGMCPLayer(...)`.
+`register_into(prefix=...)` goes through `layer.set_prefix()`, the same check as the
+constructor, so `register_into(layer, server, prefix="bad:")` raises `ValueError` at once.
+The prefix belongs to the shared layer object, so mounting one layer into two servers with
+different prefixes leaves both using the last one (a warning is logged). Build one layer per
+prefix.
 
 ### 8.8 Principal resolvers
 
@@ -1849,6 +1870,12 @@ CloudGMCPLayer(
 | `max_output_chars` | 200,000 | Cap on the text block of one tool result |
 | `name`, `version`, `instructions` | `"cloudg"`, cloudg's version, built-in text | Server identity and the instructions sent on `initialize` / `server/discover` |
 
+Every keyword argument except `config` is also a field of `LayerOptions`
+(`cloudg/mcp/layer_options.py`, importable from `cloudg.mcp.layer`), so a configuration can
+be built once and passed whole: `CloudGMCPLayer(config, options=LayerOptions(policy="strict",
+prefix="cloudg_"))`. Keyword arguments given next to `options` override its fields, and an
+unknown keyword raises `TypeError` like a normal signature would.
+
 When any filter is given, the layer builds a new `Registry` with the matching specs, so the
 registry you pass is not modified. Without filters the layer uses your registry object as is,
 and later `registry.add(...)` calls show up in the layer.
@@ -1946,14 +1973,18 @@ which runs `serve_async` in `asyncio.run` and returns quietly on Ctrl+C. The asy
 from cloudg.mcp.server import serve_async
 
 await serve_async(
-    layer, transport="stdio", *, flavor="auto", host="127.0.0.1", port=8765, path="/mcp",
-    auth=None, auth_tokens=None, allowed_origins=None, allowed_hosts=None, cors_origins=(),
-    json_response=False, stateless=False, page_size=100, principal_resolver=None,
-    log_level="INFO", ready=None,
+    layer, transport="stdio", *, options=None, flavor="auto", host="127.0.0.1", port=8765,
+    path="/mcp", auth=None, auth_tokens=None, allowed_origins=None, allowed_hosts=None,
+    cors_origins=(), json_response=False, stateless=False, page_size=100,
+    principal_resolver=None, log_level="INFO", ready=None,
 )
 ```
 
-The arguments mirror the CLI options. `auth` takes a ready `TokenAuth`; `auth_tokens` takes
+The arguments mirror the CLI options. They are the fields of `cloudg.mcp.server.ServeOptions`,
+so `serve_async(layer, "http", options=ServeOptions(port=9000, auth_tokens=[...]))` works too;
+keyword arguments override the fields of `options`, and an unknown keyword raises
+`TypeError`. `auth` and `auth_tokens` are left out of the options' `repr()`, so logging the
+options cannot leak a token. `auth` takes a ready `TokenAuth`; `auth_tokens` takes
 spec strings. `serve_async` leaves the application's logging alone: it sets the `cloudg`
 logger to `log_level` and adds a stderr handler to `cloudg` only when no handler is
 configured anywhere. Invalid option combinations (section 5.3) raise `ValueError` before anything
@@ -2002,7 +2033,7 @@ Every handler receives a `ToolContext` as its first argument (named `ctx` or `co
 |---|---|
 | `ctx.layer`, `ctx.workspace`, `ctx.config` | The layer, its workspace, the workspace's cloudg config |
 | `ctx.principal` | The caller |
-| `ctx.kind`, `ctx.name` | `tool`, `resource`, `prompt` or `completion`; the tool or prompt name, or the URI |
+| `ctx.kind`, `ctx.name` | `tool`, `resource`, `prompt` or `completion`; the tool or prompt name, the URI, or for a completion the name of the argument being completed |
 | `ctx.request_id` | The JSON-RPC id when an adapter supplied it |
 | `ctx.session` | The adapter's session object (SDK session, fastmcp context, native session) or `None` |
 | `ctx.meta` | Free-form per-call dict; completions find the other arguments in `ctx.meta["arguments"]` |
@@ -2050,7 +2081,7 @@ Workspace(config=None, *, allowed_roots=None, output_dir=None, max_datasets=16)
 | Argument | Default | Meaning |
 |---|---|---|
 | `config` | `CloudGConfig()` | Used by the live tools and for the default report directory |
-| `allowed_roots` | `$CLOUDG_MCP_ALLOWED_ROOTS`, else the current directory plus `config.report.output_dir` | Directories tools may read from and write to |
+| `allowed_roots` | `$CLOUDG_MCP_ALLOWED_ROOTS`, else the current directory plus `config.report.output_dir`, either left out when it is `/` or the home directory | Directories tools may read from and write to |
 | `output_dir` | `config.report.output_dir` | Where export tools write. Added to the allowed roots if it is not inside one |
 | `max_datasets` | 16 | Beyond this, the oldest non-active dataset is evicted |
 
@@ -2080,7 +2111,7 @@ a `map_inventory` call naming an existing dataset:
 
 ```json
 {"isError": true,
- "text": "A dataset named 'live-1' already exists. Choose another name (for example 'live-1-2'), or pass replace=true to overwrite it.",
+ "text": "A dataset with that name already exists. Choose another name (the error data suggests a free one), or pass replace=true to overwrite it.",
  "_meta": {"cloudg/error_code": -32602,
            "cloudg/error_data": {"existing": "live-1", "suggested": "live-1-2"}}}
 ```
@@ -2105,7 +2136,8 @@ a `map_inventory` call naming an existing dataset:
 | JSON object with `check_type`, or whose `results` is an object | `checkov` |
 | JSON object with `Findings` | `prowler` |
 | JSON list whose first item has `check_type` | `checkov` |
-| JSON list whose first item has `ProductArn`, `SchemaVersion`, `finding_info` or `status_code` | `prowler` |
+| JSON list whose first item has `ProductArn` or `SchemaVersion` | `prowler` |
+| JSON list, JSON Lines or a directory whose first record is OCSF (`finding_info`, `class_uid`, `category_uid`, `type_uid` or `severity_id`, and no `ProductArn`) | refused with `InvalidArgumentsError`: cloudg reads Prowler's ASFF output only, so re-run Prowler with `-M json-asff` |
 | JSON list whose first item has `severity`, `title` or `resource_id` | `generic` |
 | JSON Lines (first line parses, whole file does not) | `prowler` |
 
@@ -2133,8 +2165,10 @@ allowed roots (/run/media/morpheuslord/Personal_Files/Projects/cloudg,
 directory to the workspace's allowed roots.
 ```
 
-The default root is the process's current directory, which is wherever the client launched
-the server. Desktop clients do not let you choose it, so set the roots explicitly for them:
+The default roots are the process's current directory, which is wherever the client launched
+the server, and the configured report directory. Either one is left out when it is `/` or the
+home directory, so a client that starts the server from your home directory does not expose
+all of it; with both left out the workspace refuses to start until roots are configured. Desktop clients do not let you choose it, so set the roots explicitly for them:
 
 ```json
 {
@@ -2201,10 +2235,11 @@ Tool results are paged by the catalog tools themselves. List-style tools take `l
 ```
 
 The cursor is `c<offset>.<12 hex characters>`. The hex part fingerprints the dataset name, the
-dataset version and the tool's filter arguments (not `limit`, so the page size may change
-between calls). Passing it back with
+dataset version, an id of that particular load of the dataset and the tool's filter
+arguments (not `limit`, so the page size may change between calls). Passing it back with
 the same query continues at the offset (the next page above started at offset 2). Changing
-the filters, or any change to the dataset, makes the old cursor stale:
+the filters, any change to the dataset, or loading a new dataset under the same name makes
+the old cursor stale:
 
 ```text
 Stale cursor: the query arguments or the dataset changed since it was issued. Repeat the
@@ -2742,7 +2777,16 @@ The details are in [MCP_PRIVACY.md](MCP_PRIVACY.md). The parts that touch this g
   across restarts.
 - Every transport binds to 127.0.0.1 by default, and every HTTP flavor runs the same
   `Origin` / `Host` guard (section 7) and supports static bearer tokens mapped to roles. The native server warns at start-up when
-  bound to a non-loopback address without tokens.
+  bound to a non-loopback address without tokens. An empty token stops the server before it
+  starts, a session id works only for the principal that opened it, and the native server
+  caps connections, sessions per principal and the time a client may take to send a request
+  (6.2).
+- Error messages never repeat the caller's arguments or list names from the dataset; that
+  detail goes into `cloudg/error_data`, which passes through the output pipeline. Values the
+  input pipeline restored from pseudonyms are pseudonymised again in everything that leaves
+  the call: results, errors, links, progress and log messages. Unexpected exceptions in
+  resource and prompt handlers reach the client as a generic error.
+- `--registry` imports and runs operator code; never build its value from untrusted input.
 - File access is confined to the allowed roots and writes to the output directory.
 - Audit trails: the JSONL middleware (hashed argument values, completions included) and the
   policy's decision log, which also records calls to unknown or hidden primitives
@@ -2776,7 +2820,8 @@ stdout. `cloudg -v mcp serve` is safe: the verbose logs go to stderr.
 ### 17.3 403 Forbidden: invalid Origin
 
 The request carried an `Origin` header that is neither allowed (loopback by default) nor
-same-origin with the `Host` header. Browsers always send it; most non-browser clients do not.
+same-origin with a validated `Host` header (on a non-loopback bind, same-origin counts only
+with `--allowed-host`). Browsers always send it; most non-browser clients do not.
 Add the page's origin with `--allowed-origin` (any flavor), and if a browser must read the
 responses, with `--cors-origin` too (native flavor only).
 

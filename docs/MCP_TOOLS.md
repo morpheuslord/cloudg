@@ -20,13 +20,15 @@ result = await layer.call_tool("load_dataset", {"path": str(estate / "inventory"
 
 The `open` policy applies no transforms, so the examples show raw tool output. Under the default `standard` policy, secrets are redacted and every result carries an extra `cloudg/transforms` entry in `_meta`. A few things were changed for print:
 
-- Arrays are cut to the first few items, followed by a string such as `"... 5 more"`. That string is a marker added for this document; the tool returned the full array.
+- Arrays are cut to the first two or three items, followed by a marker such as `"... 5 more"`; count maps keep five keys plus `"...": "N more"`. The markers are added for this document; the tool returned everything.
 - Long strings end in `...` where they were cut.
 - `<estate>` stands for the absolute path of the sample-estate directory on the capture machine.
 - Error examples are shown as one object holding the tool name, the arguments, and the error result's `text` (`content[0].text`) and `_meta`.
-- Calls run in sequence against one workspace, so some results depend on earlier calls (for example the dataset `version` grows after a mutation). Where that matters the text says so.
+- Calls run in document order against one workspace, so some results depend on earlier calls (for example the dataset `version` grows after a mutation). Where that matters the text says so. The `sample` dataset was loaded again, unmodified, at the start of the Compliance, Ontology, Export, Live, Meta and Privacy sections, so the suppressions and the ingested finding of the Findings section do not show up there. The resource, completion and prompt examples used a fresh workspace holding `sample`, its snapshot `baseline` and `after`, and the recipes a fresh `sample`.
+- The script also wrote the inputs some examples need: `scans/prowler-asff.json` (one Prowler ASFF record for `sg-web`), `scans/prowler-ocsf.json` (one Prowler OCSF record) and `after/`, a copy of the inventory edited as described under [`diff_datasets`](#diff_datasets).
+- Timestamps (`loaded_at`, `detected_at`, audit `ts`), cursors and pseudonyms differ from run to run.
 
-The live tools (`map_inventory`, `collect_assets`, `run_scanners`, `run_pipeline`) were run against a stub: `cloudg.api.CloudGEngine` was replaced by the `FakeEngine` class from `tests/mcp/test_catalog_export_live_meta.py` and `cloudg.mcp.catalog.live.credential_problems` was patched to return `{}`. The workspace got a fresh `LiveOperationGuard` with default settings, and its cooldowns were reset between examples that are not about the guard. Their results show the real envelope and progress notifications the layer produces, but the inventory inside them is the sample estate, not a cloud account. The credential failure example under `map_inventory` is real: it ran the actual AWS credential check against an empty AWS config with the metadata service disabled.
+The live tools (`map_inventory`, `collect_assets`, `run_scanners`, `run_pipeline`) were run against a stub: `cloudg.api.CloudGEngine` was replaced by the `FakeEngine` class from `tests/mcp/test_catalog_export_live_meta.py` and `cloudg.mcp.catalog.live.credential_problems` was patched to return `{}`. The workspace kept its `LiveOperationGuard` with the default settings; its cooldowns were reset between examples that are not about the guard, and the `rate_limit_status` example got a fresh guard. Their results show the real envelope and progress notifications the layer produces, but the inventory inside them is the sample estate, not a cloud account. The credential failure example under `map_inventory` is real: it ran the actual AWS credential check against an empty AWS config with the metadata service disabled.
 
 To repeat any example yourself, use the in-process CLI (see [MCP.md](MCP.md) for every option):
 
@@ -73,7 +75,7 @@ cloudg mcp read cloudg://findings/summary --policy open --dataset sample=./inven
 | [`largest_blast_radius`](#largest_blast_radius) | graph | confidential | no | Assets with the most transitive dependents. |
 | [`cross_account_edges`](#cross_account_edges) | graph | confidential | no | Relationships that cross account boundaries. |
 | [`centrality_top`](#centrality_top) | graph | confidential | no | Most central assets by degree or betweenness. |
-| [`subgraph_export`](#subgraph_export) | graph | confidential | no | Neighbourhood of a few assets as D3, Cytoscape or GraphML. |
+| [`subgraph_export`](#subgraph_export) | graph | restricted | no | Neighbourhood of a few assets as D3, Cytoscape or GraphML. |
 | [`security_coverage`](#security_coverage) | graph | confidential | no | Security services per account and region, and the gaps. |
 | [`graph_stats`](#graph_stats) | graph | internal | no | Size and shape of the relationship graph. |
 | [`list_findings`](#list_findings) | findings | confidential | no | Filtered, sorted, paginated finding search. |
@@ -92,7 +94,7 @@ cloudg mcp read cloudg://findings/summary --policy open --dataset sample=./inven
 | [`control_status`](#control_status) | compliance | confidential | no | One control with its findings and affected assets. |
 | [`compliance_gaps`](#compliance_gaps) | compliance | confidential | no | Assets that fail compliance, worst first. |
 | [`ontology_stats`](#ontology_stats) | ontology | internal | no | Triples, classes and relation counts of the ontology. |
-| [`sparql_query`](#sparql_query) | ontology | confidential | no | Read-only SPARQL over the dataset's ontology. |
+| [`sparql_query`](#sparql_query) | ontology | restricted | no | Read-only SPARQL over the dataset's ontology. |
 | [`ontology_neighbourhood`](#ontology_neighbourhood) | ontology | confidential | no | Semantic relations around one asset. |
 | [`relation_groups`](#relation_groups) | ontology | confidential | no | Relation group counts, or the triples of one group. |
 | [`rag_chunks`](#rag_chunks) | ontology | confidential | no | Retrieval-ready text chunks with metadata. |
@@ -162,7 +164,7 @@ A tool returns a JSON object. The layer sends it twice: as `structuredContent`, 
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"dataset\": \"report\",\n  \"kind\": \"report\",\n  \"source\": \"<estate>/report/findings.json\",\n  \"loaded_at\": \"2026-10-08T15:20:07+00:00\",\n  \"version\": 0,\n  \"provide..."
+      "text": "{\n  \"dataset\": \"report\",\n  \"kind\": \"report\",\n  \"source\": \"<estate>/report/findings.json\",\n  \"loaded_at\": \"2026-10-09T14:25:10+00:00\",\n  \"version\": 0,\n  \"provide..."
     },
     {
       "type": "resource_link",
@@ -176,7 +178,7 @@ A tool returns a JSON object. The layer sends it twice: as `structuredContent`, 
     "dataset": "report",
     "kind": "report",
     "source": "<estate>/report/findings.json",
-    "loaded_at": "2026-10-08T15:20:07+00:00",
+    "loaded_at": "2026-10-09T14:25:10+00:00",
     "version": 0,
     "providers": [
       "aws",
@@ -204,7 +206,7 @@ A tool returns a JSON object. The layer sends it twice: as `structuredContent`, 
     "compliance_frameworks": [
       "CIS-AWS",
       "CIS-Azure",
-      "... 3 more"
+      "... 2 more"
     ],
     "assets_by_type": {
       "SECURITY_GROUP": 4,
@@ -212,16 +214,7 @@ A tool returns a JSON object. The layer sends it twice: as `structuredContent`, 
       "CLOUD_ACCOUNT": 3,
       "EC2": 3,
       "S3_BUCKET": 3,
-      "SUBNET": 2,
-      "ORGANIZATION": 1,
-      "ORG_UNIT": 1,
-      "ORG_POLICY": 1,
-      "VPC": 1,
-      "LOAD_BALANCER": 1,
-      "TARGET_GROUP": 1,
-      "RDS_INSTANCE": 1,
-      "KMS_KEY": 1,
-      "SECRET": 1
+      "...": "10 more"
     },
     "assets_by_provider": {
       "AWS": 36,
@@ -234,22 +227,13 @@ A tool returns a JSON object. The layer sends it twice: as `structuredContent`, 
       "GOVERNS": 1,
       "SECURITY_GROUP_RULE": 4,
       "ATTACHED_TO": 6,
-      "LOAD_BALANCER_TARGET": 3,
-      "ASSUMES_ROLE": 4,
-      "REFERENCES": 5,
-      "INVOKES": 2,
-      "GRANTS_ACCESS": 9,
-      "LOGS_TO": 1,
-      "USES_IMAGE": 1,
-      "PROTECTS": 1,
-      "MONITORS": 1,
-      "INTERNET_EXPOSED": 4
+      "...": "10 more"
     },
     "has_organization": false,
     "coverage_records": 0
   },
   "_meta": {
-    "cloudg/duration_ms": 0
+    "cloudg/duration_ms": 2
   }
 }
 ```
@@ -258,7 +242,7 @@ The text rendering is capped at `max_output_chars` (200,000 by default, set on `
 
 ### The `dataset` argument
 
-Every tool that reads data takes `dataset`. Empty means the active dataset, which is the one most recently loaded, selected or collected. A name that is not loaded fails with the list of loaded names:
+Every tool that reads data takes `dataset`. Empty means the active dataset, which is the one most recently loaded, selected or collected. A name that is not loaded fails; `error_data` holds the name and the list of loaded datasets:
 
 ```json
 {
@@ -267,9 +251,20 @@ Every tool that reads data takes `dataset`. Empty means the active dataset, whic
     "name": "prod"
   },
   "isError": true,
-  "text": "No dataset named 'prod'. Loaded datasets: sample, report.",
+  "text": "No such dataset. 2 dataset(s) are loaded: see datasets in the error data, or call list_datasets.",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "prod",
+      "datasets": [
+        {
+          "dataset": "sample"
+        },
+        {
+          "dataset": "report"
+        }
+      ]
+    }
   }
 }
 ```
@@ -292,17 +287,18 @@ A few tools need no dataset: `workspace_status`, `list_datasets`, `list_framewor
 
 ### Asset references
 
-Arguments named `ref`, `source`, `target`, `start`, `seeds`, `refs` and `resource` take an asset reference. `Dataset.find_asset` (`cloudg/mcp/state.py`) tries these in order and stops at the first unique hit:
+Arguments named `ref`, `source`, `target`, `start`, `seeds`, `refs` and `resource` take an asset reference. `Dataset.find_asset` (`cloudg/mcp/state/dataset.py`) resolves it with `cloudg.inventory.dependencies.AssetIndex`, the matcher the ontology and the RAG export use too. It tries these in order and stops at the first unique hit:
 
 1. the internal asset id (`web-1`);
 2. the exact ARN or cloud resource id (`arn:aws:ec2:us-east-1:111111111111:instance/i-0web1`, an Azure resource id, a GCP full name);
 3. an exact name shared by no other asset (`prod-data`);
-4. a tail of the ARN or resource id, when only one asset has it (`ref_tails` in `cloudg/mcp/state.py`): the resource part of an ARN, i.e. everything after the fifth `:` (`function:api-handler`, `db:orders-db`, `instance/i-0web1`), the text after the last `/` (`i-0web1`, `sg-0admin`) and the text after the last `:` (`api-handler`); Azure and GCP ids contribute their last `/` segment;
-5. a case-insensitive name shared by no other asset.
+4. the text after the last `/` of the ARN or resource id, when only one asset has it (`i-0web1`, `sg-0admin`; Azure and GCP ids contribute their last `/` segment);
+5. the resource part of an ARN, i.e. everything after the fifth `:` (`function:api-handler`, `db:orders-db`, `instance/i-0web1`), or its last `:` or `/` segment (`api-handler`, `orders-db`), when only one asset has it;
+6. a case-insensitive name shared by no other asset.
 
-A tail that several assets share does not resolve; use a longer form or the id.
+A name or tail that several assets share does not resolve, and the last two steps are skipped for a reference that is the exact name of more than one asset; use a longer form or the id.
 
-When a name matches several assets, the error lists their ids, types and accounts and puts the ids in `_meta.cloudg/error_data.ambiguous`. When nothing matches, the error suggests up to five close names or ARNs (substring hits first, then fuzzy matches) and puts them in `error_data.suggestions`:
+Error messages never repeat the reference you passed or the names of other assets: those go into `_meta.cloudg/error_data`, where the privacy policy can transform them like any other result. When a name matches several assets, `error_data` holds the ids in `ambiguous` and up to five `candidates` (id, name, ARN, type, account). When nothing matches, `error_data.value` is the reference and `suggestions` lists up to five close assets (substring hits on name or ARN first, then fuzzy name matches):
 
 ```json
 {
@@ -311,15 +307,30 @@ When a name matches several assets, the error lists their ids, types and account
     "ref": "web-3"
   },
   "isError": true,
-  "text": "No asset matches 'web-3' in dataset 'sample'. Did you mean: 'web-2', 'web-1', 'web-tg', 'web-alb', 'web-acl'? Use find_assets(query=...) to search by name, ARN or tag.",
+  "text": "No asset matches the reference in this dataset. 5 close matches, see suggestions in the error data. Use find_assets(query=...) to search by name, ARN or tag.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
+      "value": "web-3",
+      "dataset": "sample",
       "suggestions": [
-        "web-2",
-        "web-1",
-        "web-tg",
-        "... 2 more"
+        {
+          "id": "web-2",
+          "name": "web-2",
+          "arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web2",
+          "type": "EC2",
+          "account_id": "111111111111",
+          "dataset": "sample"
+        },
+        {
+          "id": "web-1",
+          "name": "web-1",
+          "arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web1",
+          "type": "EC2",
+          "account_id": "111111111111",
+          "dataset": "sample"
+        },
+        "... 3 more"
       ]
     }
   }
@@ -411,7 +422,7 @@ The result also carried these resource links in `content`:
 ]
 ```
 
-The graph tools (`neighbors`, `get_edges`, `find_paths`, `attack_paths`, `lateral_movement_paths`, `subgraph_export`) accept two more forms. `internet`, `public`, `0.0.0.0/0` and `::/0` all mean the internet node of the graph, which exists when some edge starts at `0.0.0.0/0` or `::/0`; without one they fail with `This dataset has no internet node (no 0.0.0.0/0 rules or INTERNET_EXPOSED edges). Use internet_exposure to see assets flagged as exposed.` Any other placeholder node in the graph (a CIDR, an external principal) can be passed by its node id.
+The graph tools (`neighbors`, `get_edges`, `find_paths`, `attack_paths`, `lateral_movement_paths`, `subgraph_export`) accept two more forms. `internet`, `public`, `0.0.0.0/0` and `::/0` all mean the internet. The entry points are found the way the reachability analysis finds them: the `0.0.0.0/0` and `::/0` nodes and the source of every ingress edge whose CIDR is `0.0.0.0/0`, `::/0` or an Azure `Internet`, `Any` or `*` tag. `neighbors` and `subgraph_export` start from the first entry point (`0.0.0.0/0` when it exists); `find_paths` and `attack_paths` start from a virtual node, `__internet__` (shown as `internet`), linked to every entry point, so an Azure-only dataset works too. Without any entry point they fail with `This dataset has no internet node (no internet-sourced ingress rules or INTERNET_EXPOSED edges). Use internet_exposure to see assets flagged as exposed.` Any other placeholder node in the graph (a CIDR, an external principal) can be passed by its node id.
 
 Most results name assets by their internal `id` (`cross_account_edges` and the keys in `diff_datasets` use ARNs). Pass ids back when you chain calls; they are the only form that never becomes ambiguous.
 
@@ -428,9 +439,9 @@ List tools take `limit` and `cursor` and return an envelope:
 | `truncated` | `true` when more pages exist. |
 | `items` | The page. |
 
-`limit` defaults to 50 and allows 1 to 500 unless the tool's table says otherwise. A cursor looks like `c3.4529e8cb825a`: `c`, the offset of the next item, a dot, then the first 12 hex digits of a SHA-256 over the dataset name, the dataset `version` and the query arguments (`limit` excluded, so the page size may change between pages). The format is short and dotted on purpose: the privacy policies redact long base64-looking strings as secrets, and a redacted cursor could not be passed back.
+`limit` defaults to 50 and allows 1 to 500 unless the tool's table says otherwise. A cursor looks like `c3.054790bd1d07`: `c`, the offset of the next item, a dot, then the first 12 hex digits of a SHA-256 over the dataset name, the dataset `version`, an id of that particular load of the dataset and the query arguments (`limit` excluded, so the page size may change between pages). The format is short and dotted on purpose: the privacy policies redact long base64-looking strings as secrets, and a redacted cursor could not be passed back.
 
-A cursor only works with the query and dataset version that produced it. Change a filter, or mutate the dataset (suppress, ingest, normalise, add reachability findings, run scanners), and the old cursor fails instead of returning a wrong page. The first two pages of a risk-sorted search:
+A cursor only works with the query and dataset version that produced it. Change a filter, mutate the dataset (suppress, ingest, normalise, add reachability findings, run scanners), or load a new dataset under the same name, and the old cursor fails with an invalid-arguments error instead of returning a wrong page. The first two pages of a risk-sorted search:
 
 Called with the arguments below, `find_assets` returned this `structuredContent`.
 
@@ -444,7 +455,7 @@ Called with the arguments below, `find_assets` returned this `structuredContent`
   "total": 44,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.4529e8cb825a",
+  "next_cursor": "c3.054790bd1d07",
   "truncated": true,
   "items": [
     {
@@ -478,7 +489,7 @@ Called with the arguments below, `find_assets` returned this `structuredContent`
 {
   "sort_by": "risk",
   "limit": 3,
-  "cursor": "c3.4529e8cb825a",
+  "cursor": "c3.054790bd1d07",
   "fields": [
     "name",
     "type",
@@ -494,7 +505,7 @@ Called with the arguments below, `find_assets` returned this `structuredContent`
   "total": 44,
   "offset": 3,
   "returned": 3,
-  "next_cursor": "c6.4529e8cb825a",
+  "next_cursor": "c6.054790bd1d07",
   "truncated": true,
   "items": [
     {
@@ -530,7 +541,7 @@ Reusing that cursor with `sort_by: "name"` fails, and so does anything that is n
   "arguments": {
     "sort_by": "name",
     "limit": 3,
-    "cursor": "c3.4529e8cb825a"
+    "cursor": "c3.054790bd1d07"
   },
   "isError": true,
   "text": "Stale cursor: the query arguments or the dataset changed since it was issued. Repeat the call without cursor to start again.",
@@ -614,9 +625,20 @@ Severities rank `CRITICAL` (4) > `HIGH` (3) > `MEDIUM` (2) > `LOW` (1) > `INFO` 
     "min_severity": "SEVERE"
   },
   "isError": true,
-  "text": "Unknown severity 'SEVERE'. Valid values: CRITICAL, HIGH, MEDIUM, LOW, INFO",
+  "text": "Unknown severity. Valid values: CRITICAL, HIGH, MEDIUM, LOW, INFO",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "SEVERE",
+      "valid": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "INFO"
+      ],
+      "close_matches": []
+    }
   }
 }
 ```
@@ -625,7 +647,7 @@ Severities rank `CRITICAL` (4) > `HIGH` (3) > `MEDIUM` (2) > `LOW` (1) > `INFO` 
 
 ### Enumerated arguments
 
-Asset types, edge types, providers and relation groups are parsed the same way as severities: case-insensitive, with `-` and spaces read as `_`. A miss suggests up to three close values and lists the valid ones (the first 30 when there are more):
+Asset types, edge types, providers and relation groups are parsed the same way as severities: case-insensitive, with `-` and spaces read as `_`. A miss names up to three close values in the message and lists the valid ones (the first 30 when there are more). `error_data` holds the value that was passed (`value`), every valid value (`valid`) and the close matches (`close_matches`):
 
 ```json
 {
@@ -637,9 +659,21 @@ Asset types, edge types, providers and relation groups are parsed the same way a
     ]
   },
   "isError": true,
-  "text": "Unknown edge type 'ASSUMES'. Did you mean ASSUMES_ROLE? Valid values: SECURITY_GROUP_RULE, NACL_RULE, ROUTE, IAM_TRUST, IAM_POLICY_ATTACHMENT, CONTAINS, PEERING, LOAD_BALANCER_TARGET, INTERNET_EXPOSED...",
+  "text": "Unknown edge type. Did you mean ASSUMES_ROLE? Valid values: SECURITY_GROUP_RULE, NACL_RULE, ROUTE, IAM_TRUST, IAM_POLICY_ATTACHMENT, CONTAINS, PEERING, LOAD_BALANCER_TARGET, INTERNET_EXPOSED, ATTACHED...",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "ASSUMES",
+      "valid": [
+        "SECURITY_GROUP_RULE",
+        "NACL_RULE",
+        "ROUTE",
+        "... 17 more"
+      ],
+      "close_matches": [
+        "ASSUMES_ROLE"
+      ]
+    }
   }
 }
 ```
@@ -698,7 +732,7 @@ A finding brief:
 | `detected_at` | ISO 8601 timestamp. |
 | `uri` | `cloudg://findings/{id}`. |
 
-A finding is matched to an asset when its `resource_arn` or `resource_id` equals an asset's id, ARN or name (the first hit wins). Findings that match nothing count as `unmapped` in `findings_summary` and show `asset_id: null`.
+A finding is matched to an asset by its `resource_id` and `resource_arn`, with the same `AssetIndex` tiers as an asset reference: id, then ARN, unique name, unique ARN tail, ARN resource part, and a name in any letter case. A name or tail several assets share matches nothing. Findings that match nothing count as `unmapped` in `findings_summary` and show `asset_id: null`.
 
 ### Risk scores
 
@@ -706,7 +740,7 @@ Four different scores appear in results:
 
 - `risk_score` on a finding is computed by the `Finding` model: CRITICAL 9.5, HIGH 7.5, MEDIUM 5.0, LOW 2.5, INFO 0.5; with a CVSS score it is the mean of that value and the CVSS, rounded to one decimal. `f-web-cve` (HIGH, CVSS 8.1) scores 7.8.
 - `find_assets` with `sort_by: "risk"` ranks on the worst open finding's `risk_score`, plus 2.0 when the asset is internet-exposed, then the number of open findings.
-- `top_risks` scores an asset as `max_finding_risk * exposure * blast * volume`. `exposure` is 1.5 when the asset is flagged internet-exposed or is a descendant of an internet entry point in the relationship graph (`internet_reachable`), else 1.0. `blast` is `1 + min(1, log10(1 + d) / 2)` where `d` counts transitive dependents up to depth 6. `volume` is `1 + min(0.5, 0.05 * (open findings - 1))`. The result is rounded to two decimals, and each item carries the components.
+- `top_risks` scores an asset as `max_finding_risk * exposure * blast * volume`. `exposure` is 1.5 when the asset is flagged internet-exposed or the reachability analysis reaches it from the internet over network-flow edges (`internet_reachable`), else 1.0. `blast` is `1 + min(1, log10(1 + d) / 2)` where `d` counts transitive dependents up to depth 6. `volume` is `1 + min(0.5, 0.05 * (open findings - 1))`. The result is rounded to two decimals, and each item carries the components.
 - `attack_paths` scores a path as `target weight + 0.5 * min(10, open findings on the path) - 0.3 * (hops - 1)`. Target weights come from the crown-jewel table: relational databases 10; DynamoDB, data warehouses, secrets and key vaults 9; KMS keys and buckets 8; file systems and search domains 7; caches and access keys 6; IAM roles and users 5. An explicit `target` always weighs 10.
 - `blast_radius.network.risk_score` comes from `ReachabilityAnalyzer.compute_blast_radius`: 0.5 per reachable node plus 2.0 per reachable sensitive data store, capped at 10.
 
@@ -719,7 +753,7 @@ Each primitive declares a sensitivity and the side effects it needs. Policies us
 | `public` | Vocabulary and catalog data with no tenant information (meta tools, `list_frameworks`, `list_detectors`, schema and docs resources). |
 | `internal` | Counts and summaries. |
 | `confidential` | Identifiers, topology and findings. Most tools. |
-| `restricted` | Raw metadata and anything that may hold secrets: `get_asset_metadata`, `privacy_audit_log`, `reveal_token`. |
+| `restricted` | Raw metadata and anything that may hold secrets: `get_asset_metadata`, `privacy_audit_log`, `reveal_token`. Also the outputs the privacy layer cannot look inside, because they are one opaque string: `sparql_query` (its rows are keyed by the query's own variable names), `subgraph_export` and the text graph and ontology resources (`cloudg://graph/{format}`, `cloudg://ontology/turtle`, `cloudg://ontology/{format}`). A profile with a `confidential` ceiling hides all of them. |
 
 | Capability | Meaning | Tools |
 |---|---|---|
@@ -739,8 +773,11 @@ Each primitive declares a sensitivity and the side effects it needs. Policies us
 | `standard` | 73 | `reveal_token` |
 | `read_only` | 66 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `map_inventory`, `reveal_token`, `run_pipeline`, `run_scanners` |
 | `airgapped` | 69 | `collect_assets`, `map_inventory`, `reveal_token`, `run_pipeline`, `run_scanners` |
-| `strict` | 64 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `get_asset_metadata`, `map_inventory`, `privacy_audit_log`, `reveal_token`, `run_pipeline`, `run_scanners` |
-| `soc-analyst` | 64 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `get_asset_metadata`, `map_inventory`, `privacy_audit_log`, `reveal_token`, `run_pipeline`, `run_scanners` |
+| `audit` | 66 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `map_inventory`, `reveal_token`, `run_pipeline`, `run_scanners` |
+| `strict` | 61 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `get_asset_metadata`, `map_inventory`, `preview_transform`, `privacy_audit_log`, `reveal_token`, `run_pipeline`, `run_scanners`, `sparql_query`, `subgraph_export` |
+| `soc-analyst` | 62 | `collect_assets`, `export_ontology`, `export_report`, `export_terraform`, `get_asset_metadata`, `map_inventory`, `privacy_audit_log`, `reveal_token`, `run_pipeline`, `run_scanners`, `sparql_query`, `subgraph_export` |
+
+Under `soc-analyst` the `analyst` role sees 60 tools (it also loses `rate_limit_status` and `terraform_preview`) and the `lead` role 70 (only the four live tools are hidden).
 
 The CLI flag `--read-only` is different from the `read_only` profile: it removes tools with `write_fs`, `cloud_access` or `exec` and every tool annotated destructive, so it also drops `unload_dataset`.
 
@@ -784,7 +821,7 @@ Tools attach `resource_link` content blocks pointing at the resources that hold 
 
 There are two kinds of failure.
 
-A tool error comes back as a normal result with `isError: true`, the message in `content[0].text` and the details in `_meta`: `cloudg/error_code` and, when there is structured detail, `cloudg/error_data`. The model can read it and retry. Bad arguments, unknown datasets, unresolved references, path violations, denied calls, timeouts and handler exceptions all take this route. Argument validation happens before the handler runs and reports pydantic's error list:
+A tool error comes back as a normal result with `isError: true`, the message in `content[0].text` and the details in `_meta`: `cloudg/error_code` and, when there is structured detail, `cloudg/error_data`. The model can read it and retry. The message never repeats the value the caller passed and never lists names from the dataset: the value, close matches and valid choices are in `cloudg/error_data` (`value`, `suggestions`, `valid`, `close_matches`), which goes through the caller's output pipeline like a result, so a pseudonymising policy pseudonymises them. Bad arguments, unknown datasets, unresolved references, path violations, denied calls, timeouts and handler exceptions all take this route. Argument validation happens before the handler runs and reports pydantic's error list:
 
 ```json
 {
@@ -827,7 +864,7 @@ Resource reads and prompt requests raise for every failure (unknown URI, unknown
 | `-31029` | Rate limited: a policy rate limit, or the live operation guard refusing a collection (cooldown, busy, caller quota; see [Live operation guard](#live-operation-guard)). |
 | `-32603` | Generic layer error, used by the live tools' credential preflight. |
 | `"timeout"` | The tool ran past its timeout (300 s by default, longer where the entry says so). |
-| `"handler_error"` | An unexpected exception in the handler; the text is `ExceptionType: message`. |
+| `"handler_error"` | An unexpected exception in a tool handler; the text is `ExceptionType: message`, passed through the output pipeline. Resource and prompt handlers never send raw exception text. |
 
 Tools never accept arguments outside their schema (`additionalProperties: false`):
 
@@ -914,7 +951,7 @@ Called with the arguments below, `workspace_status` returned this `structuredCon
       "name": "sample",
       "kind": "inventory",
       "source": "<estate>/inventory",
-      "loaded_at": "2026-10-08T15:20:07+00:00",
+      "loaded_at": "2026-10-09T14:25:11+00:00",
       "version": 0,
       "providers": [
         "aws",
@@ -960,7 +997,7 @@ The result also carried these resource links in `content`:
 
 Fields: `active_dataset` (name or null); `datasets[]` with `name`, `kind` (`inventory`, `report`, `generic`, `live`, `snapshot`, or a scanner name), `source` (file path, `live`, `inline`, `ingest` or `snapshot of X`), `loaded_at`, `version`, `providers`, counts of `assets`, `edges`, `findings` and `compliance_results`, and `cached`, which says whether the graph, dependency graph, ontology, centrality and entity RAG chunks are already built; `allowed_roots`; `output_dir`; `providers_configured` (from the cloudg config); `next_steps` only when nothing is loaded.
 
-Allowed roots come from `Workspace(allowed_roots=...)`, else `$CLOUDG_MCP_ALLOWED_ROOTS` (`os.pathsep`-separated), else the current directory plus the configured report directory. The output directory is added to the roots if it is outside them.
+Allowed roots come from `Workspace(allowed_roots=...)`, else `$CLOUDG_MCP_ALLOWED_ROOTS` (`os.pathsep`-separated), else the current directory plus the configured report directory, leaving out either one when it is `/` or the home directory (with neither left, the workspace refuses to start). The output directory is added to the roots if it is outside them.
 
 Related: `load_dataset`, `list_datasets`, `dataset_summary`.
 
@@ -986,7 +1023,7 @@ Called with the arguments below, `list_datasets` returned this `structuredConten
       "name": "sample",
       "kind": "inventory",
       "source": "<estate>/inventory",
-      "loaded_at": "2026-10-08T15:20:07+00:00",
+      "loaded_at": "2026-10-09T14:25:12+00:00",
       "version": 0,
       "providers": [
         "aws",
@@ -1065,7 +1102,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
   "dataset": "sample",
   "kind": "inventory",
   "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:07+00:00",
+  "loaded_at": "2026-10-09T14:25:12+00:00",
   "version": 0,
   "providers": [
     "aws",
@@ -1094,8 +1131,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "CIS-AWS",
     "CIS-Azure",
     "CIS-GCP",
-    "NIST-800-53",
-    "... 1 more"
+    "... 2 more"
   ],
   "assets_by_type": {
     "SECURITY_GROUP": 4,
@@ -1103,16 +1139,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "CLOUD_ACCOUNT": 3,
     "EC2": 3,
     "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
+    "...": "10 more"
   },
   "assets_by_provider": {
     "AWS": 36,
@@ -1125,16 +1152,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "SECURITY_GROUP_RULE": 4,
     "INTERNET_EXPOSED": 4,
     "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
+    "...": "10 more"
   },
   "has_organization": true,
   "coverage_records": 0,
@@ -1180,7 +1198,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
   "dataset": "report",
   "kind": "report",
   "source": "<estate>/report/findings.json",
-  "loaded_at": "2026-10-08T15:20:07+00:00",
+  "loaded_at": "2026-10-09T14:25:12+00:00",
   "version": 0,
   "providers": [
     "aws",
@@ -1208,7 +1226,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
   "compliance_frameworks": [
     "CIS-AWS",
     "CIS-Azure",
-    "... 3 more"
+    "... 2 more"
   ],
   "assets_by_type": {
     "SECURITY_GROUP": 4,
@@ -1216,16 +1234,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "CLOUD_ACCOUNT": 3,
     "EC2": 3,
     "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
+    "...": "10 more"
   },
   "assets_by_provider": {
     "AWS": 36,
@@ -1238,16 +1247,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "GOVERNS": 1,
     "SECURITY_GROUP_RULE": 4,
     "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "ASSUMES_ROLE": 4,
-    "REFERENCES": 5,
-    "INVOKES": 2,
-    "GRANTS_ACCESS": 9,
-    "LOGS_TO": 1,
-    "USES_IMAGE": 1,
-    "PROTECTS": 1,
-    "MONITORS": 1,
-    "INTERNET_EXPOSED": 4
+    "...": "10 more"
   },
   "has_organization": false,
   "coverage_records": 0
@@ -1292,7 +1292,7 @@ Errors:
     "name": "sample"
   },
   "isError": true,
-  "text": "A dataset named 'sample' already exists. Choose another name (for example 'sample-2'), or pass replace=true to overwrite it.",
+  "text": "A dataset with that name already exists. Choose another name (the error data suggests a free one), or pass replace=true to overwrite it.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
@@ -1345,7 +1345,7 @@ Called with the arguments below, `select_dataset` returned this `structuredConte
   "name": "report",
   "kind": "report",
   "source": "<estate>/report/findings.json",
-  "loaded_at": "2026-10-08T15:20:07+00:00",
+  "loaded_at": "2026-10-09T14:25:12+00:00",
   "version": 0,
   "providers": [
     "aws",
@@ -1366,7 +1366,7 @@ Called with the arguments below, `select_dataset` returned this `structuredConte
 }
 ```
 
-An unknown name fails with the loaded names (see [The `dataset` argument](#the-dataset-argument)).
+An unknown name fails, with the loaded datasets in `error_data` (see [The `dataset` argument](#the-dataset-argument)).
 
 ### `unload_dataset`
 
@@ -1391,8 +1391,7 @@ Called with the arguments below, `unload_dataset` returned this `structuredConte
   "remaining": [
     "sample",
     "report",
-    "baseline",
-    "... 1 more"
+    "after"
   ]
 }
 ```
@@ -1423,7 +1422,7 @@ Called with the arguments below, `snapshot_dataset` returned this `structuredCon
   "name": "baseline",
   "kind": "snapshot",
   "source": "snapshot of sample",
-  "loaded_at": "2026-10-08T15:20:07+00:00",
+  "loaded_at": "2026-10-09T14:25:12+00:00",
   "version": 0,
   "providers": [
     "aws",
@@ -1454,7 +1453,7 @@ A `new_name` that is already loaded is refused unless `replace` is true:
     "dataset": "ocsf-test"
   },
   "isError": true,
-  "text": "A dataset named 'report' already exists. Choose another name (for example 'report-2'), or pass replace=true to overwrite it.",
+  "text": "A dataset with that name already exists. Choose another name (the error data suggests a free one), or pass replace=true to overwrite it.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
@@ -1638,9 +1637,24 @@ Called with the arguments below, `diff_datasets` returned this `structuredConten
     "base": "yesterday"
   },
   "isError": true,
-  "text": "No dataset named 'yesterday'. Loaded datasets: sample, report, baseline, pre-ingest, after.",
+  "text": "No such dataset. 5 dataset(s) are loaded: see datasets in the error data, or call list_datasets.",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "yesterday",
+      "datasets": [
+        {
+          "dataset": "sample"
+        },
+        {
+          "dataset": "report"
+        },
+        {
+          "dataset": "after"
+        },
+        "... 2 more"
+      ]
+    }
   }
 }
 ```
@@ -1668,7 +1682,7 @@ Called with the arguments below, `dataset_summary` returned this `structuredCont
   "dataset": "sample",
   "kind": "inventory",
   "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:07+00:00",
+  "loaded_at": "2026-10-09T14:25:12+00:00",
   "version": 0,
   "providers": [
     "aws",
@@ -1705,16 +1719,7 @@ Called with the arguments below, `dataset_summary` returned this `structuredCont
     "CLOUD_ACCOUNT": 3,
     "EC2": 3,
     "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
+    "...": "10 more"
   },
   "assets_by_provider": {
     "AWS": 36,
@@ -1727,16 +1732,7 @@ Called with the arguments below, `dataset_summary` returned this `structuredCont
     "SECURITY_GROUP_RULE": 4,
     "INTERNET_EXPOSED": 4,
     "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
+    "...": "10 more"
   },
   "has_organization": true,
   "coverage_records": 0,
@@ -1785,7 +1781,7 @@ The result also carried these resource links in `content`:
 
 ## Inventory
 
-These tools answer "what do we have". `find_assets` and `count_assets` share one filter implementation (`filter_assets` in `cloudg/mcp/catalog/inventory.py`).
+These tools answer "what do we have". `find_assets` and `count_assets` share one filter implementation (`filter_assets` in `cloudg/mcp/catalog/_inventory.py`).
 
 ### `find_assets`
 
@@ -1924,9 +1920,22 @@ Errors include unknown enum values, unknown `fields`, stale or invalid cursors (
     ]
   },
   "isError": true,
-  "text": "Unknown asset type 'LAMBDA'. Did you mean LAMBDA_FUNCTION, ALARM? Valid values: EC2, VIRTUAL_MACHINE, GCE_INSTANCE, LAMBDA_FUNCTION, CLOUD_FUNCTION, ECS_CLUSTER...",
+  "text": "Unknown asset type. Did you mean LAMBDA_FUNCTION, ALARM? Valid values: EC2, VIRTUAL_MACHINE, GCE_INSTANCE, LAMBDA_FUNCTION, CLOUD_FUNCTION, ECS_CLUSTER, EKS_CLU...",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "LAMBDA",
+      "valid": [
+        "EC2",
+        "VIRTUAL_MACHINE",
+        "GCE_INSTANCE",
+        "... 153 more"
+      ],
+      "close_matches": [
+        "LAMBDA_FUNCTION",
+        "ALARM"
+      ]
+    }
   }
 }
 ```
@@ -2182,7 +2191,7 @@ The same asset without `keys`, called through a layer with `policy="standard"`. 
         "provenance": {
           "kind": "tool",
           "name": "get_asset_metadata",
-          "generated_at": "2026-10-08T15:20:16+00:00",
+          "generated_at": "2026-10-09T14:25:17+00:00",
           "policy": "standard",
           "category": "inventory",
           "principal_roles": [
@@ -2387,20 +2396,7 @@ Called with the arguments below, `list_accounts` returned this `structuredConten
       "name": null,
       "external": false
     },
-    {
-      "account_id": "222222222222",
-      "provider": "AWS",
-      "assets": 4,
-      "regions": [
-        "eu-west-1",
-        "global"
-      ],
-      "internet_exposed": 0,
-      "open_findings": 1,
-      "name": "shared-services",
-      "external": false
-    },
-    "... 2 more"
+    "... 3 more"
   ]
 }
 ```
@@ -2444,15 +2440,7 @@ Called with the arguments below, `list_regions` returned this `structuredContent
       "assets": 10,
       "accounts": 3
     },
-    {
-      "region": "westeurope",
-      "providers": [
-        "AZURE"
-      ],
-      "assets": 5,
-      "accounts": 1
-    },
-    "... 2 more"
+    "... 3 more"
   ],
   "scanned_regions": {
     "aws": [
@@ -2758,15 +2746,7 @@ Called with the arguments below, `organization_topology` returned this `structur
       "parent_id": "org",
       "external": false
     },
-    {
-      "id": "acct-prod",
-      "name": "prod",
-      "type": "CLOUD_ACCOUNT",
-      "account_id": "111111111111",
-      "parent_id": "ou-workloads",
-      "external": false
-    },
-    "... 2 more"
+    "... 3 more"
   ],
   "total": 5,
   "truncated": false,
@@ -2790,8 +2770,8 @@ Related: `list_accounts`, `cross_account_edges`, the `cross_account_trust_review
 
 The graph tools read three views of the same edges, each built lazily and cached per dataset:
 
-- The relationship graph (`GraphBuilder`, a NetworkX `DiGraph`): edges as collected, read "source verb target". Placeholder nodes such as `0.0.0.0/0` appear when an edge points at something that is not an asset. Parallel edges between the same two nodes collapse into one here.
-- The flow graph: the relationship graph plus, for every `resource ATTACHED_TO security-group` edge, a reverse edge from the security group (or NSG) to the resource, because traffic a group admits reaches what it is attached to. Path results label these hops `SG_ADMITS`. `find_paths` in `flow` mode and `attack_paths` use it.
+- The relationship graph (`GraphBuilder`, a NetworkX `DiGraph`): edges as collected, read "source verb target". Placeholder nodes such as `0.0.0.0/0` appear when an edge points at something that is not an asset. The graph holds one edge per pair of nodes: parallel `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` edges with the same CIDR and direction are merged into one edge whose `port_range` and `protocol` are comma lists, and any other parallel edge replaces the earlier one.
+- The flow graph (`Dataset.flow_graph`): the network-flow hops of `cloudg.graph.reachability.network_flow_graph()`, the same walk the internet-exposure analysis uses, plus the identity edges (`ASSUMES_ROLE`, `IAM_TRUST`, `GRANTS_ACCESS`) as explicit pivots, because an attacker who reaches a workload can use its role. Flow hops follow `INTERNET_EXPOSED`, ingress rules, `ROUTE`, `PEERING` and `LOAD_BALANCER_TARGET` edges, `CONTAINS` only out of a VPC, VNet or subnet, `ATTACHED_TO` forward from a network interface or public IP, and `ATTACHED_TO` backwards from a security group, NSG or NACL to what is attached to it, since traffic a group admits reaches those resources. Path results label those reversed hops `SG_ADMITS`. Egress rules, `INVOKES` and the other typed edges are not traffic paths. `find_paths` in `flow` mode and `attack_paths` use it.
 - The dependency graph (`cloudg.inventory.dependencies.DependencyGraph`): each edge turned into a "dependent needs dependency" arrow. `forward` edge types (`REFERENCES`, `ATTACHED_TO`, `ROUTE`, `PEERING`, `USES_IMAGE`, `ASSUMES_ROLE`, `LOGS_TO`, `LOAD_BALANCER_TARGET`, `GRANTS_ACCESS`, `IAM_POLICY_ATTACHMENT`, `IAM_TRUST`) make the source depend on the target; `reverse` types (`CONTAINS`, `INVOKES`, `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS`) make the target depend on the source; `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` create no dependency. `depends_on`, `dependents`, `dependency_tree`, `shared_dependencies`, `largest_blast_radius` and the first half of `blast_radius` use it. [INVENTORY_REFERENCE.md](INVENTORY_REFERENCE.md) sections 6 and 12 have the full table.
 
 `neighbors` and `get_edges` read the raw edge list, so parallel edges are all reported.
@@ -2862,20 +2842,7 @@ Called with the arguments below, `neighbors` returned this `structuredContent`.
       "max_severity": null,
       "uri": "cloudg://assets/sg-app"
     },
-    {
-      "id": "tg-web",
-      "name": "web-tg",
-      "type": "TARGET_GROUP",
-      "provider": "AWS",
-      "region": "us-east-1",
-      "account_id": "111111111111",
-      "arn": "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/web-tg/def",
-      "internet_exposed": false,
-      "open_findings": 0,
-      "max_severity": null,
-      "uri": "cloudg://assets/tg-web"
-    },
-    "... 2 more"
+    "... 3 more"
   ],
   "edges": [
     {
@@ -2896,17 +2863,7 @@ Called with the arguments below, `neighbors` returned this `structuredContent`.
       "edge_type": "ATTACHED_TO",
       "relationship": null
     },
-    {
-      "id": "e-tg-web1",
-      "source": "tg-web",
-      "source_name": "web-tg",
-      "target": "web-1",
-      "target_name": "web-1",
-      "edge_type": "LOAD_BALANCER_TARGET",
-      "relationship": null,
-      "port_range": "8080"
-    },
-    "... 2 more"
+    "... 3 more"
   ],
   "node_count": 5,
   "edge_count": 5,
@@ -3057,7 +3014,7 @@ Called with the arguments below, `neighbors` returned this `structuredContent`.
       "max_severity": "CRITICAL",
       "uri": "cloudg://assets/sg-admin"
     },
-    "... 5 more"
+    "... 4 more"
   ],
   "edges": [
     {
@@ -3093,7 +3050,7 @@ Called with the arguments below, `neighbors` returned this `structuredContent`.
       ],
       "direction": "ingress"
     },
-    "... 5 more"
+    "... 4 more"
   ],
   "node_count": 7,
   "edge_count": 7,
@@ -3153,13 +3110,13 @@ Searches the raw edge list. All filters combine with AND, and the result pages l
 | `edge_types` | string[] or null | `null` |  | Only these EdgeType values. |
 | `relationship` | string | `""` |  | Exact relationship / RelationType. |
 | `cross_account_only` | boolean | `false` |  | Only edges whose two endpoints are mapped assets in different accounts. |
-| `internet_only` | boolean | `false` |  | Only edges from 0.0.0.0/0 / ::/0. |
-| `port` | integer or null | `null` |  | Edges allowing this port. |
+| `internet_only` | boolean | `false` |  | Only ingress edges from the internet (0.0.0.0/0, ::/0, or the Azure Internet / Any / * sources). |
+| `port` | integer or null | `null` | 0..65535 | Edges allowing this port. |
 | `limit` | integer | `50` | 1..500 | Maximum items to return. |
 | `cursor` | string | `""` |  | Opaque cursor from a previous call's next_cursor; empty = first page. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-`internet_only` keeps edges whose source is `0.0.0.0/0` or `::/0` or whose `cidr` is one of those. `port` keeps edges whose `ports` list contains the port, whose `port_range` covers it (comma-separated values and `lo-hi` ranges are understood), or which have no ports at all and protocol `ALL` or `-1`. `cross_account_only` keeps edges whose two ends are assets in different accounts. `source` and `target` take references, including `internet`.
+`internet_only` keeps ingress edges whose source or `cidr` stands for the internet: `0.0.0.0/0`, `::/0`, or the Azure `Internet`, `Any` and `*` sources. `port` keeps edges whose `ports` list contains the port or whose `port_range` opens it, parsed by `cloudg.graph.ports` like the reachability findings: comma lists, `lo-hi` ranges and Azure `*` are understood, an empty port list on a TCP, UDP or all-protocol filter rule means every port, and ICMP rules open no ports. `cross_account_only` keeps edges whose two ends are assets in different accounts. `source` and `target` take references, including `internet`.
 
 Every rule that opens SSH to the internet:
 
@@ -3253,7 +3210,7 @@ Called with the arguments below, `get_edges` returned this `structuredContent`.
   "total": 56,
   "offset": 0,
   "returned": 2,
-  "next_cursor": "c2.a3ee44dbae90",
+  "next_cursor": "c2.45682a5c230e",
   "truncated": true,
   "items": [
     {
@@ -3284,7 +3241,7 @@ A `source` or `target` that resolves to nothing fails with the usual "No asset m
 
 Category `graph` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema yes · timeout: layer default (300 s)
 
-Shortest simple paths from `source` to `target`, shortest first, using NetworkX `shortest_simple_paths`. Enumeration stops at the first path longer than `max_depth` hops or once `max_paths` paths are collected. `truncated` is true whenever `max_paths` paths were returned, which does not prove more exist.
+Shortest simple paths from `source` to `target`, shortest first, using NetworkX `shortest_simple_paths`. Enumeration stops at the first path longer than `max_depth` hops or once `max_paths` paths are collected. `truncated` is true only when another path within `max_depth` exists beyond the ones returned.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -3292,10 +3249,10 @@ Shortest simple paths from `source` to `target`, shortest first, using NetworkX 
 | `target` | string | required | min length 1 | End asset ref. |
 | `max_depth` | integer | `6` | 1..12 | Longest path (in hops) to return. |
 | `max_paths` | integer | `5` | 1..50 | Maximum number of paths, shortest first. |
-| `mode` | string | `"flow"` | one of `flow`, `directed`, `undirected` | flow: directed + security groups admit traffic to attached resources (best for reachability); directed: edges as collected; undirected: any connection. |
+| `mode` | string | `"flow"` | one of `flow`, `directed`, `undirected` | flow: network-flow hops (as the reachability analysis walks them: security groups admit traffic to attached resources) plus identity pivots (ASSUMES_ROLE, IAM_TRUST, GRANTS_ACCESS); directed: edges as collected; undirected: any connection. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-Modes: `flow` (default) is the flow graph, best for "can traffic get from A to B"; `directed` is the relationship graph as collected; `undirected` ignores direction and answers "are these connected at all".
+Modes: `flow` (default) is the flow graph, best for "can traffic get from A to B, and which identity can it pivot to"; `directed` is the relationship graph as collected; `undirected` ignores direction and answers "are these connected at all". With `source: "internet"` the walk starts at the virtual `__internet__` node linked to every internet entry point.
 
 Each path has `length` (hops), `nodes` (hop briefs), `edge_types` (one per hop, `SG_ADMITS` for derived flow hops) and `summary` (names joined by `->`). The result also echoes `source`, `target` and `mode`, plus `total_found` and `truncated`, and a `hint` when nothing was found.
 
@@ -3311,8 +3268,8 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
 {
   "dataset": "sample",
   "source": {
-    "id": "0.0.0.0/0",
-    "name": "0.0.0.0/0",
+    "id": "__internet__",
+    "name": "internet",
     "type": "EXTERNAL",
     "external": true
   },
@@ -3348,15 +3305,7 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
           "internet_exposed": true,
           "open_findings": 0
         },
-        {
-          "id": "tg-web",
-          "name": "web-tg",
-          "type": "TARGET_GROUP",
-          "account_id": "111111111111",
-          "internet_exposed": false,
-          "open_findings": 0
-        },
-        "... 3 more"
+        "... 4 more"
       ],
       "edge_types": [
         "INTERNET_EXPOSED",
@@ -3383,15 +3332,7 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
           "internet_exposed": true,
           "open_findings": 0
         },
-        {
-          "id": "tg-web",
-          "name": "web-tg",
-          "type": "TARGET_GROUP",
-          "account_id": "111111111111",
-          "internet_exposed": false,
-          "open_findings": 0
-        },
-        "... 3 more"
+        "... 4 more"
       ],
       "edge_types": [
         "INTERNET_EXPOSED",
@@ -3401,45 +3342,10 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
       ],
       "summary": "0.0.0.0/0 -> web-alb -> web-tg -> web-2 -> app-role -> orders-db"
     },
-    {
-      "length": 6,
-      "nodes": [
-        {
-          "id": "0.0.0.0/0",
-          "name": "0.0.0.0/0",
-          "type": "EXTERNAL",
-          "external": true
-        },
-        {
-          "id": "sg-web",
-          "name": "sg-web",
-          "type": "SECURITY_GROUP",
-          "account_id": "111111111111",
-          "internet_exposed": false,
-          "open_findings": 0
-        },
-        {
-          "id": "alb-web",
-          "name": "web-alb",
-          "type": "LOAD_BALANCER",
-          "account_id": "111111111111",
-          "internet_exposed": true,
-          "open_findings": 0
-        },
-        "... 4 more"
-      ],
-      "edge_types": [
-        "SECURITY_GROUP_RULE",
-        "SG_ADMITS",
-        "LOAD_BALANCER_TARGET",
-        "... 3 more"
-      ],
-      "summary": "0.0.0.0/0 -> sg-web -> web-alb -> web-tg -> web-1 -> app-role -> orders-db"
-    },
     "... 2 more"
   ],
-  "total_found": 5,
-  "truncated": true
+  "total_found": 4,
+  "truncated": false
 }
 ```
 
@@ -3455,8 +3361,8 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
 {
   "dataset": "sample",
   "source": {
-    "id": "0.0.0.0/0",
-    "name": "0.0.0.0/0",
+    "id": "__internet__",
+    "name": "internet",
     "type": "EXTERNAL",
     "external": true
   },
@@ -3525,8 +3431,8 @@ Called with the arguments below, `find_paths` returned this `structuredContent`.
 {
   "dataset": "sample",
   "source": {
-    "id": "0.0.0.0/0",
-    "name": "0.0.0.0/0",
+    "id": "__internet__",
+    "name": "internet",
     "type": "EXTERNAL",
     "external": true
   },
@@ -3557,7 +3463,7 @@ Related: `attack_paths` (ranked, many targets at once), `neighbors`.
 
 Category `graph` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema yes · timeout: layer default (300 s)
 
-Shortest routes from the internet to sensitive assets over the flow graph, ranked. A virtual entry node is linked to every internet placeholder node and to every asset flagged internet-exposed, and Dijkstra from it (unweighted, so hop counts) finds one shortest path to each target within `max_depth` hops. Without `target`, the targets are all crown-jewel assets (see [Risk scores](#risk-scores) for the weights); with `target`, only that asset, at weight 10.
+Shortest routes from the internet to sensitive assets over the flow graph, ranked. A virtual entry node is linked to every internet entry point (the `0.0.0.0/0` and `::/0` nodes and the sources of internet-sourced ingress rules, Azure `Internet`, `Any` and `*` included) and to every asset flagged internet-exposed, and Dijkstra from it (unweighted, so hop counts) finds one shortest path to each target within `max_depth` hops. Without `target`, the targets are all crown-jewel assets (see [Risk scores](#risk-scores) for the weights); with `target`, only that asset, at weight 10.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -3566,7 +3472,7 @@ Shortest routes from the internet to sensitive assets over the flow graph, ranke
 | `max_paths` | integer | `20` | 1..100 | Maximum paths returned after ranking. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-Each path is a `find_paths`-style path (the virtual entry node is dropped, so it starts at the exposed asset or at `0.0.0.0/0`) plus `entry` (`internet-exposed asset` or `0.0.0.0/0 rule`), `target_weight`, `findings_on_path` (open findings on every hop) and `score`. The result has `paths` (at most `max_paths`), `total_found`, `truncated` and `targets_considered`. When nothing is exposed it returns no paths and a `hint`.
+Each path is a `find_paths`-style path (the virtual entry node is dropped, so it starts at the exposed asset or at an entry point such as `0.0.0.0/0`) plus `entry` (`internet-exposed asset` or `internet-sourced rule`), `target_weight`, `findings_on_path` (open findings on every hop) and `score`. The result has `paths` (at most `max_paths`), `total_found`, `truncated` and `targets_considered`. When nothing is exposed it returns no paths and a `hint`.
 
 Called with the arguments below, `attack_paths` returned this `structuredContent`.
 
@@ -3597,16 +3503,7 @@ Called with the arguments below, `attack_paths` returned this `structuredContent
           "internet_exposed": false,
           "open_findings": 0
         },
-        {
-          "id": "web-1",
-          "name": "web-1",
-          "type": "EC2",
-          "account_id": "111111111111",
-          "internet_exposed": false,
-          "open_findings": 1,
-          "max_severity": "HIGH"
-        },
-        "... 2 more"
+        "... 3 more"
       ],
       "edge_types": [
         "LOAD_BALANCER_TARGET",
@@ -3689,7 +3586,7 @@ Called with the arguments below, `attack_paths` returned this `structuredContent
       "score": 8.7
     }
   ],
-  "total_found": 13,
+  "total_found": 11,
   "truncated": true,
   "targets_considered": 14
 }
@@ -3923,17 +3820,17 @@ Related: `cross_account_edges`, the `cross_account_trust_review` and `blast_radi
 
 Category `graph` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Assets whose collector flag says they are internet-exposed, each with the evidence. `internet_rules` lists (up to 10) inbound edges from `0.0.0.0/0` or `::/0`, or with that CIDR, that reach the asset directly or through a security group or NSG attached to it: `edge_type`, `ports` (the port range, else up to 10 explicit ports, else `all`), `protocol`, and `via` (the group's name, or the edge description). `sensitive_ports_open` is the intersection of those ports with 22, 3389, 3306, 5432, 1433, 27017, 6379, 9200, 5601, 8080 and 8443. `protected_by_waf` is true when a `PROTECTS` edge points at the asset.
+Assets whose collector flag says they are internet-exposed, each with the evidence. `internet_rules` lists (up to 10) ingress edges whose source or CIDR stands for the internet (`0.0.0.0/0`, `::/0`, Azure `Internet`, `Any`, `*`) that reach the asset directly or through a security group or NSG attached to it; egress rules are skipped: `edge_type`, `ports` (the port range, else up to 10 explicit ports, else `all`), `protocol`, and `via` (the group's name, or the edge description). `sensitive_ports_open` is the intersection of those ports with 22, 3389, 3306, 5432, 1433, 27017, 6379, 9200, 5601, 8080 and 8443. `protected_by_waf` is true when a `PROTECTS` edge points at the asset.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `asset_types` | string[] or null | `null` |  | Only these AssetType values. |
-| `include_reachable` | boolean | `false` |  | Also list assets transitively reachable from 0.0.0.0/0 in the graph. |
+| `include_reachable` | boolean | `false` |  | Also list assets transitively reachable from the internet in the graph. |
 | `limit` | integer | `50` | 1..500 | Maximum items to return. |
 | `cursor` | string | `""` |  | Opaque cursor from a previous call's next_cursor; empty = first page. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-With `include_reachable: true` the result adds `graph_reachable`: assets that are descendants of an internet entry point in the relationship graph (`total`, `truncated` and the first `limit` node briefs, sorted by id). Reachability here follows every edge type, identity grants included, so the set is much wider than the flagged one.
+With `include_reachable: true` the result adds `graph_reachable`: the assets the reachability analysis reaches from the internet over network-flow edges (`total`, `truncated` and the first `limit` node briefs, sorted by id). IAM grants and `INVOKES` edges are not followed, but the walk passes security groups, subnets and load balancers, so the set is wider than the flagged one.
 
 Called with the arguments below, `internet_exposure` returned this `structuredContent`.
 
@@ -3947,7 +3844,7 @@ Called with the arguments below, `internet_exposure` returned this `structuredCo
   "total": 6,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.d8bf6d2487c6",
+  "next_cursor": "c3.a2a0bceed308",
   "truncated": true,
   "items": [
     {
@@ -4045,7 +3942,7 @@ Called with the arguments below, `internet_exposure` returned this `structuredCo
     }
   ],
   "graph_reachable": {
-    "total": 23,
+    "total": 12,
     "truncated": true,
     "items": [
       {
@@ -4281,24 +4178,7 @@ Called with the arguments below, `blast_radius` returned this `structuredContent
         "depth": 1,
         "parent_id": "app-role"
       },
-      {
-        "id": "tg-web",
-        "name": "web-tg",
-        "type": "TARGET_GROUP",
-        "provider": "AWS",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "arn": "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/web-tg/def",
-        "internet_exposed": false,
-        "open_findings": 0,
-        "max_severity": null,
-        "uri": "cloudg://assets/tg-web",
-        "via": "LOAD_BALANCER_TARGET",
-        "relationship": null,
-        "depth": 2,
-        "parent_id": "web-1"
-      },
-      "... 1 more"
+      "... 2 more"
     ],
     "truncated": false
   },
@@ -4307,19 +4187,6 @@ Called with the arguments below, `blast_radius` returned this `structuredContent
     "max_depth": 4,
     "risk_score": 7.5,
     "sensitive_reachable": [
-      {
-        "id": "lambda-role",
-        "name": "api-lambda-role",
-        "type": "IAM_ROLE",
-        "provider": "AWS",
-        "region": "global",
-        "account_id": "111111111111",
-        "arn": "arn:aws:iam::111111111111:role/api-lambda-role",
-        "internet_exposed": false,
-        "open_findings": 0,
-        "max_severity": null,
-        "uri": "cloudg://assets/lambda-role"
-      },
       {
         "id": "artifacts-bucket",
         "name": "shared-artifacts",
@@ -4334,19 +4201,19 @@ Called with the arguments below, `blast_radius` returned this `structuredContent
         "uri": "cloudg://assets/artifacts-bucket"
       },
       {
-        "id": "deploy-role",
-        "name": "deploy-role",
-        "type": "IAM_ROLE",
+        "id": "data-bucket",
+        "name": "prod-data",
+        "type": "S3_BUCKET",
         "provider": "AWS",
-        "region": "global",
-        "account_id": "222222222222",
-        "arn": "arn:aws:iam::222222222222:role/deploy-role",
+        "region": "us-east-1",
+        "account_id": "111111111111",
+        "arn": "arn:aws:s3:::prod-data",
         "internet_exposed": false,
-        "open_findings": 1,
-        "max_severity": "HIGH",
-        "uri": "cloudg://assets/deploy-role"
+        "open_findings": 0,
+        "max_severity": null,
+        "uri": "cloudg://assets/data-bucket"
       },
-      "... 2 more"
+      "... 3 more"
     ]
   }
 }
@@ -4427,24 +4294,7 @@ Called with the arguments below, `depends_on` returned this `structuredContent`.
       "depth": 1,
       "parent_id": "api-handler"
     },
-    {
-      "id": "lambda-role",
-      "name": "api-lambda-role",
-      "type": "IAM_ROLE",
-      "provider": "AWS",
-      "region": "global",
-      "account_id": "111111111111",
-      "arn": "arn:aws:iam::111111111111:role/api-lambda-role",
-      "internet_exposed": false,
-      "open_findings": 0,
-      "max_severity": null,
-      "uri": "cloudg://assets/lambda-role",
-      "via": "ASSUMES_ROLE",
-      "relationship": null,
-      "depth": 1,
-      "parent_id": "api-handler"
-    },
-    "... 4 more"
+    "... 5 more"
   ]
 }
 ```
@@ -4522,24 +4372,7 @@ Called with the arguments below, `dependents` returned this `structuredContent`.
       "depth": 1,
       "parent_id": "sg-app"
     },
-    {
-      "id": "tg-web",
-      "name": "web-tg",
-      "type": "TARGET_GROUP",
-      "provider": "AWS",
-      "region": "us-east-1",
-      "account_id": "111111111111",
-      "arn": "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/web-tg/def",
-      "internet_exposed": false,
-      "open_findings": 0,
-      "max_severity": null,
-      "uri": "cloudg://assets/tg-web",
-      "via": "LOAD_BALANCER_TARGET",
-      "relationship": null,
-      "depth": 2,
-      "parent_id": "web-1"
-    },
-    "... 1 more"
+    "... 2 more"
   ]
 }
 ```
@@ -4548,7 +4381,7 @@ Called with the arguments below, `dependents` returned this `structuredContent`.
 
 Category `graph` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-The nested upstream and downstream tree of one asset, the view `cloudg deps` prints. `direction` picks `depends_on`, `dependents` or both. Each node has `id`, `name`, `type`, `account_id`, `via`, `relationship` and `children`. `include_hierarchy` adds organization and account containment edges. The tree is cut to `max_nodes` nodes depth-first in list order; `truncated` is true when the budget ran out, which includes the case where the tree has exactly `max_nodes` nodes.
+The nested upstream and downstream tree of one asset, the view `cloudg deps` prints. `direction` picks `depends_on`, `dependents` or both. Each node has `id`, `name`, `type`, `account_id`, `via`, `relationship` and `children`. `include_hierarchy` adds organization and account containment edges. The tree is cut to `max_nodes` nodes depth-first in list order; `truncated` is true only when nodes were actually left out.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -4599,30 +4432,7 @@ Called with the arguments below, `dependency_tree` returned this `structuredCont
       "relationship": "TRIGGERED_BY",
       "children": []
     },
-    {
-      "id": "lambda-role",
-      "name": "api-lambda-role",
-      "arn": "arn:aws:iam::111111111111:role/api-lambda-role",
-      "type": "IAM_ROLE",
-      "account_id": "111111111111",
-      "region": "global",
-      "via": "ASSUMES_ROLE",
-      "relationship": null,
-      "children": [
-        {
-          "id": "db-secret",
-          "name": "orders-db-credentials",
-          "arn": "arn:aws:secretsmanager:us-east-1:111111111111:secret:orders-db-credentials-AbC",
-          "type": "SECRET",
-          "account_id": "111111111111",
-          "region": "us-east-1",
-          "via": "GRANTS_ACCESS",
-          "relationship": null,
-          "children": []
-        }
-      ]
-    },
-    "... 3 more"
+    "... 4 more"
   ],
   "dependents": [],
   "truncated": false
@@ -5008,9 +4818,9 @@ Called with the arguments below, `centrality_top` returned this `structuredConte
 
 ### `subgraph_export`
 
-Category `graph` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
+Category `graph` · sensitivity `restricted` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-The neighbourhood of a few assets as a self-contained graph document, for visualisation or another tool. Each seed is resolved (the internet alias works), the walk goes `depth` hops in both directions over `edge_types` (all when unset), the node set is capped at `max_nodes`, and a fresh `GraphBuilder` renders the assets and the edges between kept nodes. `format` is `d3` (`{nodes, links}`), `cytoscape` (`{elements: {nodes, edges}}`) or `graphml` (an XML string). Returns `format`, `nodes`, `edges`, `truncated` and `graph`. For the whole graph read `cloudg://graph/{format}` instead.
+The neighbourhood of a few assets as a self-contained graph document, for visualisation or another tool. Each seed is resolved (the internet alias works), the walk goes `depth` hops in both directions over `edge_types` (all when unset), the node set is capped at `max_nodes`, and a fresh `GraphBuilder` renders the assets and the edges between kept nodes. `format` is `d3` (`{nodes, links}`), `cytoscape` (`{elements: {nodes, edges}}`) or `graphml` (an XML string). Returns `format`, `nodes`, `edges`, `truncated` and `graph`. For the whole graph read `cloudg://graph/{format}` instead. The tool is `restricted`: the GraphML form is one opaque string the privacy transforms cannot look inside, so `strict` and the `soc-analyst` analyst do not see it.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -5058,7 +4868,7 @@ Called with the arguments below, `subgraph_export` returned this `structuredCont
         "is_internet_exposed": false,
         "is_external": false
       },
-      "... 4 more"
+      "... 3 more"
     ],
     "links": [
       {
@@ -5083,7 +4893,7 @@ Called with the arguments below, `subgraph_export` returned this `structuredCont
         "relationship": "",
         "description": ""
       },
-      "... 3 more"
+      "... 2 more"
     ]
   }
 }
@@ -5240,7 +5050,7 @@ Called with the arguments below, `security_coverage` returned this `structuredCo
 
 Category `graph` · sensitivity `internal` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Shape of the relationship graph: `nodes` (assets plus placeholders), `asset_nodes`, `placeholder_nodes`, `edges` (raw edge count), `graph_edges` (after parallel edges collapse), `edges_by_type`, `edges_by_relationship` (top 30), `components` (weakly connected), `largest_component`, `isolated_assets`, `density` and `mean_degree`.
+Shape of the relationship graph: `nodes` (assets plus placeholders), `asset_nodes`, `placeholder_nodes`, `edges` (raw edge count), `graph_edges` (after parallel rule edges are merged and other parallel edges collapse), `edges_by_type`, `edges_by_relationship` (top 30), `components` (weakly connected), `largest_component`, `isolated_assets`, `density` and `mean_degree`.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -5266,16 +5076,7 @@ Called with the arguments below, `graph_stats` returned this `structuredContent`
     "SECURITY_GROUP_RULE": 4,
     "INTERNET_EXPOSED": 4,
     "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
+    "...": "10 more"
   },
   "edges_by_relationship": {
     "INTERNET_REACHABLE": 4,
@@ -5331,7 +5132,7 @@ Called with the arguments below, `list_findings` returned this `structuredConten
   "total": 11,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.2ec70b663c1b",
+  "next_cursor": "c3.ab0acc7643a8",
   "truncated": true,
   "severity_breakdown": {
     "CRITICAL": 2,
@@ -5611,12 +5412,17 @@ A miss suggests ids that contain the given text:
     "finding_id": "f-ssh"
   },
   "isError": true,
-  "text": "No finding with id 'f-ssh' in dataset 'sample'. Did you mean: f-ssh-open? Use list_findings to browse finding ids.",
+  "text": "No finding with that id in this dataset. 1 close match, see suggestions in the error data. Use list_findings to browse finding ids.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
+      "value": "f-ssh",
+      "dataset": "sample",
       "suggestions": [
-        "f-ssh-open"
+        {
+          "finding_id": "f-ssh-open",
+          "dataset": "sample"
+        }
       ]
     }
   }
@@ -5825,7 +5631,7 @@ The assets to fix first. Only assets with at least one open finding (at or above
 | `min_severity` | string | `""` |  | Only consider open findings at or above this severity. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-`internet_reachable` in the components is true for any asset that is flagged exposed or that the relationship graph reaches from an internet entry point over any edge type. On the sample estate that includes the two security groups below, which are not flagged exposed themselves:
+`internet_reachable` in the components is true for any asset that is flagged exposed or that the reachability analysis reaches from the internet over network-flow edges. On the sample estate that includes the two security groups below: their internet-sourced rules make them reachable, although they are not flagged exposed themselves.
 
 Called with the arguments below, `top_risks` returned this `structuredContent`.
 
@@ -6063,7 +5869,7 @@ Behaviour in detail:
 - `reports` maps a tool name (`prowler`, `scoutsuite`, `checkov`, `trivy`, case-insensitive) to a list of files or directories. An unknown tool fails the whole call before anything is read.
 - Every path must resolve inside an allowed root; one path outside fails the whole call with an access error. A path that cannot be parsed, does not exist, or holds Prowler OCSF output (refused, as in `load_dataset`) is reported in `errors` and the call continues.
 - With `new_dataset: true`, an empty dataset named `dataset` (or `ingested`, made unique) is created with `kind: "report"`, `source: "ingest"`. It becomes the active dataset unless `activate` is false. A name that is already loaded is refused before anything is parsed, unless `replace` is true.
-- With `normalise: true` (the default) the normaliser runs over the dataset's existing findings plus the new ones: duplicates across scanners merge, findings get scores and framework tags, and the normaliser's compliance results are merged into the dataset's (`merge_compliance` in `cloudg/mcp/catalog/findings.py`): a control the normaliser evaluated takes its new result plus any surviving finding ids the old result listed; a control it did not evaluate (scanner-native mappings, PASS results) is kept with its finding ids filtered to findings that still exist, and dropped only when all of them are gone. Suppression flags survive by finding id. With `normalise: false` the findings are appended as parsed.
+- With `normalise: true` (the default) the normaliser runs over the dataset's existing findings plus the new ones: duplicates across scanners merge, findings get scores and framework tags, and the normaliser's compliance results are merged into the dataset's (`merge_compliance` in `cloudg/mcp/catalog/_findings.py`): a control the normaliser evaluated takes its new result plus any surviving finding ids the old result listed; a control it did not evaluate (scanner-native mappings, PASS results) is kept with its finding ids filtered to findings that still exist, and dropped only when all of them are gone. Suppression flags survive by finding id. With `normalise: false` the findings are appended as parsed.
 
 Returns `dataset`, `parsed`, `per_path` (`tool`, `path`, `findings`), `errors` (`tool`, `path`, `error`), `findings_before`, `findings_after`, `matched_to_assets` (how many parsed findings map to an asset), `normalised` and `active` (the active dataset after the call).
 
@@ -6234,12 +6040,12 @@ Called with the arguments below, `normalise_findings` returned this `structuredC
   "dataset": "sample",
   "findings_before": 13,
   "findings_after": 13,
-  "compliance_results_before": 19,
-  "compliance_results_after": 19,
+  "compliance_results_before": 22,
+  "compliance_results_after": 22,
   "frameworks": [
-    "CIS",
     "CIS-AWS",
     "CIS-Azure",
+    "CIS-GCP",
     "... 5 more"
   ]
 }
@@ -6249,9 +6055,9 @@ Called with the arguments below, `normalise_findings` returned this `structuredC
 
 Category `findings` · sensitivity `confidential` · capabilities `read_state`, `write_state` · readOnly false, destructive false, idempotent false, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Runs `cloudg.graph.reachability.ReachabilityAnalyzer` over a copy of the relationship graph and turns its results into findings with `source_tool: "cloudg-reachability"`: a CRITICAL finding for each sensitive data store (RDS, Aurora, Azure SQL, Cloud SQL, DynamoDB) reachable from the internet, a HIGH finding for other reachable assets whose type is not expected to face the internet (load balancers, CloudFront, CDNs and internet gateways are expected), and CRITICAL findings for security group rules that open a sensitive port to `0.0.0.0/0`. "Reachable" means a descendant of an internet entry point over any edge type, so a database behind an IAM grant counts.
+Runs `cloudg.graph.reachability.ReachabilityAnalyzer` over a copy of the relationship graph and returns its findings, with `source_tool: "cloudg-reachability"`: a CRITICAL finding for each sensitive data store (RDS, Aurora, Azure SQL, Cloud SQL, DynamoDB) reachable from the internet, a HIGH finding for other reachable assets whose type is not expected to face the internet (load balancers, CloudFront, CDNs and internet gateways are expected; security groups, NSGs, NACLs and target groups are passed through but never reported), and a CRITICAL finding for each sensitive port that an ingress rule opens to the internet (`0.0.0.0/0`, `::/0` or an Azure `Internet`, `Any` or `*` source). "Reachable" follows network-flow edges only, as described under [Graph](#graph): an IAM grant does not make a database reachable, and a function behind a public API gateway is not reported.
 
-Without `add_to_dataset` it only previews. Findings whose (source tool, title, resource id) already exist are skipped, so repeated runs do not duplicate. Finding ids are deterministic (`reach-` plus 16 hex digits of a hash over tool, title, resource and evidence), so a previewed id is the id that gets added and two previews return the same ids. Added findings are not normalised. Returns `generated`, `new` (not yet in the dataset), `added`, the bounded `total`, `returned`, `truncated` and `items` (briefs of the new ones).
+Without `add_to_dataset` it only previews. Findings already in the dataset, by id or by (source tool, title, resource id), are skipped, so repeated runs do not duplicate. The ids are the analyser's own: a UUID5 hash of the rule and the asset's ARN (or id), so the same exposure keeps its id from scan to scan and a previewed id is the id that gets added. Added findings are not normalised. Returns `generated`, `new` (not yet in the dataset), `added`, the bounded `total`, `returned`, `truncated` and `items` (briefs of the new ones).
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -6268,44 +6074,44 @@ Called with the arguments below, `reachability_findings` returned this `structur
 ```json
 {
   "dataset": "sample",
-  "generated": 24,
-  "new": 24,
+  "generated": 9,
+  "new": 9,
   "added": 0,
-  "total": 24,
+  "total": 9,
   "returned": 3,
   "truncated": true,
   "items": [
     {
-      "id": "reach-f5e1ae4c97fe26ce",
-      "title": "Unexpected internet-exposed resource: web-2",
+      "id": "4404191e-4430-5cd8-9a4d-036bbb058662",
+      "title": "Unexpected internet-exposed resource: public-api",
       "severity": "HIGH",
       "risk_score": 7.5,
       "source_tool": "cloudg-reachability",
-      "resource_id": "web-2",
-      "resource_arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web2",
-      "asset_id": "web-2",
-      "asset_name": "web-2",
+      "resource_id": "api-gw",
+      "resource_arn": "arn:aws:apigateway:us-east-1::/restapis/a1b2c3",
+      "asset_id": "api-gw",
+      "asset_name": "public-api",
       "compliance_frameworks": [],
       "is_suppressed": false,
       "cvss_score": null,
-      "detected_at": "2026-10-08T15:20:07.400847",
-      "uri": "cloudg://findings/reach-f5e1ae4c97fe26ce"
+      "detected_at": "2026-10-09T14:25:22.341914",
+      "uri": "cloudg://findings/4404191e-4430-5cd8-9a4d-036bbb058662"
     },
     {
-      "id": "reach-cc5ac896be368f8f",
-      "title": "Unexpected internet-exposed resource: raw-uploads",
+      "id": "1ee8a511-d242-5bf0-8313-163d439997e2",
+      "title": "Unexpected internet-exposed resource: jump-vm",
       "severity": "HIGH",
       "risk_score": 7.5,
       "source_tool": "cloudg-reachability",
-      "resource_id": "gcp-gcs",
-      "resource_arn": "//storage.googleapis.com/projects/_/buckets/raw-uploads",
-      "asset_id": "gcp-gcs",
-      "asset_name": "raw-uploads",
+      "resource_id": "az-vm",
+      "resource_arn": "/subscriptions/00000000-aaaa-bbbb-cccc-000000000001/resourceGroups/rg-hub/providers/Microsoft.Compute/virtualMachines/jump-vm",
+      "asset_id": "az-vm",
+      "asset_name": "jump-vm",
       "compliance_frameworks": [],
       "is_suppressed": false,
       "cvss_score": null,
-      "detected_at": "2026-10-08T15:20:07.400873",
-      "uri": "cloudg://findings/reach-cc5ac896be368f8f"
+      "detected_at": "2026-10-09T14:25:22.341937",
+      "uri": "cloudg://findings/1ee8a511-d242-5bf0-8313-163d439997e2"
     },
     "... 1 more"
   ]
@@ -6366,18 +6172,7 @@ Called with the arguments below, `list_frameworks` returned this `structuredCont
         "gdpr.yaml"
       ]
     },
-    {
-      "framework": "HIPAA",
-      "versions": [
-        "45 CFR 164 Subpart C"
-      ],
-      "providers": [],
-      "controls": 8,
-      "files": [
-        "hipaa_security_rule.yaml"
-      ]
-    },
-    "... 9 more"
+    "... 10 more"
   ]
 }
 ```
@@ -6438,22 +6233,7 @@ Called with the arguments below, `compliance_summary` returned this `structuredC
       "affected_assets": 3,
       "uri": "cloudg://compliance/PCI-DSS"
     },
-    {
-      "framework": "NIST-800-53",
-      "controls_evaluated": 1,
-      "controls_failing": 1,
-      "controls_passing": 0,
-      "controls_other": 0,
-      "pass_rate": 0.0,
-      "open_findings": 2,
-      "severity_breakdown": {
-        "HIGH": 1,
-        "MEDIUM": 1
-      },
-      "affected_assets": 2,
-      "uri": "cloudg://compliance/NIST-800-53"
-    },
-    "... 2 more"
+    "... 3 more"
   ]
 }
 ```
@@ -6547,16 +6327,7 @@ Called with the arguments below, `list_controls` returned this `structuredConten
       "open_findings": 1,
       "max_severity": "HIGH"
     },
-    {
-      "framework": "CIS-AWS",
-      "control_id": "2.1.4",
-      "control_title": "S3 Block Public Access",
-      "status": "FAIL",
-      "findings": 1,
-      "open_findings": 1,
-      "max_severity": "HIGH"
-    },
-    "... 1 more"
+    "... 2 more"
   ]
 }
 ```
@@ -6576,7 +6347,7 @@ Called with the arguments below, `list_controls` returned this `structuredConten
   "total": 81,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.fae0f3ab53c2",
+  "next_cursor": "c3.a358f04c1624",
   "truncated": true,
   "items": [
     {
@@ -6612,9 +6383,18 @@ Called with the arguments below, `list_controls` returned this `structuredConten
     "source": "ruleset"
   },
   "isError": true,
-  "text": "No ruleset framework matches 'FEDRAMP'. Known: AWS-Foundational-Security-Best-Practices-AWS, CIS-AWS, CIS-AZURE, CIS-GCP, GDPR, GDPR-AWS, HIPAA, HIPAA-AWS, HIPAA-AZURE, HIPAA-GCP, ISO-27001, ISO27001-...",
+  "text": "No ruleset framework matches the name. Known: AWS-Foundational-Security-Best-Practices-AWS, CIS-AWS, CIS-AZURE, CIS-GCP, GDPR, GDPR-AWS, HIPAA, HIPAA-AWS, HIPAA-AZURE, HIPAA-GCP, ISO-27001, ISO27001-A...",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "FEDRAMP",
+      "known": [
+        "AWS-Foundational-Security-Best-Practices-AWS",
+        "CIS-AWS",
+        "CIS-AZURE",
+        "... 25 more"
+      ]
+    }
   }
 }
 ```
@@ -6710,9 +6490,19 @@ The ruleset and the dataset can disagree on titles: here the dataset result says
     "control_id": "9.9"
   },
   "isError": true,
-  "text": "No control '9.9' for framework 'CIS-AWS'. Controls in this dataset: 1.16, 2.1.4, 3.1, 5.2",
+  "text": "No such control for that framework. Controls in this dataset: 1.16, 2.1.4, 3.1, 5.2",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "9.9",
+      "framework": "CIS-AWS",
+      "known": [
+        "1.16",
+        "2.1.4",
+        "3.1",
+        "5.2"
+      ]
+    }
   }
 }
 ```
@@ -6744,7 +6534,7 @@ Called with the arguments below, `compliance_gaps` returned this `structuredCont
   "total": 8,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.f111f3b78c40",
+  "next_cursor": "c3.50cc1e27f5ec",
   "truncated": true,
   "items": [
     {
@@ -6818,7 +6608,7 @@ Related: the `compliance_gap_analysis` prompt, [Recipe: compliance gap triage](#
 
 ## Ontology
 
-cloudg builds an RDF/OWL ontology from a dataset (`cloudg.graph.ontology.CloudOntology`): one individual per asset (`cmr:<asset id>`), per finding (`cmr:finding_<finding id>`) and per tag (`cmr:tag_<key>_<value>`), typed with classes such as `cm:RelationalDatabase`, and connected by roughly 60 relation types in seven groups (NETWORK, CONTAINMENT, IAM, DATA_FLOW, SECURITY, COMPUTE, GOVERNANCE). Data properties are `cmp:hasName`, `hasARN`, `hasRegion`, `hasProvider`, `hasAccountId`, `hasCIDR`, `hasPort`, `hasProtocol`, `hasSeverity`, `hasRiskScore` and `isInternetExposed`. The ontology is built on first use and cached; on a large map the first call can take a while and reports progress.
+cloudg builds an RDF/OWL ontology from a dataset (`cloudg.graph.ontology.CloudOntology`): one individual per asset (`cmr:<asset id>`), per finding (`cmr:finding_<finding id>`) and per tag (`cmr:tag_<key>_<value>`), typed with classes such as `cm:RelationalDatabase`, and connected by 64 relation types in seven groups (NETWORK, CONTAINMENT, IAM, DATA_FLOW, SECURITY, COMPUTE, GOVERNANCE). Data properties are `cmp:hasName`, `hasARN`, `hasRegion`, `hasProvider`, `hasAccountId`, `hasCIDR`, `hasPort`, `hasProtocol`, `hasSeverity`, `hasRiskScore` and `isInternetExposed`. The ontology is built on first use and cached; on a large map the first call can take a while and reports progress.
 
 Prefixes predefined for SPARQL:
 
@@ -6829,7 +6619,7 @@ Prefixes predefined for SPARQL:
 | `cmr:` | `https://cloudg.io/resource/` | Individuals. |
 | `rdf:`, `rdfs:`, `owl:`, `xsd:` | The W3C namespaces | |
 
-Two things to know when reading ontology results. `cmp:FINDING_AFFECTS` points at `cmr:` plus the finding's `resource_id` exactly as the scanner wrote it, so a finding that names its resource by ARN or by display name points at a node that is not the asset (in the sample, the RDS backup finding and the public S3 finding). The relation inference also falls back to `VPC_CONTAINS_SUBNET` for every `CONTAINS` edge that does not start at a subnet or a cluster (organization to OU, account to VPC), and turns every `SECURITY_GROUP_RULE` edge into `PROTECTED_BY_SG` from the rule's source to the group (`0.0.0.0/0 PROTECTED_BY_SG sg-web`), so check endpoint types before reading those names literally.
+How the relations are read. `cmp:FINDING_AFFECTS` points at the asset a finding affects, resolved like an asset reference (id, ARN, unique name, unique ARN tail); only a finding whose resource matches nothing points at `cmr:` plus its raw `resource_id`. A `CONTAINS` edge gets a specific relation only when both endpoint types fit it (`VPC_CONTAINS_SUBNET`, `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE`, `ORG_CONTAINS_ACCOUNT`), otherwise the generic `CONTAINS`. A security group rule yields `INGRESS_ALLOWED` or `EGRESS_ALLOWED`, `INTERNET_REACHABLE` for an internet source, and port relations read from the parsed port ranges (`ALL_TRAFFIC`, `ONLY_SSH`, `ONLY_HTTP`, `ONLY_HTTPS`, `ONLY_RDP`, `PORT_RESTRICTED`); `PROTECTED_BY_SG` and `PROTECTED_BY_NACL` come from `ATTACHED_TO` edges into a group (`web-alb PROTECTED_BY_SG sg-web`). `ENCRYPTED_BY_KMS` links an encrypted asset to its key.
 
 ### `ontology_stats`
 
@@ -6851,57 +6641,24 @@ Called with the arguments below, `ontology_stats` returned this `structuredConte
 {
   "dataset": "sample",
   "built_now": true,
-  "total_triples": 1185,
+  "total_triples": 1184,
   "classes_used": 30,
   "individuals": 78,
   "relation_type_counts": {
-    "hasAccountId": 44,
-    "SUBNET_CONTAINS_INSTANCE": 5,
-    "hasPort": 8,
-    "PORT_RESTRICTED": 1,
-    "hasName": 57,
-    "ENCRYPTED_BY_KMS": 4,
-    "OWNED_BY": 7,
     "hasRiskScore": 12,
+    "hasName": 57,
+    "hasAccountId": 44,
     "isInternetExposed": 44,
-    "hasRegion": 44,
-    "VPC_CONTAINS_SUBNET": 7,
-    "TAGGED_WITH": 17,
-    "DEPENDS_ON": 7,
-    "hasARN": 44,
-    "hasProvider": 44,
-    "FINDING_AFFECTS": 12,
-    "RUNS_ON": 5,
-    "hasCIDR": 7,
-    "hasSeverity": 12,
-    "COMPLIANCE_GOVERNS": 15,
-    "ONLY_RDP": 1,
-    "ONLY_SSH": 1,
     "INTERNET_REACHABLE": 7,
-    "POLICY_ALLOWS_ACTION": 8,
-    "PROTECTED_BY_WAF": 1,
-    "MONITORED_BY": 1,
-    "ROLE_ASSUMES_ROLE": 2,
-    "CROSS_ACCOUNT_TRUST": 2,
-    "TRIGGERED_BY": 1,
-    "hasProtocol": 4,
-    "PROTECTED_BY_SG": 4,
-    "LOGS_TO": 1,
-    "INVOKES": 1,
-    "LB_TARGETS_INSTANCE": 3,
-    "READS_FROM": 1,
-    "INGRESS_ALLOWED": 4,
-    "LOAD_BALANCED_BY": 3,
-    "ONLY_HTTP": 1,
-    "ONLY_HTTPS": 1
+    "...": "36 more"
   },
   "relation_group_counts": {
-    "CONTAINMENT": 15,
     "NETWORK": 16,
-    "SECURITY": 36,
-    "GOVERNANCE": 25,
-    "COMPUTE": 17,
+    "CONTAINMENT": 15,
+    "SECURITY": 38,
     "IAM": 12,
+    "GOVERNANCE": 25,
+    "COMPUTE": 11,
     "DATA_FLOW": 2
   }
 }
@@ -6924,9 +6681,11 @@ A second call reads the cache and reports `"built_now": false`.
 
 ### `sparql_query`
 
-Category `ontology` · sensitivity `confidential` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema yes · timeout 120 s
+Category `ontology` · sensitivity `restricted` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema yes · timeout 120 s
 
-Runs one read-only SPARQL query against the dataset's ontology. Before parsing, string literals and comments are blanked and the query is rejected if it starts (after `PREFIX` / `BASE` declarations) with `INSERT`, `DELETE`, `LOAD`, `CLEAR`, `DROP`, `CREATE`, `ADD`, `MOVE`, `COPY` or `WITH`. After parsing, `FROM` / `FROM NAMED` and any `SERVICE` clause are rejected, so a query can neither change the graph nor load remote data.
+Runs one read-only SPARQL query against the dataset's ontology. Before parsing, string literals and comments are blanked and the query is rejected if it starts (after `PREFIX` / `BASE` declarations) with `INSERT`, `DELETE`, `LOAD`, `CLEAR`, `DROP`, `CREATE`, `ADD`, `MOVE`, `COPY` or `WITH`; both steps are linear scans, so a hostile query string cannot stall them. After parsing, `FROM` / `FROM NAMED` and any `SERVICE` clause are rejected, so a query can neither change the graph nor load remote data.
+
+The tool is `restricted`. Its rows are keyed by the query's own variable names, so the privacy transforms cannot tell an identifier column from any other, and `strict` and the `soc-analyst` analyst do not see the tool.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -6943,7 +6702,7 @@ Result by query type (`query_type` is rdflib's algebra name):
 | `AskQuery` | `answer` (boolean), empty `rows`. |
 | `ConstructQuery`, `DescribeQuery` | `rows` of `{subject, predicate, object}`. |
 
-`limit` is applied while reading the results; when more rows exist, `truncated` is true and a `hint` suggests `LIMIT` / `OFFSET`.
+`limit` is applied while reading the results, so a query whose patterns multiply out stops after `limit` rows instead of enumerating every combination; when more rows exist, `truncated` is true and a `hint` suggests `LIMIT` / `OFFSET`. Reading also stops after 60 seconds, with a `hint` to narrow the query. Clauses that need the whole solution set first (`ORDER BY`, aggregates, `DISTINCT` over a large set) and `CONSTRUCT` / `DESCRIBE` are bounded only by the tool's 120-second timeout. A `SELECT` result carries `variable_kinds`, which says whether each column holds URIs, literals or both (`term`).
 
 The internet-reachable relation (the example in the tool's own description narrows it to relational databases, which returns no rows on the sample estate because nothing reaches the database directly):
 
@@ -6973,14 +6732,14 @@ Called with the arguments below, `sparql_query` returned this `structuredContent
       "r": "cmr:api-gw",
       "name": "public-api"
     },
-    {
-      "r": "cmr:gcp-gcs",
-      "name": "raw-uploads"
-    },
-    "... 3 more"
+    "... 4 more"
   ],
   "returned": 7,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "r": "uri",
+    "name": "literal"
+  }
 }
 ```
 
@@ -7024,7 +6783,12 @@ Called with the arguments below, `sparql_query` returned this `structuredContent
     }
   ],
   "returned": 2,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "subject": "uri",
+    "predicate": "uri",
+    "object": "term"
+  }
 }
 ```
 
@@ -7041,28 +6805,28 @@ Called with the arguments below, `sparql_query` returned this `structuredContent
   "rows": [
     {
       "subject": "cmr:orders-db",
+      "predicate": "rdf:type",
+      "object": "cm:RelationalDatabase"
+    },
+    {
+      "subject": "cmr:orders-db",
       "predicate": "cmp:hasProvider",
       "object": "AWS"
     },
     {
       "subject": "cmr:orders-db",
-      "predicate": "cmp:TAGGED_WITH",
-      "object": "cmr:tag_env_prod"
+      "predicate": "cmp:hasARN",
+      "object": "arn:aws:rds:us-east-1:111111111111:db:orders-db"
     },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:ENCRYPTED_BY_KMS",
-      "object": "cmr:kms-main"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:isInternetExposed",
-      "object": "false"
-    },
-    "... 7 more"
+    "... 8 more"
   ],
   "returned": 11,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "subject": "uri",
+    "predicate": "uri",
+    "object": "term"
+  }
 }
 ```
 
@@ -7078,14 +6842,17 @@ Called with the arguments below, `sparql_query` returned this `structuredContent
   "query_type": "SelectQuery",
   "rows": [
     {
-      "s": "cm:AccessAnalyzer"
+      "s": "cmp:MONITORED_BY"
     },
     {
-      "s": "cm:DataCatalog"
+      "s": "cmr:tag_owner_api-team"
     }
   ],
   "returned": 2,
   "truncated": true,
+  "variable_kinds": {
+    "s": "uri"
+  },
   "hint": "More rows exist: add LIMIT / OFFSET to the query or raise limit."
 }
 ```
@@ -7106,7 +6873,10 @@ Called with the arguments below, `sparql_query` returned this `structuredContent
     }
   ],
   "returned": 1,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "r": "uri"
+  }
 }
 ```
 
@@ -7199,7 +6969,7 @@ Called with the arguments below, `ontology_neighbourhood` returned this `structu
   },
   "predicates": {
     "TAGGED_WITH": 2,
-    "DEPENDS_ON": 1,
+    "PROTECTED_BY_SG": 1,
     "ENCRYPTED_BY_KMS": 1,
     "SUBNET_CONTAINS_INSTANCE": 1,
     "POLICY_ALLOWS_ACTION": 1
@@ -7221,18 +6991,10 @@ Called with the arguments below, `ontology_neighbourhood` returned this `structu
       "subject_id": "cmr:orders-db",
       "object_id": "cmr:tag_data_pii"
     },
-    {
-      "subject": "orders-db",
-      "predicate": "DEPENDS_ON",
-      "object": "sg-db",
-      "depth": 1,
-      "subject_id": "cmr:orders-db",
-      "object_id": "cmr:sg-db"
-    },
-    "... 3 more"
+    "... 4 more"
   ],
   "returned": 6,
-  "truncated": false
+  "truncated": true
 }
 ```
 
@@ -7249,7 +7011,7 @@ The result also carried these resource links in `content`:
 ]
 ```
 
-Note that `FINDING_AFFECTS` is missing here although `orders-db` has an open finding: the finding names the database by ARN (see the note at the start of this section).
+With `limit: 6` the walk stopped early (`truncated`). Without a limit the same call also returns `FINDING_AFFECTS` from the RDS backup finding, which names the database by ARN and is resolved to the asset, and the two `COMPLIANCE_GOVERNS` triples.
 
 ### `relation_groups`
 
@@ -7289,8 +7051,10 @@ Called with the arguments below, `relation_groups` returned this `structuredCont
     "CONTAINMENT": {
       "total": 15,
       "types": {
-        "VPC_CONTAINS_SUBNET": 7,
+        "CONTAINS": 3,
+        "VPC_CONTAINS_SUBNET": 2,
         "SUBNET_CONTAINS_INSTANCE": 5,
+        "ORG_CONTAINS_ACCOUNT": 2,
         "LB_TARGETS_INSTANCE": 3
       }
     },
@@ -7310,9 +7074,9 @@ Called with the arguments below, `relation_groups` returned this `structuredCont
       }
     },
     "SECURITY": {
-      "total": 36,
+      "total": 38,
       "types": {
-        "PROTECTED_BY_SG": 4,
+        "PROTECTED_BY_SG": 6,
         "PROTECTED_BY_WAF": 1,
         "ENCRYPTED_BY_KMS": 4,
         "FINDING_AFFECTS": 12,
@@ -7320,13 +7084,13 @@ Called with the arguments below, `relation_groups` returned this `structuredCont
       }
     },
     "COMPUTE": {
-      "total": 17,
+      "total": 11,
       "types": {
         "RUNS_ON": 5,
         "TRIGGERED_BY": 1,
         "INVOKES": 1,
         "LOAD_BALANCED_BY": 3,
-        "DEPENDS_ON": 7
+        "DEPENDS_ON": 1
       }
     },
     "GOVERNANCE": {
@@ -7360,7 +7124,7 @@ Called with the arguments below, `relation_groups` returned this `structuredCont
   "total": 12,
   "offset": 0,
   "returned": 3,
-  "next_cursor": "c3.7b39a74ddd4c",
+  "next_cursor": "c3.548cbba67c13",
   "truncated": true,
   "items": [
     {
@@ -7392,9 +7156,21 @@ Called with the arguments below, `relation_groups` returned this `structuredCont
     "group": "FINANCE"
   },
   "isError": true,
-  "text": "Unknown relation group 'FINANCE'. Did you mean GOVERNANCE? Valid values: NETWORK, CONTAINMENT, IAM, DATA_FLOW, SECURITY, COMPUTE, GOVERNANCE",
+  "text": "Unknown relation group. Did you mean GOVERNANCE? Valid values: NETWORK, CONTAINMENT, IAM, DATA_FLOW, SECURITY, COMPUTE, GOVERNANCE",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "FINANCE",
+      "valid": [
+        "NETWORK",
+        "CONTAINMENT",
+        "IAM",
+        "... 4 more"
+      ],
+      "close_matches": [
+        "GOVERNANCE"
+      ]
+    }
   }
 }
 ```
@@ -7415,7 +7191,7 @@ Retrieval-ready text chunks from `cloudg.graph.rag_export.RAGExporter`, useful a
 | `cursor` | string | `""` |  | Opaque cursor from a previous call's next_cursor; empty = first page. |
 | `dataset` | string | `""` |  | Dataset name (see list_datasets). Empty = the active dataset. |
 
-`ref` keeps only that asset's entity chunk. `query` is a case-insensitive substring of `content`. `min_severity` compares against `metadata.severity_max`, which entity and community chunks carry; it is checked against the five severity names in upper case and fails with `Unknown severity 'X'.` otherwise. Entity chunks match findings by the raw `resource_id`, like the ontology, so `orders-db` below shows `finding_count: 0`.
+`ref` keeps only that asset's entity chunk. `query` is a case-insensitive substring of `content`. `min_severity` compares against `metadata.severity_max`, which entity and community chunks carry; it is checked against the five severity names in upper case and fails with `Unknown severity.` otherwise. Entity chunks match findings to assets like the ontology does, so `orders-db` below counts its backup finding, which names the database by ARN.
 
 Called with the arguments below, `rag_chunks` returned this `structuredContent`.
 
@@ -7436,7 +7212,7 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
     {
       "chunk_id": "entity::orders-db",
       "chunk_type": "entity",
-      "content": "Resource: orders-db\nType: RDS_INSTANCE\nProvider: AWS\nRegion: us-east-1\nARN: arn:aws:rds:us-east-1:111111111111:db:orders-db\nAccount: 111111111111\nTags: {\"env\": \"prod\", \"data\": \"pii\"}\n\nRelations (4):\n  → DEPENDS_ON: sg-db\n  → ENCRYPTED_BY_KMS: prod-main-key\n  ← SUBNET_CONTAINS_INSTANCE: prod-private-a\n  ← POLICY_ALLOWS_ACTION: app-role",
+      "content": "Resource: orders-db\nType: RDS_INSTANCE\nProvider: AWS\nRegion: us-east-1\nARN: arn:aws:rds:us-east-1:111111111111:db:orders-db\nAccount: 111111111111\nTags: {\"env\": \"prod\", \"data\": \"pii\"}\n\nRelations (4):\n  → PROTECTED_BY_SG: sg-db\n  → ENCRYPTED_...",
       "metadata": {
         "asset_type": "RDS_INSTANCE",
         "provider": "AWS",
@@ -7444,15 +7220,18 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
         "account_id": "111111111111",
         "is_internet_exposed": false,
         "relation_types": [
-          "DEPENDS_ON",
           "ENCRYPTED_BY_KMS",
           "POLICY_ALLOWS_ACTION",
+          "PROTECTED_BY_SG",
           "... 1 more"
         ],
-        "severity_max": "NONE",
-        "compliance_frameworks": [],
+        "severity_max": "MEDIUM",
+        "compliance_frameworks": [
+          "CIS-AWS",
+          "NIST-800-53"
+        ],
         "neighbour_count": 4,
-        "finding_count": 0,
+        "finding_count": 1,
         "arn": "arn:aws:rds:us-east-1:111111111111:db:orders-db"
       }
     }
@@ -7470,30 +7249,28 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
 {
   "dataset": "sample",
   "chunk_type": "community",
-  "total": 6,
+  "total": 5,
   "offset": 0,
   "returned": 1,
-  "next_cursor": "c1.fcb5e55744da",
+  "next_cursor": "c1.485ea695a67d",
   "truncated": true,
   "items": [
     {
-      "chunk_id": "community::0",
+      "chunk_id": "community::1",
       "chunk_type": "community",
-      "content": "Community 0 (9 resources):\n  • sample-org (ORGANIZATION)\n  • Workloads (ORG_UNIT)\n  • prod (CLOUD_ACCOUNT)\n  • shared-services (CLOUD_ACCOUNT)\n  • deny-unapproved-regions (ORG_POLICY)\n  • prod-vpc (VPC)\n  • prod-public-a (SUBNET)\n  • sg-admin (SECURITY_GROUP)\n  • bastion (EC2)\n\nAsset types: {'ORGANI...",
+      "content": "Community 1 (10 resources):\n  • sample-org (ORGANIZATION)\n  • Workloads (ORG_UNIT)\n  • prod (CLOUD_ACCOUNT)\n  • shared-services (CLOUD_ACCOUNT)\n  • deny-unapproved-regions (ORG_POLICY)\n  • prod-vpc (VPC)\n  • prod-public-a (SUBNET)\n  • sg-admin (SECURITY_GROUP)\n  • bastion (EC2)\n  • bastion-admin (IA...",
       "metadata": {
-        "community_id": 0,
-        "member_count": 9,
+        "community_id": 1,
+        "member_count": 10,
         "asset_types": {
           "ORGANIZATION": 1,
           "ORG_UNIT": 1,
           "CLOUD_ACCOUNT": 2,
           "ORG_POLICY": 1,
           "VPC": 1,
-          "SUBNET": 1,
-          "SECURITY_GROUP": 1,
-          "EC2": 1
+          "...": "4 more"
         },
-        "internal_edges": 8,
+        "internal_edges": 9,
         "external_edges": 4,
         "internet_exposed_count": 1,
         "finding_count": 3,
@@ -7502,7 +7279,7 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
           "CIS-AWS",
           "PCI-DSS"
         ],
-        "risk_score": 6.2
+        "risk_score": 6.5
       }
     }
   ]
@@ -7522,18 +7299,20 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
   "total": 7,
   "offset": 0,
   "returned": 1,
-  "next_cursor": "c1.c5f307325b45",
+  "next_cursor": "c1.2e7539349d13",
   "truncated": true,
   "items": [
     {
       "chunk_id": "relation_group::CONTAINMENT",
       "chunk_type": "relation_group",
-      "content": "Relation Group: CONTAINMENT\nTotal relations: 15\n\nRelation type distribution:\n  VPC_CONTAINS_SUBNET: 7\n  SUBNET_CONTAINS_INSTANCE: 5\n  LB_TARGETS_INSTANCE: 3\n\nTriples:\n  sample-org → VPC_CONTAINS_SUBNET → Workloads\n  Workloads → VPC_CONTAINS_SUBNET → prod\n  Workloads → VPC_CONTAINS_SUBNET → shared-se...",
+      "content": "Relation Group: CONTAINMENT\nTotal relations: 15\n\nRelation type distribution:\n  SUBNET_CONTAINS_INSTANCE: 5\n  CONTAINS: 3\n  LB_TARGETS_INSTANCE: 3\n  ORG_CONTAINS_ACCOUNT: 2\n  VPC_CONTAINS_SUBNET: 2\n\nTriples:\n  sample-org → CONTAINS → Workloads\n  Workloads → ORG_CONTAINS_ACCOUNT → prod\n  Workloads → O...",
       "metadata": {
         "relation_group": "CONTAINMENT",
         "total_relations": 15,
         "relation_type_counts": {
-          "VPC_CONTAINS_SUBNET": 7,
+          "CONTAINS": 3,
+          "ORG_CONTAINS_ACCOUNT": 2,
+          "VPC_CONTAINS_SUBNET": 2,
           "SUBNET_CONTAINS_INSTANCE": 5,
           "LB_TARGETS_INSTANCE": 3
         },
@@ -7564,7 +7343,7 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
     {
       "chunk_id": "entity::sg-admin",
       "chunk_type": "entity",
-      "content": "Resource: sg-admin\nType: SECURITY_GROUP\nProvider: AWS\nRegion: us-east-1\nARN: arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin\nAccount: 111111111111\n\nRelations (5):\n  ← INGRESS_ALLOWED: 0.0....",
+      "content": "Resource: sg-admin\nType: SECURITY_GROUP\nProvider: AWS\nRegion: us-east-1\nARN: arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin\nAccount: 111111111111\n\nRelations (4):\n  ← INGRESS_ALLOWED: 0.0....",
       "metadata": {
         "asset_type": "SECURITY_GROUP",
         "provider": "AWS",
@@ -7572,16 +7351,16 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
         "account_id": "111111111111",
         "is_internet_exposed": false,
         "relation_types": [
-          "DEPENDS_ON",
           "INGRESS_ALLOWED",
-          "... 3 more"
+          "INTERNET_REACHABLE",
+          "... 2 more"
         ],
         "severity_max": "CRITICAL",
         "compliance_frameworks": [
           "CIS-AWS",
           "PCI-DSS"
         ],
-        "neighbour_count": 5,
+        "neighbour_count": 4,
         "finding_count": 1,
         "arn": "arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin"
       }
@@ -7597,15 +7376,15 @@ Called with the arguments below, `rag_chunks` returned this `structuredContent`.
         "account_id": "00000000-aaaa-bbbb-cccc-000000000001",
         "is_internet_exposed": false,
         "relation_types": [
-          "DEPENDS_ON",
           "INGRESS_ALLOWED",
-          "... 3 more"
+          "INTERNET_REACHABLE",
+          "... 2 more"
         ],
         "severity_max": "CRITICAL",
         "compliance_frameworks": [
           "CIS-Azure"
         ],
-        "neighbour_count": 5,
+        "neighbour_count": 4,
         "finding_count": 1,
         "arn": "/subscriptions/00000000-aaaa-bbbb-cccc-000000000001/resourceGroups/rg-hub/providers/Microsoft.Network/networkSecurityGroups/jump-nsg"
       }
@@ -7637,8 +7416,8 @@ Called with the arguments below, `export_ontology` returned this `structuredCont
   "dataset": "sample",
   "path": "<estate>/out/estate.ttl",
   "format": "turtle",
-  "triples": 1185,
-  "bytes": 43944
+  "triples": 1184,
+  "bytes": 43748
 }
 ```
 
@@ -7710,19 +7489,7 @@ Called with the arguments below, `terraform_preview` returned this `structuredCo
     "aws_security_group": 4,
     "aws_lb": 1,
     "aws_instance": 3,
-    "aws_db_instance": 1,
-    "aws_s3_bucket": 3,
-    "aws_kms_key": 1,
-    "aws_secretsmanager_secret": 1,
-    "aws_iam_role": 4,
-    "aws_lambda_function": 1,
-    "azurerm_virtual_network": 1,
-    "azurerm_network_security_group": 1,
-    "azurerm_linux_virtual_machine": 1,
-    "azurerm_key_vault": 1,
-    "azurerm_storage_account": 1,
-    "google_storage_bucket": 1,
-    "google_compute_instance": 1
+    "...": "13 more"
   },
   "unmapped_asset_types": {
     "ORGANIZATION": 1,
@@ -7730,14 +7497,7 @@ Called with the arguments below, `terraform_preview` returned this `structuredCo
     "CLOUD_ACCOUNT": 3,
     "ORG_POLICY": 1,
     "TARGET_GROUP": 1,
-    "API_GATEWAY": 1,
-    "LOG_GROUP": 1,
-    "WAF_WEB_ACL": 1,
-    "THREAT_DETECTOR": 1,
-    "SECURITY_HUB": 1,
-    "VULNERABILITY_SCANNER": 1,
-    "CONTAINER_REGISTRY": 1,
-    "DATA_WAREHOUSE": 1
+    "...": "8 more"
   }
 }
 ```
@@ -7771,15 +7531,30 @@ Called with the arguments below, `terraform_preview` returned this `structuredCo
     ]
   },
   "isError": true,
-  "text": "No asset matches 'web-11' in dataset 'sample'. Did you mean: 'web-1', 'web-2', 'web-tg', 'web-alb', 'web-acl'? Use find_assets(query=...) to search by name, ARN or tag.",
+  "text": "No asset matches the reference in this dataset. 5 close matches, see suggestions in the error data. Use find_assets(query=...) to search by name, ARN or tag.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
+      "value": "web-11",
+      "dataset": "sample",
       "suggestions": [
-        "web-1",
-        "web-2",
-        "web-tg",
-        "... 2 more"
+        {
+          "id": "web-1",
+          "name": "web-1",
+          "arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web1",
+          "type": "EC2",
+          "account_id": "111111111111",
+          "dataset": "sample"
+        },
+        {
+          "id": "web-2",
+          "name": "web-2",
+          "arn": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web2",
+          "type": "EC2",
+          "account_id": "111111111111",
+          "dataset": "sample"
+        },
+        "... 3 more"
       ]
     }
   }
@@ -7972,14 +7747,15 @@ When the check does not finish in time the message is `Credential check did not 
 
 An agent can ask for a collection far more often than a person running `cloudg map`. Every live call therefore goes through the workspace's `LiveOperationGuard` (`cloudg/resilience/guard.py`, reachable as `Workspace.live_guard` and replaceable there). The guard works on scopes: one per configured account, profile, subscription or project (`aws/123456789012`, `aws/profile:prod`, `gcp/org:42`), or the bare provider name when the config names none. In the sample run the config named no AWS account, so the scope was `aws`.
 
-- Single-flight: a call identical to one already running (same operation, providers, scopes and arguments) waits for it and returns the same result with `"joined": true` and a `note`. Only one engine runs.
+- Single-flight: a call identical to one already running (same operation, providers, scopes and collection arguments such as `regions` or `services`; the dataset `name` is not part of the comparison) waits for it and returns the same result with `"joined": true` and a `note`. Only one engine runs.
+- Timeout: an operation still running after `operation_timeout_seconds` (`ratelimit.live_operation_timeout_seconds`, default 3600) is cancelled and its scopes are freed; the caller gets reason `timeout`. An operation whose callers have all gone (each cancelled by the client or a tool timeout) is cancelled too.
 - Concurrency caps: at most `max_concurrent_per_scope` (default 1) live operations per scope and `max_concurrent_total` (default 2) overall. A different operation on a busy scope is refused with reason `busy`.
 - Cooldown: after an operation on a scope finishes (successfully or not), a new one on that scope is refused for `cooldown_seconds` (default 120, overridable per provider) with reason `cooldown`.
 - Caller quota: with `caller_max_operations` set, a caller gets at most that many new live operations per `caller_window_seconds` (reason `quota`). It is off by default.
 
-The defaults come from the `ratelimit` section of the cloudg config (`live_cooldown_seconds`, `live_max_concurrent`, `live_max_concurrent_total`, `live_caller_max_operations`, `live_caller_window_seconds`, and `ratelimit.<provider>.live_cooldown_seconds`). `run_scanners` is guarded only when Prowler or ScoutSuite runs; the offline scanners have no scope.
+The defaults come from the `ratelimit` section of the cloudg config (`live_cooldown_seconds`, `live_max_concurrent`, `live_max_concurrent_total`, `live_caller_max_operations`, `live_caller_window_seconds`, `live_operation_timeout_seconds`, and `ratelimit.<provider>.live_cooldown_seconds`). `run_scanners` always runs under the guard, so identical scans share one run, but it claims the cloud scopes (and their cooldowns) only when Prowler or ScoutSuite runs; the offline scanners have no scope.
 
-A refusal is a tool error with code `-31029`. `error_data` carries `reason`, `message`, `retry_after_seconds`, `scopes`, `caller`, and `use_dataset`, the most recent live dataset already loaded, which the message tells the caller to query instead. A second `map_inventory` on the same scope right after the first:
+A refusal is a tool error with code `-31029`. `error_data` carries `reason`, `message`, `retry_after_seconds`, `scopes` and `caller` (each only when set), and `use_dataset`: the most recent live dataset already loaded whose providers include every provider of the refused call, which the message tells the caller to query instead. A second `map_inventory` on the same scope right after the first:
 
 ```json
 {
@@ -7997,7 +7773,7 @@ A refusal is a tool error with code `-31029`. `error_data` carries `reason`, `me
     "cloudg/error_data": {
       "reason": "cooldown",
       "message": "live collection of aws ran recently; cooling down, retry in 120s or use the cached dataset",
-      "retry_after_seconds": 119.9,
+      "retry_after_seconds": 120.0,
       "scopes": [
         "aws"
       ],
@@ -8028,7 +7804,7 @@ A refusal is a tool error with code `-31029`. `error_data` carries `reason`, `me
 }
 ```
 
-With the `admin` role the same call ran. Two `map_inventory(providers=["gcp"])` calls started 50 ms apart, the first with `name: "shared"` and the second without a name, produced one engine run. The second call got the first call's result, dataset `shared` included, plus the join marker:
+With the `admin` or `operator` role the same call skips the cooldown and runs. Two `map_inventory(providers=["gcp"])` calls started 50 ms apart, the first with `name: "shared"` and the second without a name, produced one engine run. The second call got the first call's result, dataset `shared` included, plus the join marker:
 
 Called with the arguments below, `map_inventory` returned this `structuredContent`.
 
@@ -8041,7 +7817,7 @@ Called with the arguments below, `map_inventory` returned this `structuredConten
   "dataset": "shared",
   "active": true,
   "tool": "map_inventory",
-  "duration_s": 0.1,
+  "duration_s": 0.3,
   "summary": {
     "total_assets": 44,
     "total_edges": 56,
@@ -8058,16 +7834,7 @@ Called with the arguments below, `map_inventory` returned this `structuredConten
       "CLOUD_ACCOUNT": 3,
       "EC2": 3,
       "S3_BUCKET": 3,
-      "SUBNET": 2,
-      "ORGANIZATION": 1,
-      "ORG_UNIT": 1,
-      "ORG_POLICY": 1,
-      "VPC": 1,
-      "LOAD_BALANCER": 1,
-      "TARGET_GROUP": 1,
-      "RDS_INSTANCE": 1,
-      "KMS_KEY": 1,
-      "SECRET": 1
+      "...": "10 more"
     },
     "providers": [
       "aws",
@@ -8085,7 +7852,7 @@ Called with the arguments below, `map_inventory` returned this `structuredConten
   ],
   "next_steps": [
     "dataset_summary",
-    "... 4 more"
+    "... 2 more"
   ],
   "joined": true,
   "note": "An identical live operation was already running; this call shares its result instead of collecting again."
@@ -8104,7 +7871,7 @@ While that operation held the `gcp` scope, `collect_assets(providers=["gcp"])` w
     "name": "busy-try"
   },
   "isError": true,
-  "text": "a live operation is already running for gcp; retry when it finishes or use the cached dataset. The last live result is already loaded as dataset 'live-forced'; query it instead of collecting again.",
+  "text": "a live operation is already running for gcp; retry when it finishes or use the cached dataset. The last live result is already loaded as dataset 'live-aws'; query it instead of collecting again.",
   "_meta": {
     "cloudg/error_code": -31029,
     "cloudg/error_data": {
@@ -8114,7 +7881,7 @@ While that operation held the `gcp` scope, `collect_assets(providers=["gcp"])` w
         "gcp"
       ],
       "caller": "local",
-      "use_dataset": "live-forced"
+      "use_dataset": "live-aws"
     }
   }
 }
@@ -8140,7 +7907,7 @@ The phase hook of the engine is wired to MCP progress notifications. `progress` 
 
 `map_inventory`, `collect_assets` and `run_pipeline` return: `dataset` (the new name), `active: true`, `tool`, `duration_s`, `summary` (`total_assets`, `total_edges`, `total_findings`, `open_findings`, `severity_breakdown`, `accounts`, `regions`, `internet_exposed`, `cross_account_edges`, `assets_by_type`, `providers`), the tool-specific fields below, and `next_steps`. They link `cloudg://datasets/{name}/summary` (priority 1.0) and `cloudg://workspace`.
 
-Without `name`, the dataset is called `<prefix>-<YYYYmmdd-HHMMSS>` (`inventory-`, `collect-`, `pipeline-`). An explicit `name` is checked before anything else runs: a malformed name, or one already loaded without `replace: true`, fails without creating an engine. In the capture run the engine count stayed at 2 across both of these calls:
+Without `name`, the dataset is called `<prefix>-<YYYYmmdd-HHMMSS>` (`inventory-`, `collect-`, `pipeline-`). An explicit `name` is checked before anything else runs: a malformed name, or one already loaded without `replace: true`, fails without creating an engine. In the capture run neither of these calls created one:
 
 ```json
 {
@@ -8149,9 +7916,12 @@ Without `name`, the dataset is called `<prefix>-<YYYYmmdd-HHMMSS>` (`inventory-`
     "name": "my dataset"
   },
   "isError": true,
-  "text": "Invalid dataset name 'my dataset': use 1-64 letters, digits, '.', '_' or '-'.",
+  "text": "Invalid dataset name: use 1-64 letters, digits, '.', '_' or '-'.",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "my dataset"
+    }
   }
 }
 ```
@@ -8167,7 +7937,7 @@ Without `name`, the dataset is called `<prefix>-<YYYYmmdd-HHMMSS>` (`inventory-`
     "force": true
   },
   "isError": true,
-  "text": "A dataset named 'sample' already exists. Choose another name (for example 'sample-2'), or pass replace=true to overwrite it.",
+  "text": "A dataset with that name already exists. Choose another name (the error data suggests a free one), or pass replace=true to overwrite it.",
   "_meta": {
     "cloudg/error_code": -32602,
     "cloudg/error_data": {
@@ -8225,16 +7995,7 @@ Called with the arguments below, `map_inventory` returned this `structuredConten
       "CLOUD_ACCOUNT": 3,
       "EC2": 3,
       "S3_BUCKET": 3,
-      "SUBNET": 2,
-      "ORGANIZATION": 1,
-      "ORG_UNIT": 1,
-      "ORG_POLICY": 1,
-      "VPC": 1,
-      "LOAD_BALANCER": 1,
-      "TARGET_GROUP": 1,
-      "RDS_INSTANCE": 1,
-      "KMS_KEY": 1,
-      "SECRET": 1
+      "...": "10 more"
     },
     "providers": [
       "aws",
@@ -8254,7 +8015,7 @@ Called with the arguments below, `map_inventory` returned this `structuredConten
   "next_steps": [
     "dataset_summary",
     "find_assets",
-    "... 3 more"
+    "... 2 more"
   ]
 }
 ```
@@ -8288,7 +8049,7 @@ The progress notifications received during the call (`progress`, `total`, `messa
 [
   [
     0.5,
-    2,
+    2.0,
     "mapping inventory"
   ],
   [
@@ -8297,8 +8058,8 @@ The progress notifications received during the call (`progress`, `total`, `messa
     "phase: inventory_mapping"
   ],
   [
-    2,
-    2,
+    2.0,
+    2.0,
     "done"
   ]
 ]
@@ -8363,16 +8124,7 @@ Called with the arguments below, `collect_assets` returned this `structuredConte
       "CLOUD_ACCOUNT": 3,
       "EC2": 3,
       "S3_BUCKET": 3,
-      "SUBNET": 2,
-      "ORGANIZATION": 1,
-      "ORG_UNIT": 1,
-      "ORG_POLICY": 1,
-      "VPC": 1,
-      "LOAD_BALANCER": 1,
-      "TARGET_GROUP": 1,
-      "RDS_INSTANCE": 1,
-      "KMS_KEY": 1,
-      "SECRET": 1
+      "...": "10 more"
     },
     "providers": [
       "aws",
@@ -8383,7 +8135,7 @@ Called with the arguments below, `collect_assets` returned this `structuredConte
   "next_steps": [
     "dataset_summary",
     "find_assets",
-    "... 3 more"
+    "... 2 more"
   ]
 }
 ```
@@ -8421,8 +8173,8 @@ The progress notifications received during the call (`progress`, `total`, `messa
     "phase: collection"
   ],
   [
-    2,
-    2,
+    2.0,
+    2.0,
     "done"
   ]
 ]
@@ -8432,7 +8184,7 @@ The progress notifications received during the call (`progress`, `total`, `messa
 
 Category `live` · sensitivity `confidential` · capabilities `cloud_access`, `exec`, `read_fs`, `read_state`, `write_fs`, `write_state` · readOnly false, destructive false, idempotent false, openWorld true · outputSchema no · timeout 7200 s
 
-Runs security scanners plus cloudg's reachability analysis against an existing dataset's assets and adds the findings to it. Scanner output files go to `<output_dir>/scans`. `iac_dir` (for Checkov) must be inside an allowed root. Only Prowler and ScoutSuite need cloud credentials, so the preflight runs only when one of them is selected; Checkov, Trivy and the IAM linter run offline. With `normalise` the dataset's findings are deduplicated and compliance-mapped afterwards (merging the compliance results as `normalise_findings` does). Unlike the other three it does not create a dataset.
+Runs security scanners plus cloudg's reachability analysis against an existing dataset's assets and adds the findings to it. Scanner output files go to `<output_dir>/scans`. `iac_dir` (for Checkov) must be inside an allowed root. Only Prowler and ScoutSuite need cloud credentials, so the preflight runs only when one of them is selected; Checkov, Trivy and the IAM linter run offline. With `normalise` the dataset's findings are deduplicated and compliance-mapped afterwards (merging the compliance results as `normalise_findings` does). Container image names that start with `-` are refused, so an image argument can never be read as a scanner option. Unlike the other three it does not create a dataset.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -8463,10 +8215,10 @@ Called with the arguments below, `run_scanners` returned this `structuredContent
   "severity_breakdown": {
     "HIGH": 1
   },
-  "findings_before": 13,
-  "findings_after": 14,
+  "findings_before": 12,
+  "findings_after": 13,
   "output_dir": "<estate>/out/scans",
-  "duration_s": 1.3,
+  "duration_s": 1.2,
   "errors": [],
   "next_steps": [
     "top_risks",
@@ -8596,16 +8348,7 @@ Called with the arguments below, `run_pipeline` returned this `structuredContent
       "CLOUD_ACCOUNT": 3,
       "EC2": 3,
       "S3_BUCKET": 3,
-      "SUBNET": 2,
-      "ORGANIZATION": 1,
-      "ORG_UNIT": 1,
-      "ORG_POLICY": 1,
-      "VPC": 1,
-      "LOAD_BALANCER": 1,
-      "TARGET_GROUP": 1,
-      "RDS_INSTANCE": 1,
-      "KMS_KEY": 1,
-      "SECRET": 1
+      "...": "10 more"
     },
     "providers": [
       "aws"
@@ -8619,7 +8362,7 @@ Called with the arguments below, `run_pipeline` returned this `structuredContent
   "next_steps": [
     "dataset_summary",
     "find_assets",
-    "... 3 more"
+    "... 2 more"
   ]
 }
 ```
@@ -8666,21 +8409,7 @@ The progress notifications received during the call (`progress`, `total`, `messa
     6.0,
     "phase: analysis"
   ],
-  [
-    4.0,
-    6.0,
-    "phase: normalisation"
-  ],
-  [
-    5.0,
-    6.0,
-    "phase: reporting"
-  ],
-  [
-    6,
-    6,
-    "done"
-  ]
+  "... 3 more"
 ]
 ```
 
@@ -8721,7 +8450,7 @@ Called with the arguments below, `rate_limit_status` returned this `structuredCo
     "active_total": 0,
     "active_by_scope": {},
     "cooling_down": {
-      "aws": 119.9
+      "aws": 120.0
     },
     "started": 1,
     "joined": 0,
@@ -8797,7 +8526,7 @@ Called with the arguments below, `list_capabilities` returned this `structuredCo
         ],
         "summary": "Compliance posture per framework: controls evaluated / failing /\npassing, pass rate, open findings by severity and affec..."
       },
-      "... 3 more"
+      "... 2 more"
     ],
     "export": [
       {
@@ -8826,207 +8555,7 @@ Called with the arguments below, `list_capabilities` returned this `structuredCo
       },
       "... 1 more"
     ],
-    "findings": [
-      {
-        "name": "findings_for_asset",
-        "title": "Findings for asset",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "All findings on one asset, highest risk first."
-      },
-      {
-        "name": "findings_summary",
-        "title": "Findings summary",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "internal",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Finding counts grouped by severity, tool, compliance framework,\nasset type, account or asset, each group with its severi..."
-      },
-      "... 8 more"
-    ],
-    "graph": [
-      {
-        "name": "attack_paths",
-        "title": "Attack paths",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Shortest routes from the internet (0.0.0.0/0 rules and\ninternet-exposed assets) to sensitive assets over the flow graph,..."
-      },
-      {
-        "name": "blast_radius",
-        "title": "Blast radius",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "What is affected if this asset breaks, is deleted, changed or\ncompromised: (1) dependency blast radius, meaning everythi..."
-      },
-      "... 15 more"
-    ],
-    "inventory": [
-      {
-        "name": "count_assets",
-        "title": "Count assets",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "internal",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Count assets grouped by type, provider, region, account, cloud\nservice, exposure or worst open-finding severity, with op..."
-      },
-      {
-        "name": "coverage_report",
-        "title": "Coverage report",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "internal",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Which collectors / services succeeded or failed per provider,\naccount and region during collection, with error messages ..."
-      },
-      "... 9 more"
-    ],
-    "live": [
-      {
-        "name": "collect_assets",
-        "title": "Collect assets (live)",
-        "read_only": false,
-        "open_world": true,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "cloud_access",
-          "read_state",
-          "... 1 more"
-        ],
-        "summary": "Run the standard multi-provider asset collection (the `cloudg\ncollect` phase: core services, network edges, IAM)"
-      },
-      {
-        "name": "map_inventory",
-        "title": "Map inventory (live)",
-        "read_only": false,
-        "open_world": true,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "cloud_access",
-          "read_state",
-          "... 1 more"
-        ],
-        "summary": "Map the complete live inventory (no scanners) with read-only cloud\nAPI calls using the server's configured credentials: ..."
-      },
-      "... 3 more"
-    ],
-    "meta": [
-      {
-        "name": "describe_schema",
-        "title": "Describe schema",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "public",
-        "capabilities": [],
-        "summary": "cloudg's vocabulary: asset types (grouped by family), edge types\n(with how each reads), severities, ontology relation ty..."
-      },
-      {
-        "name": "explain_asset_type",
-        "title": "Explain asset type",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "public",
-        "capabilities": [],
-        "summary": "How cloudg models one asset type: family, notes, OWL ontology\nclass, Terraform resource type, whether it is a sensitive ..."
-      },
-      "... 2 more"
-    ],
-    "ontology": [
-      {
-        "name": "export_ontology",
-        "title": "Export ontology",
-        "read_only": false,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state",
-          "write_fs"
-        ],
-        "summary": "Write the dataset's ontology to the workspace output directory as\nTurtle, JSON-LD, RDF/XML or N-Triples"
-      },
-      {
-        "name": "ontology_neighbourhood",
-        "title": "Ontology neighbourhood",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Semantic relations around an asset in the ontology (e.g.\nPROTECTED_BY_SG, ENCRYPTED_BY_KMS, INTERNET_REACHABLE,\nFINDING_..."
-      },
-      "... 4 more"
-    ],
-    "privacy": [
-      {
-        "name": "list_detectors",
-        "title": "List sensitive-data detectors",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "public",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "List the sensitive-entity detectors (content regexes and key-name\nrules) and the strategy the active policy applies to e..."
-      },
-      {
-        "name": "preview_transform",
-        "title": "Preview privacy transforms",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "internal",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Show how the active policy would transform some data for you:\nwhich values get redacted, masked, hashed, pseudonymised, ..."
-      },
-      "... 3 more"
-    ],
-    "workspace": [
-      {
-        "name": "dataset_summary",
-        "title": "Dataset summary",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "internal",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Headline numbers for a dataset: asset / edge / finding counts,\nopen findings by severity, accounts, regions, internet-ex..."
-      },
-      {
-        "name": "diff_datasets",
-        "title": "Diff datasets",
-        "read_only": true,
-        "open_world": false,
-        "sensitivity": "confidential",
-        "capabilities": [
-          "read_state"
-        ],
-        "summary": "Compare two datasets: assets added / removed / changed (matched\non ARN), edges added / removed, findings new / resolved ..."
-      },
-      "... 6 more"
-    ]
+    "...": "8 more categories"
   },
   "tool_count": 74,
   "resources": 13,
@@ -9034,7 +8563,7 @@ Called with the arguments below, `list_capabilities` returned this `structuredCo
   "prompts": [
     "security_posture_review",
     "executive_summary",
-    "... 9 more"
+    "... 7 more"
   ],
   "workflows": {
     "orient": [
@@ -9183,9 +8712,22 @@ Called with the arguments below, `explain_asset_type` returned this `structuredC
     "asset_type": "LAMBDA"
   },
   "isError": true,
-  "text": "Unknown asset type 'LAMBDA'. Did you mean LAMBDA_FUNCTION, ALARM? Valid values: EC2, VIRTUAL_MACHINE, GCE_INSTANCE, LAMBDA_FUNCTION, CLOUD_FUNCTION, E...",
+  "text": "Unknown asset type. Did you mean LAMBDA_FUNCTION, ALARM? Valid values: EC2, VIRTUAL_MACHINE, GCE_INSTANCE, LAMBDA_FUNCTION, CLOUD_FUNCTION, ECS_CLUSTE...",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "LAMBDA",
+      "valid": [
+        "EC2",
+        "VIRTUAL_MACHINE",
+        "GCE_INSTANCE",
+        "... 153 more"
+      ],
+      "close_matches": [
+        "LAMBDA_FUNCTION",
+        "ALARM"
+      ]
+    }
   }
 }
 ```
@@ -9213,7 +8755,7 @@ Called with the arguments below, `explain_edge_type` returned this `structuredCo
   "typical": "VPC -> subnet, subnet -> instance, account -> resource",
   "note": "VPC contains Subnet",
   "dependency_direction": "reverse",
-  "ontology_relations": "inferred from the endpoint asset types (VPC_CONTAINS_SUBNET, SUBNET_CONTAINS_INSTANCE, CLUSTER_CONTAINS_SERVICE)"
+  "ontology_relations": "inferred from both endpoint types (VPC_CONTAINS_SUBNET, SUBNET_CONTAINS_INSTANCE, CLUSTER_CONTAINS_SERVICE, ORG_CONTAINS_ACCOUNT), else the generic CONTAINS"
 }
 ```
 
@@ -9243,9 +8785,21 @@ Called with the arguments below, `explain_edge_type` returned this `structuredCo
     "edge_type": "LIKES"
   },
   "isError": true,
-  "text": "Unknown edge type 'LIKES'. Did you mean INVOKES? Valid values: SECURITY_GROUP_RULE, NACL_RULE, ROUTE, IAM_TRUST, IAM_POLICY_ATTACHMENT, CONTAINS, PEER...",
+  "text": "Unknown edge type. Did you mean INVOKES? Valid values: SECURITY_GROUP_RULE, NACL_RULE, ROUTE, IAM_TRUST, IAM_POLICY_ATTACHMENT, CONTAINS, PEERING, LOA...",
   "_meta": {
-    "cloudg/error_code": -32602
+    "cloudg/error_code": -32602,
+    "cloudg/error_data": {
+      "value": "LIKES",
+      "valid": [
+        "SECURITY_GROUP_RULE",
+        "NACL_RULE",
+        "ROUTE",
+        "... 17 more"
+      ],
+      "close_matches": [
+        "INVOKES"
+      ]
+    }
   }
 }
 ```
@@ -9258,7 +8812,7 @@ The privacy tools let a caller see what the active policy does to its data. [MCP
 
 Category `privacy` · sensitivity `internal` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-The active policy as it applies to the caller: `policy`, `description`, `loaded_from` (profile name or file), `extends` (inheritance chain), `principal` (`id`, `roles`), `max_sensitivity`, `denied_capabilities`, `visible_tools`, `output_pipeline` (one description per transform; the redact step lists its `strategies` as `{applies_to, strategy, options}` items), `pseudonymisation` (`active`, `vault_scope`, `vault_entries`, `by_entity`, `key_source`), `audit_enabled` and `counters` (allowed, denied, rate-limited and reveal decisions so far).
+The active policy as it applies to the caller: `policy`, `description`, `loaded_from` (profile name or file), `extends` (inheritance chain), `principal` (`id`, `roles`), `max_sensitivity`, `denied_capabilities`, `visible_tools`, `output_pipeline` (one description per transform; the redact step lists its `strategies` as `{applies_to, strategy, options}` items), `pseudonymisation` (`active`, `vault_scope`, `vault_entries`, `by_entity`, `key_source`), `audit_enabled` and `counters` (allowed, denied, rate-limited, hidden and reveal decisions so far).
 
 Arguments: none.
 
@@ -9294,7 +8848,7 @@ Called with the arguments below, `privacy_status` returned this `structuredConte
   },
   "audit_enabled": false,
   "counters": {
-    "allowed": 172
+    "allowed": 190
   }
 }
 ```
@@ -9303,7 +8857,7 @@ Called with the arguments below, `privacy_status` returned this `structuredConte
 
 Category `privacy` · sensitivity `internal` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Runs the caller's output pipeline (or the pipeline of `tool`, when given) over sample data and returns `policy`, `tool`, `transformed` and `report`. A JSON string is parsed first unless `parse_json` is false. The tool's own result is exempt from transforms, so the preview is shown as produced. Pseudonyms created by the preview are stored in the vault; nothing else is kept.
+Runs the caller's output pipeline (or the pipeline of `tool`, when given) over sample data and returns `policy`, `tool`, `transformed` and `report`. A JSON string is parsed first unless `parse_json` is false. The tool's own result is exempt from transforms, so the preview is shown as produced. Pseudonyms in a preview come from a separate vault with a random key (`Policy.preview_vault()`), so they never match the pseudonyms in real results and a preview cannot be used to confirm which real value is behind one; nothing is stored. `strict` hides the tool.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -9375,7 +8929,7 @@ Called with the arguments below, `list_detectors` returned this `structuredConte
 
 Category `privacy` · sensitivity `restricted` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Recent access decisions kept in memory by the policy: denials and rate-limit hits always, every call when the policy enables `audit`. Arguments appear as field names with keyed hashes, never values. Returns `policy`, `audit_enabled`, `total` (after the `decision` filter) and the last `limit` `entries`. It is `restricted`: `strict` hides it, and `soc-analyst` shows it only to the `lead` role, whose sensitivity ceiling is `restricted`.
+Recent access decisions kept in memory by the policy: denials and rate-limit hits always, every call when the policy enables `audit`. Arguments appear as field names with keyed hashes, never values. Returns `policy`, `audit_enabled`, `scope`, `total` (after the `decision` filter) and the last `limit` `entries`. A caller with the `admin` or `privacy-admin` role sees every principal's entries (`scope: "all"`); anyone else sees only their own (`scope: "own"`). It is `restricted`: `strict` hides it, and `soc-analyst` shows it only to the `lead` role, whose sensitivity ceiling is `restricted`.
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -9392,21 +8946,23 @@ Called with the arguments below, `privacy_audit_log` returned this `structuredCo
 {
   "policy": "open",
   "audit_enabled": false,
+  "scope": "own",
   "total": 0,
   "entries": []
 }
 ```
 
-Under the `soc-analyst` profile for a principal with the `lead` role, after one `reveal_token` call:
+Under the `soc-analyst` profile for a principal with the `lead` role, after one `reveal_token` call. `lead` is neither `admin` nor `privacy-admin`, so it sees its own entries only:
 
 ```json
 {
   "policy": "soc-analyst",
   "audit_enabled": true,
-  "total": 5,
+  "scope": "own",
+  "total": 2,
   "entries": [
     {
-      "ts": 1791472816.3150337,
+      "ts": 1791555925.6701138,
       "decision": "allowed",
       "kind": "tool",
       "name": "reveal_token",
@@ -9420,7 +8976,7 @@ Under the `soc-analyst` profile for a principal with the `lead` role, after one 
       "reason": "reveal"
     },
     {
-      "ts": 1791472816.3154116,
+      "ts": 1791555925.674695,
       "decision": "allowed",
       "kind": "tool",
       "name": "privacy_audit_log",
@@ -9429,7 +8985,7 @@ Under the `soc-analyst` profile for a principal with the `lead` role, after one 
         "lead"
       ],
       "arguments": {
-        "limit": "92de9908f226"
+        "limit": "c4fdb6b794fd"
       }
     }
   ]
@@ -9468,10 +9024,10 @@ Under `soc-analyst`, an `analyst` called `get_asset(ref="web-1")` and received a
 ```json
 {
   "args": {
-    "token": "res-44376b4596"
+    "token": "res-661a5c1774"
   },
   "structured": {
-    "pseudonym": "res-44376b4596",
+    "pseudonym": "res-661a5c1774",
     "found": true,
     "value": "web-1",
     "entity_type": "resource_name"
@@ -9481,16 +9037,16 @@ Under `soc-analyst`, an `analyst` called `get_asset(ref="web-1")` and received a
 }
 ```
 
-Revealing the ARN from the same result restores the instance id but keeps `prod-payments`: the `soc-analyst` profile replaces account `111111111111` with that alias before pseudonymising, and aliases are not stored in the vault. Tools accept the alias in arguments and map it back, but `reveal_token` does not:
+Revealing the ARN from the same result restores both parts: the instance id, from the vault, and the account. The `soc-analyst` profile replaces account `111111111111` with the alias `prod-payments` before pseudonymising; `reveal_token` maps the aliases of the caller's own output pipelines back as well, so `replaced` counts two substitutions:
 
 ```json
 {
-  "arn": "arn:aws:ec2:us-east-1:prod-payments:instance/res-719e5de2f3",
+  "arn": "arn:aws:ec2:us-east-1:prod-payments:instance/res-755b09a5d1",
   "result": {
-    "pseudonym": "arn:aws:ec2:us-east-1:prod-payments:instance/res-719e5de2f3",
+    "pseudonym": "arn:aws:ec2:us-east-1:prod-payments:instance/res-755b09a5d1",
     "found": true,
-    "value": "arn:aws:ec2:us-east-1:prod-payments:instance/i-0web1",
-    "replaced": 1
+    "value": "arn:aws:ec2:us-east-1:111111111111:instance/i-0web1",
+    "replaced": 2
   }
 }
 ```
@@ -9515,9 +9071,9 @@ Unlike tools, a failed read raises a JSON-RPC error (`-32602` for an unknown URI
 | `cloudg://compliance` | `application/json` | internal | `compliance_summary` for every framework. | |
 | `cloudg://compliance/{framework}` | `application/json` | internal | `posture` rows (exact name match preferred, else substring) and up to 300 `failing_controls`. | `framework` |
 | `cloudg://graph/d3` | `application/json` | confidential | The whole relationship graph as D3 `{nodes, links}`. | |
-| `cloudg://graph/{format}` | `application/json` for `d3` and `cytoscape`, `application/graphml+xml` for `graphml` (the template lists `application/json`) | confidential | `d3`, `cytoscape` or `graphml`. | `format` |
-| `cloudg://ontology/turtle` | `text/turtle` | confidential | The ontology in Turtle. | |
-| `cloudg://ontology/{format}` | the format's own type (the template lists `text/turtle`) | confidential | `turtle`, `json-ld` (`application/ld+json`), `xml` (`application/rdf+xml`), `nt` (`application/n-triples`). | `format` |
+| `cloudg://graph/{format}` | `application/json` for `d3` and `cytoscape`, `application/graphml+xml` for `graphml` (the template lists `application/json`) | restricted | `d3`, `cytoscape` or `graphml`. Restricted because the GraphML form is one opaque string; use `cloudg://graph/d3` under a confidential ceiling. | `format` |
+| `cloudg://ontology/turtle` | `text/turtle` | restricted | The ontology in Turtle. | |
+| `cloudg://ontology/{format}` | the format's own type (the template lists `text/turtle`) | restricted | `turtle`, `json-ld` (`application/ld+json`), `xml` (`application/rdf+xml`), `nt` (`application/n-triples`). | `format` |
 | `cloudg://schema/asset-types` | `application/json` | public | Asset types by family. | |
 | `cloudg://schema/asset-types/{asset_type}` | `application/json` | public | `asset_type`, `family`, `note`, `ontology_class`, `terraform_type`. | `asset_type` |
 | `cloudg://schema/edge-types` | `application/json` | public | Each edge type with `reads_as`, `typical` and `dependency_direction`. | |
@@ -9635,7 +9191,7 @@ Its neighbours, for the internet placeholder node:
       ],
       "direction": "ingress"
     },
-    "... 5 more"
+    "... 4 more"
   ],
   "neighbors": [
     {
@@ -9664,7 +9220,7 @@ Its neighbours, for the internet placeholder node:
       "max_severity": "CRITICAL",
       "uri": "cloudg://assets/sg-admin"
     },
-    "... 5 more"
+    "... 4 more"
   ]
 }
 ```
@@ -9837,7 +9393,7 @@ Its neighbours, for the internet placeholder node:
 }
 ```
 
-`cloudg://graph/d3` returned one `application/json` content item (22161 characters).
+`cloudg://graph/d3` returned one `application/json` content item (28639 characters).
 
 ```json
 {
@@ -9864,7 +9420,7 @@ Its neighbours, for the internet placeholder node:
       "is_internet_exposed": false,
       "is_external": false
     },
-    "... 43 more"
+    "... 42 more"
   ],
   "links": [
     {
@@ -9889,7 +9445,7 @@ Its neighbours, for the internet placeholder node:
       "relationship": "",
       "description": ""
     },
-    "... 54 more"
+    "... 53 more"
   ]
 }
 ```
@@ -9900,11 +9456,11 @@ Its neighbours, for the internet placeholder node:
 <graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
   <key id="d15" for="edge" attr.name="relationship" attr.type="string" />
   <key id="d14" for="edge" attr.name="description" attr.type="string" />
-  <key id="d13" for="edge" att
+  <key id="d13" for="edge" attr.name="direction" attr.type="string" />
 ...
 ```
 
-`cloudg://ontology/turtle` returned one `text/turtle` content item (43944 characters).
+`cloudg://ontology/turtle` returned one `text/turtle` content item (43748 characters).
 
 ```turtle
 @prefix cm: <https://cloudg.io/ontology#> .
@@ -9922,7 +9478,7 @@ cm:AccessKey a owl:Class ;
     rdfs:label "AccessKey" ;
     rdfs:subClassOf cm:CloudResource .
 
-cm:Acces
+cm:AccessPoint a owl:Class ;
 ...
 ```
 
@@ -10085,7 +9641,7 @@ cm:Acces
 3. Prioritise: `top_risks`, `internet_exposure`, `attack_paths`.
 4. Drill down: `get_asset(ref)`, `findings_for_asset`, `neighbors`, `blast_radius`,
    `dependency_tree`, `find_paths`.
-5. Compliance: `compliance_summary`, `list_controls`, `control_status`, `compliance_gap
+5. Compliance: `compliance_summary`, `list_controls`, `control_status`, `compliance_gaps`.
 ...
 ```
 
@@ -10124,7 +9680,7 @@ cm:Acces
     "namespaces": 0,
     "by_entity": {},
     "key_source": "random",
-    "key_id": "e4f4d423bb80",
+    "key_id": "d03a61100e65",
     "persist_path": null,
     "counters": {},
     "key_configured": false
@@ -10133,12 +9689,12 @@ cm:Acces
   "extends_chain": [],
   "effective_denied_capabilities": [],
   "counters": {
-    "allowed": 27
+    "allowed": 18
   },
   "available_profiles": [
     "airgapped",
     "audit",
-    "... 5 more"
+    "... 3 more"
   ]
 }
 ```
@@ -10150,7 +9706,7 @@ Read errors:
   "uri": "cloudg://assets/web-9",
   "error": "ReferenceNotFoundError",
   "code": -32602,
-  "message": "No asset matches 'web-9' in dataset 'sample'. Did you mean: 'web-2', 'web-1', 'web-tg', 'web-alb', 'web-acl'? Use find_assets(query=...) to search by name, ARN or tag."
+  "message": "No asset matches the reference in this dataset. 5 close matches, see suggestions in the error data. Use find_assets(query=...) to search by name, ARN or tag."
 }
 ```
 
@@ -10159,7 +9715,7 @@ Read errors:
   "uri": "cloudg://findings/severity/URGENT",
   "error": "ReferenceNotFoundError",
   "code": -32602,
-  "message": "Unknown severity 'URGENT'; use one of CRITICAL, HIGH, MEDIUM, LOW, INFO"
+  "message": "Unknown severity; use one of CRITICAL, HIGH, MEDIUM, LOW, INFO"
 }
 ```
 
@@ -10168,7 +9724,7 @@ Read errors:
   "uri": "cloudg://graph/png",
   "error": "ReferenceNotFoundError",
   "code": -32602,
-  "message": "Unknown graph format 'png'; use d3, cytoscape, graphml"
+  "message": "Unknown graph format; use d3, cytoscape, graphml"
 }
 ```
 
@@ -10177,7 +9733,7 @@ Read errors:
   "uri": "cloudg://docs/nope",
   "error": "ReferenceNotFoundError",
   "code": -32602,
-  "message": "Unknown docs topic 'nope'. Topics: mcp, pipeline, cli, inputs, outputs, data-models, configuration, python-api, recipes, authentication, identifiers, edges, edge-types, relations, inventory-summary, dependencies, inventory-map, organization"
+  "message": "Unknown docs topic. Topics: mcp, pipeline, cli, inputs, outputs, data-models, configuration, python-api, recipes, authentication, identifiers, edges, edge-types, relations, inventory-summary, dependencies, inventory-map, organization"
 }
 ```
 
@@ -10231,9 +9787,7 @@ Arguments without a completer (the prompt argument `change`, for example) return
       "web-1",
       "web-2",
       "web-acl",
-      "web-alb",
-      "web-tg",
-      "sg-web"
+      "... 3 more"
     ],
     "total": 6,
     "hasMore": false
@@ -10258,10 +9812,7 @@ Arguments without a completer (the prompt argument `change`, for example) return
       "api-lambda-role",
       "app-role",
       "bastion-admin",
-      "deploy-role",
-      "prod",
-      "shared-services",
-      "vendor-co"
+      "... 4 more"
     ],
     "total": 7,
     "hasMore": false
@@ -10340,8 +9891,7 @@ With `dataset` in the context arguments, `ref` completes against that dataset. I
       "web-1",
       "web-2",
       "web-alb",
-      "web-tg",
-      "sg-web"
+      "... 2 more"
     ],
     "total": 5,
     "hasMore": false
@@ -10396,7 +9946,7 @@ With `dataset` in the context arguments, `ref` completes against that dataset. I
 
 ## Prompts
 
-Each prompt returns user messages only. The first holds the task and the exact tool calls to make. When data is loaded, the context follows so the model starts informed, in two forms: a text message `Context for this task (JSON):` with a fenced JSON block for computed context, and embedded resources whose URI serves exactly the embedded content (the dataset summary, an asset, a finding, a framework). With no dataset loaded and no `dataset` argument, a prompt returns a single message explaining how to load data instead of failing (`drift_review` is the exception: it needs two datasets and raises):
+Each prompt returns user messages only. The first holds the task and the exact tool calls to make. The task text never contains values from the workspace (dataset, asset, finding or framework names, account ids, the caller's own arguments): it points at the context instead, as in "the asset in the context (`asset.id`)". When data is loaded, the context follows so the model starts informed, in two forms: a text message `Context for this task (JSON):` with a fenced JSON block, and embedded resources whose URI serves exactly the embedded content (the dataset summary, an asset, a finding, a framework). Every context message also carries its data in `_meta["cloudg/data"]` with the rendering rule in `_meta["cloudg/render"]`, so the privacy transforms work on the data with its keys and the text is rendered again from the transformed data. With no dataset loaded and no `dataset` argument, a prompt returns a single message explaining how to load data instead of failing (`drift_review` is the exception: it needs two datasets and raises):
 
 `description`: "Security posture review"
 
@@ -10424,7 +9974,7 @@ A `dataset` argument naming a dataset that is not loaded, a missing required arg
   },
   "error": "ReferenceNotFoundError",
   "code": -32602,
-  "message": "No asset matches 'web-9' in dataset 'sample'. Did you mean: 'web-2', 'web-1', 'web-tg', 'web-alb', 'web-acl'? Use find_assets(query=...) to search by name, ARN or tag."
+  "message": "No asset matches the reference in this dataset. 5 close matches, see suggestions in the error data. Use find_assets(query=...) to search by name, ARN or tag."
 }
 ```
 
@@ -10435,7 +9985,7 @@ A `dataset` argument naming a dataset that is not loaded, a missing required arg
   },
   "error": "NoDatasetError",
   "code": -32602,
-  "message": "No dataset named 'nope'. Loaded datasets: sample, baseline, after."
+  "message": "No such dataset. 3 dataset(s) are loaded: see datasets in the error data, or call list_datasets."
 }
 ```
 
@@ -10446,16 +9996,16 @@ Asset, finding and framework resources always read the active dataset, so a prom
 | `security_posture_review` | `dataset` | none | confidential | The five riskiest assets, posture of the first five frameworks | Dataset summary | `top_risks`, `internet_exposure`, `attack_paths`, `lateral_movement_paths`, `cross_account_edges`, `security_coverage`, `compliance_summary` |
 | `executive_summary` | `dataset` | none | internal | Overview figures | Dataset summary | `findings_summary`, `compliance_summary`, `top_risks` |
 | `attack_surface_report` | `dataset` | none | confidential | Exposed count, exposed by type, first 15 exposed briefs | Dataset summary | `internet_exposure`, `get_edges`, `attack_paths`, `find_paths`, `findings_for_asset` |
-| `investigate_asset` | `ref`, `dataset` | `ref` | confidential | none (the asset detail, when not the active dataset) | `cloudg://assets/{id}` | `get_asset`, `get_asset_metadata`, `neighbors`, `depends_on`, `dependents`, `findings_for_asset`, `get_finding`, `blast_radius`, `find_paths`, `ontology_neighbourhood` |
+| `investigate_asset` | `ref`, `dataset` | `ref` | confidential | `dataset` (plus the asset detail, when not the active dataset) | `cloudg://assets/{id}` | `get_asset`, `get_asset_metadata`, `neighbors`, `depends_on`, `dependents`, `findings_for_asset`, `get_finding`, `blast_radius`, `find_paths`, `ontology_neighbourhood` |
 | `blast_radius_assessment` | `ref`, `dataset` | `ref` | confidential | Asset brief, transitive dependents (depth 10), accounts affected, first 20 direct dependents | `cloudg://assets/{id}` | `blast_radius`, `dependency_tree`, `lateral_movement_paths`, `findings_for_asset` |
 | `change_impact_analysis` | `ref`, `change`, `dataset` | `ref` | confidential | Asset brief, up to 20 direct dependencies each way | `cloudg://assets/{id}` | `dependents`, `dependency_tree`, `shared_dependencies`, `cross_account_edges`, `get_asset_metadata`, `snapshot_dataset`, `diff_datasets` |
 | `cross_account_trust_review` | `dataset` | none | confidential | Cross-account edge count, external count, counts per account pair and edge type | Dataset summary | `cross_account_edges`, `get_edges`, `lateral_movement_paths`, `organization_topology` |
-| `compliance_gap_analysis` | `framework`, `dataset` | `framework` | confidential | none (the framework detail, when not the active dataset or not resolvable) | `cloudg://compliance/{framework}` | `compliance_summary`, `list_controls`, `control_status`, `compliance_gaps` |
+| `compliance_gap_analysis` | `framework`, `dataset` | `framework` | confidential | `dataset` and `framework` (plus the framework detail, when not the active dataset; the posture alone when the framework does not resolve) | `cloudg://compliance/{framework}` | `compliance_summary`, `list_controls`, `control_status`, `compliance_gaps` |
 | `remediation_plan` | `severity` (default `HIGH`), `dataset` | none | confidential | The ten riskiest assets at or above the severity | Dataset summary | `list_findings`, `top_risks`, `get_finding`, `blast_radius`, `suppress_findings` |
-| `incident_triage` | `finding_id`, `dataset` | `finding_id` | confidential | none (the finding detail, when not the active dataset) | `cloudg://findings/{id}` | `get_finding`, `get_asset`, `internet_exposure`, `find_paths`, `blast_radius`, `lateral_movement_paths` |
+| `incident_triage` | `finding_id`, `dataset` | `finding_id` | confidential | `dataset` and `target_ref`, the affected asset (plus the finding detail, when not the active dataset) | `cloudg://findings/{id}` | `get_finding`, `get_asset`, `internet_exposure`, `find_paths`, `blast_radius`, `lateral_movement_paths` |
 | `drift_review` | `base`, `target` | `base` | confidential | `diff_datasets(base, target, limit=25)` | none | `diff_datasets`, `get_asset`, `findings_for_asset` |
 
-All prompts carry the tag `workflow` in `_meta`. The messages below are real; the embedded JSON is trimmed like the other examples.
+Every JSON context also names the dataset (`dataset`), and `change_impact_analysis` adds the planned change as `planned_change`. All prompts carry the tag `workflow` in `_meta`. The messages below are real; the embedded JSON is trimmed like the other examples.
 
 ### `security_posture_review`
 
@@ -10464,8 +10014,8 @@ All prompts carry the tag `workflow` in `_meta`. The messages below are real; th
 Message 1 (`user`, text):
 
 ```text
-Review the security posture of the cloud estate in dataset `sample`.
-The embedded JSON has the overview, the five riskiest assets and compliance posture.
+Review the security posture of the cloud estate in the dataset named in the
+context. The embedded JSON has the overview, the five riskiest assets and compliance posture.
 
 Work through, calling cloudg tools as needed:
 1. `top_risks(top=10)`: the assets to fix first and why (score components).
@@ -10483,6 +10033,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
   "top_risks": [
     {
       "asset": "jump-nsg",
@@ -10500,15 +10051,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
       "internet_exposed": false,
       "top_finding": "Security group allows SSH (22) from 0.0.0.0/0"
     },
-    {
-      "asset": "deploy-role",
-      "id": "deploy-role",
-      "type": "IAM_ROLE",
-      "score": 16.0,
-      "internet_exposed": false,
-      "top_finding": "Role trusts an external account without ExternalId"
-    },
-    "... 2 more"
+    "... 3 more"
   ],
   "compliance": [
     {
@@ -10542,117 +10085,12 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
       "affected_assets": 3,
       "uri": "cloudg://compliance/PCI-DSS"
     },
-    {
-      "framework": "NIST-800-53",
-      "controls_evaluated": 1,
-      "controls_failing": 1,
-      "controls_passing": 0,
-      "controls_other": 0,
-      "pass_rate": 0.0,
-      "open_findings": 2,
-      "severity_breakdown": {
-        "HIGH": 1,
-        "MEDIUM": 1
-      },
-      "affected_assets": 2,
-      "uri": "cloudg://compliance/NIST-800-53"
-    },
-    "... 2 more"
+    "... 3 more"
   ]
 }
 ```
 
-Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`):
-
-```json
-{
-  "dataset": "sample",
-  "kind": "inventory",
-  "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:15+00:00",
-  "version": 0,
-  "providers": [
-    "aws",
-    "azure",
-    "gcp"
-  ],
-  "total_assets": 44,
-  "total_edges": 56,
-  "total_findings": 12,
-  "open_findings": 11,
-  "suppressed_findings": 1,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 5,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "INFO": 1
-  },
-  "accounts": 5,
-  "regions": 5,
-  "internet_exposed": 6,
-  "cross_account_edges": 3,
-  "unlinked_assets": 2,
-  "unresolved_references": 1,
-  "compliance_frameworks": [
-    "CIS-AWS",
-    "CIS-Azure",
-    "CIS-GCP",
-    "... 2 more"
-  ],
-  "assets_by_type": {
-    "SECURITY_GROUP": 4,
-    "IAM_ROLE": 4,
-    "CLOUD_ACCOUNT": 3,
-    "EC2": 3,
-    "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
-  },
-  "assets_by_provider": {
-    "AWS": 36,
-    "AZURE": 5,
-    "GCP": 3
-  },
-  "edges_by_type": {
-    "CONTAINS": 12,
-    "GOVERNS": 1,
-    "SECURITY_GROUP_RULE": 4,
-    "INTERNET_EXPOSED": 4,
-    "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
-  },
-  "has_organization": true,
-  "coverage_records": 0,
-  "organization": {
-    "id": "o-sample",
-    "accounts": 2,
-    "ous": 1,
-    "control_tower": true,
-    "governed_regions": [
-      "us-east-1",
-      "eu-west-1"
-    ]
-  }
-}
-```
+Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`): the [`dataset_summary`](#dataset_summary) object of `sample`.
 
 ### `executive_summary`
 
@@ -10661,8 +10099,8 @@ Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `applic
 Message 1 (`user`, text):
 
 ```text
-Write a one-page executive summary of the cloud security state of dataset
-`sample` for non-technical leadership, from the embedded figures (call
+Write a one-page executive summary of the cloud security state of the dataset
+in the context for non-technical leadership, from the embedded figures (call
 `findings_summary`, `compliance_summary` and `top_risks(top=3)` for anything missing).
 
 Structure: headline (one sentence), scale of the estate, risk level with the 3 issues that
@@ -10706,111 +10144,12 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
     "CLOUD_ACCOUNT": 3,
     "EC2": 3,
     "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
+    "...": "10 more"
   }
 }
 ```
 
-Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`):
-
-```json
-{
-  "dataset": "sample",
-  "kind": "inventory",
-  "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:15+00:00",
-  "version": 0,
-  "providers": [
-    "aws",
-    "azure",
-    "gcp"
-  ],
-  "total_assets": 44,
-  "total_edges": 56,
-  "total_findings": 12,
-  "open_findings": 11,
-  "suppressed_findings": 1,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 5,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "INFO": 1
-  },
-  "accounts": 5,
-  "regions": 5,
-  "internet_exposed": 6,
-  "cross_account_edges": 3,
-  "unlinked_assets": 2,
-  "unresolved_references": 1,
-  "compliance_frameworks": [
-    "CIS-AWS",
-    "CIS-Azure",
-    "CIS-GCP",
-    "... 2 more"
-  ],
-  "assets_by_type": {
-    "SECURITY_GROUP": 4,
-    "IAM_ROLE": 4,
-    "CLOUD_ACCOUNT": 3,
-    "EC2": 3,
-    "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
-  },
-  "assets_by_provider": {
-    "AWS": 36,
-    "AZURE": 5,
-    "GCP": 3
-  },
-  "edges_by_type": {
-    "CONTAINS": 12,
-    "GOVERNS": 1,
-    "SECURITY_GROUP_RULE": 4,
-    "INTERNET_EXPOSED": 4,
-    "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
-  },
-  "has_organization": true,
-  "coverage_records": 0,
-  "organization": {
-    "id": "o-sample",
-    "accounts": 2,
-    "ous": 1,
-    "control_tower": true,
-    "governed_regions": [
-      "us-east-1",
-      "eu-west-1"
-    ]
-  }
-}
-```
+Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`): the [`dataset_summary`](#dataset_summary) object of `sample`.
 
 ### `attack_surface_report`
 
@@ -10819,7 +10158,7 @@ Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `applic
 Message 1 (`user`, text):
 
 ```text
-Map the external attack surface of dataset `sample`.
+Map the external attack surface of the dataset named in the context.
 
 1. `internet_exposure(limit=100)`: every exposed asset with the rules exposing it, sensitive
    ports and WAF protection.
@@ -10836,6 +10175,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
   "internet_exposed_total": 6,
   "exposed_by_type": {
     "LOAD_BALANCER": 1,
@@ -10872,115 +10212,12 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
       "max_severity": "HIGH",
       "uri": "cloudg://assets/bastion"
     },
-    {
-      "id": "logs-bucket",
-      "name": "prod-logs",
-      "type": "S3_BUCKET",
-      "provider": "AWS",
-      "region": "us-east-1",
-      "account_id": "111111111111",
-      "arn": "arn:aws:s3:::prod-logs",
-      "internet_exposed": true,
-      "open_findings": 1,
-      "max_severity": "HIGH",
-      "uri": "cloudg://assets/logs-bucket"
-    },
-    "... 3 more"
+    "... 4 more"
   ]
 }
 ```
 
-Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`):
-
-```json
-{
-  "dataset": "sample",
-  "kind": "inventory",
-  "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:15+00:00",
-  "version": 0,
-  "providers": [
-    "aws",
-    "azure",
-    "gcp"
-  ],
-  "total_assets": 44,
-  "total_edges": 56,
-  "total_findings": 12,
-  "open_findings": 11,
-  "suppressed_findings": 1,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 5,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "INFO": 1
-  },
-  "accounts": 5,
-  "regions": 5,
-  "internet_exposed": 6,
-  "cross_account_edges": 3,
-  "unlinked_assets": 2,
-  "unresolved_references": 1,
-  "compliance_frameworks": [
-    "CIS-AWS",
-    "CIS-Azure",
-    "CIS-GCP",
-    "... 2 more"
-  ],
-  "assets_by_type": {
-    "SECURITY_GROUP": 4,
-    "IAM_ROLE": 4,
-    "CLOUD_ACCOUNT": 3,
-    "EC2": 3,
-    "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
-  },
-  "assets_by_provider": {
-    "AWS": 36,
-    "AZURE": 5,
-    "GCP": 3
-  },
-  "edges_by_type": {
-    "CONTAINS": 12,
-    "GOVERNS": 1,
-    "SECURITY_GROUP_RULE": 4,
-    "INTERNET_EXPOSED": 4,
-    "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
-  },
-  "has_organization": true,
-  "coverage_records": 0,
-  "organization": {
-    "id": "o-sample",
-    "accounts": 2,
-    "ous": 1,
-    "control_tower": true,
-    "governed_regions": [
-      "us-east-1",
-      "eu-west-1"
-    ]
-  }
-}
-```
+Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`): the [`dataset_summary`](#dataset_summary) object of `sample`.
 
 ### `investigate_asset`
 
@@ -10989,10 +10226,10 @@ Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `applic
 Message 1 (`user`, text):
 
 ```text
-Investigate the asset `orders-db` (id `orders-db`) in dataset
-`sample`. Its current detail is embedded.
+Investigate the asset described in the context (use its `id` as `ref` in the
+calls below). Its current detail is embedded.
 
-1. `get_asset(ref='orders-db')` and `get_asset_metadata` (specific keys) for configuration.
+1. `get_asset(ref=<id>)` and `get_asset_metadata` (specific keys) for configuration.
 2. `neighbors(ref, depth=2)` for what it connects to, then `depends_on` / `dependents`.
 3. `findings_for_asset(ref)` then `get_finding` on the serious ones.
 4. `blast_radius(ref)` and, if it is exposed, `find_paths(source='internet', target=ref)`.
@@ -11002,7 +10239,15 @@ Report what it is, who owns it (tags), how it is exposed, what it can reach, wha
 it, its findings, and prioritised recommendations.
 ```
 
-Message 2 (`user`, embedded resource `cloudg://assets/orders-db`, `application/json`):
+Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced JSON block:
+
+```json
+{
+  "dataset": "sample"
+}
+```
+
+Message 3 (`user`, embedded resource `cloudg://assets/orders-db`, `application/json`):
 
 ```json
 {
@@ -11070,12 +10315,12 @@ Message 2 (`user`, embedded resource `cloudg://assets/orders-db`, `application/j
 Message 1 (`user`, text):
 
 ```text
-Assess the blast radius of `prod-main-key` (KMS_KEY) in `sample` if
-it is (a) compromised and (b) deleted or unavailable.
+Assess the blast radius of the asset in the context (`asset.id`) if it is
+(a) compromised and (b) deleted or unavailable.
 
-1. `blast_radius(ref='kms-main')`: dependency and network reach, sensitive stores reachable.
+1. `blast_radius(ref=<asset.id>)`: dependency and network reach, sensitive stores reachable.
 2. `dependency_tree(ref, direction='down')` shows what breaks, layer by layer.
-3. `lateral_movement_paths(start='kms-main')` for identity pivots from it.
+3. `lateral_movement_paths(start=<asset.id>)` for identity pivots from it.
 4. `findings_for_asset` on the most critical dependents.
 
 Report both scenarios with affected services / accounts / data, severity, and containment
@@ -11086,6 +10331,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
   "asset": {
     "id": "kms-main",
     "name": "prod-main-key",
@@ -11130,20 +10376,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
       "max_severity": null,
       "uri": "cloudg://assets/data-bucket"
     },
-    {
-      "id": "orders-db",
-      "name": "orders-db",
-      "type": "RDS_INSTANCE",
-      "provider": "AWS",
-      "region": "us-east-1",
-      "account_id": "111111111111",
-      "arn": "arn:aws:rds:us-east-1:111111111111:db:orders-db",
-      "internet_exposed": false,
-      "open_findings": 1,
-      "max_severity": "MEDIUM",
-      "uri": "cloudg://assets/orders-db"
-    },
-    "... 1 more"
+    "... 2 more"
   ]
 }
 ```
@@ -11186,12 +10419,12 @@ Message 3 (`user`, embedded resource `cloudg://assets/kms-main`, `application/js
 Message 1 (`user`, text):
 
 ```text
-Plan the change "remove port 5432 ingress" to `sg-app` (SECURITY_GROUP) in `sample`.
-Direct upstream / downstream dependencies are embedded.
+Plan the change described in the context (`planned_change`) to the asset in the
+context (`asset.id`). Direct upstream / downstream dependencies are embedded.
 
-1. `dependents(ref='sg-app', max_depth=5)` and `dependency_tree(ref, direction='down')`.
+1. `dependents(ref=<asset.id>, max_depth=5)` and `dependency_tree(ref, direction='down')`.
 2. `shared_dependencies()`: is it a single point of failure?
-3. `cross_account_edges(account_id='111111111111')` for other accounts affected.
+3. `cross_account_edges(account_id=<asset.account_id>)` for other accounts affected.
 4. `get_asset_metadata(ref)` for the settings being changed.
 
 Deliver: affected components ranked by impact, risks, pre-checks, a rollout and rollback
@@ -11202,6 +10435,8 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
+  "planned_change": "remove port 5432 ingress",
   "asset": {
     "id": "sg-app",
     "name": "sg-app",
@@ -11287,7 +10522,8 @@ Message 3 (`user`, embedded resource `cloudg://assets/sg-app`, `application/json
 Message 1 (`user`, text):
 
 ```text
-Review trust relationships across account boundaries in `sample`.
+Review trust relationships across account boundaries in the dataset named in the
+context.
 
 1. `cross_account_edges(external_only=true)` then all of them by account pair.
 2. `get_edges(edge_types=['IAM_TRUST'])` and `get_edges(edge_types=['GRANTS_ACCESS'],
@@ -11303,6 +10539,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
   "cross_account_edges": 3,
   "external": 1,
   "by_account_pair": {
@@ -11313,97 +10550,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 }
 ```
 
-Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`):
-
-```json
-{
-  "dataset": "sample",
-  "kind": "inventory",
-  "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:15+00:00",
-  "version": 0,
-  "providers": [
-    "aws",
-    "azure",
-    "gcp"
-  ],
-  "total_assets": 44,
-  "total_edges": 56,
-  "total_findings": 12,
-  "open_findings": 11,
-  "suppressed_findings": 1,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 5,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "INFO": 1
-  },
-  "accounts": 5,
-  "regions": 5,
-  "internet_exposed": 6,
-  "cross_account_edges": 3,
-  "unlinked_assets": 2,
-  "unresolved_references": 1,
-  "compliance_frameworks": [
-    "CIS-AWS",
-    "CIS-Azure",
-    "CIS-GCP",
-    "... 2 more"
-  ],
-  "assets_by_type": {
-    "SECURITY_GROUP": 4,
-    "IAM_ROLE": 4,
-    "CLOUD_ACCOUNT": 3,
-    "EC2": 3,
-    "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
-  },
-  "assets_by_provider": {
-    "AWS": 36,
-    "AZURE": 5,
-    "GCP": 3
-  },
-  "edges_by_type": {
-    "CONTAINS": 12,
-    "GOVERNS": 1,
-    "SECURITY_GROUP_RULE": 4,
-    "INTERNET_EXPOSED": 4,
-    "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
-  },
-  "has_organization": true,
-  "coverage_records": 0,
-  "organization": {
-    "id": "o-sample",
-    "accounts": 2,
-    "ous": 1,
-    "control_tower": true,
-    "governed_regions": [
-      "us-east-1",
-      "eu-west-1"
-    ]
-  }
-}
-```
+Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`): the [`dataset_summary`](#dataset_summary) object of `sample`.
 
 ### `compliance_gap_analysis`
 
@@ -11412,19 +10559,29 @@ Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `applic
 Message 1 (`user`, text):
 
 ```text
-Run a PCI-DSS compliance gap analysis on `sample`.
+Run a compliance gap analysis for the framework named in the context
+(`framework`, called <framework> below).
 
-1. `compliance_summary(framework='PCI-DSS')`.
-2. `list_controls(framework='PCI-DSS', status='FAIL')` and
-   `list_controls(framework='PCI-DSS', source='ruleset')` for the full control set.
+1. `compliance_summary(framework=<framework>)`.
+2. `list_controls(framework=<framework>, status='FAIL')` and
+   `list_controls(framework=<framework>, source='ruleset')` for the full control set.
 3. `control_status` on the failing controls with the most / worst findings.
-4. `compliance_gaps(framework='PCI-DSS')` to list the assets behind the gaps.
+4. `compliance_gaps(framework=<framework>)` to list the assets behind the gaps.
 
 Deliver: pass rate and failing controls grouped by domain, the assets responsible, a
 remediation backlog ordered by severity x effort, and evidence references (finding ids).
 ```
 
-Message 2 (`user`, embedded resource `cloudg://compliance/PCI-DSS`, `application/json`):
+Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced JSON block:
+
+```json
+{
+  "dataset": "sample",
+  "framework": "PCI-DSS"
+}
+```
+
+Message 3 (`user`, embedded resource `cloudg://compliance/PCI-DSS`, `application/json`):
 
 ```json
 {
@@ -11467,7 +10624,8 @@ Message 2 (`user`, embedded resource `cloudg://compliance/PCI-DSS`, `application
 Message 1 (`user`, text):
 
 ```text
-Build a remediation plan for open findings at CRITICAL or above in `sample`.
+Build a remediation plan for open findings at CRITICAL or above in the dataset named
+in the context.
 
 1. `list_findings(min_severity='CRITICAL', limit=100)` (page with next_cursor if needed).
 2. `top_risks(top=20, min_severity='CRITICAL')` to order work by real risk.
@@ -11483,6 +10641,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 
 ```json
 {
+  "dataset": "sample",
   "min_severity": "CRITICAL",
   "top_risks": [
     {
@@ -11505,97 +10664,7 @@ Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced J
 }
 ```
 
-Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`):
-
-```json
-{
-  "dataset": "sample",
-  "kind": "inventory",
-  "source": "<estate>/inventory",
-  "loaded_at": "2026-10-08T15:20:15+00:00",
-  "version": 0,
-  "providers": [
-    "aws",
-    "azure",
-    "gcp"
-  ],
-  "total_assets": 44,
-  "total_edges": 56,
-  "total_findings": 12,
-  "open_findings": 11,
-  "suppressed_findings": 1,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 5,
-    "MEDIUM": 2,
-    "LOW": 1,
-    "INFO": 1
-  },
-  "accounts": 5,
-  "regions": 5,
-  "internet_exposed": 6,
-  "cross_account_edges": 3,
-  "unlinked_assets": 2,
-  "unresolved_references": 1,
-  "compliance_frameworks": [
-    "CIS-AWS",
-    "CIS-Azure",
-    "CIS-GCP",
-    "... 2 more"
-  ],
-  "assets_by_type": {
-    "SECURITY_GROUP": 4,
-    "IAM_ROLE": 4,
-    "CLOUD_ACCOUNT": 3,
-    "EC2": 3,
-    "S3_BUCKET": 3,
-    "SUBNET": 2,
-    "ORGANIZATION": 1,
-    "ORG_UNIT": 1,
-    "ORG_POLICY": 1,
-    "VPC": 1,
-    "LOAD_BALANCER": 1,
-    "TARGET_GROUP": 1,
-    "RDS_INSTANCE": 1,
-    "KMS_KEY": 1,
-    "SECRET": 1
-  },
-  "assets_by_provider": {
-    "AWS": 36,
-    "AZURE": 5,
-    "GCP": 3
-  },
-  "edges_by_type": {
-    "CONTAINS": 12,
-    "GOVERNS": 1,
-    "SECURITY_GROUP_RULE": 4,
-    "INTERNET_EXPOSED": 4,
-    "ATTACHED_TO": 6,
-    "LOAD_BALANCER_TARGET": 3,
-    "PROTECTS": 1,
-    "ASSUMES_ROLE": 4,
-    "GRANTS_ACCESS": 9,
-    "IAM_TRUST": 2,
-    "INVOKES": 2,
-    "LOGS_TO": 1,
-    "REFERENCES": 5,
-    "USES_IMAGE": 1,
-    "MONITORS": 1
-  },
-  "has_organization": true,
-  "coverage_records": 0,
-  "organization": {
-    "id": "o-sample",
-    "accounts": 2,
-    "ous": 1,
-    "control_tower": true,
-    "governed_regions": [
-      "us-east-1",
-      "eu-west-1"
-    ]
-  }
-}
-```
+Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `application/json`): the [`dataset_summary`](#dataset_summary) object of `sample`.
 
 ### `incident_triage`
 
@@ -11604,20 +10673,29 @@ Message 3 (`user`, embedded resource `cloudg://datasets/sample/summary`, `applic
 Message 1 (`user`, text):
 
 ```text
-Triage the finding "Security group allows SSH (22) from 0.0.0.0/0" (CRITICAL, id `f-ssh-open`) in
-`sample` as a potential incident.
+Triage the finding in the context (CRITICAL) as a potential
+incident. `id` is the finding id and `target_ref` the affected asset (<target> below).
 
-1. `get_finding(finding_id='f-ssh-open')` for evidence and mapped controls.
-2. `get_asset(ref='sg-admin')` and `internet_exposure()`: is the affected asset reachable?
-3. `find_paths(source='internet', target='sg-admin')` and `blast_radius(ref='sg-admin')`.
-4. `lateral_movement_paths(start='sg-admin')` to see where an attacker goes next.
+1. `get_finding(finding_id=<id>)` for evidence and mapped controls.
+2. `get_asset(ref=<target>)` and `internet_exposure()`: is the affected asset reachable?
+3. `find_paths(source='internet', target=<target>)` and `blast_radius(ref=<target>)`.
+4. `lateral_movement_paths(start=<target>)` to see where an attacker goes next.
 
 Deliver: is it exploitable (likely / possible / unlikely) and why, impact if exploited,
 immediate containment steps, evidence to collect, the permanent fix, and severity
 re-rating if justified.
 ```
 
-Message 2 (`user`, embedded resource `cloudg://findings/f-ssh-open`, `application/json`):
+Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced JSON block:
+
+```json
+{
+  "dataset": "sample",
+  "target_ref": "sg-admin"
+}
+```
+
+Message 3 (`user`, embedded resource `cloudg://findings/f-ssh-open`, `application/json`):
 
 ```json
 {
@@ -11653,13 +10731,13 @@ There is no `dataset` argument; `target` empty means the active dataset.
 Message 1 (`user`, text):
 
 ```text
-Review what changed between dataset `baseline` (before) and
-`after` (after). The diff is embedded (counts plus the first items).
+Review what changed between the datasets `base` (before) and `target` (after)
+named in the context. The diff is embedded (counts plus the first items).
 
-Call `diff_datasets(base='baseline', target='after', limit=200)` for more,
-and `get_asset` / `findings_for_asset` on anything suspicious. Report: new or newly exposed
-assets, removed controls (security groups, WAF, logging), new trust edges, findings
-introduced vs resolved, and whether each change looks intended or like drift.
+Call `diff_datasets(base=<base>, target=<target>, limit=200)` for more, and `get_asset` /
+`findings_for_asset` on anything suspicious. Report: new or newly exposed assets, removed
+controls (security groups, WAF, logging), new trust edges, findings introduced vs resolved,
+and whether each change looks intended or like drift.
 ```
 
 Message 2 (`user`, text): `Context for this task (JSON):` followed by a fenced JSON block:
@@ -12276,6 +11354,7 @@ SELECT ?r ?name WHERE { ?s cmp:INTERNET_REACHABLE ?r . ?r cmp:hasName ?name } OR
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12290,25 +11369,14 @@ SELECT ?r ?name WHERE { ?s cmp:INTERNET_REACHABLE ?r . ?r cmp:hasName ?name } OR
       "r": "cmr:api-gw",
       "name": "public-api"
     },
-    {
-      "r": "cmr:gcp-gcs",
-      "name": "raw-uploads"
-    },
-    {
-      "r": "cmr:sg-admin",
-      "name": "sg-admin"
-    },
-    {
-      "r": "cmr:sg-web",
-      "name": "sg-web"
-    },
-    {
-      "r": "cmr:alb-web",
-      "name": "web-alb"
-    }
+    "... 4 more"
   ],
   "returned": 7,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "r": "uri",
+    "name": "literal"
+  }
 }
 ```
 
@@ -12320,6 +11388,7 @@ SELECT ?name ?type WHERE { ?r cmp:isInternetExposed true ; cmp:hasName ?name ; a
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12334,21 +11403,14 @@ SELECT ?name ?type WHERE { ?r cmp:isInternetExposed true ; cmp:hasName ?name ; a
       "name": "prod-logs",
       "type": "cm:ObjectStorage"
     },
-    {
-      "name": "public-api",
-      "type": "cm:APIGateway"
-    },
-    {
-      "name": "raw-uploads",
-      "type": "cm:ObjectStorage"
-    },
-    {
-      "name": "web-alb",
-      "type": "cm:LoadBalancer"
-    }
+    "... 3 more"
   ],
   "returned": 6,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "name": "literal",
+    "type": "uri"
+  }
 }
 ```
 
@@ -12360,6 +11422,7 @@ SELECT ?name ?type WHERE { ?r cmp:TAGGED_WITH cmr:tag_data_pii ; cmp:hasName ?na
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12372,7 +11435,11 @@ SELECT ?name ?type WHERE { ?r cmp:TAGGED_WITH cmr:tag_data_pii ; cmp:hasName ?na
     }
   ],
   "returned": 2,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "name": "literal",
+    "type": "uri"
+  }
 }
 ```
 
@@ -12384,6 +11451,7 @@ SELECT ?rel ?sg WHERE { VALUES ?rel { cmp:ONLY_SSH cmp:ONLY_RDP } ?s ?rel ?t . ?
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12396,7 +11464,11 @@ SELECT ?rel ?sg WHERE { VALUES ?rel { cmp:ONLY_SSH cmp:ONLY_RDP } ?s ?rel ?t . ?
     }
   ],
   "returned": 2,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "rel": "uri",
+    "sg": "literal"
+  }
 }
 ```
 
@@ -12408,6 +11480,7 @@ SELECT ?src ?sg WHERE { ?s cmp:INGRESS_ALLOWED ?t . ?t cmp:hasName ?sg . OPTIONA
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12428,7 +11501,11 @@ SELECT ?src ?sg WHERE { ?s cmp:INGRESS_ALLOWED ?t . ?t cmp:hasName ?sg . OPTIONA
     }
   ],
   "returned": 4,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "src": "literal",
+    "sg": "literal"
+  }
 }
 ```
 
@@ -12440,6 +11517,7 @@ SELECT ?fname ?sev ?aname WHERE { ?f cmp:FINDING_AFFECTS ?a ; cmp:hasName ?fname
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12454,7 +11532,12 @@ SELECT ?fname ?sev ?aname WHERE { ?f cmp:FINDING_AFFECTS ?a ; cmp:hasName ?fname
     }
   ],
   "returned": 2,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "fname": "literal",
+    "sev": "literal",
+    "aname": "literal"
+  }
 }
 ```
 
@@ -12466,6 +11549,7 @@ SELECT ?f ?target ?name WHERE { ?f cmp:FINDING_AFFECTS ?target . OPTIONAL { ?tar
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12475,62 +11559,23 @@ SELECT ?f ?target ?name WHERE { ?f cmp:FINDING_AFFECTS ?target . OPTIONAL { ?tar
     },
     {
       "f": "cmr:finding_f-db-backup",
-      "target": "cmr:arn:aws:rds:us-east-1:111111111111:db:orders-db",
-      "name": null
+      "target": "cmr:orders-db",
+      "name": "orders-db"
     },
     {
       "f": "cmr:finding_f-default-vpc",
       "target": "cmr:vpc-prod",
       "name": "prod-vpc"
     },
-    {
-      "f": "cmr:finding_f-deploy-trust",
-      "target": "cmr:deploy-role",
-      "name": "deploy-role"
-    },
-    {
-      "f": "cmr:finding_f-gcs-public",
-      "target": "cmr:gcp-gcs",
-      "name": "raw-uploads"
-    },
-    {
-      "f": "cmr:finding_f-ghost",
-      "target": "cmr:arn:aws:s3:::ghost-bucket",
-      "name": null
-    },
-    {
-      "f": "cmr:finding_f-lambda-runtime",
-      "target": "cmr:api-handler",
-      "name": "api-handler"
-    },
-    {
-      "f": "cmr:finding_f-logs-public",
-      "target": "cmr:prod-logs",
-      "name": null
-    },
-    {
-      "f": "cmr:finding_f-rdp-open",
-      "target": "cmr:az-nsg",
-      "name": "jump-nsg"
-    },
-    {
-      "f": "cmr:finding_f-ssh-open",
-      "target": "cmr:sg-admin",
-      "name": "sg-admin"
-    },
-    {
-      "f": "cmr:finding_f-versioning",
-      "target": "cmr:data-bucket",
-      "name": "prod-data"
-    },
-    {
-      "f": "cmr:finding_f-web-cve",
-      "target": "cmr:web-1",
-      "name": "web-1"
-    }
+    "... 9 more"
   ],
   "returned": 12,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "f": "uri",
+    "target": "uri",
+    "name": "literal"
+  }
 }
 ```
 
@@ -12542,6 +11587,7 @@ SELECT ?src ?tgt WHERE { ?s cmp:CROSS_ACCOUNT_TRUST ?t . ?s cmp:hasName ?src . ?
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12554,7 +11600,11 @@ SELECT ?src ?tgt WHERE { ?s cmp:CROSS_ACCOUNT_TRUST ?t . ?s cmp:hasName ?src . ?
     }
   ],
   "returned": 2,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "src": "literal",
+    "tgt": "literal"
+  }
 }
 ```
 
@@ -12566,6 +11616,7 @@ SELECT ?name WHERE { ?r cmp:ENCRYPTED_BY_KMS ?k . ?k cmp:hasName "prod-main-key"
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12580,7 +11631,10 @@ SELECT ?name WHERE { ?r cmp:ENCRYPTED_BY_KMS ?k . ?k cmp:hasName "prod-main-key"
     "... 1 more"
   ],
   "returned": 4,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "name": "literal"
+  }
 }
 ```
 
@@ -12592,6 +11646,7 @@ SELECT ?class (COUNT(?s) AS ?n) WHERE { ?s a ?class . FILTER(STRSTARTS(STR(?clas
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12609,7 +11664,11 @@ SELECT ?class (COUNT(?s) AS ?n) WHERE { ?s a ?class . FILTER(STRSTARTS(STR(?clas
     "... 2 more"
   ],
   "returned": 5,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "class": "uri",
+    "n": "literal"
+  }
 }
 ```
 
@@ -12619,6 +11678,7 @@ SELECT ?p (COUNT(*) AS ?n) WHERE { ?s ?p ?o . FILTER(STRSTARTS(STR(?p), STR(cmp:
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "SelectQuery",
   "rows": [
     {
@@ -12633,29 +11693,14 @@ SELECT ?p (COUNT(*) AS ?n) WHERE { ?s ?p ?o . FILTER(STRSTARTS(STR(?p), STR(cmp:
       "p": "cmp:isInternetExposed",
       "n": "44"
     },
-    {
-      "p": "cmp:hasRegion",
-      "n": "44"
-    },
-    {
-      "p": "cmp:hasARN",
-      "n": "44"
-    },
-    {
-      "p": "cmp:hasProvider",
-      "n": "44"
-    },
-    {
-      "p": "cmp:TAGGED_WITH",
-      "n": "17"
-    },
-    {
-      "p": "cmp:COMPLIANCE_GOVERNS",
-      "n": "15"
-    }
+    "... 5 more"
   ],
   "returned": 8,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "p": "uri",
+    "n": "literal"
+  }
 }
 ```
 
@@ -12667,53 +11712,9 @@ DESCRIBE cmr:orders-db
 
 ```json
 {
+  "dataset": "sample",
   "query_type": "DescribeQuery",
   "rows": [
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:hasProvider",
-      "object": "AWS"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:TAGGED_WITH",
-      "object": "cmr:tag_env_prod"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:ENCRYPTED_BY_KMS",
-      "object": "cmr:kms-main"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:isInternetExposed",
-      "object": "false"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:hasAccountId",
-      "object": "111111111111"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:hasRegion",
-      "object": "us-east-1"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:TAGGED_WITH",
-      "object": "cmr:tag_data_pii"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:DEPENDS_ON",
-      "object": "cmr:sg-db"
-    },
-    {
-      "subject": "cmr:orders-db",
-      "predicate": "cmp:hasARN",
-      "object": "arn:aws:rds:us-east-1:111111111111:db:orders-db"
-    },
     {
       "subject": "cmr:orders-db",
       "predicate": "rdf:type",
@@ -12721,12 +11722,23 @@ DESCRIBE cmr:orders-db
     },
     {
       "subject": "cmr:orders-db",
-      "predicate": "cmp:hasName",
-      "object": "orders-db"
-    }
+      "predicate": "cmp:hasProvider",
+      "object": "AWS"
+    },
+    {
+      "subject": "cmr:orders-db",
+      "predicate": "cmp:hasARN",
+      "object": "arn:aws:rds:us-east-1:111111111111:db:orders-db"
+    },
+    "... 8 more"
   ],
   "returned": 11,
-  "truncated": false
+  "truncated": false,
+  "variable_kinds": {
+    "subject": "uri",
+    "predicate": "uri",
+    "object": "term"
+  }
 }
 ```
 
@@ -12734,11 +11746,10 @@ DESCRIBE cmr:orders-db
 
 These are properties of the current code (0.6.0) that callers should know about; each was checked against the capture run and is described in more detail in the entry named.
 
-- The ontology and the RAG entity chunks attach findings by the raw `resource_id`, so findings that name their resource by ARN or display name are missing from `ontology_neighbourhood`, `rag_chunks` (`finding_count: 0` for `orders-db`) and SPARQL joins on `FINDING_AFFECTS`, although every other tool matches them ([Ontology](#ontology)).
-- The ontology falls back to `VPC_CONTAINS_SUBNET` for containment that does not start at a subnet or cluster (organization to OU), and turns every security group rule into `PROTECTED_BY_SG` from the rule's source.
-- "Internet reachable" in `top_risks`, `reachability_findings` and `internet_exposure(include_reachable=true)` follows every edge type from the internet node, IAM grants included, so `reachability_findings` reports `orders-db` as an internet-exposed database. `internet_exposure` items and `find_assets(internet_exposed=true)` use the collector's flag only.
+- The relationship graph keeps one edge per pair of nodes. Parallel security group, NACL and internet-exposure rules are merged into one edge with comma lists in `port_range` and `protocol`, so `graph_stats.graph_edges`, `subgraph_export` and the graph resources show fewer edges than `get_edges`, which reads the raw list ([Graph](#graph)).
+- "Internet reachable" in `top_risks`, `reachability_findings`, `internet_exposure(include_reachable=true)` and the attack paths follows network-flow edges only, and the path tools add the identity pivots explicitly. `internet_exposure` items and `find_assets(internet_exposed=true)` use the collector's flag only.
+- Error messages never contain the value the caller passed or names from the dataset; read `cloudg/error_data` (`value`, `suggestions`, `valid`) for them ([Errors](#errors)).
+- `sparql_query`, `subgraph_export` and the text graph and ontology resources are `restricted`, so any profile with a `confidential` ceiling (`strict`, the `soc-analyst` analyst) hides them; `cloudg://graph/d3` stays available.
 - `security_coverage` checks vulnerability scanning for EC2, container registries and Lambda only.
 - `cross_account_edges` identifies endpoints by ARN where other graph tools use ids; both forms are valid references.
-- `reveal_token` does not reverse policy aliases (`soc-analyst` shows account `111111111111` as `prod-payments`), so a revealed ARN still carries the alias ([`reveal_token`](#reveal_token)).
-- A guard refusal's `use_dataset` names the most recent live dataset of any provider, not one covering the refused scope (a refused `gcp` call in the capture run was pointed at an AWS-only dataset).
 - The live guard's cooldown applies per scope to every caller, so a second agent asking for the same collection within the cooldown gets `-31029` and the name of the dataset to use instead.

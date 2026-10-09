@@ -24,7 +24,7 @@ _SEVERITY_MAP = {
 
 
 class ScoutSuiteScanner:
-    """Wraps ScoutSuite CLI — runs `scout` and parses the results JS file.
+    """Wraps ScoutSuite CLI: runs `scout` and parses the results JS file.
 
     ScoutSuite produces a `scoutsuite_results.js` file containing a JSON
     object assigned to a JS variable. We strip the variable assignment

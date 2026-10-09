@@ -277,9 +277,9 @@ two assets.
 | `relationship` | `str \| None` | `None` | Fine-grained relation, a `RelationType` name from the ontology (`TRIGGERED_BY`, `RUNS_ON`, `CROSS_ACCOUNT_TRUST`, ...). `None` when the edge class says it all. See the [vocabulary](INVENTORY_CATALOG.md#relationship-vocabulary). |
 | `properties` | `dict[str, Any]` | `{}` | Relation-specific detail copied from the declaration (empty values dropped), plus linker annotations (below). |
 | `description` | `str \| None` | `None` | Human-readable explanation (`"event source mapping"`, `"arn:aws:iam::999999999999:root can assume this role"`). |
-| `ports` | `list[int]` | `[]` | Network edges only. |
-| `port_range` | `str \| None` | `None` | Network edges only, `"80-443"`, `"0-65535"`. |
-| `protocol` | `str \| None` | `None` | Network edges only: `TCP`, `UDP`, `ICMP`, `ALL`. |
+| `ports` | `list[int]` | `[]` | Network edges only. Capped at 100 ports per range, so a wide range lists only its first 100; use `port_range`. |
+| `port_range` | `str \| None` | `None` | Network edges only, in the provider's notation: see [5.3](#53-collector-network-edges). `"443"`, `"80-443"`, `"0-65535"`, `"22,3389,8000-8100"`, `"*"`. |
+| `protocol` | `str \| None` | `None` | Network edges only, with the provider's casing: `TCP`, `UDP`, `ICMP`, `ALL` from AWS and GCP, `Tcp`, `Udp`, `Icmp`, `*` from Azure. |
 | `cidr` | `str \| None` | `None` | Network edges only: `"0.0.0.0/0"`. |
 | `direction` | `str` | `"ingress"` | `ingress` or `egress` for network rule edges. Relationship edges keep the default `"ingress"`, which carries no meaning for them. |
 
@@ -300,20 +300,37 @@ trust statement), `external_id_required`, `actions`, `access_policies` (EKS acce
 
 The AWS collector's own `collect_edges()` adds two kinds of edges before linking:
 
-- `SECURITY_GROUP_RULE`, one per rule and CIDR, between the CIDR string and the security
-  group asset's `id`: ingress edges go `cidr → <sg asset id>`, egress edges
+- `SECURITY_GROUP_RULE`, one per rule and IPv4 CIDR (`IpRanges`; IPv6 ranges and rules
+  that name another security group are not turned into edges), between the CIDR string and
+  the security group asset's `id`: ingress edges go `cidr → <sg asset id>`, egress edges
   `<sg asset id> → cidr`. The native group ID stays in the asset's `metadata.group_id` and
-  `arn`. `ports`, `port_range`, `protocol`, `cidr` and `direction` are filled.
-- `CONTAINS` VPC → subnet, between asset UUIDs.
+  `arn`. `port_range` is `"from-to"`, or a single port when both are equal; protocol `-1`
+  (all traffic) is written as protocol `ALL` with `"0-65535"`, other protocols upper-case.
+  For ICMP the two numbers are the ICMP type and code, so an echo-request rule reads
+  `"8--1"`. `ports` is filled on ingress edges only; `cidr` and `direction` on both.
+- `CONTAINS` from a VPC to every asset whose `metadata.vpc_id` names it (subnets, instances,
+  security groups, load balancers and so on), between asset UUIDs, with no `relationship` and
+  the description `"VPC <vpc_id> contains <name>"`.
 
-The Azure collector's `collect_edges()` adds `SECURITY_GROUP_RULE` edges for NSG inbound rules,
-from the rule's source address prefix (a CIDR, a service tag, `*`, or an application security
-group's resource ID when it was collected) to the NSG asset, and `CONTAINS / VPC_CONTAINS_SUBNET`
-edges from each VNet to its subnets.
+The Azure collector's `collect_edges()` adds `SECURITY_GROUP_RULE` edges for NSG inbound allow
+rules, from the rule's source address prefix (a CIDR, a service tag such as `Internet`, `*`, or
+an application security group's resource ID when it was collected) to the NSG asset, and
+`CONTAINS / VPC_CONTAINS_SUBNET` edges from each VNet to its subnets. `port_range` is the
+rule's destination port ranges joined with commas (`"22,3389,8000-8100"`) or `"*"` for every
+port, `protocol` is Azure's own spelling (`Tcp`, `Udp`, `Icmp`, `*`), and `description` is
+`"NSG rule <name>"`.
 
 The GCP collector adds one edge per internet ingress entry from `0.0.0.0/0` to the exposed asset:
 `INTERNET_EXPOSED` for exposure found through IAM, external IPs or load balancers, and
-`SECURITY_GROUP_RULE` for firewall rules, with `ports` / `protocol` from the firewall evaluation.
+`SECURITY_GROUP_RULE` for firewall rules. Every one of them has `relationship:
+"INTERNET_REACHABLE"` and the way the exposure was found as its `description`. `port_range` is
+the firewall's `ports` list joined with commas, or `null` when the rule lists no ports (which
+for TCP, UDP and SCTP means every port), and `protocol` is upper-case, `ALL` for `all`.
+
+Every consumer in cloudg (the graph builder, the reachability analysis, the ontology) reads
+these strings through `cloudg.graph.ports.parse_port_ranges()` and `edge_port_ranges()`, which
+turn all three notations into numeric ranges and treat ICMP and other port-less protocols as
+opening no ports.
 
 The security group / NSG side of a rule edge is always an asset `id`; the other side is
 deliberately external. Consumers that join edges to assets must therefore expect a few endpoints
@@ -484,13 +501,14 @@ from `cloudg.inventory.mapper` and the package root). A dataclass.
 | Field | Type | Meaning |
 |---|---|---|
 | `assets` | `list[CloudAsset]` | Every asset after deduplication and linking, including organization / hierarchy assets, external account placeholders and the account nodes added by `add_account_hierarchy`. |
-| `edges` | `list[NetworkEdge]` | Collector edges, then linker edges, then hierarchy edges. Deduplicated on `(source_id, target_id, edge_type)`. |
+| `edges` | `list[NetworkEdge]` | Collector edges, then linker edges, then hierarchy edges. The linker adds no edge whose source, target and `edge_type` an earlier edge already has. Parallel collector rules between the same two endpoints (one security group rule per port, say) are kept as separate edges. |
 | `coverage` | `list[CollectionCoverage]` | One record per discovery step and per provider × account × region collection run ([section 10](#10-coverage-records)). Not exported to any file. |
 | `providers` | `list[str]` | The configured providers, lower case (`["aws", "gcp"]`). |
 | `regions` | `dict[str, list[str]]` | Regions actually collected per provider after `all` expansion, e.g. `{"aws": ["us-east-1", "eu-west-1"]}`. |
 | `duration_ms` | `int` | Wall-clock time of `map_inventory()`. `0` after `load()`. |
 | `organization` | `dict \| None` | `OrganizationTopology.to_dict()` when an AWS Organization was mapped, else `None` ([section 17](#17-organizationtopology-and-inventory-organizationjson)). |
 | `unresolved_references` | `list[dict]` | Declared relations whose target resolved to nothing, at most 2000 ([section 11](#11-unresolved-references)). |
+| `throttling` | `dict \| None` | The run's throttling summary (`totals`, `messages`, `skipped`, `scopes`, `breakers`, `slowed_buckets`), or `None` when no cloud API pushed back. The keys are described in the [rate limits guide](RESILIENCE.md#6-what-you-see-when-a-provider-throttles). |
 
 ### 8.2 Methods and properties
 
@@ -523,7 +541,7 @@ The values are `pathlib.Path` objects. JSON files are written with `indent=2` an
 
 - `assets` and `edges` are re-validated into models (`display_id` is dropped before validation).
 - `providers` comes from the file's `providers`, or `summary.providers` for older files.
-- `regions` and `unresolved_references` are read back.
+- `regions`, `unresolved_references` and `throttling` are read back.
 - `organization` is read from `inventory-organization.json` next to the map, when present.
 - `coverage` is empty and `duration_ms` is `0`: neither is stored in the files.
 - `raw_data` is empty on every asset (it is never serialised). Linking rules that use raw
@@ -555,6 +573,7 @@ The values are `pathlib.Path` objects. JSON files are written with `indent=2` an
 | `security_service_gaps` | `int` | Assets with `metadata.security_service` set and `metadata.enabled` exactly `False`. |
 | `unresolved_references` | `int` | `len(unresolved_references)`; `2000` means the cap was hit. |
 | `organization` | `dict` | Only when an organization was mapped: `{"id", "accounts", "ous", "control_tower", "governed_regions"}`, see below. |
+| `throttling` | `dict` | Only when a cloud API throttled the run: `{"totals", "messages", "skipped"}` from `InventoryResult.throttling`. |
 
 `summary.organization`:
 
@@ -965,6 +984,7 @@ The self-contained map. Written by `export()`, read by `load()` and `cloudg deps
 | `assets` | `list[object]` | `CloudAsset.model_dump(mode="json")` for every asset ([section 3](#3-cloudasset)), including `display_id`, excluding `raw_data`. |
 | `edges` | `list[object]` | `NetworkEdge.model_dump(mode="json")` for every edge ([section 5](#5-networkedge)). |
 | `unresolved_references` | `list[object]` | [Section 11](#11-unresolved-references). |
+| `throttling` | `object` | Only when a cloud API throttled the run: the full `InventoryResult.throttling` block. |
 
 Skeleton:
 
@@ -1014,6 +1034,15 @@ asset IDs ([5.3](#53-collector-network-edges)).
 
 D3 force-layout data from `GraphBuilder.to_d3_json()`, built from the same assets and edges.
 Consumed by `docs/viewer.html` and any D3 / vis.js / Cytoscape front end.
+
+The graph holds one edge per source and target, so `links[]` is not one-to-one with the map's
+`edges[]`. `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` edges between the same two
+nodes with the same `cidr` and `direction` are merged into one link: `port_range` becomes the
+comma-separated union of their ports without repeats (`"22,443"`; a TCP, UDP or all-protocol
+rule with no ports adds `"0-65535"`, an ICMP rule adds none when the protocols differ),
+`protocol` lists each protocol once (`"TCP,ICMP"`), and `description` joins the descriptions
+with `"; "`. Any other edge that shares a source and target with an earlier one replaces it.
+Count edges in `inventory-map.json`, not here.
 
 `nodes[]`:
 
@@ -1071,7 +1100,9 @@ Node attributes: `name`, `asset_type`, `provider`, `region`, `arn`, `account_id`
 endpoint nodes have `name`, `asset_type="EXTERNAL"`, `provider="EXTERNAL"`, `is_external=true`.
 
 Edge attributes: `edge_type`, `relationship`, `description`, `direction`, `protocol`,
-`port_range`, `cidr` (empty strings when unset).
+`port_range`, `cidr` (empty strings when unset). Parallel rule edges are merged exactly as in
+[section 15](#15-inventory-graphjson), so a merged edge's `port_range`, `protocol` and
+`description` can hold comma- or semicolon-separated lists.
 
 ```python
 import networkx as nx
@@ -1441,30 +1472,30 @@ Kubernetes API.
 
 ### 21.4 Catalogs
 
-| Function | Returns |
-|---|---|
-| `load_catalog(name)` | `dict`, the packaged `<name>.yaml` merged with `$CLOUDG_CATALOG_DIR/<name>.yaml`; cached per process |
-| `asset_type_map(mapping, catalog="")` | `dict[str, AssetType]`; raises `ValueError` naming the catalog, key and value for an unknown type |
-| `flatten(groups)` | `list[str]` from a list or a mapping of group → list |
-| `asset_type_from_arn(arn)` | `AssetType`, `OTHER` when unknown |
-| `select_tasks(names, include=None, exclude=None)` | `list[str]` of task names kept |
+| Function | Module | Returns |
+|---|---|---|
+| `load_catalog(name)` | `cloudg.inventory.catalogs` | `dict`, the packaged `<name>.yaml` merged with `$CLOUDG_CATALOG_DIR/<name>.yaml`; cached per process |
+| `asset_type_map(mapping, catalog="")` | `cloudg.inventory.catalogs` | `dict[str, AssetType]`; raises `ValueError` naming the catalog, key and value for an unknown type |
+| `flatten(groups)` | `cloudg.inventory.catalogs` | `list[str]` from a list or a mapping of group → list |
+| `asset_type_from_arn(arn)` | `cloudg.inventory.aws_deep_tasks` (re-exported by `aws_deep`) | `AssetType` from the `aws_arn_types` catalog, `OTHER` when unknown |
+| `select_tasks(names, include=None, exclude=None)` | `cloudg.inventory.aws_deep_tasks` (re-exported by `aws_deep`) | `list[str]` of task names kept |
 
 ### 21.5 Mapper helpers
 
 | Function | Returns |
 |---|---|
-| `deduplicate(assets, edges)` | `tuple[list[CloudAsset], list[NetworkEdge]]`: one asset per `arn` (the deep-collected copy wins over sweep or placeholder copies; `relations` and `aliases` are merged; exposure is OR-ed); edges re-pointed and deduplicated on `(source, target, edge_type)`, self-loops dropped |
+| `deduplicate(assets, edges)` | `tuple[list[CloudAsset], list[NetworkEdge]]`: one asset per `arn` (the deep-collected copy wins over sweep or placeholder copies; `relations` and `aliases` are merged; exposure is OR-ed); edges re-pointed to the kept copy, self-loops dropped, and exact repeats dropped: two edges are repeats when their endpoints, `edge_type`, `port_range`, `ports`, `protocol`, `cidr` and `direction` all match, so parallel security group, NACL and internet-exposure rules survive |
 | `add_account_hierarchy(assets, edges)` | `tuple[list[CloudAsset], list[NetworkEdge]]`: an account node per `(provider, account_id)` (reusing organization / subscription / project nodes), and a `hierarchy` `CONTAINS` edge to every asset nothing else contains |
 
 ---
 
 ## 22. Stability and compatibility
 
-What you can rely on across 0.5.x releases:
+What you can rely on across 0.6.x releases:
 
 - The field names and types in this document. New fields and new metadata keys may be added;
   consumers should ignore keys they do not know.
-- `asset_type`, `edge_type` and `relationship` values are never renamed within 0.5.x. New values
+- `asset_type`, `edge_type` and `relationship` values are never renamed within 0.6.x. New values
   may appear (a new collector can introduce a new asset type).
 - The exported file names and their top-level keys.
 - The public Python API: the signatures listed here and the package exports of

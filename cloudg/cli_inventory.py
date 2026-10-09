@@ -122,7 +122,7 @@ def _show_map_summary(summary: dict[str, Any]) -> None:
                 "Accounts": org_summary["accounts"],
                 "Organizational units": org_summary["ous"],
                 "Control Tower": "yes" if org_summary["control_tower"] else "no",
-                "Governed regions": ", ".join(org_summary["governed_regions"]) or "—",
+                "Governed regions": ", ".join(org_summary["governed_regions"]) or "-",
             },
         )
     ui.stats_table(
@@ -317,7 +317,7 @@ def _merge_findings(
 @click.option("-o", "--output", default="./reports", help="Output directory")
 @click.pass_context
 def map_inventory(ctx: click.Context, **kwargs: Any) -> None:
-    """Map the complete infrastructure inventory — no scanners involved.
+    """Map the complete infrastructure inventory, with no scanners involved.
 
     Deep-collects everything deployed (or default) across the configured
     providers: the network fabric, compute, containers (ECR, ECS, EKS and

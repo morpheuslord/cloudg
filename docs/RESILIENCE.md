@@ -75,17 +75,19 @@ Telemetry is aggregated per service scope (operation removed). Rate-limiter leaf
 
 | Kind | Meaning | Examples |
 |---|---|---|
-| `THROTTLED` | the provider asked cloudg to slow down | AWS `Throttling`, `ThrottlingException`, `RequestLimitExceeded`, `TooManyRequestsException`, `SlowDown`, `RateExceeded` and the rest of botocore's standard-mode list; Azure `RateLimiting`, `SubscriptionRequestsThrottled`, `TenantRequestsThrottled`; GCP `ResourceExhausted`, `TooManyRequests`; any HTTP 429 or 503 |
-| `TRANSIENT` | worth retrying, not a rate signal | HTTP 408, 500, 502, 504; AWS `InternalError`, `ServiceUnavailable`, `RequestTimeout`; GCP `ServiceUnavailable`, `DeadlineExceeded`, `InternalServerError`; connection resets and timeouts from botocore, urllib3, aiohttp, httpx and azure-core |
+| `THROTTLED` | the provider asked cloudg to slow down | AWS `Throttling`, `ThrottlingException`, `RequestLimitExceeded`, `TooManyRequestsException`, `SlowDown`, `RateExceeded` and the rest of botocore's standard-mode list; Azure `RateLimiting`, `SubscriptionRequestsThrottled`, `TenantRequestsThrottled`; GCP `ResourceExhausted`, `TooManyRequests`, and `ServiceUnavailable`, which carries HTTP 503; any other HTTP 429 or 503 without a more specific code |
+| `TRANSIENT` | worth retrying, not a rate signal | HTTP 408, 500, 502, 504; AWS `InternalError`, `ServiceUnavailable` (the error code wins over its 503 status), `RequestTimeout`; GCP `DeadlineExceeded`, `InternalServerError`; connection resets and timeouts from botocore, urllib3, aiohttp, httpx and azure-core |
 | `FATAL` | retrying will not help | `AccessDenied`, validation errors, anything else with a provider error code |
 
 Where it looks, in order: the botocore `response["Error"]["Code"]` and HTTP status; azure-core `status_code`, `error.code` and `response.headers`; google-api-core exception class names (along the MRO) and `.code`; urllib `HTTPError.code` and `.headers`; aiohttp `.status`. For wrapped errors it follows `exc.cause` (api_core `RetryError`) and explicit `raise ... from` chains, up to four levels, and never the implicit `__context__`. Only when nothing else matched does it search the message text for phrases such as "rate exceeded", "throttl" or "too many requests".
 
-Two codes need context. AWS `LimitExceededException` is also used for "too many resources" quotas, so it counts as throttling only when the message mentions a rate (`rate`, `throttl`, `too many`, `per second`, `tps`); otherwise it is FATAL. Azure `RetryableErrorDueToAnotherOperation` arrives as a 429 but is a lock conflict, so it is TRANSIENT and does not slow anything down.
+Two codes need context. AWS `LimitExceededException` is also used for "too many resources" quotas, so it counts as throttling only when the message mentions a rate (`rate`, `throttl`, `too many`, `per second`, `tps`); otherwise it is FATAL. Azure `RetryableErrorDueToAnotherOperation` arrives as a 429 but is a lock conflict, so `classify()` calls it TRANSIENT. The Azure SDK policy ([3.2](#32-azure-resource-manager)) sees only the response status, though, and treats every 429 as throttling.
 
 `retry_after(exc)` returns the delay the server asked for, in seconds, from the first of these it finds: `retry-after-ms` or `x-ms-retry-after-ms` (milliseconds), `Retry-After` as delta-seconds or an HTTP-date, Resource Graph's `x-ms-user-quota-resets-after` as `hh:mm:ss` (used when `x-ms-user-quota-remaining` is `0` or missing, or the status is 429), and gRPC `RetryInfo.retry_delay`. `describe_error(exc)` is `str(exc)` with a `throttled: ` prefix for throttling errors; every coverage record in the collectors goes through it.
 
-cloudg's own errors (`CircuitOpenError`, `RetryBudgetExhaustedError`, `DeadlineExceededError`) carry `retry_after` and a botocore-shaped `.response`, so existing error-code helpers report them. The first two classify as THROTTLED, the deadline error as TRANSIENT.
+`classify_strict(exc)` is `classify()` without the message-text search: it returns `None` when no error code, exception class or HTTP status says anything. `is_provider_answer(exc)` is true when the error carries a provider status or error code, that is, the request reached the service and it answered; cloudg's own errors and local failures are not answers. `cloudg.retry.with_retry` uses the two together, so it retries throttling only when the provider itself said so.
+
+cloudg's own errors (`CircuitOpenError`, `RetryBudgetExhaustedError`, `DeadlineExceededError`) carry `retry_after` and a botocore-shaped `.response`, so existing error-code helpers report them. The first two classify as THROTTLED, the deadline error as TRANSIENT. An instrumented AWS client raises them as `AWSCircuitOpenError` and `AWSRetryBudgetExhaustedError` (in `resilience/aws.py`), which are also botocore `ClientError`s with the code `Throttling`, so code that wraps its calls in `except ClientError` keeps catching them.
 
 ### 2.3 Token buckets and levels
 
@@ -126,11 +128,11 @@ The SDK hooks keep the slot (a `Slot` object) in the request context. If neither
 
 `BreakerRegistry` holds one breaker per breaker scope, which has the same granularity as the scope's leaf bucket: per operation where buckets are per operation (built in for EC2, or any service with `per_operation: true` or an operation key), per service otherwise. A throttled `DescribeSubnets` no longer blocks `DescribeVpcs` in the same account and region. The breaker of a scope moves through three states:
 
-- Closed: calls flow. Each call that still failed with throttling or a transient error after its retries counts as one failure; any success resets the count.
+- Closed: calls flow. Each call that still failed with throttling or a transient error after its retries counts as one failure; any success resets the count. Calls the open circuit rejected were never sent and do not count, and neither does a call that stopped because the retry budget ran out: the budget stopped it, not the service.
 - Open: after `breaker_threshold` (default 5) consecutive failures, calls are rejected at once with `CircuitOpenError`, whose message is `circuit open for <scope> after repeated throttling; retry in <n>s`, for `breaker_cooldown_seconds` (default 60).
-- Half-open: after the cooldown one probe call goes through. Success closes the breaker and restores the base cooldown; failure reopens it with the cooldown doubled, up to 600 seconds.
+- Half-open: after the cooldown one probe call goes through. Success closes the breaker and restores the base cooldown; failure reopens it with the cooldown doubled, up to 600 seconds. The probe holds a lease of one cooldown: if it never reports back (it was cancelled, or ended before it was sent), the lease runs out and the next call becomes the probe, so a breaker cannot stay half-open with nobody probing.
 
-FATAL errors are not health signals and leave the breaker alone, so an `AccessDenied` storm never opens a circuit.
+A FATAL answer from the provider (`AccessDenied`, a 404, a validation error) never counts as a failure, so an `AccessDenied` storm never opens a circuit. It does prove that the service is reachable, so it counts like a success: it resets the failure count and closes a half-open breaker. FATAL errors raised locally, without a provider status or code, leave the breaker alone.
 
 ### 2.7 Retries
 
@@ -138,7 +140,7 @@ FATAL errors are not health signals and leave the breaker alone, so an `AccessDe
 
 - `max_retries` retries (8 by default);
 - the per-call deadline (`deadline_seconds`, 900): a backoff or a rate-limit wait that would overrun it ends the call with the original error or `DeadlineExceededError`;
-- the provider's retry budget (`retry_budget`, 500): every retry costs one token, every success refunds 0.1, and when a whole provider is degraded the budget runs dry and cloudg stops retrying instead of multiplying the load. This is the "retry quota" of the AWS SDKs' standard mode. The budget is shared by every integration of the provider: the SDK hooks draw from it too (section 3), and an empty budget ends the SDK's own retry loop with `RetryBudgetExhaustedError`, recorded as a throttled give-up.
+- the provider's retry budget (`retry_budget`, 500): every retry after the first two of a call costs one token, every success refunds 0.1, and when a whole provider is degraded the budget runs dry and cloudg stops retrying instead of multiplying the load. The first two retries of every call are free, so a long run that spent the budget does not leave every later call without a single retry. This is the "retry quota" of the AWS SDKs' standard mode. The budget is shared by every integration of the provider: the SDK hooks draw from it too (section 3), and an empty budget ends the SDK's own retry loop with `RetryBudgetExhaustedError`, recorded as a throttled give-up.
 
 When retrying stops, the original exception is re-raised, the breaker counts a failure, and for throttling the scope is recorded as given up.
 
@@ -158,7 +160,7 @@ What `calls` counts depends on the integration: one per API call for AWS (botoco
 
 `Governor` (`governor.py`) owns the limiter, the breakers, the per-provider retry settings and budgets, and the lifetime stats. There is one per process, returned by `get_governor()`. That is deliberate: rates learned while one collection was throttled keep protecting the next one, which is the point when an agent triggers live maps back to back.
 
-`configure(config)` applies a `CloudGConfig`, a `RateLimitConfig` or a plain dict, and is idempotent: buckets and breakers are rebuilt only for providers whose settings changed, and budgets are reset only when retry settings changed. `MultiAccountCollector` and `InventoryMapper` both call it (and `InventoryMapper.map_inventory()` reuses a stats scope its caller already bound, so an outer `stats_scope()` sees the whole run), so every entry point picks up `config.ratelimit`, `aws.max_retries` and `aws.retry_mode`. Anything else passed to `configure` (a test double, `None` aside) is ignored. `reset_governor()` replaces the process governor with a fresh default one and forgets everything learned; it exists for tests.
+`configure(config)` applies a `CloudGConfig`, a `RateLimitConfig` or a plain dict, and is idempotent: buckets and breakers are rebuilt only for providers whose settings changed, and budgets are reset only when retry settings changed. A provider whose settings did not change keeps its learned rates, its breakers, its budget and the concurrency slots its calls hold, so two runs that configure the same governor do not reset each other. `MultiAccountCollector` and `InventoryMapper` both call it (and `InventoryMapper.map_inventory()` reuses a stats scope its caller already bound, so an outer `stats_scope()` sees the whole run), so every entry point picks up `config.ratelimit`, `aws.max_retries` and `aws.retry_mode`. Anything else passed to `configure` (a test double, `None` aside) is ignored. `reset_governor()` replaces the process governor with a fresh default one and forgets everything learned; it exists for tests.
 
 ## 3. Provider wiring
 
@@ -168,10 +170,10 @@ What `calls` counts depends on the integration: one per API call for AWS (botoco
 
 | Event | What the hook does |
 |---|---|
-| `before-call` | Resolves the scope, fails fast with `CircuitOpenError` if the scope's breaker is open, counts the call, takes a limiter token, then a slot of the account's bulkhead |
-| `needs-retry` | A throttled attempt halves the scope's rate and honours Retry-After; transient errors are counted. Every retry botocore is about to make, throttled or transient, costs one token of the retry budget; when the budget is empty the hook raises `RetryBudgetExhaustedError`, which ends botocore's retry loop. A throttled retry also waits for a fresh rate token, on top of botocore's own backoff |
-| `after-call` | Releases the bulkhead slot. 2xx/3xx feeds additive recovery and closes the breaker; a throttling error that survived botocore's retries counts toward the breaker and is recorded as given up (stats and the task's ledger) |
-| `after-call-error` | The same for exceptions (connection errors, the budget error and the like) |
+| `before-call` | Resolves the scope, fails fast with `AWSCircuitOpenError` if the scope's breaker is open, counts the call, takes a limiter token, then a slot of the account's bulkhead |
+| `needs-retry` | A throttled attempt halves the scope's rate and honours Retry-After; transient errors are counted. Every retry botocore is about to make, throttled or transient, costs one token of the retry budget, except the first two retries of the call; when the budget is empty the hook raises `AWSRetryBudgetExhaustedError`, which ends botocore's retry loop. A throttled retry also waits for a fresh rate token, on top of botocore's own backoff |
+| `after-call` | Releases the bulkhead slot. 2xx/3xx feeds additive recovery and closes the breaker. An error that survived botocore's retries goes to the governor's `on_final_error`: throttling counts toward the breaker and is recorded as given up (stats and the task's ledger), a transient error counts toward the breaker, and a FATAL provider answer counts as proof that the service is reachable |
+| `after-call-error` | The same for exceptions (connection errors and the like). A spent retry budget is recorded as given up without a breaker failure, and a call the open circuit refused is not recorded again |
 
 aiobotocore awaits coroutine handlers, so the aioboto3 hooks never block the event loop. Plain boto3 sessions get blocking handlers; when such a call runs on an event-loop thread, the token wait is capped at one second (`MAX_INLINE_WAIT`) so the loop is not stalled. The token is still consumed.
 
@@ -194,7 +196,7 @@ Every azure-mgmt client cloudg builds goes through `build_azure_client(cls, ...)
 The policy resolves the scope from the request URL (subscription and the last `Microsoft.<Namespace>` segment), fails fast on an open breaker, counts the call, takes a token (subscription bucket, then the resource-provider leaf) and a slot of the subscription's bulkhead. On the response, or on an exception, the slot is released, and then:
 
 - 429 or 503: the scope's rate is halved and paused for `Retry-After`, or for `x-ms-user-quota-resets-after` when that is the only hint;
-- 429, 503, 408, 500, 502 or 504: the response costs one token of the retry budget, because azure-core is about to retry it. When the budget is empty the policy raises `RetryBudgetExhaustedError`, which ends azure-core's retry loop and is reported as throttling. The token is taken even on the last attempt, which azure-core would not retry;
+- 429, 503, 408, 500, 502 or 504: the response costs one token of the retry budget, because azure-core is about to retry it (the first two retries of a request are free). When the budget is empty the policy raises `RetryBudgetExhaustedError`, which ends azure-core's retry loop and is reported as throttling. The token is taken even on the last attempt, which azure-core would not retry;
 - other 4xx: nothing;
 - success: additive recovery and breaker reset, then two proactive checks. `x-ms-user-quota-remaining: 0` pauses the Resource Graph scope until `x-ms-user-quota-resets-after`. `x-ms-ratelimit-remaining-subscription-reads` below 25 pauses the subscription's aggregate bucket for one second, which holds every call of that subscription, whatever the resource provider, because ARM refills about 25 tokens a second. With no account limit configured, the pause falls back to the resource provider's bucket.
 
@@ -208,15 +210,16 @@ Resource Graph allows 15 queries per 5-second window per user, so it has its own
 
 - Clients from `default_graph_client_factory` are built with `build_azure_client`, so the throttle policy paces every HTTP attempt inside the SDK pipeline and reads the quota headers. `_fetch_page` notices that (`_cloudg_throttle_policy` on the client) and does not take a second token.
 - Clients from a custom factory are paced by `_fetch_page` itself: breaker check and one token per page.
-- A 429 that reaches `_fetch_page` slows the scope down and is retried up to `QueryLimits.max_retries` (5) times, with a back-off of 2, 4, 8, 16 then 30 seconds. With the throttle policy in the client, the back-off is stretched to at least the server's hint (capped at 300 seconds); otherwise the limiter, which is paused for the hint, waits it out. After the last retry the query is recorded as given up and the error is raised.
+- A client built with the throttle policy already retries 429 inside its azure-core pipeline, so a 429 that reaches `_fetch_page` from it is final: it is recorded (`on_final_error`) and raised, not retried a second time.
+- For a client from a custom factory, a 429 slows the scope down and is retried up to `QueryLimits.max_retries` (5) times, with a back-off of 2, 4, 8, 16 then 30 seconds. The limiter, which is paused for the server's hint, waits the hint out; with the limiter switched off the back-off itself is stretched to the hint, capped at 300 seconds. After the last retry the query is recorded as given up and the error is raised.
 
 ### 3.4 GCP Cloud Asset Inventory
 
 `GCPCollector._iterate` drains one paged call (ListAssets, SearchAllResources or SearchAllIamPolicies) in a worker thread:
 
 1. breaker check, one token and one counted call for `gcp/<parent>/*/cloudasset/<Rpc>`, then one bulkhead slot for the whole listing (`max_concurrency` concurrent listings per project or organization);
-2. the call itself, with `retry=gcp_retry(scope, counter=...)`: a google-api-core `Retry` on `ResourceExhausted`, `ServiceUnavailable`, `DeadlineExceeded` and `InternalServerError`, starting at 1 second, doubling, capped at `ratelimit.gcp.max_backoff_seconds` (60), with an overall timeout of `deadline_seconds` (900). Its `on_error` reports each retried error to the governor, so throttling halves the rate and `RetryInfo` delays pause it. It also enforces two limits api_core does not have: each retry costs a retry-budget token, and at most `ratelimit.gcp.max_retries` (8) consecutive retries are made per page (a `RetryCounter` shared with `paced` resets on every page that arrives). Past either limit, `on_error` raises `RetryBudgetExhaustedError`, chained to the provider error, which ends api_core's retry loop;
-3. `paced(...)` around the pager takes a token (and checks the breaker) every `page_size` items, just before the pager fetches the next page. Pages are fetched lazily while iterating, so this keeps org-wide listings under the per-minute quotas. With short pages it is approximate, never off by more than one page per short page.
+2. the call itself, with `retry=gcp_retry(scope, counter=...)`: a google-api-core `Retry` on `ResourceExhausted`, `ServiceUnavailable`, `DeadlineExceeded` and `InternalServerError`, starting at 1 second, doubling, capped at `ratelimit.gcp.max_backoff_seconds` (60), with an overall timeout of `deadline_seconds` (900). Its `on_error` reports each retried error to the governor, so throttling halves the rate and `RetryInfo` delays pause it. It also enforces two limits api_core does not have: each retry after the first two of a page costs a retry-budget token, and at most `ratelimit.gcp.max_retries` (8) consecutive retries are made per page (a `RetryCounter` shared with `paced` resets on every page that arrives). Past either limit, `on_error` raises `RetryBudgetExhaustedError`, chained to the provider error, which ends api_core's retry loop;
+3. `paced(...)` around the pager takes a token every `page_size` items, just before the pager fetches the next page. It does not check the breaker again: the breaker was checked once for the whole listing in step 1, so a listing that is a half-open breaker's probe is not rejected by its own breaker on page 2. Pages are fetched lazily while iterating, so this keeps org-wide listings under the per-minute quotas. With short pages it is approximate, never off by more than one page per short page.
 
 If the listing still fails, throttling is recorded as given up and transient errors count toward the breaker. `_iterate` returns what it collected so far plus the error, and the caller records `listing truncated: throttled: ...` (PARTIAL), or FAILED when nothing came back, and falls back to `SearchAllResources` when `ListAssets` is unavailable. `GCPDeepInventoryCollector` labels its IAM policy search the same way.
 
@@ -256,7 +259,7 @@ Other defaults:
 | Retry budget | 500 | 500 | 500 |
 | SDK retries | botocore: `aws.retry_mode` adaptive, `aws.max_retries` 10 | azure-core `RetryPolicy`: 8 total and status retries, 900 s timeout | api_core `Retry`: 900 s timeout, at most 8 consecutive retries per page |
 
-Live operation guard: 120-second cooldown per scope, one live operation per scope, two overall, no per-caller quota ([section 7](#7-live-operations-and-the-mcp-layer)).
+Live operation guard: 120-second cooldown per scope, one live operation per scope, two overall, no per-caller quota, a one-hour operation timeout ([section 7](#7-live-operations-and-the-mcp-layer)).
 
 ## 5. Configuration
 
@@ -279,6 +282,7 @@ WARNING cloudg.config: Unknown config key ratelimit.aws.max_rpss is ignored
 | `live_max_concurrent_total` | int, 1 to 256 | `2` | Live collections allowed at once overall |
 | `live_caller_max_operations` | int >= 0 | `0` | New live collections per caller per window; 0 means unlimited |
 | `live_caller_window_seconds` | float > 0 | `3600` | Length of that window |
+| `live_operation_timeout_seconds` | float > 0 or null | `3600` | A live collection running longer is cancelled and its scopes freed; null means no limit |
 
 ### 5.2 `ratelimit.<provider>`
 
@@ -332,7 +336,9 @@ The four integrations are the AWS hooks (botocore event hooks on every boto3 and
 | `aws.max_retries`, `aws.retry_mode` | botocore retries (counted after the first attempt; default adaptive, 10) | n/a | n/a | n/a |
 | `live_*`, `<provider>.live_cooldown_seconds` | `LiveOperationGuard` only | | | |
 
-Resource Graph pages fetched through `_fetch_page` also retry a 429 up to `QueryLimits.max_retries` (5) times themselves (section 3.3).
+In every integration the first two retries of a call (of a page, for GCP) are free and never draw on `retry_budget`.
+
+Resource Graph pages fetched through `_fetch_page` with a client from a custom factory also retry a 429 up to `QueryLimits.max_retries` (5) times themselves; clients cloudg builds leave that to azure-core (section 3.3).
 
 ### 5.5 Examples
 
@@ -408,7 +414,7 @@ botocore sent `DescribeSubnets` 11 times (one attempt plus 10 retries). The subn
 
 ```json
 {"service": "vpc", "status": "SUCCESS", "asset_count": 2, "error": null}
-{"service": "subnets", "status": "PARTIAL", "asset_count": 0, "error": "throttled: 1 call(s) gave up after retries (throttled: DescribeSubnets RequestLimitExceeded: Request limit exceeded. (retries exhausted))"}
+{"service": "subnets", "status": "PARTIAL", "asset_count": 0, "error": "throttled: 1 call(s) gave up after retries (throttled: DescribeSubnets (retries exhausted): RequestLimitExceeded: Request limit exceeded.)"}
 ```
 
 A collector that lets the error escape is recorded FAILED with `describe_error(exc)`, for example `throttled: An error occurred (RequestLimitExceeded) when calling the DescribeSubnets operation (reached max retries: 10): Request limit exceeded.`. The Azure equivalent is an `azure_<service>` record with status FAILED and `azure_full` PARTIAL; on GCP it is `listing truncated: throttled: ...` on `gcp_list_assets`.
@@ -425,13 +431,13 @@ A collector that lets the error escape is recorded FAILED with `describe_error(e
     "gave_up": 1,
     "rejected": 0,
     "breaker_trips": 0,
-    "wait_seconds": 0.963
+    "wait_seconds": 0.949
   },
   "messages": [
     "aws/123456789012/us-east-1/ec2: throttled 11x, slowed to 5.0 rps, 10 retries, 1 calls gave up"
   ],
   "skipped": {
-    "aws/123456789012/us-east-1/ec2": "throttled: DescribeSubnets RequestLimitExceeded: Request limit exceeded. (retries exhausted)"
+    "aws/123456789012/us-east-1/ec2": "throttled: DescribeSubnets (retries exhausted): RequestLimitExceeded: Request limit exceeded."
   }
 }
 ```
@@ -453,11 +459,11 @@ A collector that lets the error escape is recorded FAILED with `describe_error(e
       "rejected": 0,
       "breaker_trips": 0,
       "waits": 10,
-      "wait_seconds": 0.963,
+      "wait_seconds": 0.949,
       "max_wait_seconds": 0.1,
       "rate_rps": 5.0,
       "min_rate_rps": 5.0,
-      "last_error": "throttled: DescribeSubnets RequestLimitExceeded: Request limit exceeded. (retries exhausted)"
+      "last_error": "throttled: DescribeSubnets (retries exhausted): RequestLimitExceeded: Request limit exceeded."
     }
   },
   "breakers": {},
@@ -465,7 +471,7 @@ A collector that lets the error escape is recorded FAILED with `describe_error(e
     "aws/123456789012/us-east-1/ec2/DescribeSubnets": {
       "rate_rps": 5.0,
       "ceiling_rps": 20.0,
-      "tokens": 0.152,
+      "tokens": 0.173,
       "capacity": 25.0,
       "paused_for": 0.0,
       "throttles": 11
@@ -501,17 +507,18 @@ aws/123456789012/us-east-1/ec2: throttled 11x, slowed to 5.0 rps, 10 retries, ci
 - Concurrency caps: at most `max_concurrent_per_scope` live operations per scope and `max_concurrent_total` overall. Extra callers get `LiveOperationBusy`, or wait for a slot with `wait=True`.
 - Cooldown: after an operation touching a scope finishes, successfully or not, a new one for that scope is refused for the cooldown with `CooldownActive`. A failure is often throttling, which is why failures cool down too (`cooldown_after_failure=True`).
 - Caller quotas: at most `caller_max_operations` new live operations per caller per window (`CallerQuotaExceeded`). Off by default.
+- Operation timeout: an operation still running after `operation_timeout_seconds` is cancelled, and every caller waiting for it gets `LiveOperationTimeout`. A running operation is also cancelled when every caller waiting for it has gone (each was cancelled, by a client or a tool timeout), so an abandoned collection cannot keep its scopes busy.
 
-Every rejection subclasses `LiveOperationRejected` and has `reason` (`cooldown`, `busy` or `quota`), `retry_after` and `to_dict()`: `{"reason", "message", "retry_after_seconds", "scopes", "caller"}`. A scope is any string; the provider for a per-provider cooldown is the part before the first `/` or `:`. `LiveOperationGuard.from_config(config)` maps the `ratelimit.live_*` keys and each provider's `live_cooldown_seconds`. `guard.status()` reports operations in flight, active counts per scope, the seconds left on each cooling scope, and how many operations started and joined.
+Every rejection subclasses `LiveOperationRejected` and has `reason` (`cooldown`, `busy`, `quota` or `timeout`), `retry_after` and `to_dict()`: `{"reason", "message"}` plus `retry_after_seconds`, `scopes` and `caller` when they are set. A scope is any string; the provider for a per-provider cooldown is the part before the first `/` or `:`. The limits can be passed as keyword arguments or as one `GuardSettings` object (`LiveOperationGuard(GuardSettings(...), clock=...)`, with keyword arguments overriding it; an unknown keyword raises `TypeError`). `LiveOperationGuard.from_config(config)` maps the `ratelimit.live_*` keys, `live_operation_timeout_seconds` (default 3600, `null` for no limit) included, and each provider's `live_cooldown_seconds`. `guard.status()` reports operations in flight, active counts per scope, the seconds left on each cooling scope, and how many operations started and joined.
 
 ### 7.2 In the MCP layer
 
-The workspace owns one guard, `workspace.live_guard`, built from `config.ratelimit` on first use. The live tools `map_inventory`, `collect_assets`, `run_pipeline` and `run_scanners` (the last one only when Prowler or ScoutSuite is enabled; the other scanners need no cloud access) run like this:
+The workspace owns one guard, `workspace.live_guard`, built from `config.ratelimit` on first use. The live tools `map_inventory`, `collect_assets`, `run_pipeline` and `run_scanners` run like this:
 
 1. arguments and the result dataset name are validated;
 2. `force=true` is checked: only principals with the `admin` or `operator` role may use it, others get an access error;
-3. the credential preflight runs ([MCP guide, section 15](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md#15-live-tools-and-the-credential-preflight));
-4. the collection runs inside `guard.run(...)`.
+3. the credential preflight runs ([MCP guide, section 15](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md#15-live-tools-and-the-credential-preflight)); for `run_scanners` only when Prowler or ScoutSuite is enabled, since the other scanners need no cloud access;
+4. the collection runs inside `guard.run(...)`. `run_scanners` always runs under the guard, so identical scans share one run; it uses the cloud scopes for cooldowns and caps only when a cloud scanner is enabled.
 
 The guard scopes are derived from the config: `aws/<account>` for each configured account, else `aws/profile:<name>`, else `aws`; `azure/<subscription>` or `azure`; `gcp/<project>`, else `gcp/org:<id>`, else `gcp`. The single-flight key covers the operation, the providers, the scopes and the tool's arguments, so only truly identical calls share a run. A call that joined another gets `"joined": true` and a note in its result.
 
@@ -693,7 +700,7 @@ dataset-1 dataset-1 1 started, 1 joined
 dataset-1
 ```
 
-`run(key, factory, *, scopes=(), caller=None, bypass_cooldown=False, wait=False)` takes a zero-argument factory that returns the awaitable, not the awaitable itself, so a refused call never creates a coroutine. Other members: `check(scopes, caller=..., bypass_cooldown=...)` raises the rejection a new call would get, without side effects; `cooldown_remaining(scope)`; `in_flight(key)`; `reset(scope=None)` clears one cooldown, or every cooldown and quota; `mark_completed(scopes)` starts a cooldown after a collection that ran outside the guard. Construct it with `clock=` to test it without waiting.
+`run(key, factory, *, scopes=(), caller=None, bypass_cooldown=False, wait=False, timeout=None)` takes a zero-argument factory that returns the awaitable, not the awaitable itself, so a refused call never creates a coroutine. Other members: `check(scopes, caller=..., bypass_cooldown=...)` raises the rejection a new call would get, without side effects; `cooldown_remaining(scope)`; `in_flight(key)`; `reset(scope=None)` clears one cooldown, or every cooldown and quota; `mark_completed(scopes)` starts a cooldown after a collection that ran outside the guard. Construct it with `clock=` to test it without waiting.
 
 ## 9. Tuning
 
@@ -713,14 +720,13 @@ Start from the defaults and read the run's `throttling` block before changing an
 
 - Per-item fan-out is now held to the documented rates, which makes some maps slower than in 0.5.x (where the SDK's own retries absorbed the throttling until they failed).
 - Not instrumented yet: the GCP organization-policy and access-context-manager clients outside `_iterate`, the urllib fallback that lists Azure subscriptions, and the single region-discovery call.
-- A throttled Resource Graph page can be counted twice in telemetry, once by the client's throttle policy and once by `_fetch_page`. Pacing is not affected, only the counters.
 - A blocking boto3 or Azure call made on an event-loop thread goes ahead without a bulkhead slot when none is free, so `max_concurrency` is not a hard cap for that path.
 - The Azure policy charges a retry-budget token for a retryable response even on the last attempt, which azure-core does not retry.
 - Learned rates and breaker state live in memory. A new process, including each `cloudg map` invocation, starts at the configured rates.
 
 ## 11. Testing
 
-`tests/test_resilience.py` has 103 tests: classification across SDK shapes (real botocore errors included), Retry-After parsing, token buckets and AIMD on a fake clock, the limiter's levels and overrides, the bulkhead, the breaker state machine and its per-operation scope, unknown config keys, retries, budgets and deadlines, the decorator, the live guard, the config models, and integration tests for each provider. The AWS ones use moto with a `before-send` handler that answers one operation with `RequestLimitExceeded`, and check the attempt count, the coverage status and the stats.
+`tests/test_resilience.py` has 120 tests: classification across SDK shapes (real botocore errors included), Retry-After parsing, token buckets and AIMD on a fake clock, the limiter's levels and overrides, the bulkhead, the breaker state machine and its per-operation scope, unknown config keys, retries, budgets and deadlines, the decorator, the live guard, the config models, and integration tests for each provider. The AWS ones use moto with a `before-send` handler that answers one operation with `RequestLimitExceeded`, and check the attempt count, the coverage status and the stats.
 
 The governor is process-wide state, so `tests/conftest.py` has an autouse fixture, `fresh_resilience_governor`, that calls `reset_governor()` before and after every test. It also raises every built-in rate, burst and account limit to 1,000,000 by swapping `limiter.DEFAULT_LIMITS` for a fast profile. moto never throttles, and its fixtures (hundreds of default AMIs and snapshots) would otherwise make the production per-service rates the bottleneck of the suite. The hooks, limiter, breakers and telemetry still run on every call. `tests/test_resilience.py` has its own autouse fixture that puts `limiter.BUILTIN_LIMITS` back, so the resilience tests see the real defaults.
 

@@ -1,4 +1,4 @@
-"""Deep Azure inventory collector — full-subscription resource enumeration.
+"""Deep Azure inventory collector: full-subscription resource enumeration.
 
 Primary path: **Azure Resource Graph** (``azure-mgmt-resourcegraph``). A few
 paginated KQL queries per subscription return every resource with its full

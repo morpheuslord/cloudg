@@ -4,7 +4,7 @@
 #   1. their normalised titles match, AND
 #   2. both check IDs resolve to the same canonical `id` below.
 #
-# Checks not listed here are never merged across scanners — the safe
+# Checks not listed here are never merged across scanners; the safe
 # failure mode is visible duplication, not silently dropping a scanner's
 # coverage. Extend this file as new equivalences are confirmed.
 #

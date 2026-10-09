@@ -2846,8 +2846,13 @@ edges, and the account `CONTAINS` hierarchy) are described in INVENTORY_REFERENC
 
 ## Relationship vocabulary
 
-`relationship` values are `RelationType` names from `cloudg/graph/ontology_rules.py`, so the
-ontology export uses the declared relation instead of re-inferring one. The inventory uses:
+`relationship` values are `RelationType` names from `cloudg/graph/ontology_rules.py` (64 in
+all), so the ontology export can use the declared relation. On `CONTAINS`, `ATTACHED_TO` and the
+typed edges (`INVOKES`, `USES_IMAGE`, `ASSUMES_ROLE`, `GRANTS_ACCESS`, `LOGS_TO`, `PROTECTS`,
+`MONITORS`, `MANAGES`, `GOVERNS`, `REFERENCES`) the declared relation replaces the one the
+ontology would infer. On `SECURITY_GROUP_RULE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`,
+`LOAD_BALANCER_TARGET`, `ROUTE`, `PEERING` and `INTERNET_EXPOSED` edges it comes first and the
+inferred relations are added after it. The inventory uses:
 
 | Relationship | Meaning |
 |---|---|
@@ -2869,7 +2874,7 @@ ontology export uses the declared relation instead of re-inferring one. The inve
 | `ORG_CONTAINS_ACCOUNT` | OU / root contains an account; management group contains a subscription. |
 | `OWNED_BY` | Ownership / management (stack → resource, landing zone → shared accounts, permission set → SSO role). |
 | `POLICY_ALLOWS_ACTION` | A policy or role assignment grants the principal access to the target. |
-| `PROTECTED_BY_NACL` | Subnet protected by a network ACL. |
+| `PROTECTED_BY_NACL` | Declared on `PROTECTS` edges from an AWS Network Firewall or a Route 53 Resolver DNS Firewall rule group to the VPC or transit gateway it protects. The ontology also infers it for a resource `ATTACHED_TO` a network ACL. |
 | `PROTECTED_BY_SG` | Resource protected by a security group / NSG. |
 | `PROTECTED_BY_WAF` | Resource protected by a WAF web ACL / Cloud Armor / WAF policy. |
 | `READS_FROM` | Reads data from the target (sources, mounted volumes, secrets, parameters). |

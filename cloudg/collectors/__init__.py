@@ -1,4 +1,4 @@
-"""Collectors package — async cloud resource collectors."""
+"""Collectors package: async cloud resource collectors."""
 
 from cloudg.collectors.base import BaseCollector
 

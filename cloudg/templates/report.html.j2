@@ -640,7 +640,7 @@
         const node = g.append('g').selectAll('g').data(graphData.nodes).join('g')
             .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended));
 
-        // Node shape — findings get triangles, compliance gets diamonds, rest get circles
+        // Node shape: findings get triangles, compliance gets diamonds, rest get circles
         node.each(function(d) {
             const el = d3.select(this);
             const r = d.is_external ? 8 : 16;

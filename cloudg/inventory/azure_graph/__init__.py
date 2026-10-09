@@ -5,9 +5,9 @@ its full ``properties`` bag in a handful of paginated KQL queries, which is
 both far faster and far richer than enumerating each service SDK. This
 package holds the provider-neutral half of the Azure inventory:
 
-- :func:`run_query` (``query``) — paginated ARG queries (``skipToken``)
+- :func:`run_query` (``query``): paginated ARG queries (``skipToken``)
   with 429 back-off, against any client exposing ``resources(request)``.
-- :class:`AzureAssetBuilder` (``builder``) — turns ARM-shaped rows (from
+- :class:`AzureAssetBuilder` (``builder``): turns ARM-shaped rows (from
   ARG *or* from SDK models serialised with :func:`to_rest`) into
   :class:`CloudAsset` objects carrying typed ``metadata["relations"]`` and
   ``metadata["aliases"]`` for the
