@@ -17,6 +17,7 @@ from cloudg.mcp.context import Principal
 from cloudg.mcp.core import Capability, NotFoundError, Registry, Sensitivity
 from cloudg.mcp.layer import CloudGMCPLayer
 from cloudg.mcp.policy import Policy
+from tests.mcp.fake_secrets import AWS_KEY_ID
 
 ARN = "arn:aws:ec2:us-east-1:123456789012:instance/i-0abc1234def567890"
 AZ_ID = (
@@ -42,7 +43,7 @@ ASSETS = {
             "public_ip": "54.12.33.4",
             "password": "hunter2",
             "user_data": "IyEvYmluL2Jhc2g=",
-            "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+            "AccessKeyId": AWS_KEY_ID,
         },
         "raw_data": {"huge": "x" * 100},
     },
@@ -138,7 +139,7 @@ async def test_standard_redacts_secrets_keeps_identifiers():
     assert "raw_data" not in a
     assert a["tags"]["Description"].startswith("⟦untrusted⟧")
     text = res.content[0].text
-    assert "hunter2" not in text and "AKIAIOSFODNN7EXAMPLE" not in text
+    assert "hunter2" not in text and AWS_KEY_ID not in text
     report = res.meta["cloudg/transforms"]
     assert report["redacted"]["sensitive_field"] == 2
     assert report["untrusted"]["suspicious"] == 1
