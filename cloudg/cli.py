@@ -1,4 +1,4 @@
-"""CloudG CLI — Click-based command-line interface.
+"""CloudG CLI: Click-based command-line interface.
 
 All terminal rendering goes through :mod:`cloudg.ui`, the Rich UI layer.
 """
@@ -66,7 +66,7 @@ class BannerGroup(click.Group):
 @click.option("--log-file", default=None, help="Path to log file")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool, config_path: str | None, log_file: str | None) -> None:
-    """☁️  cloudg — cloud graphing: infrastructure mapping and security intelligence."""
+    """☁️  cloudg (cloud graphing): infrastructure mapping and security intelligence."""
     global _config
     from cloudg.config import load_config
 
@@ -160,7 +160,7 @@ def collect(
     output: str,
 ) -> None:
     """Collect cloud assets from the specified provider."""
-    ui.section(f"Asset Collection — {provider.upper()}")
+    ui.section(f"Asset Collection: {provider.upper()}")
 
     from cloudg.credentials import CredentialResolver
 
@@ -413,10 +413,10 @@ def ingest(
     output: str,
     fmt: str,
 ) -> None:
-    """Aggregate existing scanner outputs — no scanners are executed.
+    """Aggregate existing scanner outputs; no scanners are executed.
 
     Feed cloudg the native output files of scans you already ran
-    (Prowler, ScoutSuite, Checkov, Trivy — any combination) and it
+    (Prowler, ScoutSuite, Checkov, Trivy, in any combination) and it
     normalises, deduplicates across scanners via the check-equivalence
     rulesets, maps compliance frameworks, and generates reports.
 
@@ -446,8 +446,8 @@ def ingest(
 
 
 # ─────────────────────────────────────────────────────────────────────
-# RUN command (full pipeline) — defined in cloudg.cli_commands
-# MAP / DEPS commands (inventory mapping) — defined in cloudg.cli_inventory
+# RUN command (full pipeline): defined in cloudg.cli_commands
+# MAP / DEPS commands (inventory mapping): defined in cloudg.cli_inventory
 # ─────────────────────────────────────────────────────────────────────
 
 cli.add_command(run)

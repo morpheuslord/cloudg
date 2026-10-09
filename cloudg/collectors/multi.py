@@ -242,7 +242,7 @@ class MultiAccountCollector:
 
         # Supports direct keys, OIDC web identity, profiles, the
         # default chain (instance/task roles), and AssumeRole with
-        # optional ExternalId — see cloudg.credentials.
+        # optional ExternalId; see cloudg.credentials.
         assume_into = account_id
         if account_id and account_id == self._caller_account:
             assume_into = None

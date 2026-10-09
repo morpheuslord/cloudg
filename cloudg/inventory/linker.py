@@ -1,8 +1,8 @@
 """Cross-service relationship linker.
 
-Derives the edges that interlink an inventory — attachment, containment,
+Derives the edges that interlink an inventory (attachment, containment,
 routing, invocation, identity, protection, monitoring, governance and
-generic references — purely from collected asset metadata. No cloud API
+generic references) purely from collected asset metadata. No cloud API
 calls and no scanners: given any list of CloudAssets (AWS, Azure, GCP, or
 mixed), it produces the edges that turn a flat inventory into a connected
 map.

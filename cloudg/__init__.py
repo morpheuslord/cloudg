@@ -1,4 +1,4 @@
-"""cloudg — cloud graphing: multi-cloud mapping and security intelligence."""
+"""cloudg (cloud graphing): multi-cloud mapping and security intelligence."""
 
 __version__ = "0.6.0"
 

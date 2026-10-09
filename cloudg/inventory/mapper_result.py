@@ -111,7 +111,7 @@ def _asset_flags(assets: list[CloudAsset], linked_ids: set[str]) -> dict[str, in
 
 @dataclass
 class InventoryResult:
-    """Complete inventory map — assets, interconnections, and summary."""
+    """Complete inventory map: assets, interconnections, and summary."""
 
     assets: list[CloudAsset] = field(default_factory=list)
     edges: list[NetworkEdge] = field(default_factory=list)

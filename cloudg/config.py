@@ -535,7 +535,7 @@ class CloudGConfig(BaseModel):
         default=["aws"],
         description="Providers to scan: aws, azure, gcp. Use multiple for simultaneous scanning.",
     )
-    # Backward-compat alias — single provider string is auto-wrapped
+    # Backward-compat alias: a single provider string is auto-wrapped
     provider: str | None = Field(
         default=None,
         exclude=True,

@@ -16,10 +16,10 @@ AWS (build_aws_session):
 
 Azure (build_azure_credential):
     1. Workload identity federation (tenant_id + client_id +
-       federated_token_file — AKS / GitHub OIDC)
+       federated_token_file; AKS / GitHub OIDC)
     2. Service principal with client secret
     3. Service principal with client certificate
-    4. Managed identity (system- or user-assigned — inherited identity)
+    4. Managed identity (system- or user-assigned, inherited identity)
     5. DefaultAzureCredential chain (env, CLI, PowerShell, managed identity)
 
 GCP (build_gcp_credentials):
@@ -351,7 +351,7 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
     """Build google-auth credentials from a GCPConfig.
 
     Returns:
-        (credentials, default_project_id) — project may be None when the
+        (credentials, default_project_id); project may be None when the
         auth method carries no project (e.g. impersonation).
 
     Raises:
@@ -370,7 +370,7 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
 
     if credentials_file and getattr(cfg, "credentials_file", None):
         # 1. Explicit file: service account key OR workload identity
-        #    federation (external_account) config — load handles both.
+        #    federation (external_account) config; load handles both.
         logger.info("GCP auth: file-based identity (%s)", credentials_file)
         credentials, project = google.auth.load_credentials_from_file(
             credentials_file, scopes=_GCP_SCOPES

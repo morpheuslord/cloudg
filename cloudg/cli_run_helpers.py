@@ -226,7 +226,7 @@ def _submit_provider_scanners(
     profile: str | None,
     output_dir: Path,
 ) -> None:
-    """Submit Prowler and ScoutSuite — one instance per provider."""
+    """Submit Prowler and ScoutSuite, one instance per provider."""
     if "prowler" in scanner_list:
         for prov in cfg.providers:
             if prov in ("aws", "azure", "gcp"):
@@ -267,7 +267,7 @@ def _submit_checkov(
         return
     if not iac_dirs:
         ui.warn(
-            "Checkov: nothing to scan — pass --iac-dir, set "
+            "Checkov: nothing to scan; pass --iac-dir, set "
             "scanners.iac_directories, or enable --terraform to scan the "
             "recreated infrastructure"
         )
@@ -312,11 +312,11 @@ def _submit_trivy_and_iam(
                 iac_dirs,
             )
         else:
-            ui.warn("Trivy: nothing to scan — configure --images, --iac-dir, or enable --terraform")
+            ui.warn("Trivy: nothing to scan; configure --images, --iac-dir, or enable --terraform")
     else:
         ui.skip("Trivy: not enabled")
 
-    # IAM Linter — always runs internally to analyze collected assets
+    # IAM Linter: always runs internally to analyze collected assets
     if "iam" in scanner_list or assets:
         submit("IAM Linter", "IAM Lint", _scan_iam, assets)
 
@@ -339,7 +339,7 @@ def _collect_scanner_results(
                 iam_findings.extend(findings)
             else:
                 scanner_findings.extend(findings)
-            ui.task_done(progress, task_id, f"{scanner_name} — {len(findings)} findings")
+            ui.task_done(progress, task_id, f"{scanner_name}: {len(findings)} findings")
         except concurrent.futures.TimeoutError:
             ui.task_failed(
                 progress,

@@ -1,4 +1,4 @@
-"""Inventory mapper — scanner-independent infrastructure mapping.
+"""Inventory mapper: scanner-independent infrastructure mapping.
 
 Orchestrates deep collection across providers, accounts and regions, links
 every asset into an interconnected map, and produces exportable artifacts.
@@ -24,7 +24,7 @@ A mapping run:
 
 Scanner findings produced elsewhere (a `cloudg run`, `cloudg ingest`, or
 any `CloudGEngine.scan()`) can be merged in afterwards to overlay the
-inventory with risk — producing an asset map (asset → findings) and a
+inventory with risk, producing an asset map (asset → findings) and a
 compliance map (framework → affected assets).
 
 Usage (programmatic):

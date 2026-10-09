@@ -88,7 +88,7 @@ class AnalysisResult:
 
 @dataclass
 class PipelineResult:
-    """Complete pipeline output — single object for downstream consumption.
+    """Complete pipeline output: a single object for downstream consumption.
 
     This is the primary return type for `CloudGEngine.run_pipeline()`.
     Designed for easy serialisation and integration with larger systems.
@@ -182,7 +182,7 @@ class CloudGEngine(ScannerRunsMixin):
     def __init__(self, config: CloudGConfig) -> None:
         self.config = config
 
-        # Event hooks — set these before calling run_pipeline()
+        # Event hooks: set these before calling run_pipeline()
         self.on_collection_complete: OnCollectionComplete | None = None
         self.on_scan_complete: OnScanComplete | None = None
         self.on_finding: OnFinding | None = None
@@ -255,7 +255,7 @@ class CloudGEngine(ScannerRunsMixin):
         findings: list[Finding] | None = None,
         tagging_sweep: bool | None = None,
     ) -> "Any":
-        """Map the complete infrastructure inventory — no scanners involved.
+        """Map the complete infrastructure inventory; no scanners are involved.
 
         Runs the deep inventory collectors (full network fabric plus
         catch-all sweeps: AWS Resource Groups Tagging API, Azure ARM
