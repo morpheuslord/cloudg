@@ -390,7 +390,7 @@ Do not cache `reports/`. Publish it as an artifact instead. A run's useful files
 | `inventory-map.json` | the map from `cloudg map`, loadable with `InventoryResult.load` |
 | `ontology.ttl`, `rag_chunks.jsonl` | feed downstream analysis or a retrieval index |
 
-The reports describe your estate in detail: account IDs, ARNs, open ports, IAM grants. Keep artifact retention short and the repository private, and use the Docker image or a private runner when the reports must not leave your network. See [Docker](/guides/docker/) for the image, which bundles all four scanners.
+The reports describe your estate in detail: account IDs, ARNs, open ports, IAM grants. Keep artifact retention short and the repository private, and use the Docker image or a private runner when the reports must not leave your network. See [Docker](/guides/docker/) for the image, which bundles Prowler, Checkov and Trivy.
 
 :::links
 - [Authentication](/guides/authentication/) Every credential method and its precedence.
