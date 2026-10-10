@@ -172,44 +172,49 @@ def _load_report_input(path: Path, rules_dir: str | None = None) -> tuple[Any, d
     """
     import json
 
-    from cloudg.schema.models import CloudAsset, ComplianceResult, Finding, ScanResult
-
     with open(path) as f:
         data = json.load(f)
 
     if isinstance(data, list):
-        from cloudg.normaliser import FindingsNormaliser
-
-        findings = [Finding.model_validate(item) for item in data]
-        return FindingsNormaliser(rules_dir=rules_dir).normalise(findings), {
-            "nodes": [],
-            "links": [],
-        }
+        return _normalise_raw_findings(data, rules_dir), {"nodes": [], "links": []}
     if not isinstance(data, dict):
         raise ValueError(
             f"{path}: expected a findings.json object or a raw-findings.json list, "
             f"got {type(data).__name__}"
         )
-
     graph = data.get("graph") or {"nodes": [], "links": []}
+    return _scan_result_from_findings_json(data, graph), graph
+
+
+def _normalise_raw_findings(data: list[Any], rules_dir: str | None) -> Any:
+    """ScanResult for a raw-findings.json list, normalised like `cloudg ingest`."""
+    from cloudg.normaliser import FindingsNormaliser
+    from cloudg.schema.models import Finding
+
+    findings = [Finding.model_validate(item) for item in data]
+    return FindingsNormaliser(rules_dir=rules_dir).normalise(findings)
+
+
+def _scan_result_from_findings_json(data: dict[str, Any], graph: dict[str, Any]) -> Any:
+    """ScanResult restored from a findings.json object, metadata included."""
+    from cloudg.schema.models import CloudAsset, ComplianceResult, Finding, ScanResult
+
     metadata = data.get("metadata") or {}
     restored = {
         key: metadata[key]
         for key in _METADATA_FIELDS
         if metadata.get(key) not in (None, "", "None")
     }
-    if "edges" in data:
-        edges = _validate_edges(data.get("edges") or [])
-    else:
-        edges = _edges_from_graph(graph)
-    scan_result = ScanResult(
+    edges = (
+        _validate_edges(data.get("edges") or []) if "edges" in data else _edges_from_graph(graph)
+    )
+    return ScanResult(
         assets=[CloudAsset.model_validate(a) for a in data.get("assets", [])],
         findings=[Finding.model_validate(f) for f in data.get("findings", [])],
         compliance=[ComplianceResult.model_validate(c) for c in data.get("compliance", [])],
         edges=edges,
         **restored,
     )
-    return scan_result, graph
 
 
 def _validate_edges(raw: list[Any]) -> list[Any]:

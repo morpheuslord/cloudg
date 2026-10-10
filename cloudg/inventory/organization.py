@@ -166,34 +166,51 @@ class OrganizationTopology:
             OrganizationScopeError: an ``include_ous`` entry matches no OU;
                 the message lists the OUs the organization has.
         """
-        allowed_ous: set[str] | None = None
-        if include_ous:
-            allowed_ous = set()
-            unmatched: list[str] = []
-            for ref in include_ous:
-                ou_id = self._resolve_ou(ref)
-                if ou_id is None:
-                    unmatched.append(ref)
-                    continue
-                allowed_ous |= self._descendant_ous(ou_id)
-            if unmatched:
-                raise OrganizationScopeError(
-                    f"OU filter {', '.join(repr(r) for r in unmatched)} matched no OU in the "
-                    f"organization. Known OUs: {self._known_ous()}"
-                )
+        allowed_ous = self._allowed_ous(include_ous) if include_ous else None
         excluded = set(exclude_accounts or [])
-        selected = []
-        for acct in self.accounts.values():
-            if acct.id in excluded:
-                continue
-            if acct.status != "ACTIVE" and not include_suspended:
-                continue
-            if acct.id == self.management_account_id and not include_management_account:
-                continue
-            if allowed_ous is not None and acct.parent_id not in allowed_ous:
-                continue
-            selected.append(acct.id)
-        return sorted(selected)
+        return sorted(
+            acct.id
+            for acct in self.accounts.values()
+            if acct.id not in excluded
+            and self._passes_filters(
+                acct, allowed_ous, include_management_account, include_suspended
+            )
+        )
+
+    def _passes_filters(
+        self,
+        acct: Any,
+        allowed_ous: set[str] | None,
+        include_management_account: bool,
+        include_suspended: bool,
+    ) -> bool:
+        """Status, management-account and OU filters of target_accounts()."""
+        if acct.status != "ACTIVE" and not include_suspended:
+            return False
+        if acct.id == self.management_account_id and not include_management_account:
+            return False
+        return allowed_ous is None or acct.parent_id in allowed_ous
+
+    def _allowed_ous(self, include_ous: list[str]) -> set[str]:
+        """OU IDs under the ``include_ous`` references (nested OUs included).
+
+        Raises:
+            OrganizationScopeError: a reference matches no OU.
+        """
+        allowed: set[str] = set()
+        unmatched: list[str] = []
+        for ref in include_ous:
+            ou_id = self._resolve_ou(ref)
+            if ou_id is None:
+                unmatched.append(ref)
+            else:
+                allowed |= self._descendant_ous(ou_id)
+        if unmatched:
+            raise OrganizationScopeError(
+                f"OU filter {', '.join(repr(r) for r in unmatched)} matched no OU in the "
+                f"organization. Known OUs: {self._known_ous()}"
+            )
+        return allowed
 
     # ------------------------------------------------------------------
     # Map nodes and edges

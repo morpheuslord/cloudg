@@ -204,21 +204,41 @@ def failed_collection_targets(coverage: list[CollectionCoverage]) -> list[str]:
     """
     lines: list[str] = []
     for cov in coverage:
-        where = "/".join(x for x in (cov.account_id, cov.region) if x) or "all"
-        targets = [svc for svc in cov.services if svc.service in _TARGET_RECORDS]
-        services = [svc for svc in cov.services if svc.service not in _TARGET_RECORDS]
-        failed_targets = [svc for svc in targets if svc.status.value == "FAILED"]
-        for svc in failed_targets:
-            lines.append(f"{cov.provider} {where}: {svc.error or 'failed'}")
-        if (
-            not failed_targets
-            and targets
-            and services
-            and all(svc.status.value == "FAILED" for svc in services)
-        ):
-            error = next((svc.error for svc in services if svc.error), None)
-            lines.append(f"{cov.provider} {where}: every service failed ({error or 'no detail'})")
+        lines.extend(_failed_target_lines(cov))
     return lines
+
+
+def _failed_target_lines(cov: CollectionCoverage) -> list[str]:
+    """Failure lines for one coverage record (see failed_collection_targets)."""
+    where = _coverage_location(cov)
+    targets, services = _split_target_records(cov)
+    failed = [svc for svc in targets if svc.status.value == "FAILED"]
+    if failed:
+        return [f"{cov.provider} {where}: {svc.error or 'failed'}" for svc in failed]
+    if not targets or not _all_failed(services):
+        return []
+    error = next((svc.error for svc in services if svc.error), "no detail")
+    return [f"{cov.provider} {where}: every service failed ({error})"]
+
+
+def _coverage_location(cov: CollectionCoverage) -> str:
+    """``account/region`` of a coverage record, or ``all``."""
+    parts = [x for x in (cov.account_id, cov.region) if x]
+    return "/".join(parts) or "all"
+
+
+def _split_target_records(cov: CollectionCoverage) -> tuple[list[Any], list[Any]]:
+    """(per-target records such as aws_full, per-service records)."""
+    targets: list[Any] = []
+    services: list[Any] = []
+    for svc in cov.services:
+        (targets if svc.service in _TARGET_RECORDS else services).append(svc)
+    return targets, services
+
+
+def _all_failed(services: list[Any]) -> bool:
+    """True for a non-empty list of service records that all FAILED."""
+    return bool(services) and all(svc.status.value == "FAILED" for svc in services)
 
 
 def _run_sync(coro: Any, name: str) -> Any:

@@ -92,35 +92,47 @@ def parse_ocsf_record(
         return None
 
     info = _dict(item.get("finding_info"))
-    severity = severity_map.get(str(item.get("severity") or "").lower(), Severity.MEDIUM)
-
-    resources = item.get("resources") or []
-    first = _dict(resources[0]) if isinstance(resources, list) and resources else {}
-    resource = str(first.get("uid") or first.get("name") or "")
-    arn = str(first.get("uid") or "")
-
-    frameworks: list[str] = []
-    for key in _dict(_dict(item.get("unmapped")).get("compliance")):
-        for prefix, framework in compliance_map.items():
-            if prefix in str(key).lower():
-                if framework not in frameworks:
-                    frameworks.append(framework)
-                break
-
+    resource, arn = _ocsf_resource(item)
     check = ocsf_check_id(item)
-    evidence = item.get("status_detail") or item.get("message") or ""
     return Finding(
         resource_id=resource,
         resource_arn=arn,
-        severity=severity,
+        severity=severity_map.get(str(item.get("severity") or "").lower(), Severity.MEDIUM),
         title=str(info.get("title") or check or "Prowler finding"),
         description=str(info.get("desc") or item.get("risk_details") or ""),
-        evidence=(evidence if isinstance(evidence, str) else json.dumps(evidence, default=str))[
-            :1000
-        ],
+        evidence=_ocsf_evidence(item),
         remediation=str(_dict(item.get("remediation")).get("desc") or ""),
         source_tool="prowler",
         source_finding_id=_source_finding_id(item, check, resource),
-        compliance_frameworks=frameworks,
+        compliance_frameworks=_ocsf_frameworks(item, compliance_map),
         is_suppressed=str(item.get("status") or "").lower() == "suppressed",
     )
+
+
+def _ocsf_resource(item: dict[str, Any]) -> tuple[str, str]:
+    """(resource id, ARN) of the first resource in an OCSF record."""
+    resources = item.get("resources") or []
+    first = _dict(resources[0]) if isinstance(resources, list) and resources else {}
+    return str(first.get("uid") or first.get("name") or ""), str(first.get("uid") or "")
+
+
+def _ocsf_evidence(item: dict[str, Any]) -> str:
+    """Status detail (or message) of an OCSF record, as text of at most 1000 characters."""
+    evidence = item.get("status_detail") or item.get("message") or ""
+    text = evidence if isinstance(evidence, str) else json.dumps(evidence, default=str)
+    return text[:1000]
+
+
+def _ocsf_frameworks(item: dict[str, Any], compliance_map: dict[str, str]) -> list[str]:
+    """Framework names for the ``unmapped.compliance`` keys of an OCSF record."""
+    frameworks: list[str] = []
+    for key in _dict(_dict(item.get("unmapped")).get("compliance")):
+        framework = _framework_for_key(str(key).lower(), compliance_map)
+        if framework and framework not in frameworks:
+            frameworks.append(framework)
+    return frameworks
+
+
+def _framework_for_key(key: str, compliance_map: dict[str, str]) -> str | None:
+    """The first framework whose marker appears in a lower-case compliance key."""
+    return next((fw for marker, fw in compliance_map.items() if marker in key), None)

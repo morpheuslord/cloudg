@@ -240,16 +240,9 @@ def select_scanners(names: list[str], registry: PluginRegistry | None = None) ->
     registry = registry or PluginRegistry()
     plugin_names = {n.lower(): n for n in registry.list_scanners() if registry.is_plugin_scanner(n)}
     selection = ScannerSelection()
-    for raw in names:
-        name = raw.strip().lower()
-        if not name or name in selection.builtin or name in selection.plugins:
-            continue
-        if name in _BUILTIN_SCANNERS:
-            selection.builtin.append(name)
-        elif name in plugin_names:
-            selection.plugins[name] = registry.get_scanner(plugin_names[name])
-        elif name not in selection.unknown:
-            selection.unknown.append(name)
+    for name in dict.fromkeys(raw.strip().lower() for raw in names):
+        if name:
+            _select_one(selection, name, plugin_names, registry)
     if selection.unknown:
         logger.warning(
             "Unknown scanner(s) ignored: %s. Available: %s",
@@ -257,6 +250,18 @@ def select_scanners(names: list[str], registry: PluginRegistry | None = None) ->
             ", ".join(available_scanners(registry)),
         )
     return selection
+
+
+def _select_one(
+    selection: ScannerSelection, name: str, plugin_names: dict[str, str], registry: PluginRegistry
+) -> None:
+    """Add one (lower-case, de-duplicated) scanner name to ``selection``."""
+    if name in _BUILTIN_SCANNERS:
+        selection.builtin.append(name)
+    elif name in plugin_names:
+        selection.plugins[name] = registry.get_scanner(plugin_names[name])
+    else:
+        selection.unknown.append(name)
 
 
 def available_scanners(registry: PluginRegistry | None = None) -> list[str]:
@@ -278,30 +283,37 @@ def run_plugin_scanner(scanner_cls: Type[Any], **context: Any) -> list[Any]:
     Raises:
         TypeError: ``run()`` returned something that is not a finding.
     """
+    scanner = scanner_cls(**_declared_kwargs(scanner_cls, context))
+    return [_as_finding(scanner_cls, item) for item in scanner.run() or []]
+
+
+def _declared_kwargs(scanner_cls: Type[Any], context: dict[str, Any]) -> dict[str, Any]:
+    """The part of ``context`` the plugin constructor declares (all of it for **kwargs)."""
     import inspect
 
+    try:
+        params = list(inspect.signature(scanner_cls).parameters.values())
+    except (TypeError, ValueError):
+        return {}
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return dict(context)
+    accepted = {p.name for p in params}
+    return {k: v for k, v in context.items() if k in accepted}
+
+
+def _as_finding(scanner_cls: Type[Any], item: Any) -> Any:
+    """A plugin result item as a Finding (dicts are validated).
+
+    Raises:
+        TypeError: the item is neither a Finding nor a dict.
+    """
     from cloudg.schema.models import Finding
 
-    try:
-        params = inspect.signature(scanner_cls).parameters.values()
-    except (TypeError, ValueError):
-        params = []
-    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
-        kwargs = dict(context)
-    else:
-        accepted = {p.name for p in params}
-        kwargs = {k: v for k, v in context.items() if k in accepted}
-    scanner = scanner_cls(**kwargs)
-
-    findings: list[Any] = []
-    for item in scanner.run() or []:
-        if isinstance(item, Finding):
-            findings.append(item)
-        elif isinstance(item, dict):
-            findings.append(Finding.model_validate(item))
-        else:
-            raise TypeError(
-                f"{scanner_cls.__name__}.run() returned a {type(item).__name__}, "
-                "expected Finding objects or dicts"
-            )
-    return findings
+    if isinstance(item, Finding):
+        return item
+    if isinstance(item, dict):
+        return Finding.model_validate(item)
+    raise TypeError(
+        f"{scanner_cls.__name__}.run() returned a {type(item).__name__}, "
+        "expected Finding objects or dicts"
+    )

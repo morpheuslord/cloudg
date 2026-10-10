@@ -322,35 +322,15 @@ def scan(
     ui.section("Security Scan")
 
     from cloudg.api_scanners import plan_scanner_jobs, resolve_iac_dirs
-    from cloudg.config import CloudGConfig
 
-    cfg: CloudGConfig = (ctx.obj or CloudGConfig()).model_copy(deep=True)
-    provider = provider.lower()
-    cfg.providers = [provider]
-    if profile:
-        cfg.aws.profile = profile
-
+    cfg = _scan_config(ctx, provider, profile)
+    provider = cfg.providers[0]
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
     scanner_list = _resolve_run_scanners(cfg, scanners)
     resolved_iac_dirs, _ = resolve_iac_dirs(iac_dir, cfg.scanners.iac_directories)
-    resolved_images = _resolve_run_images(images, cfg)
-    try:
-        assets = _load_scan_assets(assets_path)
-    except (OSError, ValueError) as exc:
-        ui.error_panel("Could not load --assets", exc)
-        sys.exit(1)
-
-    ui.config_panel(
-        "Scan Configuration",
-        {
-            "Provider": provider,
-            "Scanners": ", ".join(scanner_list) or "none",
-            "IaC directories": ", ".join(resolved_iac_dirs) or "none",
-            "Assets": str(len(assets)) if assets_path else "none (IAM linter needs --assets)",
-            "Timeout": f"{cfg.scanners.timeout_seconds}s per scanner",
-        },
-    )
+    assets = _load_scan_assets_or_exit(assets_path)
+    _show_scan_config(cfg, scanner_list, resolved_iac_dirs, assets, assets_path)
 
     plan = plan_scanner_jobs(
         cfg,
@@ -360,7 +340,7 @@ def scan(
         out=output_dir,
         assets=assets,
         iac_dirs=resolved_iac_dirs,
-        images=resolved_images,
+        images=_resolve_run_images(images, cfg),
     )
     _show_scan_plan(plan)
     if not plan.jobs:
@@ -372,24 +352,61 @@ def scan(
         sys.exit(1)
 
     outcome = _run_scan_plan(plan)
-    all_findings = outcome.findings
-
-    # Save raw findings
-    findings_path = output_dir / "raw-findings.json"
-    with open(findings_path, "w") as f:
-        json.dump(
-            [f.model_dump(mode="json") for f in all_findings],
-            f,
-            indent=2,
-            default=str,
-        )
-
+    findings_path = _write_raw_findings(outcome.findings, output_dir)
     console.print()
-    ui.success(f"Total: [metric]{len(all_findings)}[/] findings")
+    ui.success(f"Total: [metric]{len(outcome.findings)}[/] findings")
     ui.artifact("Raw findings", findings_path)
     if not outcome.completed:
         ui.error_panel("Every scanner failed", "No requested scanner finished; see above.")
         sys.exit(1)
+
+
+def _scan_config(ctx: click.Context, provider: str, profile: str | None) -> Any:
+    """A copy of the -c config narrowed to the one provider `cloudg scan` targets."""
+    from cloudg.config import CloudGConfig
+
+    cfg: CloudGConfig = (ctx.obj or CloudGConfig()).model_copy(deep=True)
+    cfg.providers = [provider.lower()]
+    if profile:
+        cfg.aws.profile = profile
+    return cfg
+
+
+def _load_scan_assets_or_exit(assets_path: str | None) -> list[Any]:
+    """Assets for the IAM linter from --assets, or exit 1 when they can't be read."""
+    try:
+        return _load_scan_assets(assets_path)
+    except (OSError, ValueError) as exc:
+        ui.error_panel("Could not load --assets", exc)
+        sys.exit(1)
+
+
+def _show_scan_config(
+    cfg: Any,
+    scanner_list: list[str],
+    iac_dirs: list[str],
+    assets: list[Any],
+    assets_path: str | None,
+) -> None:
+    """Print the `cloudg scan` configuration panel."""
+    ui.config_panel(
+        "Scan Configuration",
+        {
+            "Provider": cfg.providers[0],
+            "Scanners": ", ".join(scanner_list) or "none",
+            "IaC directories": ", ".join(iac_dirs) or "none",
+            "Assets": str(len(assets)) if assets_path else "none (IAM linter needs --assets)",
+            "Timeout": f"{cfg.scanners.timeout_seconds}s per scanner",
+        },
+    )
+
+
+def _write_raw_findings(findings: list[Any], output_dir: Path) -> Path:
+    """Write raw-findings.json (a plain list of findings) and return its path."""
+    findings_path = output_dir / "raw-findings.json"
+    with open(findings_path, "w") as f:
+        json.dump([x.model_dump(mode="json") for x in findings], f, indent=2, default=str)
+    return findings_path
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -443,12 +460,10 @@ def report(input_file: str, output: str, fmt: str, overwrite: bool) -> None:
         sys.exit(1)
 
     output_dir = Path(output)
-    json_target = output_dir / "findings.json"
     if (
         fmt in ("json", "all")
         and not overwrite
-        and json_target.exists()
-        and json_target.resolve() == input_path.resolve()
+        and _same_file(output_dir / "findings.json", input_path)
     ):
         ui.error_panel(
             "Refusing to overwrite the input",
@@ -466,29 +481,41 @@ def report(input_file: str, output: str, fmt: str, overwrite: bool) -> None:
         sys.exit(1)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("json", "svg", "html"):
+        if fmt in (name, "all"):
+            ui.artifact(name.upper(), _REPORT_WRITERS[name](scan_result, graph_data, output_dir))
 
-    if fmt in ("json", "all"):
-        from cloudg.renderers.json_export import JSONExporter
 
-        exporter = JSONExporter(output_dir=str(output_dir))
-        path = exporter.export(scan_result, graph_json=graph_data)
-        ui.artifact("JSON", path)
+def _same_file(target: Path, source: Path) -> bool:
+    """True when ``target`` exists and is the same file as ``source``."""
+    return target.exists() and target.resolve() == source.resolve()
 
-    if fmt in ("svg", "all"):
-        from cloudg.renderers.svg import SVGRenderer
 
-        renderer = SVGRenderer(output_dir=str(output_dir))
-        path = renderer.render(scan_result.assets, scan_result.edges)
-        ui.artifact("SVG", path)
+def _write_report_json(scan_result: Any, graph_data: Any, output_dir: Path) -> Path:
+    from cloudg.renderers.json_export import JSONExporter
 
-    if fmt in ("html", "all"):
-        from cloudg.renderers.html_report import HTMLReportGenerator
+    return JSONExporter(output_dir=str(output_dir)).export(scan_result, graph_json=graph_data)
 
-        generator = HTMLReportGenerator(
-            output_dir=str(output_dir), inline_js=_config.report.inline_js if _config else True
-        )
-        path = generator.generate(scan_result, graph_json=graph_data)
-        ui.artifact("HTML", path)
+
+def _write_report_svg(scan_result: Any, graph_data: Any, output_dir: Path) -> Path:
+    from cloudg.renderers.svg import SVGRenderer
+
+    return SVGRenderer(output_dir=str(output_dir)).render(scan_result.assets, scan_result.edges)
+
+
+def _write_report_html(scan_result: Any, graph_data: Any, output_dir: Path) -> Path:
+    from cloudg.renderers.html_report import HTMLReportGenerator
+
+    inline_js = _config.report.inline_js if _config else True
+    generator = HTMLReportGenerator(output_dir=str(output_dir), inline_js=inline_js)
+    return generator.generate(scan_result, graph_json=graph_data)
+
+
+_REPORT_WRITERS = {
+    "json": _write_report_json,
+    "svg": _write_report_svg,
+    "html": _write_report_html,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────

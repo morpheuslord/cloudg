@@ -348,31 +348,12 @@ def plan_scanner_jobs(
 
     selection = select_scanners(names)
     plan = ScanPlan(requested=selection.names + selection.unknown, unknown=selection.unknown)
-
+    inputs = _ScanInputs(config, providers, profile, out, assets, iac_dirs, images)
     for name in selection.builtin:
-        if not scanner_available(name):
+        if scanner_available(name):
+            _BUILTIN_PLANNERS[name](plan, inputs, name)
+        else:
             plan.notes.append(("skip", f"{_LABELS[name]}: not installed ({_INSTALL_HINTS[name]})"))
-            continue
-        if name in ("prowler", "scoutsuite"):
-            _plan_cloud_scanner(plan, config, name, providers, profile, out)
-        elif name == "checkov":
-            _plan_checkov(plan, config, iac_dirs)
-        elif name == "trivy":
-            _plan_trivy(plan, config, iac_dirs, images)
-        elif name == "iam":
-            if assets:
-                plan.jobs.append(
-                    ScanJob("iam", "IAM linter", "iam", functools.partial(scan_iam, assets))
-                )
-            else:
-                plan.notes.append(
-                    (
-                        "warning",
-                        "IAM linter: skipped, no collected assets to lint (it reads the IAM "
-                        "policies of collected assets)",
-                    )
-                )
-
     for name, scanner_cls in selection.plugins.items():
         fn = functools.partial(
             scan_plugin,
@@ -388,6 +369,48 @@ def plan_scanner_jobs(
         )
         plan.jobs.append(ScanJob(name, f"{name} (plugin)", name, fn))
     return plan
+
+
+@dataclass
+class _ScanInputs:
+    """What plan_scanner_jobs() hands to the per-scanner planners."""
+
+    config: Any
+    providers: list[str]
+    profile: str | None
+    out: Path
+    assets: list[CloudAsset]
+    iac_dirs: list[str]
+    images: list[str]
+
+
+def _plan_iam(plan: ScanPlan, inputs: _ScanInputs, name: str) -> None:
+    """The IAM linter job, or a note when there are no assets to lint."""
+    if inputs.assets:
+        plan.jobs.append(
+            ScanJob("iam", "IAM linter", "iam", functools.partial(scan_iam, inputs.assets))
+        )
+        return
+    plan.notes.append(
+        (
+            "warning",
+            "IAM linter: skipped, no collected assets to lint (it reads the IAM "
+            "policies of collected assets)",
+        )
+    )
+
+
+_BUILTIN_PLANNERS: dict[str, Callable[[ScanPlan, _ScanInputs, str], None]] = {
+    "prowler": lambda plan, i, name: _plan_cloud_scanner(
+        plan, i.config, name, i.providers, i.profile, i.out
+    ),
+    "scoutsuite": lambda plan, i, name: _plan_cloud_scanner(
+        plan, i.config, name, i.providers, i.profile, i.out
+    ),
+    "checkov": lambda plan, i, name: _plan_checkov(plan, i.config, i.iac_dirs),
+    "trivy": lambda plan, i, name: _plan_trivy(plan, i.config, i.iac_dirs, i.images),
+    "iam": _plan_iam,
+}
 
 
 def _plan_cloud_scanner(

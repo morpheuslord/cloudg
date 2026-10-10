@@ -572,57 +572,56 @@ class FindingsNormaliser:
         control that a passed check maps to, and that no finding fails, is
         PASS. Controls with neither were not assessed and get no result.
         """
-        # Group findings by (framework, control_id). Exact check-ID matches
-        # (from ruleset `checks` lists) give the real control ID and title;
-        # everything else falls back to parsing source_finding_id.
+        control_findings, control_titles = self._failing_controls(findings)
+        results = [
+            ComplianceResult(
+                framework=framework,
+                control_id=control_id,
+                control_title=control_titles.get(
+                    (framework, control_id), f"{framework} {control_id}"
+                ),
+                status=ComplianceStatus.FAIL,
+                finding_ids=finding_ids,
+            )
+            for (framework, control_id), finding_ids in control_findings.items()
+        ]
+        for fw, control_id, title in self._match_source_ids(passed_checks or ()):
+            if (fw, control_id) in control_findings:
+                continue
+            control_findings[(fw, control_id)] = []  # one PASS result per control
+            results.append(
+                ComplianceResult(
+                    framework=fw,
+                    control_id=control_id,
+                    control_title=title or f"{fw} {control_id}",
+                    status=ComplianceStatus.PASS,
+                )
+            )
+        return results
+
+    def _failing_controls(
+        self, findings: list[Finding]
+    ) -> tuple[dict[tuple[str, str], list[str]], dict[tuple[str, str], str]]:
+        """Finding IDs and titles per (framework, control_id) the findings fail.
+
+        Exact check-ID matches (from ruleset `checks` lists) give the real
+        control ID and title; everything else falls back to parsing the
+        finding's source IDs.
+        """
         control_findings: dict[tuple[str, str], list[str]] = defaultdict(list)
         control_titles: dict[tuple[str, str], str] = {}
-
         for finding in findings:
-            exact = self._exact_matches.get(finding.id, [])
             exact_frameworks = set()
-            for fw, control_id, title in exact:
+            for fw, control_id, title in self._exact_matches.get(finding.id, []):
                 control_findings[(fw, control_id)].append(finding.id)
                 if title:
                     control_titles[(fw, control_id)] = title
                 exact_frameworks.add(fw)
-
             for fw in finding.compliance_frameworks:
-                if fw in exact_frameworks:
-                    continue
-                # Use scanner-native control ID if available in a source ID
-                control_id = self._control_id_from_sources(self._sources(finding), fw)
-                control_findings[(fw, control_id)].append(finding.id)
-
-        passing: dict[tuple[str, str], str] = {}
-        for fw, control_id, title in self._match_source_ids(passed_checks or ()):
-            if (fw, control_id) not in control_findings:
-                passing[(fw, control_id)] = title
-
-        results: list[ComplianceResult] = []
-        for (framework, control_id), finding_ids in control_findings.items():
-            results.append(
-                ComplianceResult(
-                    framework=framework,
-                    control_id=control_id,
-                    control_title=control_titles.get(
-                        (framework, control_id), f"{framework} {control_id}"
-                    ),
-                    status=ComplianceStatus.FAIL,
-                    finding_ids=finding_ids,
-                )
-            )
-        for (framework, control_id), title in passing.items():
-            results.append(
-                ComplianceResult(
-                    framework=framework,
-                    control_id=control_id,
-                    control_title=title or f"{framework} {control_id}",
-                    status=ComplianceStatus.PASS,
-                )
-            )
-
-        return results
+                if fw not in exact_frameworks:
+                    control_id = self._control_id_from_sources(self._sources(finding), fw)
+                    control_findings[(fw, control_id)].append(finding.id)
+        return control_findings, control_titles
 
     @classmethod
     def _control_id_from_sources(cls, sources: list[tuple[str, str]], framework: str) -> str:
