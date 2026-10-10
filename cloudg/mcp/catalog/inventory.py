@@ -331,14 +331,16 @@ def coverage_report(ctx: Any, dataset: DatasetArg = "") -> dict:
     """Which collectors / services succeeded or failed per provider,
     account and region during collection, with error messages for
     failures. Explains gaps (e.g. AccessDenied) before trusting the map.
-    Only live collections carry coverage records."""
+    Live collections carry coverage records, and so do inventory maps
+    saved with them."""
     ds = ws_dataset(ctx, dataset)
     if not ds.coverage:
         return {
             "dataset": ds.name,
             "records": [],
-            "note": "This dataset has no coverage records (they exist only for live "
-            "collections via map_inventory / collect_assets).",
+            "note": "This dataset has no coverage records (they come from live "
+            "collections via map_inventory / collect_assets, and from inventory maps "
+            "saved with them).",
         }
     records = [c.to_summary() for c in ds.coverage]
     total = sum(r["total_services"] for r in records)

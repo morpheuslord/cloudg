@@ -336,9 +336,10 @@ class CloudGEngine(ScannerRunsMixin):
         Args:
             output_dir: When set, exports inventory-map.json / .graphml /
                 inventory-graph.json there.
-            findings: Optional scanner findings produced elsewhere; when
-                given (with output_dir), asset-map.json and
-                compliance-map.json are exported as well.
+            findings: Optional scanner findings produced elsewhere. When
+                given, the overlay is stored on the returned result as
+                ``asset_map`` and ``compliance_map``; with output_dir set,
+                asset-map.json and compliance-map.json are exported too.
             tagging_sweep: Override config.inventory.tagging_sweep
                 (False skips the AWS tagging-API sweep).
 
@@ -356,6 +357,9 @@ class CloudGEngine(ScannerRunsMixin):
             self._emit_error("inventory_mapping", exc)
             raise
 
+        if findings:
+            result.asset_map = mapper.build_asset_map(result, findings)
+            result.compliance_map = mapper.build_compliance_map(result, findings)
         if output_dir is not None:
             result.export(output_dir)
             if findings:
