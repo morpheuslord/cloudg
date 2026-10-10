@@ -78,13 +78,6 @@
   </div>
 </div>
 <div class="sr-only" aria-live="polite" data-live></div>
-<script src="{{ site.asset('static/js/docs.js') }}" defer></script>
-{% if page.kind == 'home' or '<pre class="mermaid">' in page.body %}
-<script type="module">
-import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-window.__cloudgMermaid = mermaid;
-window.dispatchEvent(new Event('cloudg:mermaid'));
-</script>
-{% endif %}
+<script type="module" src="{{ site.asset('static/js/docs.js') }}"></script>
 </body>
 </html>
