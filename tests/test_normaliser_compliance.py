@@ -168,3 +168,40 @@ def test_finding_list_carries_passed_checks(rules_dir):
     assert [(c.control_id, c.status) for c in result.compliance] == [
         ("TF.3", ComplianceStatus.PASS)
     ]
+
+
+def _prowler_job(findings):
+    from cloudg.api_scanners import ScanJob
+
+    return ScanJob(
+        name="prowler-aws", label="Prowler (aws)", scanner="prowler", fn=lambda: findings
+    )
+
+
+def test_engine_scan_plan_keeps_passed_checks(rules_dir):
+    """Live scans hand Prowler's passing checks on to the normaliser."""
+    from cloudg.api import CloudGEngine
+    from cloudg.api_scanners import ScanPlan
+    from cloudg.config import CloudGConfig
+
+    f = _finding("prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-a")
+    plan = ScanPlan(jobs=[_prowler_job(FindingList([f], passed_checks={"s3_bucket_versioning"}))])
+    found = CloudGEngine(CloudGConfig())._run_scan_plan(plan)
+    assert found == [f]
+    assert found.passed_checks == {"s3_bucket_versioning"}
+
+    result = FindingsNormaliser(rules_dir=rules_dir).normalise([], found, [])
+    statuses = {c.control_id: c.status for c in result.compliance}
+    assert statuses == {"TF.1": ComplianceStatus.FAIL, "TF.2": ComplianceStatus.PASS}
+
+
+def test_cli_scan_outcome_keeps_passed_checks():
+    from cloudg.cli_helpers import ScanOutcome
+
+    f = _finding("prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-a")
+    job = _prowler_job(None)
+    outcome = ScanOutcome(results=[(job, FindingList([f], passed_checks={"s3_bucket_versioning"}))])
+    selected = outcome.findings_of("iam", exclude=True)
+    assert selected == [f]
+    assert selected.passed_checks == {"s3_bucket_versioning"}
+    assert outcome.findings_of("iam").passed_checks == set()

@@ -70,13 +70,19 @@ class ScanOutcome:
         return [f for _, findings in self.results for f in findings]
 
     def findings_of(self, scanner: str, *, exclude: bool = False) -> list[Any]:
-        """Findings of jobs for ``scanner`` (or of every other job with exclude)."""
-        return [
-            f
-            for job, findings in self.results
-            if (job.scanner == scanner) != exclude
-            for f in findings
-        ]
+        """Findings of jobs for ``scanner`` (or of every other job with exclude).
+
+        Returns a FindingList carrying the jobs' passing checks (Prowler), so
+        the normaliser can mark the controls they cover as PASS.
+        """
+        from cloudg.normaliser import FindingList
+
+        selected = FindingList()
+        for job, findings in self.results:
+            if (job.scanner == scanner) != exclude:
+                selected.extend(findings)
+                selected.passed_checks.update(getattr(findings, "passed_checks", None) or ())
+        return selected
 
 
 def _run_scan_plan(plan: Any) -> ScanOutcome:

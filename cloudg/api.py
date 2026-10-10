@@ -418,7 +418,10 @@ class CloudGEngine(ScannerRunsMixin):
             scanner's findings as that scanner finishes.
         """
         self._emit_phase_start("scanning")
-        all_findings: list[Finding] = []
+        from cloudg.normaliser import FindingList
+
+        # A FindingList, so Prowler's passing checks reach the normaliser
+        all_findings = FindingList()
         out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
@@ -445,7 +448,9 @@ class CloudGEngine(ScannerRunsMixin):
             images=resolved_images,
         )
         # Run all scanners concurrently
-        all_findings.extend(self._run_scan_plan(plan))
+        scanner_findings = self._run_scan_plan(plan)
+        all_findings.extend(scanner_findings)
+        all_findings.passed_checks.update(getattr(scanner_findings, "passed_checks", None) or ())
 
         self._emit_scan_complete(all_findings)
 

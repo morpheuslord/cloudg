@@ -564,7 +564,10 @@ class ScannerRunsMixin:
         if not plan.jobs:
             return []
 
-        scanner_findings: list[Finding] = []
+        from cloudg.normaliser import FindingList
+
+        # A FindingList, so Prowler's passing checks reach the normaliser
+        scanner_findings = FindingList()
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(plan.jobs), 2)) as executor:
             future_to_job = {executor.submit(job.fn): job for job in plan.jobs}
             for future in concurrent.futures.as_completed(future_to_job):
@@ -580,6 +583,9 @@ class ScannerRunsMixin:
                     self._emit_error(job.name, exc)
                     continue
                 scanner_findings.extend(findings)
+                scanner_findings.passed_checks.update(
+                    getattr(findings, "passed_checks", None) or ()
+                )
                 logger.info("[%s] %d findings", job.name, len(findings))
                 self._emit_findings(findings)
 
