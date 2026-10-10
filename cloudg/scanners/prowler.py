@@ -52,14 +52,40 @@ class ProwlerScanner:
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
         aws_region: str | None = None,
+        aws_session_token: str | None = None,
+        timeout_seconds: int = 3600,
+        env: dict[str, str] | None = None,
+        aws_regions: list[str] | None = None,
     ) -> None:
+        """Args beyond the provider and paths:
+
+        aws_access_key_id / aws_secret_access_key / aws_session_token:
+            Credentials exported to the Prowler process (and AWS_PROFILE
+            removed from its environment so they take effect).
+        aws_region: AWS_DEFAULT_REGION for the process; None or "ALL"
+            leaves it unset.
+        aws_regions: Regions to scan, passed as ``-f``. None, empty or
+            ["ALL"] passes nothing, so Prowler scans every region. An
+            ``-f`` / ``--region`` / ``--filter-region`` in ``extra_args``
+            wins.
+        timeout_seconds: How long Prowler may run before it is killed.
+        env: Extra environment variables for the process.
+        """
         self._provider = provider
         self._profile = profile
         self._output_dir = output_dir or tempfile.mkdtemp(prefix="prowler_")
         self._extra_args = extra_args or []
         self._aws_access_key_id = aws_access_key_id
         self._aws_secret_access_key = aws_secret_access_key
+        self._aws_session_token = aws_session_token
         self._aws_region = aws_region
+        self._timeout_seconds = timeout_seconds
+        self._env = dict(env or {})
+        self._aws_regions = [
+            r for r in (aws_regions or []) if r and r.strip() and r.strip().upper() != "ALL"
+        ]
+        #: Why the last run did not finish (timeout, launch failure); empty on success
+        self.errors: list[str] = []
 
     @staticmethod
     def is_available() -> bool:
@@ -108,6 +134,14 @@ class ProwlerScanner:
         if self._profile and self._provider == "aws":
             cmd.extend(["-p", self._profile])
 
+        region_flags = {"-f", "--region", "--filter-region"}
+        if (
+            self._provider == "aws"
+            and self._aws_regions
+            and not any(arg.split("=", 1)[0] in region_flags for arg in self._extra_args)
+        ):
+            cmd.extend(["-f", *self._aws_regions])
+
         cmd.extend(self._extra_args)
         return cmd
 
@@ -116,12 +150,20 @@ class ProwlerScanner:
         import os
 
         env = os.environ.copy()
-        if self._aws_access_key_id:
+        env.update(self._env)
+        if self._aws_access_key_id and self._aws_secret_access_key:
             env["AWS_ACCESS_KEY_ID"] = self._aws_access_key_id
-        if self._aws_secret_access_key:
             env["AWS_SECRET_ACCESS_KEY"] = self._aws_secret_access_key
-        if self._aws_region:
+            if self._aws_session_token:
+                env["AWS_SESSION_TOKEN"] = self._aws_session_token
+            else:
+                env.pop("AWS_SESSION_TOKEN", None)
+            # botocore ignores the key variables while a profile is selected
+            env.pop("AWS_PROFILE", None)
+        if self._aws_region and self._aws_region.upper() != "ALL":
             env["AWS_DEFAULT_REGION"] = self._aws_region
+        elif (env.get("AWS_DEFAULT_REGION") or "").upper() == "ALL":
+            env.pop("AWS_DEFAULT_REGION")
         return env
 
     def _stream_output(self, proc: Any, start_time: float) -> None:
@@ -166,7 +208,7 @@ class ProwlerScanner:
             )
             reader.start()
 
-            proc.wait(timeout=3600)
+            proc.wait(timeout=self._timeout_seconds)
             reader.join(timeout=5)
 
             elapsed = int(time.time() - start_time)
@@ -176,11 +218,15 @@ class ProwlerScanner:
                 logger.info("[Prowler] Completed successfully in %ds", elapsed)
 
         except subprocess.TimeoutExpired:
-            logger.error("[Prowler] Scan timed out after 3600s; killing process")
+            logger.error(
+                "[Prowler] Scan timed out after %ds; killing process", self._timeout_seconds
+            )
             proc.kill()
+            self.errors.append(f"timed out after {self._timeout_seconds}s")
             return False
         except Exception as exc:
             logger.error("[Prowler] Failed to run: %s", exc)
+            self.errors.append(f"could not run: {exc}")
             return False
 
         return True

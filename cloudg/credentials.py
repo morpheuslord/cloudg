@@ -11,8 +11,9 @@ AWS (build_aws_session):
     4. Default chain: env vars, EC2/ECS instance role (inherited role),
        container credentials, SSO cache
     Then, optionally on top of any of the above:
-    5. STS AssumeRole into role_arn or accounts[]/role_name, with optional
-       external_id (the standard third-party auditor pattern)
+    5. STS AssumeRole into role_arn and/or accounts[]/role_name (role_arn
+       first, then the member role from there), with optional external_id
+       (the standard third-party auditor pattern)
 
 Azure (build_azure_credential):
     1. Workload identity federation (tenant_id + client_id +
@@ -182,14 +183,17 @@ def build_aws_session(
         cfg: AWSConfig (or any object with the same credential fields).
         region: Target region for the session.
         account_id: Target account for cross-account AssumeRole via
-            cfg.role_name (ignored when cfg.role_arn is set).
+            cfg.role_name. With cfg.role_arn set too, role_arn is assumed
+            first and the account's role from there (role chaining), so
+            role_arn never replaces the member role.
 
     Returns:
         boto3.Session ready for API calls.
 
     Raises:
         ImportError: If boto3 is not installed.
-        RuntimeError: If a requested role assumption fails.
+        RuntimeError: If a requested role assumption fails, or account_id
+            is given without cfg.role_name (there is no role to reach it).
     """
     try:
         import boto3
@@ -211,27 +215,111 @@ def build_aws_session(
     _instrument_aws_session(session, None, region)
 
     # 5. Optional role assumption on top of the base credentials
-    target_role = _aws_target_role(cfg, role_arn, assumed_via_oidc, account_id)
-    if target_role:
+    for target_role in _aws_target_roles(cfg, role_arn, assumed_via_oidc, account_id):
         session = _aws_assume_role(boto3, session, target_role, session_name, external_id, region)
         _instrument_aws_session(session, account_id, region)
 
     return session
 
 
-def _aws_target_role(
+def _aws_target_roles(
     cfg: Any, role_arn: str | None, assumed_via_oidc: bool, account_id: str | None
-) -> str | None:
-    """The role to assume on top of the base session, if any.
+) -> list[str]:
+    """The roles to assume, in order, on top of the base session.
 
-    An explicit ``role_arn`` wins unless OIDC federation already assumed it;
-    otherwise ``account_id`` plus ``cfg.role_name`` names a cross-account role.
+    An explicit ``role_arn`` is assumed first unless OIDC federation already
+    assumed it. Then ``account_id`` plus ``cfg.role_name`` names the
+    cross-account (member) role, assumed from there.
     """
+    roles: list[str] = []
     if role_arn and not assumed_via_oidc:
-        return role_arn
-    if account_id and getattr(cfg, "role_name", None):
-        return f"arn:aws:iam::{account_id}:role/{cfg.role_name}"
-    return None
+        roles.append(role_arn)
+    if account_id:
+        role_name = getattr(cfg, "role_name", None)
+        if not role_name:
+            raise RuntimeError(
+                f"Cannot reach account {account_id}: no role to assume there. "
+                "Set aws.role_name (--role-name) to the role that exists in each account."
+            )
+        member_role = f"arn:aws:iam::{account_id}:role/{role_name}"
+        if member_role not in roles:
+            roles.append(member_role)
+    return roles
+
+
+def check_aws_account_scope(cfg: Any) -> None:
+    """Reject an account list that has no role to reach the accounts with.
+
+    ``aws.accounts`` (``--accounts``) names other accounts; cloudg reaches
+    each one by assuming ``aws.role_name`` (``--role-name``) there. Without
+    a role name every listed account would be read with the caller's own
+    credentials. With ``aws.organization.enabled`` the member role defaults
+    to AWSControlTowerExecution, so the check does not apply.
+
+    Raises:
+        ValueError: accounts are set but no role name is.
+    """
+    org = getattr(cfg, "organization", None)
+    if getattr(org, "enabled", False):
+        return
+    if getattr(cfg, "accounts", None) and not getattr(cfg, "role_name", None):
+        raise ValueError(
+            "--accounts (aws.accounts) needs --role-name (aws.role_name): the role "
+            "cloudg assumes in each listed account"
+        )
+
+
+def aws_scanner_auth(cfg: Any, region: str | None = None) -> tuple[str | None, dict[str, str]]:
+    """Credentials for an AWS scanner subprocess (Prowler, ScoutSuite).
+
+    Resolves the same auth methods as :func:`build_aws_session`, in the
+    same order, into what a child process understands:
+
+    - a role to assume (``role_arn``, also through OIDC web identity):
+      the role is assumed here and its temporary keys are exported;
+    - direct keys: exported as they are, session token included;
+    - a profile: returned as the profile to pass on the command line;
+    - nothing: no profile and no variables, the default chain applies.
+
+    Scanners audit the caller's own account (or role_arn's); member
+    accounts of ``aws.accounts`` / ``--org`` are not scanned one by one.
+
+    Args:
+        cfg: AWSConfig (or any object with the same credential fields).
+        region: Region for the STS calls; "ALL" or None means us-east-1.
+
+    Returns:
+        (profile, env) where env holds AWS_ACCESS_KEY_ID,
+        AWS_SECRET_ACCESS_KEY and, for temporary credentials,
+        AWS_SESSION_TOKEN. Assumed-role keys last as long as STS issued
+        them for (one hour).
+
+    Raises:
+        RuntimeError: assuming role_arn failed.
+    """
+    if not region or region.upper() == "ALL":
+        region = "us-east-1"
+    role_arn = getattr(cfg, "role_arn", None)
+    access_key = getattr(cfg, "access_key_id", None)
+    secret_key = getattr(cfg, "secret_access_key", None)
+
+    if role_arn:
+        session = build_aws_session(cfg, region)
+        credentials = session.get_credentials()
+        if credentials is None:
+            raise RuntimeError(f"No credentials resolved for role {role_arn}")
+        frozen = credentials.get_frozen_credentials()
+        return None, _aws_key_env(frozen.access_key, frozen.secret_key, frozen.token)
+    if access_key and secret_key:
+        return None, _aws_key_env(access_key, secret_key, getattr(cfg, "session_token", None))
+    return getattr(cfg, "profile", None) or None, {}
+
+
+def _aws_key_env(access_key: str, secret_key: str, token: str | None) -> dict[str, str]:
+    env = {"AWS_ACCESS_KEY_ID": access_key, "AWS_SECRET_ACCESS_KEY": secret_key}
+    if token:
+        env["AWS_SESSION_TOKEN"] = token
+    return env
 
 
 def _instrument_aws_session(session: Any, account_id: str | None, region: str) -> None:
@@ -396,6 +484,15 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
     return credentials, project
 
 
+def _with_profile(cfg: Any, profile: str) -> Any:
+    """A copy of ``cfg`` with ``profile`` replaced (pydantic model or plain object)."""
+    if hasattr(cfg, "model_copy"):
+        return cfg.model_copy(update={"profile": profile})
+    from types import SimpleNamespace
+
+    return SimpleNamespace(**{**vars(cfg), "profile": profile})
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Resolver (thin wrapper kept for the `collect` command and library use)
 # ─────────────────────────────────────────────────────────────────────
@@ -419,9 +516,10 @@ class CredentialResolver:
 
         Args:
             profile: AWS profile name (defaults to AWS_PROFILE env var).
+                With ``config``, it replaces config.profile.
             region: AWS region (defaults to AWS_DEFAULT_REGION or us-east-1).
             config: Optional AWSConfig for the full range of auth methods
-                (direct keys, OIDC, role assumption). Overrides `profile`.
+                (direct keys, OIDC, role assumption).
 
         Returns:
             AWSCredentials with an active boto3 session.
@@ -429,6 +527,8 @@ class CredentialResolver:
         region = region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 
         if config is not None:
+            if profile and profile != getattr(config, "profile", None):
+                config = _with_profile(config, profile)
             session = build_aws_session(config, region)
         else:
             from types import SimpleNamespace

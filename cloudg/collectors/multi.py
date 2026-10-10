@@ -144,7 +144,7 @@ class MultiAccountCollector:
         # Region resolution
         if is_all_regions(cfg.regions):
             logger.info("AWS: discovering all regions...")
-            regions = await self._region_discovery.discover_aws()
+            regions = await self._discover_aws_regions(cfg)
         else:
             regions = cfg.regions
 
@@ -155,9 +155,10 @@ class MultiAccountCollector:
         primary = primary_region(regions)
 
         # The caller's own account (e.g. the Organizations management
-        # account) is collected with the base credentials: member-account
-        # roles such as AWSControlTowerExecution do not exist there.
-        if cfg.accounts and cfg.role_name and not cfg.role_arn:
+        # account, or role_arn's account) is collected with the base
+        # credentials: member-account roles such as AWSControlTowerExecution
+        # do not exist there.
+        if cfg.accounts:
             self._caller_account = await asyncio.to_thread(
                 self._lookup_caller_account, cfg, primary
             )
@@ -170,6 +171,29 @@ class MultiAccountCollector:
                 )
 
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    async def _discover_aws_regions(self, cfg: Any) -> list[str]:
+        """Enabled regions, listed with the run's own credentials (not a
+        plain default-chain session)."""
+        import os
+
+        from cloudg.credentials import build_aws_session
+        from cloudg.region_discovery import AWS_DEFAULT_ENABLED_REGIONS
+
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or ""
+        if not region or region.upper() == "ALL":
+            region = "us-east-1"
+        try:
+            session = await asyncio.to_thread(build_aws_session, cfg, region, None)
+        except Exception as exc:
+            logger.warning(
+                "AWS region discovery could not authenticate (%s); scanning the %d "
+                "regions enabled by default",
+                exc,
+                len(AWS_DEFAULT_ENABLED_REGIONS),
+            )
+            return list(AWS_DEFAULT_ENABLED_REGIONS)
+        return await self._region_discovery.discover_aws(session)
 
     @staticmethod
     def _lookup_caller_account(cfg: Any, region: str) -> str | None:

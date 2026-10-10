@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 
 from cloudg.region_discovery import (
+    AWS_DEFAULT_ENABLED_REGIONS,
     AWS_REGIONS_FALLBACK,
     AZURE_LOCATIONS_FALLBACK,
     GCP_REGIONS_FALLBACK,
@@ -78,8 +79,8 @@ class TestAWSDiscovery:
         discovery = RegionDiscovery()
         with patch.dict("sys.modules", {"boto3": None}):
             regions = _run(discovery.discover_aws(session=None))
-        # Should at least have fallback
-        assert len(regions) >= 20
+        # Falls back to the regions every account has enabled
+        assert regions == AWS_DEFAULT_ENABLED_REGIONS
 
     def test_fallback_on_exception(self):
         """On API error, should return fallback."""
@@ -87,7 +88,26 @@ class TestAWSDiscovery:
         mock_session = MagicMock()
         mock_session.client.side_effect = Exception("Connection error")
         regions = _run(discovery.discover_aws(session=mock_session))
-        assert regions == AWS_REGIONS_FALLBACK
+        assert regions == AWS_DEFAULT_ENABLED_REGIONS
+
+    def test_fallback_has_no_opt_in_regions(self):
+        """Opt-in regions (af-south-1, me-south-1, ...) fail in accounts
+        that have not enabled them, so the fallback leaves them out."""
+        assert "us-east-1" in AWS_DEFAULT_ENABLED_REGIONS
+        for opt_in in ("af-south-1", "ap-east-1", "me-south-1", "il-central-1"):
+            assert opt_in in AWS_REGIONS_FALLBACK
+            assert opt_in not in AWS_DEFAULT_ENABLED_REGIONS
+
+    def test_api_call_uses_the_session_and_its_region(self):
+        """The given (resolved-credential) session is used, in its own region."""
+        discovery = RegionDiscovery()
+        mock_session = MagicMock()
+        mock_session.region_name = "eu-west-1"
+        mock_session.client.return_value.describe_regions.return_value = {
+            "Regions": [{"RegionName": "eu-west-1"}]
+        }
+        assert _run(discovery.discover_aws(session=mock_session)) == ["eu-west-1"]
+        mock_session.client.assert_called_once_with("ec2", region_name="eu-west-1")
 
     def test_api_success(self):
         """On successful API, should return discovered regions."""
@@ -138,7 +158,7 @@ class TestDiscoverAll:
         discovery = RegionDiscovery()
         result = _run(discovery.discover_all(["aws"]))
         assert "aws" in result
-        assert len(result["aws"]) >= 20
+        assert len(result["aws"]) >= len(AWS_DEFAULT_ENABLED_REGIONS)
 
     def test_discover_all_multi_provider(self):
         """Multiple providers should all have entries."""

@@ -430,6 +430,8 @@ class InventoryMapper:
         """
         if not ("aws" in cfg.providers and cfg.aws.organization.enabled):
             return None
+        from cloudg.inventory.organization import OrganizationScopeError
+
         cov = CollectionCoverage(provider="aws", region="global")
         coverage.append(cov)
         t0 = time.time()
@@ -444,6 +446,8 @@ class InventoryMapper:
             if topology.errors:
                 cov.record("controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors))
             return topology
+        except OrganizationScopeError:
+            raise  # a filter typo must not quietly become a caller-account-only map
         except Exception as exc:
             logger.error("Organization discovery failed; mapping the caller account only: %s", exc)
             cov.record("organizations", ServiceStatus.FAILED, error=str(exc))

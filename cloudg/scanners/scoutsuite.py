@@ -37,11 +37,58 @@ class ScoutSuiteScanner:
         profile: str | None = None,
         report_dir: str | None = None,
         extra_args: list[str] | None = None,
+        timeout_seconds: int = 3600,
+        env: dict[str, str] | None = None,
+        regions: list[str] | None = None,
     ) -> None:
+        """``timeout_seconds`` is how long ScoutSuite may run; ``env`` adds
+        environment variables (for example resolved AWS credentials) to the
+        process. ``regions`` limits an AWS scan (``--regions``); None, empty
+        or ["ALL"] scans every region, and a ``--regions`` in ``extra_args``
+        wins."""
         self._provider = provider
         self._profile = profile
         self._report_dir = report_dir or tempfile.mkdtemp(prefix="scoutsuite_")
         self._extra_args = extra_args or []
+        self._timeout_seconds = timeout_seconds
+        self._env = dict(env or {})
+        self._regions = [
+            r for r in (regions or []) if r and r.strip() and r.strip().upper() != "ALL"
+        ]
+        #: Why the last run did not finish (timeout, launch failure); empty on success
+        self.errors: list[str] = []
+
+    def _build_env(self) -> dict[str, str] | None:
+        """Process environment: the parent's plus ``env`` (None when unchanged)."""
+        if not self._env:
+            return None
+        import os
+
+        env = os.environ.copy()
+        env.update(self._env)
+        if "AWS_ACCESS_KEY_ID" in self._env:
+            # botocore ignores the key variables while a profile is selected
+            env.pop("AWS_PROFILE", None)
+            if "AWS_SESSION_TOKEN" not in self._env:
+                env.pop("AWS_SESSION_TOKEN", None)
+        return env
+
+    def _build_command(self) -> list[str]:
+        """Build the ``scout`` argv list."""
+        cmd = ["scout", self._provider, "--report-dir", self._report_dir, "--no-browser"]
+
+        if self._profile and self._provider == "aws":
+            cmd.extend(["--profile", self._profile])
+
+        if (
+            self._provider == "aws"
+            and self._regions
+            and not any(arg.split("=", 1)[0] == "--regions" for arg in self._extra_args)
+        ):
+            cmd.extend(["--regions", *self._regions])
+
+        cmd.extend(self._extra_args)
+        return cmd
 
     @staticmethod
     def is_available() -> bool:
@@ -57,12 +104,7 @@ class ScoutSuiteScanner:
             )
             return []
 
-        cmd = ["scout", self._provider, "--report-dir", self._report_dir, "--no-browser"]
-
-        if self._profile and self._provider == "aws":
-            cmd.extend(["--profile", self._profile])
-
-        cmd.extend(self._extra_args)
+        cmd = self._build_command()
 
         logger.info("Running ScoutSuite: %s", " ".join(cmd))
 
@@ -73,8 +115,9 @@ class ScoutSuiteScanner:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=3600,
+                timeout=self._timeout_seconds,
                 check=False,
+                env=self._build_env(),
             )
             if result.returncode != 0:
                 logger.warning(
@@ -83,10 +126,12 @@ class ScoutSuiteScanner:
                     result.stderr[:500],
                 )
         except subprocess.TimeoutExpired:
-            logger.error("ScoutSuite scan timed out")
+            logger.error("ScoutSuite scan timed out after %ds", self._timeout_seconds)
+            self.errors.append(f"timed out after {self._timeout_seconds}s")
             return []
         except Exception as exc:
             logger.error("Failed to run ScoutSuite: %s", exc)
+            self.errors.append(f"could not run: {exc}")
             return []
 
         return self._parse_output()
