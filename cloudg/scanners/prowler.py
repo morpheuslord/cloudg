@@ -10,6 +10,13 @@ import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists,
 import tempfile
 from typing import Any
 
+from cloudg.normaliser import FindingList, prowler_check_id
+from cloudg.scanners.prowler_ocsf import (
+    is_ocsf_record,
+    ocsf_check_id,
+    ocsf_status,
+    parse_ocsf_record,
+)
 from cloudg.schema.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,14 @@ _COMPLIANCE_MAP = {
     "hipaa": "HIPAA",
     "soc2": "SOC2",
 }
+
+
+def _get(item: dict[str, Any], *keys: str) -> Any:
+    """``item[k1][k2]...``, or "" when a level is missing or not a dict."""
+    value: Any = item
+    for key in keys:
+        value = value.get(key) if isinstance(value, dict) else None
+    return "" if value is None else value
 
 
 class ProwlerScanner:
@@ -231,13 +246,20 @@ class ProwlerScanner:
 
         return True
 
+    #: Prowler check names that passed in the last parsed output (ASFF
+    #: ``PASSED`` or OCSF ``PASS`` records); see :class:`cloudg.normaliser.FindingList`
+    passed_checks: frozenset[str] = frozenset()
+
     @classmethod
     def parse_report(cls, path: str) -> list[Finding]:
-        """Parse existing Prowler ASFF JSON output without running Prowler.
+        """Parse existing Prowler output without running Prowler.
 
-        Accepts a single ASFF JSON/JSONL file or a directory that is
+        Accepts a single ASFF (``-M json-asff``) or OCSF (``-M json-ocsf``,
+        Prowler 4 and later) JSON / JSONL file, or a directory that is
         searched recursively for ``*.json`` files (Prowler's ``-o`` output
-        directory works as-is).
+        directory works as-is). Returns a :class:`~cloudg.normaliser.FindingList`
+        of the failing checks whose ``passed_checks`` names the checks that
+        passed.
         """
         import os
 
@@ -249,13 +271,18 @@ class ProwlerScanner:
         return scanner._parse_files(files)
 
     def _parse_output(self) -> list[Finding]:
-        """Parse Prowler ASFF JSON output files."""
+        """Parse Prowler ASFF / OCSF JSON output files."""
         output_files = glob.glob(f"{self._output_dir}/**/*.json", recursive=True)
         return self._parse_files(output_files)
 
     def _parse_files(self, output_files: list[str]) -> list[Finding]:
-        """Parse a list of Prowler ASFF JSON/JSONL files."""
-        findings: list[Finding] = []
+        """Parse a list of Prowler ASFF or OCSF JSON/JSONL files.
+
+        Each record is read as OCSF when it has OCSF keys, else as ASFF.
+        Passing checks give no finding; their names are collected in
+        :attr:`passed_checks` and on the returned list.
+        """
+        findings = FindingList()
 
         for file_path in output_files:
             try:
@@ -270,16 +297,57 @@ class ProwlerScanner:
                     else:
                         data = [json.loads(line) for line in content.splitlines() if line.strip()]
 
-                    for item in data:
-                        finding = self._parse_asff_finding(item)
+                    for item in self._records(data):
+                        finding = self._parse_record(item, findings.passed_checks)
                         if finding:
                             findings.append(finding)
 
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Failed to parse Prowler output %s: %s", file_path, exc)
 
-        logger.info("Parsed %d findings from Prowler", len(findings))
+        self.passed_checks = frozenset(findings.passed_checks)
+        logger.info(
+            "Parsed %d findings from Prowler (%d passed checks)",
+            len(findings),
+            len(findings.passed_checks),
+        )
         return findings
+
+    @staticmethod
+    def _records(data: Any) -> list[Any]:
+        """The finding records of one parsed file: a list of records, or an
+        ASFF ``{"Findings": [...]}`` batch."""
+        items = data if isinstance(data, list) else [data]
+        records: list[Any] = []
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("Findings"), list):
+                records.extend(item["Findings"])
+            else:
+                records.append(item)
+        return records
+
+    def _parse_record(self, item: Any, passed: set[str]) -> Finding | None:
+        """One ASFF or OCSF record to a Finding; a passing check is added to
+        ``passed`` instead."""
+        if not isinstance(item, dict):
+            return None
+        if is_ocsf_record(item):
+            if ocsf_status(item) == "PASS":
+                check = ocsf_check_id(item)
+                if check:
+                    passed.add(check)
+                return None
+            try:
+                return parse_ocsf_record(item, _SEVERITY_MAP, _COMPLIANCE_MAP)
+            except Exception as exc:
+                logger.debug("Failed to parse OCSF finding: %s", exc)
+                return None
+        if str(_get(item, "Compliance", "Status")).upper() == "PASSED":
+            check = prowler_check_id(item.get("GeneratorId")) or prowler_check_id(item.get("Id"))
+            if check:
+                passed.add(check)
+            return None
+        return self._parse_asff_finding(item)
 
     def _parse_asff_finding(self, asff: dict[str, Any]) -> Finding | None:
         """Convert a single ASFF finding to our Finding model."""

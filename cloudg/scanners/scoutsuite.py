@@ -23,6 +23,27 @@ _SEVERITY_MAP = {
 }
 
 
+# Compliance benchmark names in a ScoutSuite rule's ``compliance`` list
+# (lower-case substring) to the framework name cloudg uses
+_COMPLIANCE_MAP = {"cis": "CIS"}
+
+
+def _compliance_frameworks(finding_data: dict[str, Any]) -> list[str]:
+    """Frameworks named by a ScoutSuite finding's ``compliance`` entries.
+
+    Entries look like ``{"name": "CIS Amazon Web Services Foundations",
+    "version": "1.2.0", "reference": "1.3"}``. The finding's ``references``
+    are documentation URLs, not frameworks, and are not used here.
+    """
+    frameworks: list[str] = []
+    for entry in finding_data.get("compliance") or []:
+        name = str(entry.get("name", "") if isinstance(entry, dict) else entry).lower()
+        for needle, framework in _COMPLIANCE_MAP.items():
+            if needle in name and framework not in frameworks:
+                frameworks.append(framework)
+    return frameworks
+
+
 class ScoutSuiteScanner:
     """Wraps ScoutSuite CLI: runs `scout` and parses the results JS file.
 
@@ -212,6 +233,7 @@ class ScoutSuiteScanner:
                 severity_str = finding_data.get("level", "warning").lower()
                 severity = _SEVERITY_MAP.get(severity_str, Severity.MEDIUM)
 
+                frameworks = _compliance_frameworks(finding_data)
                 items = finding_data.get("items", [])
                 for item in items:
                     findings.append(
@@ -224,7 +246,7 @@ class ScoutSuiteScanner:
                             remediation=finding_data.get("remediation", ""),
                             source_tool="scoutsuite",
                             source_finding_id=finding_key,
-                            compliance_frameworks=finding_data.get("references", []),
+                            compliance_frameworks=list(frameworks),
                         )
                     )
 

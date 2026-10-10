@@ -263,10 +263,14 @@ def _gather_ingest_reports(
 
 
 def _parse_ingest_reports(reports: dict[str, list[str]]) -> tuple[list[Any], dict[str, int]]:
-    """Parse each report file into findings; returns (findings, per-tool counts)."""
-    from cloudg.ingest import parse_report
+    """Parse each report file into findings; returns (findings, per-tool counts).
 
-    all_findings: list[Any] = []
+    The findings are a FindingList carrying the checks Prowler reports
+    passed, so normalising them gives those controls PASS results."""
+    from cloudg.ingest import parse_report
+    from cloudg.normaliser import FindingList
+
+    all_findings = FindingList()
     per_tool: dict[str, int] = {}
     for tool, paths in reports.items():
         count = 0
@@ -278,6 +282,7 @@ def _parse_ingest_reports(reports: dict[str, list[str]]) -> tuple[list[Any], dic
                 continue
             count += len(findings)
             all_findings.extend(findings)
+            all_findings.passed_checks.update(getattr(findings, "passed_checks", None) or ())
         per_tool[tool] = count
         ui.detail(f"{tool}: {count} findings")
     return all_findings, per_tool

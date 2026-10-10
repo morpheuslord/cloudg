@@ -45,7 +45,6 @@ from cloudg.mcp.state.base import (
 from cloudg.mcp.state.dataset import Dataset
 from cloudg.mcp.state.diff import diff_datasets
 from cloudg.mcp.state.loading import (
-    check_prowler_input,
     detect_kind,
     is_ocsf,
     load_dataset_file,
@@ -62,7 +61,6 @@ __all__ = [
     "NoDatasetError",
     "ReferenceNotFoundError",
     "Workspace",
-    "check_prowler_input",
     "default_roots",
     "detect_kind",
     "diff_datasets",

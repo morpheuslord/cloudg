@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from cloudg.normaliser import FindingList
 from cloudg.schema.models import Finding
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,11 @@ def parse_report(tool: str, path: str | Path) -> list[Finding]:
 
     Returns:
         List of normalised Finding objects (empty when nothing parses).
+        Prowler reports, ASFF or OCSF, return a
+        :class:`~cloudg.normaliser.FindingList` whose ``passed_checks``
+        names the checks that passed; pass the list to
+        :meth:`~cloudg.normaliser.FindingsNormaliser.normalise` as is and
+        the compliance controls those checks map to get PASS results.
 
     Raises:
         ValueError: For an unsupported tool name.
@@ -76,11 +82,12 @@ def ingest_reports(reports: dict[str, list[str | Path]]) -> list[Finding]:
             Any combination and any subset of tools is fine.
 
     Returns:
-        Combined list of findings from every report that parsed. A path
-        that fails to parse is logged and skipped rather than aborting
-        the whole ingest.
+        Combined :class:`~cloudg.normaliser.FindingList` of findings from
+        every report that parsed, carrying the passed checks of every
+        Prowler report. A path that fails to parse is logged and skipped
+        rather than aborting the whole ingest.
     """
-    all_findings: list[Finding] = []
+    all_findings = FindingList()
     for tool, paths in reports.items():
         for path in paths:
             try:
@@ -90,4 +97,5 @@ def ingest_reports(reports: dict[str, list[str | Path]]) -> list[Finding]:
                 continue
             logger.info("[%s] %d findings ingested from %s", tool, len(findings), path)
             all_findings.extend(findings)
+            all_findings.passed_checks.update(getattr(findings, "passed_checks", None) or ())
     return all_findings

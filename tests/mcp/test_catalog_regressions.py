@@ -193,36 +193,50 @@ def test_merge_compliance_rules():
     assert out["4"].finding_ids == ["c", "b"] and out["4"].control_title == "real title"
 
 
-# -- 6. Prowler OCSF output is refused clearly ----------------------------------
+# -- 6. Prowler OCSF output is parsed ------------------------------------------
 
 OCSF = [
     {
         "message": "x",
-        "finding_info": {"title": "t", "uid": "u"},
+        "finding_info": {
+            "title": "Root account has no hardware MFA",
+            "uid": "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-us-east-1-root",
+        },
         "class_uid": 2004,
-        "severity_id": 3,
+        "severity_id": 4,
+        "severity": "High",
         "status_code": "FAIL",
-        "metadata": {"product": {"name": "Prowler"}},
-    }
+        "metadata": {"event_code": "iam_root_hardware_mfa_enabled", "product": {"name": "Prowler"}},
+        "resources": [{"uid": "arn:aws:iam::123456789012:root", "name": "root"}],
+    },
+    {
+        "finding_info": {"title": "Bucket encrypted", "uid": "u2"},
+        "class_uid": 2004,
+        "severity": "Medium",
+        "status_code": "PASS",
+        "metadata": {"event_code": "s3_bucket_default_encryption"},
+        "resources": [{"uid": "arn:aws:s3:::b"}],
+    },
 ]
 
 
-def test_ocsf_detected_and_refused(tmp_path):
+def test_ocsf_detected_and_parsed(tmp_path):
     f = tmp_path / "prowler-output.ocsf.json"
     f.write_text(json.dumps(OCSF))
-    with pytest.raises(InvalidArgumentsError, match="json-asff"):
-        detect_kind(f)
-    with pytest.raises(InvalidArgumentsError, match="OCSF"):
-        load_dataset_file(f, "x", kind="prowler")
+    assert detect_kind(f) == "prowler"
+    ds = load_dataset_file(f, "x", kind="prowler")
+    assert [x.title for x in ds.findings] == ["Root account has no hardware MFA"]
+    assert ds.findings[0].resource_arn == "arn:aws:iam::123456789012:root"
+    # the passing check gives PASS compliance results, the failing one FAIL
+    statuses = {c.status.value for c in ds.compliance}
+    assert statuses == {"PASS", "FAIL"}
     jsonl = tmp_path / "p.jsonl"
-    jsonl.write_text(json.dumps(OCSF[0]) + "\n" + json.dumps(OCSF[0]) + "\n")
-    with pytest.raises(InvalidArgumentsError, match="OCSF"):
-        detect_kind(jsonl)
+    jsonl.write_text(json.dumps(OCSF[0]) + "\n" + json.dumps(OCSF[1]) + "\n")
+    assert detect_kind(jsonl) == "prowler"
     d = tmp_path / "prowler-dir"
     d.mkdir()
-    (d / "out.json").write_text(json.dumps(OCSF))
-    with pytest.raises(InvalidArgumentsError, match="OCSF"):
-        load_dataset_file(d, "x", kind="prowler")
+    (d / "out.ocsf.json").write_text(json.dumps(OCSF))
+    assert len(load_dataset_file(d, "x", kind="prowler").findings) == 1
 
 
 def test_asff_still_detected(tmp_path):
@@ -231,11 +245,11 @@ def test_asff_still_detected(tmp_path):
     assert detect_kind(f) == "prowler"
 
 
-async def test_ingest_reports_reports_ocsf_per_path(call, sample_paths):
+async def test_ingest_reports_parses_ocsf(call, sample_paths):
     f = sample_paths["root"] / "ocsf.json"
     f.write_text(json.dumps(OCSF))
     out = await call("ingest_reports", reports={"prowler": [str(f)]})
-    assert out["parsed"] == 0 and "json-asff" in out["errors"][0]["error"]
+    assert out["parsed"] == 1 and out["errors"] == []
 
 
 # -- 7. minor correctness ---------------------------------------------------------

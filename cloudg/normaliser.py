@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from cloudg.schema.models import (
     ComplianceResult,
@@ -74,11 +74,47 @@ _FALLBACK_RULES: dict[str, list[dict[str, str]]] = {
 _TITLE_TAG_RE = re.compile(r"^\s*(\[[^\]]+\]\s*)+")
 _TITLE_JUNK_RE = re.compile(r"[^a-z0-9]+")
 
-# Prowler ASFF Ids look like
-# "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-eu-west-1-...";
-# the check name is the third dash-separated token (check names use
-# underscores, never dashes).
-_PROWLER_ASFF_ID_RE = re.compile(r"^prowler-[a-z0-9]+-([a-z0-9_]+)-")
+# Prowler finding Ids look like
+# "prowler-iam_root_hardware_mfa_enabled-123456789012-eu-west-1-<hash>"
+# (Prowler 3 and later) or carry the provider first,
+# "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-...". Check names
+# use underscores, never dashes; provider names have neither.
+_PROWLER_PROVIDERS = frozenset(
+    {"aws", "azure", "gcp", "kubernetes", "m365", "microsoft365", "github", "iac", "nhn"}
+)
+_PROWLER_CHECK_RE = re.compile(r"^[a-z0-9_]+$")
+
+
+def prowler_check_id(source_finding_id: str | None) -> str:
+    """The Prowler check name inside a Prowler finding Id, or "".
+
+    Handles both "prowler-<check>-<account>-<region>-<hash>" and
+    "prowler-<provider>-<check>-<account>-...". A bare check name (as the
+    OCSF ``metadata.event_code`` holds it) is not a finding Id and gives "".
+    """
+    tokens = (source_finding_id or "").strip().split("-")
+    if len(tokens) < 2 or tokens[0] != "prowler":
+        return ""
+    rest = tokens[1:]
+    if rest[0] in _PROWLER_PROVIDERS and len(rest) > 1:
+        rest = rest[1:]
+    return rest[0] if _PROWLER_CHECK_RE.match(rest[0]) else ""
+
+
+class FindingList(list):
+    """A list of findings that also carries the scanner checks that passed.
+
+    Scanner report parsers (Prowler's, for one) return it so the passing
+    checks reach :meth:`FindingsNormaliser.normalise` without changing the
+    list-of-findings return type: ``normalise`` reads ``passed_checks`` from
+    every list it is given. It is an ordinary list otherwise, and the
+    attribute does not survive ``+`` or ``extend`` into a plain list.
+    """
+
+    def __init__(self, findings: Iterable[Finding] = (), passed_checks: Iterable[str] = ()):
+        super().__init__(findings)
+        #: Scanner check IDs that ran and passed (Prowler check names)
+        self.passed_checks: set[str] = set(passed_checks)
 
 
 def _normalise_title(title: str) -> str:
@@ -218,25 +254,40 @@ class FindingsNormaliser:
                     )
         # Per-finding exact matches recorded during scoring, keyed by finding id
         self._exact_matches: dict[str, list[tuple[str, str, str]]] = {}
+        # (source_tool, source_finding_id) of every finding merged into a
+        # surviving finding during deduplication, keyed by the survivor's id
+        self._absorbed: dict[str, list[tuple[str, str]]] = {}
 
     def normalise(
         self,
         *finding_lists: list[Finding],
         assets: list | None = None,
+        passed_checks: Iterable[str] | None = None,
     ) -> ScanResult:
         """Merge, deduplicate, score, and map findings to compliance.
 
         Args:
             finding_lists: Variable number of finding lists from different sources.
             assets: Optional asset list for the ScanResult container.
+            passed_checks: Scanner check IDs that ran and passed (Prowler
+                check names), used together with the ``passed_checks`` of
+                every :class:`FindingList` in ``finding_lists``. A ruleset
+                control one of these checks maps to gets a PASS result
+                unless a finding fails it. Without passed checks only
+                failing controls are reported: a control no finding maps
+                to was not assessed and gets no result.
 
         Returns:
             ScanResult with normalised findings and compliance mappings.
         """
-        # Merge all findings
+        self._absorbed = {}
+        self._exact_matches = {}
+        # Merge all findings, collecting the passed checks a FindingList carries
         all_findings: list[Finding] = []
+        passed: set[str] = set(passed_checks or ())
         for finding_list in finding_lists:
             all_findings.extend(finding_list)
+            passed.update(getattr(finding_list, "passed_checks", None) or ())
 
         logger.info(
             "Normalising %d total findings from %d sources",
@@ -262,7 +313,7 @@ class FindingsNormaliser:
         scored.sort(key=lambda f: severity_order.get(f.severity, 5))
 
         # Map to compliance frameworks
-        compliance = self._map_compliance(scored)
+        compliance = self._map_compliance(scored, passed)
 
         self._findings = scored
         self._compliance = compliance
@@ -305,7 +356,7 @@ class FindingsNormaliser:
             key = (finding.source_tool, discriminator, resource)
 
             if key in by_scanner_check:
-                by_scanner_check[key] = self._merge_pair(by_scanner_check[key], finding)
+                by_scanner_check[key] = self._merge(by_scanner_check[key], finding)
             else:
                 by_scanner_check[key] = finding
 
@@ -339,7 +390,7 @@ class FindingsNormaliser:
                 else:
                     other, other_canonical, other_has_check = merged[target]
                     merged[target] = (
-                        self._merge_pair(other, finding),
+                        self._merge(other, finding),
                         other_canonical,
                         other_has_check,
                     )
@@ -360,11 +411,7 @@ class FindingsNormaliser:
         if not src:
             return ""
 
-        match = _PROWLER_ASFF_ID_RE.match(src)
-        if match:
-            return match.group(1)
-
-        return src
+        return prowler_check_id(src) or src
 
     def _canonical_check(self, finding: Finding, check_id: str) -> str | None:
         """Resolve (scanner, check_id) to a canonical semantic ID, or None."""
@@ -374,6 +421,25 @@ class FindingsNormaliser:
         # the check ID always comes from the first (primary) tool.
         scanner = finding.source_tool.split(",")[0].strip().lower()
         return self._check_equivalence.get((scanner, check_id))
+
+    def _merge(self, existing: Finding, incoming: Finding) -> Finding:
+        """:meth:`_merge_pair`, remembering the source ID of the finding
+        that was folded in so its check-ID compliance mapping still runs."""
+        keep = self._merge_pair(existing, incoming)
+        other = incoming if keep is existing else existing
+        absorbed = self._absorbed.setdefault(keep.id, [])
+        if other.id != keep.id:
+            absorbed.extend(self._absorbed.pop(other.id, []))
+        if other.source_finding_id:
+            tool = other.source_tool.split(",")[0].strip()
+            absorbed.append((tool, other.source_finding_id))
+        return keep
+
+    def _sources(self, finding: Finding) -> list[tuple[str, str]]:
+        """(tool, source_finding_id) of a finding and of every finding
+        deduplication merged into it, the finding's own first."""
+        own = (finding.source_tool.split(",")[0].strip(), finding.source_finding_id or "")
+        return [own, *self._absorbed.get(finding.id, [])]
 
     @staticmethod
     def _merge_pair(existing: Finding, incoming: Finding) -> Finding:
@@ -440,24 +506,31 @@ class FindingsNormaliser:
         return findings
 
     def _match_check_ids(self, finding: Finding) -> list[tuple[str, str, str]]:
-        """Match a finding's scanner check ID against ruleset `checks` lists.
+        """Match a finding's scanner check IDs against ruleset `checks` lists.
 
         Prowler ASFF finding IDs embed the check name between dashes
         (e.g. "prowler-aws-iam_root_hardware_mfa_enabled-123-eu-west-1-..."),
         and check names themselves never contain dashes, so splitting the
-        source ID on separators yields the check name as one token.
+        source ID on separators yields the check name as one token. The
+        source IDs of findings merged into this one during deduplication
+        are matched too, so a cross-scanner merge keeps both scanners'
+        mappings.
         """
+        return self._match_source_ids(src for _tool, src in self._sources(finding))
+
+    def _match_source_ids(self, sources: Iterable[str]) -> list[tuple[str, str, str]]:
+        """Ruleset controls whose `checks` lists name a token of ``sources``."""
         if not self._check_index:
             return []
 
-        src = finding.source_finding_id or ""
         matches: list[tuple[str, str, str]] = []
         seen: set[tuple[str, str]] = set()
-        for token in re.split(r"[-/:\s]", src):
-            for fw, control_id, title in self._check_index.get(token, []):
-                if (fw, control_id) not in seen:
-                    seen.add((fw, control_id))
-                    matches.append((fw, control_id, title))
+        for src in sources:
+            for token in re.split(r"[-/:\s]", src or ""):
+                for fw, control_id, title in self._check_index.get(token, []):
+                    if (fw, control_id) not in seen:
+                        seen.add((fw, control_id))
+                        matches.append((fw, control_id, title))
         return matches
 
     def _map_from_external_rulesets(self, finding: Finding) -> list[str]:
@@ -490,8 +563,15 @@ class FindingsNormaliser:
 
         return frameworks
 
-    def _map_compliance(self, findings: list[Finding]) -> list[ComplianceResult]:
-        """Generate per-control ComplianceResult entries from findings."""
+    def _map_compliance(
+        self, findings: list[Finding], passed_checks: Iterable[str] | None = None
+    ) -> list[ComplianceResult]:
+        """Generate per-control ComplianceResult entries.
+
+        A control is FAIL when at least one finding maps to it. A ruleset
+        control that a passed check maps to, and that no finding fails, is
+        PASS. Controls with neither were not assessed and get no result.
+        """
         # Group findings by (framework, control_id). Exact check-ID matches
         # (from ruleset `checks` lists) give the real control ID and title;
         # everything else falls back to parsing source_finding_id.
@@ -510,9 +590,14 @@ class FindingsNormaliser:
             for fw in finding.compliance_frameworks:
                 if fw in exact_frameworks:
                     continue
-                # Use scanner-native control ID if available in source_finding_id
-                control_id = self._extract_control_id(finding, fw)
+                # Use scanner-native control ID if available in a source ID
+                control_id = self._control_id_from_sources(self._sources(finding), fw)
                 control_findings[(fw, control_id)].append(finding.id)
+
+        passing: dict[tuple[str, str], str] = {}
+        for fw, control_id, title in self._match_source_ids(passed_checks or ()):
+            if (fw, control_id) not in control_findings:
+                passing[(fw, control_id)] = title
 
         results: list[ComplianceResult] = []
         for (framework, control_id), finding_ids in control_findings.items():
@@ -523,36 +608,66 @@ class FindingsNormaliser:
                     control_title=control_titles.get(
                         (framework, control_id), f"{framework} {control_id}"
                     ),
-                    status=ComplianceStatus.FAIL if finding_ids else ComplianceStatus.PASS,
+                    status=ComplianceStatus.FAIL,
                     finding_ids=finding_ids,
+                )
+            )
+        for (framework, control_id), title in passing.items():
+            results.append(
+                ComplianceResult(
+                    framework=framework,
+                    control_id=control_id,
+                    control_title=title or f"{framework} {control_id}",
+                    status=ComplianceStatus.PASS,
                 )
             )
 
         return results
 
-    @staticmethod
-    def _extract_control_id(finding: Finding, framework: str) -> str:
+    @classmethod
+    def _control_id_from_sources(cls, sources: list[tuple[str, str]], framework: str) -> str:
+        """The first scanner-native control ID any source yields, else the
+        framework aggregate."""
+        for tool, src in sources:
+            control_id = cls._control_id_for(tool, src, framework)
+            if control_id:
+                return control_id
+        return f"{framework}-aggregate"
+
+    @classmethod
+    def _extract_control_id(cls, finding: Finding, framework: str) -> str:
         """Extract a control ID from the scanner-native finding ID.
 
-        Prowler example source_finding_id: "prowler-aws-iam_root_hardware_mfa_enabled-..."
+        Prowler example source_finding_id:
+        "prowler-aws-iam_root_hardware_mfa_enabled-123456789012-..." gives
+        "<framework>/iam_root_hardware_mfa_enabled"; the account, region
+        and hash are not part of the control.
         Checkov example: "CKV_AWS_18"
 
         Falls back to framework-aggregate if no specific ID found.
         """
-        src_id = finding.source_finding_id or ""
+        control_id = cls._control_id_for(
+            finding.source_tool, finding.source_finding_id or "", framework
+        )
+        return control_id or f"{framework}-aggregate"
 
-        # Prowler: extract check name from ASFF Id
-        if "prowler" in finding.source_tool.lower() and "-" in src_id:
-            parts = src_id.split("-")
-            if len(parts) >= 4:
-                return f"{framework}/{'-'.join(parts[2:4])}"
+    @staticmethod
+    def _control_id_for(tool: str, src_id: str, framework: str) -> str:
+        """Scanner-native control ID for one (tool, source ID), or ""."""
+        tool = tool.lower()
+
+        # Prowler: the check name inside the finding Id
+        if "prowler" in tool:
+            check = prowler_check_id(src_id)
+            if check:
+                return f"{framework}/{check}"
 
         # Checkov: check_id is typically "CKV_AWS_XX"
-        if "checkov" in finding.source_tool.lower() and src_id.startswith("CKV"):
+        if "checkov" in tool and src_id.startswith("CKV"):
             return f"{framework}/{src_id}"
 
         # Trivy: CVE IDs
-        if "trivy" in finding.source_tool.lower() and src_id.startswith("CVE"):
+        if "trivy" in tool and src_id.startswith("CVE"):
             return f"{framework}/{src_id}"
 
-        return f"{framework}-aggregate"
+        return ""
