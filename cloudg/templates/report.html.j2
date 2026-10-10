@@ -206,10 +206,20 @@
             .detail-panel { width: 100%; }
         }
     </style>
-    <!-- Chart.js 4 (self-contained) -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <!-- D3.js v7 -->
-    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+{% if inline_js %}
+    <!-- Chart.js 4.4.0 (MIT) and D3 7.9.0 (ISC), inlined so the report works offline.
+         Licences: cloudg/templates/vendor/NOTICE in the cloudg package. -->
+    <script>
+{{ vendored_js.chartjs|safe }}
+    </script>
+    <script>
+{{ vendored_js.d3|safe }}
+    </script>
+{% else %}
+    <!-- Chart.js 4.4.0 and D3 7.9.0 from the CDN (report.inline_js: false) -->
+    <script src="{{ cdn_js.chartjs.cdn }}" integrity="{{ cdn_js.chartjs.integrity }}" crossorigin="anonymous"></script>
+    <script src="{{ cdn_js.d3.cdn }}" integrity="{{ cdn_js.d3.integrity }}" crossorigin="anonymous"></script>
+{% endif %}
 </head>
 <body>
 
@@ -361,12 +371,41 @@
         }
     }
 
+    // ── HTML escaping ──
+    // Finding, asset and compliance values come from scanner output and
+    // cloud metadata. Markup is only ever built with the html`` tag below,
+    // which escapes every interpolated value.
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    function html(strings, ...values) {
+        let out = strings[0];
+        values.forEach((value, i) => {
+            out += escapeHtml(value) + strings[i + 1];
+        });
+        return out;
+    }
+    const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+    function severityClass(severity) {
+        return 'severity-' + (SEVERITIES.includes(severity) ? severity : 'INFO');
+    }
+
     // ── Findings Table ──
+    // Rows keep the finding's position in findingsData, so the detail panel
+    // shows the right finding when the table is filtered
+    const findingIndex = new Map(findingsData.map((f, i) => [f, i]));
+
     function renderFindings(data) {
         const tbody = document.getElementById('findings-body');
-        tbody.innerHTML = data.map((f, i) => `
-            <tr onclick="showDetail(${i})">
-                <td><span class="severity-badge severity-${f.severity}">${f.severity}</span></td>
+        tbody.innerHTML = data.map(f => html`
+            <tr data-index="${findingIndex.get(f)}">
+                <td><span class="severity-badge ${severityClass(f.severity)}">${f.severity}</span></td>
                 <td>${f.title}</td>
                 <td><code>${f.resource_arn || f.resource_id || ''}</code></td>
                 <td>${f.source_tool}</td>
@@ -374,6 +413,11 @@
             </tr>
         `).join('');
     }
+
+    document.getElementById('findings-body').addEventListener('click', (e) => {
+        const row = e.target.closest('tr[data-index]');
+        if (row) showDetail(Number(row.dataset.index));
+    });
 
     function filterFindings() {
         const severity = document.getElementById('filter-severity').value;
@@ -383,9 +427,9 @@
         if (severity) filtered = filtered.filter(f => f.severity === severity);
         if (source) filtered = filtered.filter(f => f.source_tool === source);
         if (search) filtered = filtered.filter(f =>
-            f.title.toLowerCase().includes(search) ||
-            (f.resource_arn || '').toLowerCase().includes(search) ||
-            (f.description || '').toLowerCase().includes(search)
+            String(f.title || '').toLowerCase().includes(search) ||
+            String(f.resource_arn || '').toLowerCase().includes(search) ||
+            String(f.description || '').toLowerCase().includes(search)
         );
         renderFindings(filtered);
     }
@@ -401,11 +445,12 @@
     // ── Detail Panel ──
     function showDetail(index) {
         const f = findingsData[index];
+        if (!f) return;
         const panel = document.getElementById('detail-panel');
         const content = document.getElementById('detail-content');
-        content.innerHTML = `
+        content.innerHTML = html`
             <h2>${f.title}</h2>
-            <div class="detail-field"><div class="label">Severity</div><div class="value"><span class="severity-badge severity-${f.severity}">${f.severity}</span></div></div>
+            <div class="detail-field"><div class="label">Severity</div><div class="value"><span class="severity-badge ${severityClass(f.severity)}">${f.severity}</span></div></div>
             <div class="detail-field"><div class="label">Resource</div><div class="value"><code>${f.resource_arn || f.resource_id || 'N/A'}</code></div></div>
             <div class="detail-field"><div class="label">Description</div><div class="value">${f.description || 'N/A'}</div></div>
             <div class="detail-field"><div class="label">Evidence</div><div class="value"><pre>${f.evidence || 'N/A'}</pre></div></div>
@@ -791,14 +836,16 @@
     function renderCompliance() {
         const grid = document.getElementById('compliance-grid');
         grid.innerHTML = Object.entries(complianceSummary).map(([fw, data]) => {
-            const total = (data.pass || 0) + (data.fail || 0);
-            const pct = total > 0 ? Math.round((data.pass / total) * 100) : 0;
+            const pass = Number(data.pass) || 0;
+            const fail = Number(data.fail) || 0;
+            const total = pass + fail;
+            const pct = total > 0 ? Math.round((pass / total) * 100) : 0;
             const barColor = pct >= 80 ? 'var(--success)' : pct >= 50 ? 'var(--medium)' : 'var(--critical)';
-            return `
+            return html`
                 <div class="compliance-card">
                     <h4>${fw}</h4>
                     <div style="display:flex;justify-content:space-between;color:var(--text-muted);font-size:13px">
-                        <span>Pass: ${data.pass || 0}</span><span>Fail: ${data.fail || 0}</span><span>${pct}%</span>
+                        <span>Pass: ${pass}</span><span>Fail: ${fail}</span><span>${pct}%</span>
                     </div>
                     <div class="compliance-bar">
                         <div class="compliance-bar-fill" style="width:${pct}%;background:${barColor}"></div>
@@ -817,7 +864,7 @@
         a.click();
     }
 
-    // ── Init ──
+    // ── Init ── (tests/test_html_report.py runs the script up to this line)
     renderFindings(findingsData);
     renderTopology();
     renderCharts();
