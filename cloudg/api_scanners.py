@@ -452,7 +452,7 @@ def _plan_aws_auth(
     try:
         plan._aws_auth = resolve_aws_scanner_auth(config, profile)
     except Exception as exc:
-        logger.error("AWS credentials for the scanners did not resolve: %s", exc)
+        logger.error("AWS sign-in for the scanners failed: %s", exc)
         plan.errors.append(("scanner_auth", exc))
         plan._aws_auth = _AUTH_FAILED
         return None
