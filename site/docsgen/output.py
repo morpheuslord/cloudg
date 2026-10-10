@@ -172,7 +172,7 @@ def _count_mcp_tools() -> int:
     try:
         from cloudg.mcp import default_registry
 
-        return len(default_registry().tools())
+        return len(default_registry().tools)
     except Exception:  # noqa: BLE001
         log.debug("cannot list the MCP tools; tool count left at 0", exc_info=True)
         return 0

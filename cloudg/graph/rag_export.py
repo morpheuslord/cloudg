@@ -39,27 +39,19 @@ from cloudg.schema.models import (
     NetworkEdge,
 )
 
-from cloudg.graph.rag_text import (  # noqa: F401
+from cloudg.graph.rag_text import (
     CHUNK_STRATEGIES,
-    _SEVERITY_ORDER,
-    _SEVERITY_RANK,
     _index_findings,
     _graph_index,
     CHARS_PER_TOKEN,
-    _MORE_LINE_RESERVE,
-    _line_cost,
     _fit_sections,
     _cut,
     _entity_header_lines,
-    _edge_evidence,
     _entity_relations,
     _entity_findings_lines,
     _summarize_community_members,
     _count_community_edges,
-    _label,
-    _triple,
     _group_relation_triples,
-    _triple_evidence,
     _relation_group_lines,
 )
 
