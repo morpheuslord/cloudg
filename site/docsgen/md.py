@@ -64,6 +64,20 @@ def strip_tags(html: str) -> str:
     return unescape(re.sub(r"<[^>]+>", "", html))
 
 
+def _rule(method: Callable) -> Callable:
+    """Wrap a bound method as a markdown-it render rule.
+
+    markdown-it binds each rule to its renderer with ``__get__``. On
+    Python 3.12 that re-binds a bound method to the renderer (3.13 keeps the
+    original binding), so rules are plain functions that drop the renderer.
+    """
+
+    def rule(renderer, tokens, idx, options, env):  # noqa: ARG001
+        return method(tokens, idx, options, env)
+
+    return rule
+
+
 class Renderer:
     """Renders one document. ``resolve_link(href) -> href`` rewrites links."""
 
@@ -83,15 +97,15 @@ class Renderer:
         self.md = MarkdownIt("commonmark", {"html": True, "typographer": False}).enable("table").enable(
             "strikethrough"
         )
-        self.md.add_render_rule("fence", self._fence)
-        self.md.add_render_rule("code_block", self._code_block)
-        self.md.add_render_rule("heading_open", self._heading_open)
-        self.md.add_render_rule("heading_close", self._heading_close)
+        self.md.add_render_rule("fence", _rule(self._fence))
+        self.md.add_render_rule("code_block", _rule(self._code_block))
+        self.md.add_render_rule("heading_open", _rule(self._heading_open))
+        self.md.add_render_rule("heading_close", _rule(self._heading_close))
         self._open_ids: list[str] = []
         self.md.add_render_rule("table_open", lambda *a: '<div class="table-wrap"><table class="table">\n')
         self.md.add_render_rule("table_close", lambda *a: "</table></div>\n")
-        self.md.add_render_rule("link_open", self._link_open)
-        self.md.add_render_rule("code_inline", self._code_inline)
+        self.md.add_render_rule("link_open", _rule(self._link_open))
+        self.md.add_render_rule("code_inline", _rule(self._code_inline))
 
     # -- markdown-it render rules -------------------------------------------------
 
