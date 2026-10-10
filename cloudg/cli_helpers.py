@@ -6,8 +6,11 @@ rendering goes through :mod:`cloudg.ui`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from rich.markup import escape
 
 from cloudg import ui
 
@@ -22,111 +25,217 @@ def _parse_region_flag(scan_regions: str) -> list[str]:
     return [r.strip() for r in scan_regions.split(",")]
 
 
+# Exit status of `cloudg run` when collection failed for every target
+# (provider, account and region). Partial collection still exits 0.
+EXIT_COLLECTION_FAILED = 3
+
+
 # ─────────────────────────────────────────────────────────────────────
-# SCAN command helpers
+# SCAN / RUN scanner helpers
 # ─────────────────────────────────────────────────────────────────────
 
-
-def _basic_prowler(provider: str, profile: str | None, output_dir: Path) -> list[Any]:
-    from cloudg.scanners.prowler import ProwlerScanner
-
-    s = ProwlerScanner(provider=provider, profile=profile, output_dir=str(output_dir / "prowler"))
-    return s.run()
-
-
-def _basic_scoutsuite(provider: str, profile: str | None, output_dir: Path) -> list[Any]:
-    from cloudg.scanners.scoutsuite import ScoutSuiteScanner
-
-    s = ScoutSuiteScanner(
-        provider=provider, profile=profile, report_dir=str(output_dir / "scoutsuite")
-    )
-    return s.run()
+_BUILTIN_SCANNER_LABELS = {
+    "prowler": "Prowler",
+    "scoutsuite": "ScoutSuite",
+    "checkov": "Checkov",
+    "trivy": "Trivy",
+    "iam": "IAM linter",
+}
 
 
-def _basic_checkov(iac_dir: str) -> list[Any]:
-    from cloudg.scanners.checkov import CheckovScanner
-
-    return CheckovScanner(target_dir=iac_dir).run()
-
-
-def _basic_trivy_images(images: list[str]) -> list[Any]:
-    from cloudg.scanners.trivy import TrivyScanner
-
-    return TrivyScanner().scan_images(images)
-
-
-def _basic_trivy_fs(iac_dir: str) -> list[Any]:
-    from cloudg.scanners.trivy import TrivyScanner
-
-    return TrivyScanner().scan_filesystem([iac_dir])
+def _show_scan_plan(plan: Any) -> None:
+    """Print what the scanner plan skipped and why (not enabled, not
+    installed, nothing to scan, unresolved credentials)."""
+    requested = set(plan.requested)
+    for name, label in _BUILTIN_SCANNER_LABELS.items():
+        if name not in requested:
+            ui.skip(f"{label}: not enabled")
+    render = {"skip": ui.skip, "warning": ui.warn, "info": ui.detail}
+    for level, message in plan.notes:
+        render.get(level, ui.warn)(escape(message))
+    for phase, exc in plan.errors:
+        ui.fail(escape(f"{phase}: {exc}"))
 
 
-def _build_scan_jobs(
-    provider: str,
-    profile: str | None,
-    scanner_list: list[str],
-    iac_dir: str,
-    images: list[str],
-    output_dir: Path,
-) -> list[tuple[str, str, Any]]:
-    """Build (name, progress description, callable) tuples for `cloudg scan`."""
-    jobs: list[tuple[str, str, Any]] = []
-    if "prowler" in scanner_list:
-        jobs.append(("Prowler", "Prowler", lambda: _basic_prowler(provider, profile, output_dir)))
-    if "scoutsuite" in scanner_list:
-        jobs.append(
-            ("ScoutSuite", "ScoutSuite", lambda: _basic_scoutsuite(provider, profile, output_dir))
-        )
-    if "checkov" in scanner_list:
-        jobs.append(
-            (
-                "Checkov",
-                f"Checkov [muted](target: {iac_dir})[/]",
-                lambda: _basic_checkov(iac_dir),
-            )
-        )
-    if "trivy" in scanner_list:
-        if images:
-            jobs.append(
-                (
-                    "Trivy",
-                    f"Trivy [muted]({len(images)} images)[/]",
-                    lambda: _basic_trivy_images(images),
-                )
-            )
-        else:
-            ui.warn("Trivy: no images specified, falling back to filesystem scan")
-            jobs.append(
-                (
-                    "Trivy (filesystem)",
-                    f"Trivy filesystem [muted](target: {iac_dir})[/]",
-                    lambda: _basic_trivy_fs(iac_dir),
-                )
-            )
-    return jobs
+@dataclass
+class ScanOutcome:
+    """Findings of a scanner plan run from the CLI, per job."""
+
+    results: list[tuple[Any, list[Any]]] = field(default_factory=list)  # (job, findings)
+    completed: int = 0
+    failed: int = 0
+
+    @property
+    def findings(self) -> list[Any]:
+        return [f for _, findings in self.results for f in findings]
+
+    def findings_of(self, scanner: str, *, exclude: bool = False) -> list[Any]:
+        """Findings of jobs for ``scanner`` (or of every other job with exclude)."""
+        return [
+            f
+            for job, findings in self.results
+            if (job.scanner == scanner) != exclude
+            for f in findings
+        ]
 
 
-def _run_scan_jobs(jobs: list[tuple[str, str, Any]]) -> list[Any]:
-    """Execute scan jobs in parallel with progress display; return all findings."""
+def _run_scan_plan(plan: Any) -> ScanOutcome:
+    """Run the planned scanner jobs in parallel with a progress display.
+
+    A scanner that times out (scanners.timeout_seconds) or fails is shown as
+    failed; findings it produced before that are kept.
+    """
     import concurrent.futures
 
-    all_findings: list[Any] = []
-    with ui.scanner_progress() as progress:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs) + 1) as executor:
-            future_to_task: dict[concurrent.futures.Future, tuple[str, Any]] = {}
-            for name, description, fn in jobs:
-                task_id = progress.add_task(description, total=None)
-                future_to_task[executor.submit(fn)] = (name, task_id)
+    from cloudg.api_scanners import ScannerFailed
 
-            for future in concurrent.futures.as_completed(future_to_task):
-                name, task_id = future_to_task[future]
+    outcome = ScanOutcome()
+    if not plan.jobs:
+        return outcome
+    failures: list[str] = []
+    with ui.scanner_progress() as progress:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(plan.jobs), 2)) as executor:
+            future_to_job: dict[concurrent.futures.Future, tuple[Any, Any]] = {}
+            for job in plan.jobs:
+                task_id = progress.add_task(escape(job.label), total=None)
+                future_to_job[executor.submit(job.fn)] = (job, task_id)
+
+            for future in concurrent.futures.as_completed(future_to_job):
+                job, task_id = future_to_job[future]
                 try:
-                    findings = future.result(timeout=3600)
-                    all_findings.extend(findings)
-                    ui.task_done(progress, task_id, f"{name}: {len(findings)} findings")
+                    findings = future.result()
+                except ScannerFailed as exc:
+                    outcome.failed += 1
+                    outcome.results.append((job, exc.findings))
+                    kept = f"; kept {len(exc.findings)} findings" if exc.findings else ""
+                    ui.task_failed(progress, task_id, f"{escape(job.label)}: did not finish")
+                    failures.append(f"{job.label}: {exc}{kept}")
+                    continue
                 except Exception as exc:
-                    ui.task_failed(progress, task_id, f"{name} failed: {exc}")
-    return all_findings
+                    outcome.failed += 1
+                    ui.task_failed(progress, task_id, f"{escape(job.label)}: failed")
+                    failures.append(f"{job.label} failed: {exc}")
+                    continue
+                outcome.completed += 1
+                outcome.results.append((job, findings))
+                ui.task_done(progress, task_id, f"{escape(job.label)}: {len(findings)} findings")
+    # In full here: progress lines are cut to the terminal width
+    for line in failures:
+        ui.fail(escape(line))
+    return outcome
+
+
+def _load_scan_assets(path: str | None) -> list[Any]:
+    """Assets for the IAM linter, from a file with a top-level "assets" list:
+    inventory-<provider>.json (`cloudg collect`), inventory-map.json
+    (`cloudg map`, or the directory holding it) or findings.json."""
+    if not path:
+        return []
+    import json
+
+    from cloudg.schema.models import CloudAsset
+
+    p = Path(path)
+    if p.is_dir():
+        p = p / "inventory-map.json"
+    with open(p) as f:
+        data = json.load(f)
+    raw = data.get("assets", []) if isinstance(data, dict) else []
+    return [CloudAsset.model_validate(a) for a in raw]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# REPORT command helpers
+# ─────────────────────────────────────────────────────────────────────
+
+_METADATA_FIELDS = ("scan_id", "provider", "account_id", "region", "started_at", "completed_at")
+
+
+def _load_report_input(path: Path, rules_dir: str | None = None) -> tuple[Any, dict[str, Any]]:
+    """Read `cloudg report -i` input into (ScanResult, D3 graph JSON).
+
+    - findings.json (a JSON object): restored as written, with its scan ID,
+      provider, account, region, timestamps, assets, findings, compliance
+      results, edges and graph. Files written before findings.json carried
+      edges get them back from the graph links.
+    - raw-findings.json (a JSON list of findings, from `cloudg scan` or
+      `cloudg ingest`): normalised first, like `cloudg ingest` does.
+
+    Raises:
+        ValueError: the file is neither of the two.
+    """
+    import json
+
+    from cloudg.schema.models import CloudAsset, ComplianceResult, Finding, ScanResult
+
+    with open(path) as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        from cloudg.normaliser import FindingsNormaliser
+
+        findings = [Finding.model_validate(item) for item in data]
+        return FindingsNormaliser(rules_dir=rules_dir).normalise(findings), {
+            "nodes": [],
+            "links": [],
+        }
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{path}: expected a findings.json object or a raw-findings.json list, "
+            f"got {type(data).__name__}"
+        )
+
+    graph = data.get("graph") or {"nodes": [], "links": []}
+    metadata = data.get("metadata") or {}
+    restored = {
+        key: metadata[key]
+        for key in _METADATA_FIELDS
+        if metadata.get(key) not in (None, "", "None")
+    }
+    if "edges" in data:
+        edges = _validate_edges(data.get("edges") or [])
+    else:
+        edges = _edges_from_graph(graph)
+    scan_result = ScanResult(
+        assets=[CloudAsset.model_validate(a) for a in data.get("assets", [])],
+        findings=[Finding.model_validate(f) for f in data.get("findings", [])],
+        compliance=[ComplianceResult.model_validate(c) for c in data.get("compliance", [])],
+        edges=edges,
+        **restored,
+    )
+    return scan_result, graph
+
+
+def _validate_edges(raw: list[Any]) -> list[Any]:
+    from cloudg.schema.models import NetworkEdge
+
+    return [NetworkEdge.model_validate(e) for e in raw]
+
+
+def _edges_from_graph(graph: dict[str, Any]) -> list[Any]:
+    """Rebuild edges from D3 graph links (for findings.json files without "edges")."""
+    from pydantic import ValidationError
+
+    from cloudg.schema.models import NetworkEdge
+
+    edges = []
+    for link in graph.get("links", []):
+        fields = {
+            "source_id": link.get("source"),
+            "target_id": link.get("target"),
+            "edge_type": link.get("type"),
+            "port_range": link.get("port_range"),
+            "protocol": link.get("protocol"),
+            "cidr": link.get("cidr"),
+            "direction": link.get("direction") or "ingress",
+            "relationship": link.get("relationship") or None,
+            "description": link.get("description") or None,
+        }
+        try:
+            edges.append(NetworkEdge.model_validate(fields))
+        except ValidationError:
+            continue  # e.g. an edge type this version does not know
+    return edges
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -247,9 +356,22 @@ def _apply_run_overrides(cfg: CloudGConfig, kwargs: dict[str, Any]) -> None:
 
 def _resolve_run_scanners(cfg: CloudGConfig, scanners: str | None) -> list[str]:
     """Resolve the scanner list from the CLI flag or config.yaml scanners.enabled."""
-    if scanners is not None:
-        return [s.strip().lower() for s in scanners.split(",")]
-    return [s.strip().lower() for s in cfg.scanners.enabled]
+    names = scanners.split(",") if scanners is not None else cfg.scanners.enabled
+    return [s.strip().lower() for s in names if s.strip()]
+
+
+def _check_account_scope(cfg: CloudGConfig) -> None:
+    """--accounts / aws.accounts needs a role name to reach those accounts."""
+    import click
+
+    from cloudg.credentials import check_aws_account_scope
+
+    if "aws" not in cfg.providers:
+        return
+    try:
+        check_aws_account_scope(cfg.aws)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
 
 
 def _show_run_config(cfg: CloudGConfig, scanner_list: list[str], output_dir: Path) -> None:

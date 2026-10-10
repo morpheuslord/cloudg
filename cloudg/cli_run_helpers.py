@@ -27,6 +27,7 @@ def _collect_assets(cfg: CloudGConfig) -> tuple[list[Any], list[Any], list[Any]]
     """Phase 1: Asset Collection via the multi-provider orchestrator."""
     ui.phase("Phase 1 · Asset Collection")
 
+    from cloudg.api import failed_collection_targets
     from cloudg.collectors.multi import MultiAccountCollector
 
     multi_collector = MultiAccountCollector(cfg)
@@ -40,6 +41,8 @@ def _collect_assets(cfg: CloudGConfig) -> tuple[list[Any], list[Any], list[Any]]
     except Exception as exc:
         ui.error_panel("Collection failed", exc)
         return [], [], []
+    for line in failed_collection_targets(coverage_records)[:10]:
+        ui.fail(f"Not collected: {line}")
     return assets, edges, coverage_records
 
 
@@ -144,7 +147,9 @@ def _terraform_phase(
     try:
         from cloudg.renderers.terraform_export import TerraformExporter
 
-        tf_dir = cfg.terraform.output_dir or str(output_dir / "terraform")
+        from cloudg.renderers.terraform_export import terraform_output_dir
+
+        tf_dir = str(terraform_output_dir(cfg.terraform, output_dir))
         tf_exporter = TerraformExporter(output_dir=tf_dir)
         preview = tf_exporter.preview(assets)
         ui.detail(
@@ -161,199 +166,6 @@ def _terraform_phase(
     except Exception as exc:
         ui.fail(f"Terraform export failed: {exc}")
         return None
-
-
-def _scan_prowler(cfg: CloudGConfig, prov: str, profile: str | None, output_dir: Path) -> list[Any]:
-    from cloudg.scanners.prowler import ProwlerScanner
-
-    prowler_region = cfg.aws.regions[0] if cfg.aws.regions else None
-    s = ProwlerScanner(
-        provider=prov,
-        profile=profile,
-        output_dir=str(output_dir / "prowler" / prov),
-        extra_args=cfg.scanners.prowler_extra_args or [],
-        aws_access_key_id=cfg.aws.access_key_id if prov == "aws" else None,
-        aws_secret_access_key=cfg.aws.secret_access_key if prov == "aws" else None,
-        aws_region=prowler_region if prov == "aws" else None,
-    )
-    return s.run()
-
-
-def _scan_scoutsuite(
-    cfg: CloudGConfig, prov: str, profile: str | None, output_dir: Path
-) -> list[Any]:
-    from cloudg.scanners.scoutsuite import ScoutSuiteScanner
-
-    s = ScoutSuiteScanner(
-        provider=prov,
-        profile=profile if prov == "aws" else None,
-        report_dir=str(output_dir / "scoutsuite" / prov),
-        extra_args=cfg.scanners.scoutsuite_extra_args or [],
-    )
-    return s.run()
-
-
-def _scan_checkov(cfg: CloudGConfig, target_dir: str) -> list[Any]:
-    from cloudg.scanners.checkov import CheckovScanner
-
-    frameworks = cfg.scanners.checkov_frameworks or []
-    s = CheckovScanner(
-        target_dir=target_dir,
-        frameworks=frameworks if frameworks else None,
-        extra_args=cfg.scanners.checkov_extra_args or [],
-    )
-    return s.run()
-
-
-def _scan_trivy_images(cfg: CloudGConfig, image_list: list[str]) -> list[Any]:
-    from cloudg.scanners.trivy import TrivyScanner
-
-    s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
-    return s.scan_images(image_list)
-
-
-def _scan_trivy_fs(cfg: CloudGConfig, target_dirs: list[str]) -> list[Any]:
-    from cloudg.scanners.trivy import TrivyScanner
-
-    s = TrivyScanner(extra_args=cfg.scanners.trivy_extra_args or [])
-    return s.scan_filesystem(target_dirs)
-
-
-def _scan_iam(assets: list[Any]) -> list[Any]:
-    from cloudg.scanners.iam_linter import IAMLinter
-
-    return IAMLinter().analyze_policies(assets)
-
-
-def _submit_provider_scanners(
-    submit: Any,
-    cfg: CloudGConfig,
-    scanner_list: list[str],
-    profile: str | None,
-    output_dir: Path,
-) -> None:
-    """Submit Prowler and ScoutSuite, one instance per provider."""
-    if "prowler" in scanner_list:
-        for prov in cfg.providers:
-            if prov in ("aws", "azure", "gcp"):
-                submit(
-                    f"Prowler ({prov})",
-                    f"Prowler [muted]({prov})[/]",
-                    _scan_prowler,
-                    cfg,
-                    prov,
-                    profile,
-                    output_dir,
-                )
-    else:
-        ui.skip("Prowler: not enabled")
-
-    if "scoutsuite" in scanner_list:
-        for prov in cfg.providers:
-            if prov in ("aws", "azure", "gcp"):
-                submit(
-                    f"ScoutSuite ({prov})",
-                    f"ScoutSuite [muted]({prov})[/]",
-                    _scan_scoutsuite,
-                    cfg,
-                    prov,
-                    profile,
-                    output_dir,
-                )
-    else:
-        ui.skip("ScoutSuite: not enabled")
-
-
-def _submit_checkov(
-    submit: Any, cfg: CloudGConfig, scanner_list: list[str], iac_dirs: list[str]
-) -> None:
-    """Submit Checkov against each resolved IaC directory."""
-    if "checkov" not in scanner_list:
-        ui.skip("Checkov: not enabled")
-        return
-    if not iac_dirs:
-        ui.warn(
-            "Checkov: nothing to scan; pass --iac-dir, set "
-            "scanners.iac_directories, or enable --terraform to scan the "
-            "recreated infrastructure"
-        )
-        return
-    frameworks = cfg.scanners.checkov_frameworks or []
-    fw_label = ", ".join(frameworks) if frameworks else "auto-detect"
-    for d in iac_dirs:
-        submit(
-            f"Checkov ({d})",
-            f"Checkov [muted](target: {d}, frameworks: {fw_label})[/]",
-            _scan_checkov,
-            cfg,
-            d,
-        )
-
-
-def _submit_trivy_and_iam(
-    submit: Any,
-    cfg: CloudGConfig,
-    scanner_list: list[str],
-    iac_dirs: list[str],
-    images: list[str],
-    assets: list[Any],
-) -> None:
-    """Submit Trivy (images or filesystem fallback) and the IAM linter."""
-    if "trivy" in scanner_list:
-        if images:
-            submit(
-                "Trivy (images)",
-                f"Trivy [muted]({len(images)} images)[/]",
-                _scan_trivy_images,
-                cfg,
-                images,
-            )
-        elif iac_dirs:
-            ui.warn("Trivy: no images configured, falling back to filesystem scan")
-            submit(
-                "Trivy (filesystem)",
-                f"Trivy filesystem [muted]({len(iac_dirs)} directories)[/]",
-                _scan_trivy_fs,
-                cfg,
-                iac_dirs,
-            )
-        else:
-            ui.warn("Trivy: nothing to scan; configure --images, --iac-dir, or enable --terraform")
-    else:
-        ui.skip("Trivy: not enabled")
-
-    # IAM Linter: always runs internally to analyze collected assets
-    if "iam" in scanner_list or assets:
-        submit("IAM Linter", "IAM Lint", _scan_iam, assets)
-
-
-def _collect_scanner_results(
-    progress: Any,
-    future_to_scanner: dict[Any, tuple[str, Any]],
-    cfg: CloudGConfig,
-    scanner_findings: list[Any],
-    iam_findings: list[Any],
-) -> None:
-    """Drain scanner futures, routing findings and reporting task status."""
-    import concurrent.futures
-
-    for future in concurrent.futures.as_completed(future_to_scanner):
-        scanner_name, task_id = future_to_scanner[future]
-        try:
-            findings = future.result(timeout=cfg.scanners.timeout_seconds)
-            if scanner_name == "IAM Linter":
-                iam_findings.extend(findings)
-            else:
-                scanner_findings.extend(findings)
-            ui.task_done(progress, task_id, f"{scanner_name}: {len(findings)} findings")
-        except concurrent.futures.TimeoutError:
-            ui.task_failed(
-                progress,
-                task_id,
-                f"{scanner_name} timed out after {cfg.scanners.timeout_seconds}s",
-            )
-        except Exception as exc:
-            ui.task_failed(progress, task_id, f"{scanner_name} failed: {exc}")
 
 
 def _resolve_scan_iac_dirs(cfg: CloudGConfig, iac_dir: str | None, tf_dir: str | None) -> list[str]:
@@ -373,42 +185,6 @@ def _resolve_scan_iac_dirs(cfg: CloudGConfig, iac_dir: str | None, tf_dir: str |
     return resolved_iac_dirs
 
 
-def _run_scanners_parallel(
-    cfg: CloudGConfig,
-    scanner_list: list[str],
-    profile: str | None,
-    resolved_iac_dirs: list[str],
-    resolved_images: list[str],
-    assets: list[Any],
-    output_dir: Path,
-) -> tuple[list[Any], list[Any]]:
-    """Submit every enabled scanner to a thread pool and gather their findings."""
-    import concurrent.futures
-
-    scanner_findings: list[Any] = []
-    iam_findings: list[Any] = []
-    max_workers = len(scanner_list) + len(cfg.providers) + 1  # +1 for IAM linter
-    with ui.scanner_progress() as progress:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(max_workers, 2)) as executor:
-            future_to_scanner: dict[concurrent.futures.Future, tuple[str, Any]] = {}
-
-            def submit(name: str, description: str, fn: Any, *args: Any) -> None:
-                task_id = progress.add_task(description, total=None)
-                future_to_scanner[executor.submit(fn, *args)] = (name, task_id)
-
-            _submit_provider_scanners(submit, cfg, scanner_list, profile, output_dir)
-            _submit_checkov(submit, cfg, scanner_list, resolved_iac_dirs)
-            _submit_trivy_and_iam(
-                submit, cfg, scanner_list, resolved_iac_dirs, resolved_images, assets
-            )
-
-            _collect_scanner_results(
-                progress, future_to_scanner, cfg, scanner_findings, iam_findings
-            )
-
-    return scanner_findings, iam_findings
-
-
 def _scanner_phase(
     cfg: CloudGConfig,
     scanner_list: list[str],
@@ -421,13 +197,30 @@ def _scanner_phase(
 ) -> tuple[list[Any], list[Any]]:
     """Phase 3: run all enabled scanners in parallel.
 
+    Scanner selection, credentials, regions and timeouts follow the same
+    rules as :meth:`cloudg.api.CloudGEngine.scan`. The IAM linter runs only
+    when ``iam`` is in the scanner list.
+
     Returns (scanner findings, IAM linter findings).
     """
+    from cloudg.api_scanners import plan_scanner_jobs
+    from cloudg.cli_helpers import _run_scan_plan, _show_scan_plan
+
     ui.phase("Phase 3 · Security Scanning", note="running scanners in parallel")
     resolved_iac_dirs = _resolve_scan_iac_dirs(cfg, iac_dir, tf_dir)
-    return _run_scanners_parallel(
-        cfg, scanner_list, profile, resolved_iac_dirs, resolved_images, assets, output_dir
+    plan = plan_scanner_jobs(
+        cfg,
+        scanner_list,
+        providers=list(cfg.providers),
+        profile=profile,
+        out=output_dir,
+        assets=assets,
+        iac_dirs=resolved_iac_dirs,
+        images=resolved_images,
     )
+    _show_scan_plan(plan)
+    outcome = _run_scan_plan(plan)
+    return outcome.findings_of("iam", exclude=True), outcome.findings_of("iam")
 
 
 def _ontology_phase(
@@ -562,3 +355,26 @@ def _post_scan_phases(
 
     console.print()
     ui.success(f"All reports saved to [path]{output_dir}[/]")
+
+
+def _collection_verdict(products: RunProducts) -> int:
+    """Say how collection went and return the exit status for `cloudg run`:
+    EXIT_COLLECTION_FAILED when nothing at all could be collected, else 0."""
+    from cloudg.api import collection_failed, failed_collection_targets
+    from cloudg.cli_helpers import EXIT_COLLECTION_FAILED
+
+    failed = failed_collection_targets(products.coverage_records)
+    if collection_failed(products.assets, products.coverage_records):
+        detail = "\n".join(failed[:10]) or "the collectors raised before recording coverage"
+        ui.error_panel(
+            "Collection failed for every target",
+            f"{detail}\n\nThe reports hold scanner findings only. "
+            f"Exit status {EXIT_COLLECTION_FAILED}.",
+        )
+        return EXIT_COLLECTION_FAILED
+    if failed:
+        ui.warn(
+            f"Collection was partial: {len(failed)} target(s) failed "
+            "(see the coverage table); the run still succeeded"
+        )
+    return 0

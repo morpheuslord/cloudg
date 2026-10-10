@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 class JSONExporter:
     """Exports scan results to a findings.json file.
 
-    Contains: full asset inventory, all findings, graph data, compliance mappings.
+    Contains: full asset inventory, all findings, edges, graph data,
+    compliance mappings (enough for `cloudg report -i` to rebuild the run).
     """
 
     def __init__(self, output_dir: str = ".") -> None:
@@ -55,6 +56,7 @@ class JSONExporter:
             ],
             "findings": [finding.model_dump(mode="json") for finding in scan_result.findings],
             "compliance": [result.model_dump(mode="json") for result in scan_result.compliance],
+            "edges": [edge.model_dump(mode="json") for edge in scan_result.edges],
             "graph": graph_json or {"nodes": [], "links": []},
         }
 
