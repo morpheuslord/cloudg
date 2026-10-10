@@ -289,6 +289,11 @@ a > code { color: inherit; }
 .table-note { font-size: 14px; color: var(--color-neutral-700); max-width: 760px; }
 .opt-table td:first-child { white-space: nowrap; }
 .opt-table td:nth-child(2), .opt-table td:nth-child(3) { max-width: 160px; }
+/* "--x / --no-x" may wrap after the slash, nowhere else in the flag cell */
+.opt-flags { white-space: normal; }
+.opt-flag { white-space: nowrap; }
+/* each choice of a list like aws|azure|gcp is an inline block, so the list wraps after a "|" */
+.opt-choice { display: inline-block; }
 .opt-table td:last-child { min-width: 260px; }
 .opt-table tr:target { background: var(--color-accent-100); }
 

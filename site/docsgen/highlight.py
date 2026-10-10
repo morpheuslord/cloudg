@@ -90,7 +90,13 @@ def _css_class(ttype) -> str:
 
 
 def _lexer(lang: str):
-    alias = {"jsonl": "json", "yml": "yaml", "docker": "dockerfile", "ttl": "turtle", "terraform": "hcl"}
+    alias = {
+        "jsonl": "json",
+        "yml": "yaml",
+        "docker": "dockerfile",
+        "ttl": "turtle",
+        "terraform": "hcl",
+    }
     try:
         return get_lexer_by_name(alias.get(lang, lang) or "text", stripnl=False, ensurenl=False)
     except ClassNotFound:
@@ -164,36 +170,56 @@ def code_bar_label(lang: str, attrs: dict[str, str]) -> tuple[str, str]:
     return "file-code", attrs.get("title", LANG_LABELS.get(lang, lang.upper() if lang else "Text"))
 
 
+def _session_lines(code: str, lang: str) -> list[tuple[str, str]]:  # noqa: ARG001
+    """Console transcript: commands highlighted as bash, output left plain."""
+    lines = []
+    for role, text in _session_roles(code.rstrip("\n").split("\n")):
+        if role in ("cmd", "cont"):
+            inner = tokenize_lines(text + "\n", "bash")[0]
+        else:
+            inner = escape(text, quote=False)
+        lines.append((role, inner))
+    return lines
+
+
+def _terminal_lines(code: str, lang: str) -> list[tuple[str, str]]:  # noqa: ARG001
+    raw = code.rstrip("\n").split("\n")
+    toks = tokenize_lines(code, "bash")
+    toks += [""] * (len(raw) - len(toks))
+    return list(zip(_terminal_roles(raw), toks))
+
+
+def _editor_lines(code: str, lang: str) -> list[tuple[str, str]]:
+    return [("", t) for t in tokenize_lines(code, lang)]
+
+
+def _line_span(n: int, role: str, inner: str, hl: set[int]) -> str:
+    classes = ["line"]
+    if role:
+        classes.append(role)
+    if n in hl:
+        classes.append("hl")
+    return f'<span class="{" ".join(classes)}">{inner or " "}</span>'
+
+
 def render_code_body(code: str, lang: str, attrs: dict[str, str]) -> tuple[str, str]:
     """Render the ``<pre>`` for a block. Returns (variant, html)."""
     code = code.rstrip("\n") + "\n"
     hl = parse_ranges(attrs["hl"]) if attrs.get("hl") else set()
     if lang in SESSION_LANGS:
-        variant = "terminal"
-        rows = _session_roles(code.rstrip("\n").split("\n"))
-        html_lines = []
-        for role, text in rows:
-            inner = tokenize_lines(text + "\n", "bash")[0] if role in ("cmd", "cont") else escape(text, quote=False)
-            html_lines.append((role, inner))
+        variant, lines_of = "terminal", _session_lines
     elif lang in TERMINAL_LANGS:
-        variant = "terminal"
-        raw = code.rstrip("\n").split("\n")
-        roles = _terminal_roles(raw)
-        toks = tokenize_lines(code, "bash")
-        toks += [""] * (len(raw) - len(toks))
-        html_lines = list(zip(roles, toks))
+        variant, lines_of = "terminal", _terminal_lines
     else:
-        variant = "editor"
-        html_lines = [("", t) for t in tokenize_lines(code, lang)]
-    out = []
-    for n, (role, inner) in enumerate(html_lines, start=1):
-        classes = ["line"]
-        if role:
-            classes.append(role)
-        if n in hl:
-            classes.append("hl")
-        out.append(f'<span class="{" ".join(classes)}">{inner or " "}</span>')
-    pre = f'<pre class="code-pre"><code class="lang-{escape(lang or "text")}">' + "\n".join(out) + "</code></pre>"
+        variant, lines_of = "editor", _editor_lines
+    out = [
+        _line_span(n, role, inner, hl)
+        for n, (role, inner) in enumerate(lines_of(code, lang), start=1)
+    ]
+    lang_class = escape(lang or "text")
+    pre = (
+        f'<pre class="code-pre"><code class="lang-{lang_class}">' + "\n".join(out) + "</code></pre>"
+    )
     return variant, pre
 
 
@@ -201,7 +227,9 @@ def render_code_block(code: str, info: str) -> str:
     lang, attrs = parse_info(info)
     variant, pre = render_code_body(code, lang, attrs)
     ico, label = code_bar_label(lang, attrs)
-    lang_tag = LANG_LABELS.get(lang, lang) if lang and "title" in attrs and variant == "editor" else ""
+    lang_tag = (
+        LANG_LABELS.get(lang, lang) if lang and "title" in attrs and variant == "editor" else ""
+    )
     bar = (
         f'<div class="code-bar"><span class="code-file">{icon(ico, 14)}<span>{escape(label)}</span></span>'
         + (f'<span class="code-lang">{escape(lang_tag)}</span>' if lang_tag else "")
@@ -242,5 +270,5 @@ def render_tab_group(blocks: list[tuple[str, str]]) -> str:
     return (
         '<figure class="code code--tabs">'
         f'<div class="code-bar code-tabs" role="tablist">{"".join(tabs)}{copy_button()}</div>'
-        f'{"".join(panes)}</figure>'
+        f"{''.join(panes)}</figure>"
     )

@@ -35,7 +35,11 @@ class Command:
 
 
 def _is_unset(value) -> bool:
-    return value is None or type(value).__name__ in ("Sentinel", "_Missing") or repr(value).startswith("Sentinel.")
+    return (
+        value is None
+        or type(value).__name__ in ("Sentinel", "_Missing")
+        or repr(value).startswith("Sentinel.")
+    )
 
 
 def _value_of(param: click.Parameter) -> str:
@@ -58,14 +62,19 @@ def _value_of(param: click.Parameter) -> str:
     }.get(name, name.upper())
 
 
+def _flag_default(param: click.Option) -> str:
+    default = param.default
+    if not param.secondary_opts:
+        return "on" if default is True else "off"
+    if _is_unset(default):
+        return "config"
+    return param.opts[0] if default else param.secondary_opts[0]
+
+
 def _default_of(param: click.Parameter) -> str:
     default = param.default
-    if isinstance(param, click.Option) and param.is_flag and param.secondary_opts:
-        if _is_unset(default):
-            return "config"
-        return param.opts[0] if default else param.secondary_opts[0]
     if isinstance(param, click.Option) and param.is_flag:
-        return "on" if default is True else "off"
+        return _flag_default(param)
     if _is_unset(default):
         return "none"
     if isinstance(default, (tuple, list)):
@@ -116,51 +125,61 @@ def _source(cmd: click.Command) -> tuple[str, int]:
     return file or "", line
 
 
+def _option(p: click.Parameter) -> Option:
+    is_argument = isinstance(p, click.Argument)
+    envvar = getattr(p, "envvar", None)
+    anchor = p.opts[0] if is_argument else max(p.opts, key=len)
+    return Option(
+        flags=_flags_of(p),
+        value=_value_of(p),
+        default=_default_of(p),
+        help=" ".join((getattr(p, "help", "") or "").split()),
+        required=bool(p.required),
+        multiple=bool(getattr(p, "multiple", False)),
+        envvar=envvar if isinstance(envvar, str) else "",
+        is_argument=is_argument,
+        anchor=anchor.lstrip("-"),
+    )
+
+
+def _repo_source(cmd: click.Command, repo: Path) -> tuple[str, int]:
+    """Source file of the command callback relative to ``repo``, and its line."""
+    file, line = _source(cmd) if cmd.callback else ("", 0)
+    if not file:
+        return "", line
+    try:
+        return str(Path(file).resolve().relative_to(repo.resolve())), line
+    except ValueError:
+        return file, line
+
+
+def _command(cmd: click.Command, path: str, repo: Path) -> Command:
+    file, line = _repo_source(cmd, repo)
+    return Command(
+        path=path,
+        help=inspect.cleandoc(cmd.help or ""),
+        short_help=cmd.get_short_help_str(limit=200),
+        usage=_usage(path, cmd),
+        options=[_option(p) for p in cmd.params if not getattr(p, "hidden", False)],
+        source_file=file,
+        source_line=line,
+        group=isinstance(cmd, click.Group),
+    )
+
+
+def _walk(cmd: click.Command, path: str, repo: Path, out: dict[str, Command]) -> None:
+    if path:
+        out[path] = _command(cmd, path, repo)
+    if isinstance(cmd, click.Group):
+        for name, sub in cmd.commands.items():
+            _walk(sub, f"{path} {name}".strip(), repo, out)
+
+
 def collect(repo: Path) -> dict[str, Command]:
     from cloudg.cli import cli
 
     out: dict[str, Command] = {}
-
-    def walk(cmd: click.Command, path: str) -> None:
-        if path:
-            options = []
-            for p in cmd.params:
-                if getattr(p, "hidden", False):
-                    continue
-                help_text = getattr(p, "help", "") or ""
-                opt = Option(
-                    flags=_flags_of(p),
-                    value=_value_of(p),
-                    default=_default_of(p),
-                    help=" ".join(help_text.split()),
-                    required=bool(p.required),
-                    multiple=bool(getattr(p, "multiple", False)),
-                    envvar=p.envvar if isinstance(getattr(p, "envvar", None), str) else "",
-                    is_argument=isinstance(p, click.Argument),
-                    anchor=(p.opts[0] if isinstance(p, click.Argument) else max(p.opts, key=len)).lstrip("-"),
-                )
-                options.append(opt)
-            file, line = _source(cmd) if cmd.callback else ("", 0)
-            try:
-                file = str(Path(file).resolve().relative_to(repo.resolve())) if file else ""
-            except ValueError:
-                pass
-            help_text = inspect.cleandoc(cmd.help or "")
-            out[path] = Command(
-                path=path,
-                help=help_text,
-                short_help=cmd.get_short_help_str(limit=200),
-                usage=_usage(path, cmd),
-                options=options,
-                source_file=file,
-                source_line=line,
-                group=isinstance(cmd, click.Group),
-            )
-        if isinstance(cmd, click.Group):
-            for name, sub in cmd.commands.items():
-                walk(sub, f"{path} {name}".strip())
-
-    walk(cli, "")
+    _walk(cli, "", repo, out)
     root_help = inspect.cleandoc(cli.help or "")
     out["__root__"] = Command(
         path="",
@@ -168,7 +187,12 @@ def collect(repo: Path) -> dict[str, Command]:
         short_help="",
         usage="cloudg [OPTIONS] COMMAND [ARGS]...",
         options=[
-            Option(flags=_flags_of(p), value=_value_of(p), default=_default_of(p), help=" ".join((p.help or "").split()))
+            Option(
+                flags=_flags_of(p),
+                value=_value_of(p),
+                default=_default_of(p),
+                help=" ".join((p.help or "").split()),
+            )
             for p in cli.params
             if isinstance(p, click.Option)
         ],

@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-import importlib
 import inspect
+import pkgutil
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 _SECTION_RE = re.compile(
-    r"^(Args|Arguments|Parameters|Params|Returns|Return|Yields|Raises|Example|Examples|Note|Notes|Attributes|Usage)\s*:\s*$"
+    r"^(Args|Arguments|Parameters|Params|Returns|Return|Yields|Raises|Example|Examples"
+    r"|Note|Notes|Attributes|Usage)\s*:\s*$"
 )
+_ITEM_RE = re.compile(r"^(\*{0,2}[\w.\[\], |]+?)\s*(\([^)]*\))?\s*:\s*(.*)$")
+# objects documented on the API pages: dotted identifiers inside the cloudg package
+_API_PATH_RE = re.compile(r"^cloudg(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 
 
 @dataclass
@@ -72,11 +76,8 @@ def rst_to_md(text: str) -> str:
     return re.sub(r"``([^`]+)``", r"`\1`", text)
 
 
-def parse_docstring(text: str | None) -> Doc:
-    doc = Doc()
-    if not text:
-        return doc
-    text = rst_to_md(inspect.cleandoc(text))
+def _split_sections(text: str) -> dict[str, list[str]]:
+    """Group docstring lines under their Google-style section header ("" for the top)."""
     sections: dict[str, list[str]] = {"": []}
     current = ""
     for line in text.split("\n"):
@@ -86,43 +87,53 @@ def parse_docstring(text: str | None) -> Doc:
             sections.setdefault(current, [])
             continue
         sections.setdefault(current, []).append(line)
+    return sections
 
+
+def _items(lines: list[str]) -> list[tuple[str, str]]:
+    """``name (type): text`` entries, with continuation lines folded in."""
+    out: list[tuple[str, str]] = []
+    lines = inspect.cleandoc("\n".join(lines)).split("\n") if lines else []
+    for line in lines:
+        if not line.strip():
+            continue
+        m = _ITEM_RE.match(line) if not line.startswith(" ") else None
+        if m:
+            out.append((m.group(1).strip("* "), m.group(3).strip()))
+        elif out:
+            out[-1] = (out[-1][0], (out[-1][1] + " " + line.strip()).strip())
+    return out
+
+
+def _take(sections: dict[str, list[str]], keys: tuple[str, ...]) -> list[list[str]]:
+    """Remove and return the sections named in ``keys``, in that order."""
+    return [sections.pop(key) for key in keys if key in sections]
+
+
+def _block(lines: list[str]) -> str:
+    return inspect.cleandoc("\n".join(lines))
+
+
+def parse_docstring(text: str | None) -> Doc:
+    doc = Doc()
+    if not text:
+        return doc
+    sections = _split_sections(rst_to_md(inspect.cleandoc(text)))
     main = "\n".join(sections.pop("", [])).strip()
     paras = re.split(r"\n\s*\n", main, maxsplit=1)
     doc.summary = " ".join(paras[0].split())
     doc.body = paras[1].strip() if len(paras) > 1 else ""
-
-    def items(lines: list[str]) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
-        lines = inspect.cleandoc("\n".join(lines)).split("\n") if lines else []
-        for line in lines:
-            if not line.strip():
-                continue
-            m = re.match(r"^(\*{0,2}[\w.\[\], |]+?)\s*(\([^)]*\))?\s*:\s*(.*)$", line) if not line.startswith(" ") else None
-            if m:
-                out.append((m.group(1).strip("* "), m.group(3).strip()))
-            elif out:
-                out[-1] = (out[-1][0], (out[-1][1] + " " + line.strip()).strip())
-        return out
-
-    for key in ("args", "arguments", "parameters", "params"):
-        if key in sections:
-            doc.params.update(dict(items(sections.pop(key))))
-    for key in ("returns", "return", "yields"):
-        if key in sections:
-            doc.returns = " ".join(" ".join(sections.pop(key)).split())
-    if "raises" in sections:
-        doc.raises = items(sections.pop("raises"))
-    if "attributes" in sections:
-        doc.attributes = dict(items(sections.pop("attributes")))
-    for key in ("example", "examples", "usage"):
-        if key in sections:
-            doc.examples = inspect.cleandoc("\n".join(sections.pop(key)))
-    notes = []
-    for key in ("note", "notes"):
-        if key in sections:
-            notes.append(inspect.cleandoc("\n".join(sections.pop(key))))
-    doc.notes = "\n\n".join(notes)
+    for lines in _take(sections, ("args", "arguments", "parameters", "params")):
+        doc.params.update(dict(_items(lines)))
+    for lines in _take(sections, ("returns", "return", "yields")):
+        doc.returns = " ".join(" ".join(lines).split())
+    for lines in _take(sections, ("raises",)):
+        doc.raises = _items(lines)
+    for lines in _take(sections, ("attributes",)):
+        doc.attributes = dict(_items(lines))
+    for lines in _take(sections, ("example", "examples", "usage")):
+        doc.examples = _block(lines)
+    doc.notes = "\n\n".join(_block(lines) for lines in _take(sections, ("note", "notes")))
     return doc
 
 
@@ -159,20 +170,28 @@ def _params(sig: inspect.Signature | None, doc: Doc, skip_self: bool) -> list[Pa
     return out
 
 
+def _param_text(p: Param) -> str:
+    s = p.name
+    if p.type:
+        s += f": {p.type}"
+    if p.default:
+        s += f" = {p.default}" if p.type else f"={p.default}"
+    return s
+
+
+def _has_var_positional(params: list[Param]) -> bool:
+    return any(q.name.startswith("*") and not q.name.startswith("**") for q in params)
+
+
 def format_signature(name: str, params: list[Param], returns: str, width: int = 88) -> str:
     pieces = []
-    seen_kwonly = False
+    # a *args parameter already marks where the keyword-only ones start
+    star_written = _has_var_positional(params)
     for p in params:
-        if p.kind == "KEYWORD_ONLY" and not seen_kwonly and not any(q.name.startswith("*") and not q.name.startswith("**") for q in params):
+        if p.kind == "KEYWORD_ONLY" and not star_written:
             pieces.append("*")
-        if p.kind == "KEYWORD_ONLY":
-            seen_kwonly = True
-        s = p.name
-        if p.type:
-            s += f": {p.type}"
-        if p.default:
-            s += f" = {p.default}" if p.type else f"={p.default}"
-        pieces.append(s)
+            star_written = True
+        pieces.append(_param_text(p))
     ret = f" -> {returns}" if returns else ""
     one = f"{name}({', '.join(pieces)}){ret}"
     if len(one) <= width:
@@ -243,77 +262,126 @@ def _public_members(cls: type) -> list[str]:
     return names
 
 
-def load(path: str, repo: Path, members: list[str] | None = None) -> ApiObject:
+def _resolve(path: str) -> tuple[Any, str, str]:
+    """Return (object, module name, attribute name) for a dotted ``cloudg.`` path.
+
+    Only paths inside the cloudg package are accepted: the names come from the
+    front matter of the content pages.
+    """
+    if not _API_PATH_RE.match(path):
+        raise ValueError(f"not a cloudg object path: {path!r}")
+    obj = pkgutil.resolve_name(path)
     module_name, _, attr = path.rpartition(".")
-    try:
-        module = importlib.import_module(path)
-        obj, module_name, attr = module, path, path.rsplit(".", 1)[-1]
-    except ImportError:
-        module = importlib.import_module(module_name)
-        obj = getattr(module, attr)
-    real_module = getattr(obj, "__module__", module_name) or module_name
-    file, line = _source(obj, repo)
-    doc = parse_docstring(inspect.getdoc(obj) if not inspect.ismodule(obj) else obj.__doc__)
-
     if inspect.ismodule(obj):
-        return ApiObject(path, attr, module_name, "module", path, doc, [], "", source_file=file, source_line=1)
+        module_name = path
+    return obj, module_name, attr
 
+
+def _class_kind(cls: type) -> str:
+    if issubclass(cls, enum.Enum):
+        return "enum"
+    if _is_pydantic(cls):
+        return "model"
+    if dataclasses.is_dataclass(cls):
+        return "dataclass"
+    return "class"
+
+
+def _factory_default(factory: Any) -> str:
+    name = getattr(factory, "__name__", "")
+    return f"{name}()" if name and name != "<lambda>" else "generated"
+
+
+def _model_field_default(finfo: Any) -> str:
+    if finfo.is_required():
+        return "required"
+    if finfo.default_factory is not None:
+        return _factory_default(finfo.default_factory)
+    return _default(finfo.default)
+
+
+def _dataclass_field_default(f: dataclasses.Field) -> str:
+    if f.default is not dataclasses.MISSING:
+        return _default(f.default)
+    if f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+        return _factory_default(f.default_factory)
+    return "required"
+
+
+def _model_fields(cls: type, doc: Doc) -> list[Param]:
+    return [
+        Param(
+            fname,
+            _ann(finfo.annotation),
+            _model_field_default(finfo),
+            finfo.description or doc.attributes.get(fname, ""),
+        )
+        for fname, finfo in cls.model_fields.items()
+    ]
+
+
+def _dataclass_fields(cls: type, doc: Doc) -> list[Param]:
+    return [
+        Param(f.name, _ann(f.type), _dataclass_field_default(f), doc.attributes.get(f.name, ""))
+        for f in dataclasses.fields(cls)
+    ]
+
+
+def _enum_values(cls: type) -> list[tuple[str, str]]:
+    return [(m.name, repr(m.value)) for m in cls]
+
+
+def _member_names(cls: type, kind: str, members: list[str] | None) -> list[str]:
+    if members is not None:
+        return members
+    return [] if kind == "enum" else _public_members(cls)
+
+
+def _fill_class(api: ApiObject, cls: type, repo: Path, members: list[str] | None) -> None:
+    kind = _class_kind(cls)
+    init_doc = parse_docstring(inspect.getdoc(cls.__init__)) if "__init__" in vars(cls) else Doc()
+    doc = api.doc
+    api.doc = Doc(**{**doc.__dict__, "params": {**init_doc.params, **doc.params}})
+    api.name, api.kind, api.signature = cls.__name__, kind, cls.__name__
+    if kind in ("class", "dataclass"):
+        init_sig = _signature(cls)
+        api.params = _params(init_sig, api.doc, skip_self=False) if init_sig else []
+        api.signature = format_signature(cls.__name__, api.params, "")
+    api.bases = [b.__name__ for b in cls.__bases__ if b is not object]
+    if kind == "enum":
+        api.enum_values = _enum_values(cls)
+    fields_of = {"model": _model_fields, "dataclass": _dataclass_fields}.get(kind)
+    if fields_of:
+        api.fields = fields_of(cls, doc)
+    for name in _member_names(cls, kind, members):
+        m = _member(cls, name, repo)
+        if m is not None:
+            api.members.append(m)
+
+
+def _fill_function(api: ApiObject, fn: Any) -> None:
+    sig = _signature(fn)
+    api.params = _params(sig, api.doc, skip_self=False)
+    api.returns = _ann(sig.return_annotation) if sig else ""
+    api.kind = "async" if inspect.iscoroutinefunction(fn) else "function"
+    api.signature = format_signature(api.name, api.params, api.returns)
+
+
+def load(path: str, repo: Path, members: list[str] | None = None) -> ApiObject:
+    obj, module_name, attr = _resolve(path)
+    file, line = _source(obj, repo)
+    if inspect.ismodule(obj):
+        doc = parse_docstring(obj.__doc__)
+        return ApiObject(
+            path, attr, module_name, "module", path, doc, [], "", source_file=file, source_line=1
+        )
+    real_module = getattr(obj, "__module__", module_name) or module_name
+    doc = parse_docstring(inspect.getdoc(obj))
+    api = ApiObject(
+        path, attr, real_module, "function", attr, doc, [], "", source_file=file, source_line=line
+    )
     if inspect.isclass(obj):
-        if issubclass(obj, enum.Enum):
-            kind = "enum"
-        elif _is_pydantic(obj):
-            kind = "model"
-        elif dataclasses.is_dataclass(obj):
-            kind = "dataclass"
-        else:
-            kind = "class"
-        init_sig = None
-        if kind in ("class", "dataclass"):
-            init_sig = _signature(obj)
-        init_doc = parse_docstring(inspect.getdoc(obj.__init__)) if "__init__" in vars(obj) else Doc()
-        merged = Doc(**{**doc.__dict__, "params": {**init_doc.params, **doc.params}})
-        params = _params(init_sig, merged, skip_self=False) if init_sig else []
-        signature = format_signature(obj.__name__, params, "") if kind in ("class", "dataclass") else obj.__name__
-        bases = [b.__name__ for b in obj.__bases__ if b is not object]
-        api = ApiObject(path, obj.__name__, real_module, kind, signature, merged, params, "", bases=bases,
-                        source_file=file, source_line=line)
-        if kind == "enum":
-            api.enum_values = [(m.name, repr(m.value)) for m in obj]
-        if kind == "model":
-            for fname, finfo in obj.model_fields.items():
-                ann = _ann(finfo.annotation)
-                if finfo.is_required():
-                    default = "required"
-                elif finfo.default_factory is not None:
-                    name = getattr(finfo.default_factory, "__name__", "")
-                    default = f"{name}()" if name and name != "<lambda>" else "generated"
-                else:
-                    default = _default(finfo.default)
-                desc = finfo.description or doc.attributes.get(fname, "")
-                api.fields.append(Param(fname, ann, default, desc))
-        elif kind == "dataclass":
-            for f in dataclasses.fields(obj):
-                if f.default is not dataclasses.MISSING:
-                    default = _default(f.default)
-                elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
-                    name = getattr(f.default_factory, "__name__", "")
-                    default = f"{name}()" if name and name != "<lambda>" else "generated"
-                else:
-                    default = "required"
-                api.fields.append(Param(f.name, _ann(f.type), default, doc.attributes.get(f.name, "")))
-        names = members if members is not None else _public_members(obj)
-        if kind == "enum" and members is None:
-            names = []
-        for name in names:
-            m = _member(obj, name, repo)
-            if m is not None:
-                api.members.append(m)
-        return api
-
-    # function
-    sig = _signature(obj)
-    params = _params(sig, doc, skip_self=False)
-    returns = _ann(sig.return_annotation) if sig else ""
-    kind = "async" if inspect.iscoroutinefunction(obj) else "function"
-    signature = format_signature(attr, params, returns)
-    return ApiObject(path, attr, real_module, kind, signature, doc, params, returns, source_file=file, source_line=line)
+        _fill_class(api, obj, repo, members)
+    else:
+        _fill_function(api, obj)
+    return api

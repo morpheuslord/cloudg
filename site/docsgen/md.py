@@ -21,15 +21,16 @@ from typing import Callable
 
 from markdown_it import MarkdownIt
 
+from docsgen.fences import FenceTracker
 from docsgen.highlight import parse_info, render_code_block, render_tab_group
 from docsgen.icons import icon
 
-_FENCE_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 _CONTAINER_OPEN = re.compile(r"^(:{3,})\s*([A-Za-z][\w-]*)\s*(.*?)\s*$")
 _CONTAINER_CLOSE = re.compile(r"^(:{3,})\s*$")
 _TAB_MARK = re.compile(r"<!--TAB:(\d+)-->")
 _TAB_RUN = re.compile(r"(?:<!--TAB:\d+-->\s*)+")
 _ID_SUFFIX = re.compile(r"\s*\{#([\w.\-:]+)\}\s*$")
+_LINK_ITEM = re.compile(r"^\s*[-*]\s+\[([^\]]+)\]\(([^)]+)\)\s*(.*)$")
 
 CALLOUTS = {
     "note": ("Note", "info"),
@@ -94,15 +95,19 @@ class Renderer:
         # headings get the same -1, -2 suffixes GitHub gives them
         self._slugs: dict[str, int] = slugs if slugs is not None else {}
         self._tabs: list[tuple[str, str]] = []
-        self.md = MarkdownIt("commonmark", {"html": True, "typographer": False}).enable("table").enable(
-            "strikethrough"
+        self.md = (
+            MarkdownIt("commonmark", {"html": True, "typographer": False})
+            .enable("table")
+            .enable("strikethrough")
         )
         self.md.add_render_rule("fence", _rule(self._fence))
         self.md.add_render_rule("code_block", _rule(self._code_block))
         self.md.add_render_rule("heading_open", _rule(self._heading_open))
         self.md.add_render_rule("heading_close", _rule(self._heading_close))
         self._open_ids: list[str] = []
-        self.md.add_render_rule("table_open", lambda *a: '<div class="table-wrap"><table class="table">\n')
+        self.md.add_render_rule(
+            "table_open", lambda *a: '<div class="table-wrap"><table class="table">\n'
+        )
         self.md.add_render_rule("table_close", lambda *a: "</table></div>\n")
         self.md.add_render_rule("link_open", _rule(self._link_open))
         self.md.add_render_rule("code_inline", _rule(self._code_inline))
@@ -199,29 +204,16 @@ class Renderer:
         lines = text.split("\n")
         out: list[str] = []
         buf: list[str] = []
+        fences = FenceTracker()
         i = 0
-        fence: str | None = None
         while i < len(lines):
             line = lines[i]
-            fm = _FENCE_RE.match(line)
-            if fence is None and fm:
-                fence = fm.group(2)
-                buf.append(line)
-                i += 1
-                continue
-            if fence is not None:
-                if fm and fm.group(2)[0] == fence[0] and len(fm.group(2)) >= len(fence) and not fm.group(3).strip():
-                    fence = None
-                buf.append(line)
-                i += 1
-                continue
-            om = _CONTAINER_OPEN.match(line)
+            om = None if fences.feed(line) else _CONTAINER_OPEN.match(line)
             if om:
-                colons, kind, arg = om.group(1), om.group(2).lower(), om.group(3)
-                body, i = self._collect_container(lines, i + 1, len(colons))
+                body, i = self._collect_container(lines, i + 1, len(om.group(1)))
                 out.append(self._render_markdown("\n".join(buf)))
                 buf = []
-                out.append(self._container(kind, arg, body))
+                out.append(self._container(om.group(2).lower(), om.group(3), body))
                 continue
             buf.append(line)
             i += 1
@@ -230,42 +222,25 @@ class Renderer:
 
     @staticmethod
     def _collect_container(lines: list[str], start: int, colons: int) -> tuple[str, int]:
+        """Return the body of the container opened above ``start`` and the index after it."""
         depth = 0
-        fence: str | None = None
-        body: list[str] = []
-        i = start
-        while i < len(lines):
-            line = lines[i]
-            fm = _FENCE_RE.match(line)
-            if fence is None and fm:
-                fence = fm.group(2)
-            elif fence is not None and fm and fm.group(2)[0] == fence[0] and not fm.group(3).strip():
-                fence = None
-            elif fence is None:
-                cm = _CONTAINER_CLOSE.match(line)
-                om = _CONTAINER_OPEN.match(line)
-                if om and len(om.group(1)) == colons:
-                    depth += 1
-                elif cm and len(cm.group(1)) == colons:
-                    if depth == 0:
-                        return "\n".join(body), i + 1
-                    depth -= 1
-            body.append(line)
-            i += 1
-        return "\n".join(body), i
+        fences = FenceTracker()
+        for i in range(start, len(lines)):
+            if fences.feed(lines[i]):
+                continue
+            step = _container_step(lines[i], colons)
+            if step < 0 and depth == 0:
+                return "\n".join(lines[start:i]), i + 1
+            depth += step
+        return "\n".join(lines[start:]), max(start, len(lines))
 
     def _split_h3(self, body: str) -> tuple[str, list[tuple[str, str]]]:
         """Split a container body at ``###`` headings (outside fences)."""
         intro: list[str] = []
         items: list[tuple[str, list[str]]] = []
-        fence = None
+        fences = FenceTracker()
         for line in body.split("\n"):
-            fm = _FENCE_RE.match(line)
-            if fence is None and fm:
-                fence = fm.group(2)
-            elif fence is not None and fm and fm.group(2)[0] == fence[0] and not fm.group(3).strip():
-                fence = None
-            if fence is None and line.startswith("### "):
+            if not fences.feed(line) and line.startswith("### "):
                 items.append((line[4:].strip(), []))
                 continue
             (items[-1][1] if items else intro).append(line)
@@ -275,57 +250,89 @@ class Renderer:
         return self.md.renderInline(text)
 
     def _container(self, kind: str, arg: str, body: str) -> str:
-        if kind in CALLOUTS:
-            label, ico = CALLOUTS[kind]
-            label = arg or label
-            inner = self._render_blocks(body)
+        handler = _CONTAINERS.get(kind, Renderer._plain_container)
+        return handler(self, kind, arg, body)
+
+    def _callout(self, kind: str, arg: str, body: str) -> str:
+        label, ico = CALLOUTS[kind]
+        label = arg or label
+        inner = self._render_blocks(body)
+        return (
+            f'<aside class="callout callout--{kind}" role="note">'
+            f'<div class="callout-label">{icon(ico, 16)}<span>{escape(label)}</span></div>'
+            f'<div class="callout-body">{inner}</div></aside>\n'
+        )
+
+    def _numbered(self, kind: str, arg: str, body: str) -> str:  # noqa: ARG002
+        """``steps`` and ``cells`` containers: one numbered item per ``###`` heading."""
+        intro, items = self._split_h3(body)
+        parts = [self._render_blocks(intro)] if intro.strip() else []
+        rows = "".join(
+            self._numbered_item(kind, n, title, text)
+            for n, (title, text) in enumerate(items, start=1)
+        )
+        if kind == "steps":
+            parts.append(f'<ol class="steps">{rows}</ol>')
+        else:
+            parts.append(f'<div class="cells cells--{min(len(items), 4)}">{rows}</div>')
+        return "".join(parts) + "\n"
+
+    def _numbered_item(self, kind: str, n: int, title: str, text: str) -> str:
+        hid = self._unique(github_slug(_ID_SUFFIX.sub("", title)))
+        m = _ID_SUFFIX.search(title)
+        if m:
+            hid = m.group(1)
+            title = title[: m.start()]
+        title_html = self._inline(title)
+        self.headings.append(
+            Heading(3 + self.heading_base, hid, strip_tags(title_html), title_html)
+        )
+        inner = self._render_blocks(text)
+        if kind == "steps":
             return (
-                f'<aside class="callout callout--{kind}" role="note"><div class="callout-label">{icon(ico, 16)}'
-                f"<span>{escape(label)}</span></div><div class=\"callout-body\">{inner}</div></aside>\n"
+                f'<li class="step"><div class="step-num" aria-hidden="true">{n}</div>'
+                f'<div class="step-body"><h3 id="{escape(hid)}">{title_html}</h3>{inner}</div></li>'
             )
-        if kind in ("steps", "cells"):
-            intro, items = self._split_h3(body)
-            parts = [self._render_blocks(intro)] if intro.strip() else []
-            rows = []
-            for n, (title, text) in enumerate(items, start=1):
-                hid = self._unique(github_slug(_ID_SUFFIX.sub("", title)))
-                m = _ID_SUFFIX.search(title)
-                if m:
-                    hid = m.group(1)
-                    title = title[: m.start()]
-                title_html = self._inline(title)
-                self.headings.append(Heading(3 + self.heading_base, hid, strip_tags(title_html), title_html))
-                inner = self._render_blocks(text)
-                if kind == "steps":
-                    rows.append(
-                        f'<li class="step"><div class="step-num" aria-hidden="true">{n}</div><div class="step-body">'
-                        f'<h3 id="{escape(hid)}">{title_html}</h3>{inner}</div></li>'
-                    )
-                else:
-                    rows.append(
-                        f'<div class="cell"><div class="cell-num">{n:02d}</div>'
-                        f'<h4 id="{escape(hid)}">{title_html}</h4>{inner}</div>'
-                    )
-            if kind == "steps":
-                parts.append(f'<ol class="steps">{"".join(rows)}</ol>')
-            else:
-                parts.append(f'<div class="cells cells--{min(len(rows), 4)}">{"".join(rows)}</div>')
-            return "".join(parts) + "\n"
-        if kind == "links":
-            cards = []
-            for line in body.split("\n"):
-                m = re.match(r"^\s*[-*]\s+\[([^\]]+)\]\(([^)]+)\)\s*(.*)$", line)
-                if not m:
-                    continue
-                title, href, desc = m.groups()
-                href = self.resolve_link(href)
-                cards.append(
-                    f'<a class="link-card" href="{escape(href)}"><span class="link-card-title">{self._inline(title)}'
-                    f'{icon("arrow-right", 16)}</span><span class="link-card-desc">{self._inline(desc)}</span></a>'
-                )
-            return f'<nav class="link-cards">{"".join(cards)}</nav>\n'
-        # unknown container: render body plainly
+        return (
+            f'<div class="cell"><div class="cell-num">{n:02d}</div>'
+            f'<h4 id="{escape(hid)}">{title_html}</h4>{inner}</div>'
+        )
+
+    def _links(self, kind: str, arg: str, body: str) -> str:  # noqa: ARG002
+        cards = []
+        for line in body.split("\n"):
+            m = _LINK_ITEM.match(line)
+            if not m:
+                continue
+            title, href, desc = m.groups()
+            href = self.resolve_link(href)
+            cards.append(
+                f'<a class="link-card" href="{escape(href)}"><span class="link-card-title">'
+                f"{self._inline(title)}{icon('arrow-right', 16)}</span>"
+                f'<span class="link-card-desc">{self._inline(desc)}</span></a>'
+            )
+        return f'<nav class="link-cards">{"".join(cards)}</nav>\n'
+
+    def _plain_container(self, kind: str, arg: str, body: str) -> str:  # noqa: ARG002
+        """Unknown container: render the body plainly."""
         return f'<div class="container-{escape(kind)}">{self._render_blocks(body)}</div>\n'
+
+
+_CONTAINERS: dict[str, Callable[..., str]] = {
+    **dict.fromkeys(CALLOUTS, Renderer._callout),
+    "steps": Renderer._numbered,
+    "cells": Renderer._numbered,
+    "links": Renderer._links,
+}
+
+
+def _container_step(line: str, colons: int) -> int:
+    """1 for a nested opener with ``colons`` colons, -1 for a matching closer, else 0."""
+    om = _CONTAINER_OPEN.match(line)
+    if om and len(om.group(1)) == colons:
+        return 1
+    cm = _CONTAINER_CLOSE.match(line)
+    return -1 if cm and len(cm.group(1)) == colons else 0
 
 
 def render_inline(text: str, resolve_link: Callable[[str], str] | None = None) -> str:

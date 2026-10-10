@@ -5,8 +5,8 @@
   <tbody>
   {% for o in cmd.options %}
   <tr id="opt-{{ o.anchor }}">
-    <td class="mono strong">{{ o.flags|wbr(" / ") }}{% if o.required %} <span class="tag tag-accent">required</span>{% endif %}{% if o.is_argument %} <span class="tag tag-neutral">argument</span>{% endif %}</td>
-    <td class="mono">{{ o.value|wbr("|") }}</td>
+    <td class="mono strong">{% if " / " in o.flags %}<span class="opt-flags">{% for flag in o.flags.split(" / ") %}{% if not loop.first %} {% endif %}<span class="opt-flag">{{ flag }}{% if not loop.last %} /{% endif %}</span>{% endfor %}</span>{% else %}{{ o.flags }}{% endif %}{% if o.required %} <span class="tag tag-accent">required</span>{% endif %}{% if o.is_argument %} <span class="tag tag-neutral">argument</span>{% endif %}</td>
+    <td class="mono">{% if "|" in o.value %}{% for choice in o.value.split("|") %}<span class="opt-choice">{{ choice }}{% if not loop.last %}|{% endif %}</span>{% endfor %}{% else %}{{ o.value }}{% endif %}</td>
     <td class="mono">{{ o.default }}</td>
     <td>{{ o.help }}{% if o.multiple %} <span class="muted">Repeatable.</span>{% endif %}{% if o.envvar %} <span class="muted">Env: <code>{{ o.envvar }}</code></span>{% endif %}</td>
   </tr>

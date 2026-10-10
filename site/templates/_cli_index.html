@@ -16,7 +16,7 @@
   <thead><tr><th class="col-flag">Flag</th><th>Value</th><th>Default</th><th>Description</th></tr></thead>
   <tbody>
   {% for o in page.extra.root.options %}
-  <tr><td class="mono strong">{{ o.flags|wbr(" / ") }}</td><td class="mono">{{ o.value|wbr("|") }}</td><td class="mono">{{ o.default }}</td><td>{{ o.help }}</td></tr>
+  <tr><td class="mono strong">{% if " / " in o.flags %}<span class="opt-flags">{% for flag in o.flags.split(" / ") %}{% if not loop.first %} {% endif %}<span class="opt-flag">{{ flag }}{% if not loop.last %} /{% endif %}</span>{% endfor %}</span>{% else %}{{ o.flags }}{% endif %}</td><td class="mono">{% if "|" in o.value %}{% for choice in o.value.split("|") %}<span class="opt-choice">{{ choice }}{% if not loop.last %}|{% endif %}</span>{% endfor %}{% else %}{{ o.value }}{% endif %}</td><td class="mono">{{ o.default }}</td><td>{{ o.help }}</td></tr>
   {% endfor %}
   </tbody>
 </table>

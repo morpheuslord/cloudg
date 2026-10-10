@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from docsgen.gen_api import _ann
+
 _KEY_RE = re.compile(r"^(\s*)(-\s+)?([\w.\-]+):(?:\s+(.*?))?\s*$")
 _ITEM_RE = re.compile(r"^(\s*)-\s+(.*?)\s*$")
 _RULE_RE = re.compile(r"^#\s*[─━═\-]{3,}")
@@ -77,108 +79,202 @@ def _type_of(value: str) -> str:
     return "str"
 
 
-def parse(path: Path) -> list[Section]:
-    raw = path.read_text().split("\n")
-    sections: list[Section] = []
-    general = Section("general", "General", "Settings at the top level of the file that apply to the whole run.")
-    pending_comments: list[str] = []
-    header = ""
-    current: Section | None = None
-    stack: list[tuple[int, str]] = []
-    last_key: Key | None = None
-    list_items: list[str] = []
+class _Parser:
+    """Reads config.yaml one line at a time into sections and keys."""
 
-    def flush_list() -> None:
-        nonlocal list_items, last_key
-        if last_key is not None and list_items and last_key.type in ("map", "null"):
-            last_key.type = "list"
-            last_key.default = "[" + ", ".join(list_items) + "]"
-        list_items = []
+    def __init__(self) -> None:
+        self.sections: list[Section] = []
+        self.general = Section(
+            "general",
+            "General",
+            "Settings at the top level of the file that apply to the whole run.",
+        )
+        self.pending: list[str] = []  # comment lines waiting for the key below them
+        self.header = ""
+        self.current: Section | None = None
+        self.stack: list[tuple[int, str]] = []  # (indent, key) of the open parents
+        self.last_key: Key | None = None
+        self.list_items: list[str] = []
 
-    for line in raw:
+    def feed(self, line: str) -> None:
         stripped = line.strip()
         indent = len(line) - len(line.lstrip(" "))
         if not stripped:
-            pending_comments = []
-            if current is not None and current is not general:
-                current.lines.append(line)
-            continue
+            self._blank(line)
+            return
         if stripped.startswith("#"):
-            hm = _HEADER_RE.match(stripped)
-            if indent == 0 and (hm or _RULE_RE.match(stripped)):
-                if hm and not _RULE_RE.match(stripped):
-                    header = hm.group(1).strip("─━═ ")
-                pending_comments = []
-                continue
-            text = stripped.lstrip("#").strip()
-            if not _is_code_comment(text):
-                pending_comments.append(text)
-            if current is not None and indent > 0:
-                current.lines.append(line)
-            continue
-
+            self._comment(line, stripped, indent)
+            return
         km = _KEY_RE.match(line)
         if km and not km.group(2):
-            key, rest = km.group(3), km.group(4) or ""
-            value, comment = _split_comment(rest)
-            comment = _clean(comment)
-            if _is_code_comment(comment):
-                comment = ""
-            if indent == 0:
-                flush_list()
-                if value:  # top-level scalar
-                    general.lines.append(line)
-                    general.keys.append(Key(key, _type_of(value), value, comment or " ".join(pending_comments),
-                                            len(general.lines) - 1))
-                    current = general
-                    stack = []
-                    last_key = general.keys[-1]
-                else:
-                    current = Section(key, header or key, " ".join(pending_comments))
-                    current.lines.append(line)
-                    sections.append(current)
-                    stack = [(0, key)]
-                    header = ""
-                    last_key = None
-                pending_comments = []
-                continue
-            if current is None:
-                continue
-            flush_list()
-            while stack and stack[-1][0] >= indent:
-                stack.pop()
-            parents = [k for _, k in stack[1:]] if current is not general else [k for _, k in stack]
-            rel = ".".join(parents + [key])
-            current.lines.append(line)
-            typ = _type_of(value) if value else "map"
-            k = Key(rel, typ, value if value else "", comment or " ".join(pending_comments), len(current.lines) - 1)
-            current.keys.append(k)
-            last_key = k
-            stack.append((indent, key))
-            pending_comments = []
-            continue
-
+            self._key(line, km, indent)
+            return
         im = _ITEM_RE.match(line)
-        if im and current is not None:
-            item, comment = _split_comment(im.group(2))
-            current.lines.append(line)
-            if last_key is not None and ":" not in item:
-                list_items.append(item)
-                if comment and not last_key.description:
-                    last_key.description = comment
-            pending_comments = []
-            continue
-        if current is not None:
-            current.lines.append(line)
-    flush_list()
+        if im and self.current is not None:
+            self._item(line, im)
+        elif self.current is not None:
+            self.current.lines.append(line)
 
+    def finish(self) -> list[Section]:
+        self._flush_list()
+        for s in self.sections:
+            while s.lines and not s.lines[-1].strip():
+                s.lines.pop()
+        if self.general.keys:
+            self.sections.append(self.general)
+        return self.sections
+
+    def _flush_list(self) -> None:
+        """Turn the ``- item`` lines collected under the last key into its default."""
+        key = self.last_key
+        if key is not None and self.list_items and key.type in ("map", "null"):
+            key.type = "list"
+            key.default = "[" + ", ".join(self.list_items) + "]"
+        self.list_items = []
+
+    def _blank(self, line: str) -> None:
+        self.pending = []
+        if self.current is not None and self.current is not self.general:
+            self.current.lines.append(line)
+
+    def _comment(self, line: str, stripped: str, indent: int) -> None:
+        rule = _RULE_RE.match(stripped)
+        hm = _HEADER_RE.match(stripped)
+        if indent == 0 and (hm or rule):
+            if hm and not rule:
+                self.header = hm.group(1).strip("─━═ ")
+            self.pending = []
+            return
+        text = stripped.lstrip("#").strip()
+        if not _is_code_comment(text):
+            self.pending.append(text)
+        if self.current is not None and indent > 0:
+            self.current.lines.append(line)
+
+    def _key(self, line: str, km: re.Match, indent: int) -> None:
+        value, comment = _split_comment(km.group(4) or "")
+        comment = _clean(comment)
+        if _is_code_comment(comment):
+            comment = ""
+        if indent == 0:
+            self._top_key(line, km.group(3), value, comment)
+        elif self.current is None:
+            return
+        else:
+            self._nested_key(line, km.group(3), value, comment, indent)
+        self.pending = []
+
+    def _top_key(self, line: str, key: str, value: str, comment: str) -> None:
+        self._flush_list()
+        if value:  # top-level scalar
+            general = self.general
+            general.lines.append(line)
+            description = comment or " ".join(self.pending)
+            general.keys.append(
+                Key(key, _type_of(value), value, description, len(general.lines) - 1)
+            )
+            self.current, self.stack, self.last_key = general, [], general.keys[-1]
+            return
+        self.current = Section(key, self.header or key, " ".join(self.pending))
+        self.current.lines.append(line)
+        self.sections.append(self.current)
+        self.stack, self.header, self.last_key = [(0, key)], "", None
+
+    def _nested_key(self, line: str, key: str, value: str, comment: str, indent: int) -> None:
+        self._flush_list()
+        while self.stack and self.stack[-1][0] >= indent:
+            self.stack.pop()
+        parents = self.stack if self.current is self.general else self.stack[1:]
+        rel = ".".join([k for _, k in parents] + [key])
+        section = self.current
+        section.lines.append(line)
+        typ = _type_of(value) if value else "map"
+        description = comment or " ".join(self.pending)
+        self.last_key = Key(rel, typ, value, description, len(section.lines) - 1)
+        section.keys.append(self.last_key)
+        self.stack.append((indent, key))
+
+    def _item(self, line: str, im: re.Match) -> None:
+        item, comment = _split_comment(im.group(2))
+        self.current.lines.append(line)
+        if self.last_key is not None and ":" not in item:
+            self.list_items.append(item)
+            if comment and not self.last_key.description:
+                self.last_key.description = comment
+        self.pending = []
+
+
+def parse(path: Path) -> list[Section]:
+    parser = _Parser()
+    for line in path.read_text().split("\n"):
+        parser.feed(line)
+    return parser.finish()
+
+
+# ---------------------------------------------------------------------------
+# descriptions from the pydantic models
+# ---------------------------------------------------------------------------
+
+
+def _model_of(annotation):
+    """The pydantic model an annotation refers to (directly or inside Optional/Union)."""
+    if hasattr(annotation, "model_fields"):
+        return annotation
+    for arg in getattr(annotation, "__args__", ()) or ():
+        if hasattr(arg, "model_fields"):
+            return arg
+    return None
+
+
+def _field_info(model, path: str):
+    """The FieldInfo for a dotted key path below ``model``, or None."""
+    cur, finfo = model, None
+    for part in path.split("."):
+        if cur is None or part not in cur.model_fields:
+            return None
+        finfo = cur.model_fields[part]
+        cur = _model_of(finfo.annotation)
+    return finfo
+
+
+def _apply_descriptions(section: Section, model) -> None:
+    for k in section.keys:
+        finfo = _field_info(model, k.path)
+        if finfo is None or not finfo.description:
+            continue
+        desc = finfo.description.strip()
+        if not k.description or len(desc) > len(k.description):
+            k.description = desc
+
+
+def _add_missing_keys(section: Section, model) -> None:
+    """Add scalar model fields the example file leaves out."""
+    known = {k.path for k in section.keys}
+    for fname, finfo in model.model_fields.items():
+        if fname in known or _model_of(finfo.annotation) is not None:
+            continue
+        if any(p.startswith(fname + ".") for p in known):
+            continue
+        default = "" if finfo.default_factory else repr(finfo.default)
+        if default == "None":
+            default = "null"
+        description = (finfo.description or "") + " Not in the example file."
+        section.keys.append(Key(fname, _ann(finfo.annotation), default, description, -1))
+
+
+def merge_model_descriptions(sections: list[Section]) -> None:
+    """Prefer pydantic Field descriptions from CloudGConfig; add keys the example file omits."""
+    try:
+        from cloudg.config import CloudGConfig
+    except Exception:  # noqa: BLE001
+        return
     for s in sections:
-        while s.lines and not s.lines[-1].strip():
-            s.lines.pop()
-        # maps with only children: describe as such
-        for k in s.keys:
-            if k.type == "map" and not k.default:
-                k.default = ""
-    if general.keys:
-        sections.append(general)
-    return sections
+        if s.name == "general":
+            # top-level keys: descriptions only, nothing added
+            _apply_descriptions(s, CloudGConfig)
+            continue
+        top = CloudGConfig.model_fields.get(s.name)
+        model = _model_of(top.annotation) if top else None
+        if model is not None:
+            _apply_descriptions(s, model)
+            _add_missing_keys(s, model)
