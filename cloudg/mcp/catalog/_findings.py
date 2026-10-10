@@ -15,7 +15,7 @@ from cloudg.mcp.catalog._common import (
     parse_severity,
 )
 from cloudg.mcp.core import InvalidArgumentsError
-from cloudg.mcp.state import SEVERITY_RANK, Dataset, check_prowler_input
+from cloudg.mcp.state import SEVERITY_RANK, Dataset
 from cloudg.schema.models import ComplianceResult, ComplianceStatus, Finding, Severity
 
 FindingPredicate = Callable[[Finding], bool]
@@ -191,9 +191,13 @@ def renormalise(ws: Any, ds: Dataset, *extra: list[Finding]) -> None:
     results are merged with the new ones (see :func:`merge_compliance`)."""
     from cloudg.normaliser import FindingsNormaliser
 
-    rules = getattr(getattr(ws.config, "rulesets", None), "rules_dir", None)
+    rulesets = getattr(ws.config, "rulesets", None)
+    rules = getattr(rulesets, "rules_dir", None)
+    load_external = getattr(rulesets, "load_external", True)
     suppressed = {f.id for f in ds.findings if f.is_suppressed}
-    sr = FindingsNormaliser(rules_dir=rules).normalise(ds.findings, *extra, assets=ds.assets)
+    sr = FindingsNormaliser(rules_dir=rules, load_external=load_external).normalise(
+        ds.findings, *extra, assets=ds.assets
+    )
     for f in sr.findings:
         if f.id in suppressed:
             f.is_suppressed = True
@@ -213,19 +217,22 @@ def check_report_tools(reports: dict[str, list[str]]) -> None:
 
 
 def parse_reports(ws: Any, reports: dict[str, list[str]]) -> tuple[list, list, list[Finding]]:
-    """Parse every (tool, path) of ``reports``: (per_path, errors, findings)."""
+    """Parse every (tool, path) of ``reports``: (per_path, errors, findings).
+
+    The findings come back as a :class:`~cloudg.normaliser.FindingList`
+    carrying the checks Prowler reports passed, so :func:`renormalise`
+    can give their compliance controls PASS results."""
     from cloudg.ingest import parse_report
+    from cloudg.normaliser import FindingList
 
     check_report_tools(reports)
     per_path: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    new: list[Finding] = []
+    new = FindingList()
     for tool, paths in reports.items():
         for p in paths:
             safe = ws.check_path(p, must_exist=False)
             try:
-                if tool.lower() == "prowler" and safe.exists():
-                    check_prowler_input(safe)
                 fs = parse_report(tool, safe)
             except (ValueError, FileNotFoundError, InvalidArgumentsError) as exc:
                 msg = exc.message if isinstance(exc, InvalidArgumentsError) else str(exc)
@@ -233,4 +240,5 @@ def parse_reports(ws: Any, reports: dict[str, list[str]]) -> tuple[list, list, l
                 continue
             per_path.append({"tool": tool, "path": p, "findings": len(fs)})
             new.extend(fs)
+            new.passed_checks.update(getattr(fs, "passed_checks", None) or ())
     return per_path, errors, new

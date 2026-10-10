@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import importlib
-import re
+import importlib.metadata
 import logging
-from importlib.metadata import entry_points
+import re
+from dataclasses import dataclass, field
 from typing import Any, Type
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,13 @@ _BUILTIN_SCANNERS: dict[str, str] = {
     "trivy": "cloudg.scanners.trivy:TrivyScanner",
     "iam": "cloudg.scanners.iam_linter:IAMLinter",
 }
+
+
+def _dist_label(ep: Any) -> str:
+    """ " (from <distribution>)" for log messages, when the entry point knows it."""
+    dist = getattr(ep, "dist", None)
+    name = getattr(dist, "name", None) if dist is not None else None
+    return f" (from {name})" if name else ""
 
 
 # Shape of a valid "module.path:ClassName" plugin path
@@ -55,6 +63,14 @@ class PluginRegistry:
 
     Falls back to built-in mappings when no entry_points are found.
 
+    Precedence: the built-in collectors and scanners always win. cloudg
+    registers them as entry points itself; an entry point from any other
+    package that reuses a built-in name (for example ``prowler``) is
+    ignored with a warning, so installing a package can never silently
+    swap out a built-in scanner. Register a plugin under a name of its own
+    instead. When two packages register the same new name, the first one
+    found is kept and the others are ignored with a warning.
+
     Usage:
         registry = PluginRegistry()
         collector_cls = registry.get_collector("aws")
@@ -64,6 +80,9 @@ class PluginRegistry:
     def __init__(self) -> None:
         self._collectors: dict[str, Type[Any]] = {}
         self._scanners: dict[str, Type[Any]] = {}
+        # Names served by a third-party plugin (never a built-in name)
+        self._plugin_collectors: set[str] = set()
+        self._plugin_scanners: set[str] = set()
         self._discovered = False
 
     def _discover(self) -> None:
@@ -72,51 +91,69 @@ class PluginRegistry:
             return
         self._discovered = True
 
-        self._discover_collector_entry_points()
-        self._discover_scanner_entry_points()
+        self._discover_group(
+            COLLECTOR_GROUP, _BUILTIN_COLLECTORS, self._collectors, self._plugin_collectors
+        )
+        self._discover_group(
+            SCANNER_GROUP, _BUILTIN_SCANNERS, self._scanners, self._plugin_scanners
+        )
         self._apply_builtin_fallbacks()
 
-        logger.info(
+        logger.debug(
             "Plugin registry: %d collectors, %d scanners",
             len(self._collectors),
             len(self._scanners),
         )
 
-    def _discover_collector_entry_points(self) -> None:
-        """Discover collectors registered via entry_points."""
-        try:
-            eps = entry_points()
-            collector_eps = (
-                eps.select(group=COLLECTOR_GROUP)
-                if hasattr(eps, "select")
-                else eps.get(COLLECTOR_GROUP, [])
-            )
-            for ep in collector_eps:
-                try:
-                    self._collectors[ep.name] = ep.load()
-                    logger.debug("Loaded collector plugin: %s", ep.name)
-                except Exception as exc:
-                    logger.warning("Failed to load collector plugin %s: %s", ep.name, exc)
-        except Exception:
-            logger.debug("Collector entry point discovery failed", exc_info=True)
+    @staticmethod
+    def _group_entry_points(group: str) -> list[Any]:
+        return list(importlib.metadata.entry_points(group=group))
 
-    def _discover_scanner_entry_points(self) -> None:
-        """Discover scanners registered via entry_points."""
+    def _discover_group(
+        self,
+        group: str,
+        builtins: dict[str, str],
+        target: dict[str, Type[Any]],
+        plugin_names: set[str],
+    ) -> None:
+        """Load the third-party entry points of ``group`` (built-ins load later)."""
+        kind = group.rsplit(".", 1)[-1][:-1]  # "collector" / "scanner"
         try:
-            eps = entry_points()
-            scanner_eps = (
-                eps.select(group=SCANNER_GROUP)
-                if hasattr(eps, "select")
-                else eps.get(SCANNER_GROUP, [])
-            )
-            for ep in scanner_eps:
-                try:
-                    self._scanners[ep.name] = ep.load()
-                    logger.debug("Loaded scanner plugin: %s", ep.name)
-                except Exception as exc:
-                    logger.warning("Failed to load scanner plugin %s: %s", ep.name, exc)
+            group_eps = self._group_entry_points(group)
         except Exception:
-            logger.debug("Scanner entry point discovery failed", exc_info=True)
+            logger.debug("%s entry point discovery failed", group, exc_info=True)
+            return
+        for ep in group_eps:
+            if ep.name in builtins:
+                if ep.value != builtins[ep.name]:
+                    logger.warning(
+                        "Ignoring %s plugin %s = %s%s: %r is a built-in %s name, and "
+                        "built-ins take precedence. Register the plugin under another name.",
+                        kind,
+                        ep.name,
+                        ep.value,
+                        _dist_label(ep),
+                        ep.name,
+                        kind,
+                    )
+                continue  # cloudg's own entry point: loaded with the built-ins
+            if ep.name in plugin_names:
+                logger.warning(
+                    "Ignoring %s plugin %s = %s%s: another plugin already uses the name",
+                    kind,
+                    ep.name,
+                    ep.value,
+                    _dist_label(ep),
+                )
+                continue
+            try:
+                loaded = ep.load()
+            except Exception as exc:
+                logger.warning("Failed to load %s plugin %s: %s", kind, ep.name, exc)
+                continue
+            plugin_names.add(ep.name)
+            target[ep.name] = loaded
+            logger.debug("Loaded %s plugin: %s", kind, ep.name)
 
     def _apply_builtin_fallbacks(self) -> None:
         """Fill in built-in defaults for any plugin not discovered."""
@@ -161,3 +198,122 @@ class PluginRegistry:
         """List registered scanner names."""
         self._discover()
         return list(self._scanners.keys())
+
+    def is_plugin_scanner(self, name: str) -> bool:
+        """True when ``name`` is served by a third-party plugin (never a
+        built-in name; see the precedence rules above)."""
+        self._discover()
+        return name in self._plugin_scanners
+
+
+@dataclass
+class ScannerSelection:
+    """Requested scanner names, split by who runs them.
+
+    ``builtin`` names are run by cloudg's own orchestration (with each
+    scanner's specific settings); ``plugins`` maps the remaining names to
+    their plugin classes; ``unknown`` lists names nothing provides.
+    """
+
+    builtin: list[str] = field(default_factory=list)
+    plugins: dict[str, Type[Any]] = field(default_factory=dict)
+    unknown: list[str] = field(default_factory=list)
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.builtin
+
+    @property
+    def names(self) -> list[str]:
+        """Every scanner that will run: built-ins, then plugins."""
+        return self.builtin + list(self.plugins)
+
+
+def select_scanners(names: list[str], registry: PluginRegistry | None = None) -> ScannerSelection:
+    """Resolve ``scanners.enabled`` / ``--scanners`` names against the registry.
+
+    Built-in names (prowler, scoutsuite, checkov, trivy, iam) run the
+    built-in scanner. Other names run the plugin registered under them in
+    the ``cloudg.scanners`` entry point group (matched case-insensitively).
+    Names nothing provides are logged as a warning and reported in
+    ``unknown`` instead of being dropped silently.
+    """
+    registry = registry or PluginRegistry()
+    plugin_names = {n.lower(): n for n in registry.list_scanners() if registry.is_plugin_scanner(n)}
+    selection = ScannerSelection()
+    for name in dict.fromkeys(raw.strip().lower() for raw in names):
+        if name:
+            _select_one(selection, name, plugin_names, registry)
+    if selection.unknown:
+        logger.warning(
+            "Unknown scanner(s) ignored: %s. Available: %s",
+            ", ".join(selection.unknown),
+            ", ".join(available_scanners(registry)),
+        )
+    return selection
+
+
+def _select_one(
+    selection: ScannerSelection, name: str, plugin_names: dict[str, str], registry: PluginRegistry
+) -> None:
+    """Add one (lower-case, de-duplicated) scanner name to ``selection``."""
+    if name in _BUILTIN_SCANNERS:
+        selection.builtin.append(name)
+    elif name in plugin_names:
+        selection.plugins[name] = registry.get_scanner(plugin_names[name])
+    else:
+        selection.unknown.append(name)
+
+
+def available_scanners(registry: PluginRegistry | None = None) -> list[str]:
+    """Built-in scanner names, then the installed plugin scanners."""
+    registry = registry or PluginRegistry()
+    plugins = sorted(n for n in registry.list_scanners() if registry.is_plugin_scanner(n))
+    return list(_BUILTIN_SCANNERS) + plugins
+
+
+def run_plugin_scanner(scanner_cls: Type[Any], **context: Any) -> list[Any]:
+    """Instantiate a plugin scanner and run it.
+
+    The constructor receives the keyword arguments it declares out of
+    ``config``, ``provider``, ``profile``, ``output_dir``, ``assets``,
+    ``iac_dirs``, ``images`` and ``timeout_seconds`` (all of them when it
+    takes ``**kwargs``). ``run()`` must return a list of
+    :class:`cloudg.schema.models.Finding` objects or dicts in that shape.
+
+    Raises:
+        TypeError: ``run()`` returned something that is not a finding.
+    """
+    scanner = scanner_cls(**_declared_kwargs(scanner_cls, context))
+    return [_as_finding(scanner_cls, item) for item in scanner.run() or []]
+
+
+def _declared_kwargs(scanner_cls: Type[Any], context: dict[str, Any]) -> dict[str, Any]:
+    """The part of ``context`` the plugin constructor declares (all of it for **kwargs)."""
+    import inspect
+
+    try:
+        params = list(inspect.signature(scanner_cls).parameters.values())
+    except (TypeError, ValueError):
+        return {}
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return dict(context)
+    accepted = {p.name for p in params}
+    return {k: v for k, v in context.items() if k in accepted}
+
+
+def _as_finding(scanner_cls: Type[Any], item: Any) -> Any:
+    """A plugin result item as a Finding (dicts are validated).
+
+    Raises:
+        TypeError: the item is neither a Finding nor a dict.
+    """
+    from cloudg.schema.models import Finding
+
+    if isinstance(item, Finding):
+        return item
+    if isinstance(item, dict):
+        return Finding.model_validate(item)
+    raise TypeError(
+        f"{scanner_cls.__name__}.run() returned a {type(item).__name__}, "
+        "expected Finding objects or dicts"
+    )

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+from html import escape
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
 from cloudg.schema.models import ScanResult
 
@@ -21,6 +22,66 @@ _TEMPLATE_DIR_CANDIDATES = [
     Path("/app/templates"),  # legacy Docker runtime
     Path("./templates"),  # CWD fallback
 ]
+
+
+# JavaScript libraries the report uses. With inline_js (the default) the
+# vendored copies in cloudg/templates/vendor are embedded in the page so it
+# works offline; otherwise the page loads the same builds from the CDN,
+# pinned and checked with Subresource Integrity. See vendor/NOTICE.
+_VENDOR_DIR = Path(__file__).parent.parent / "templates" / "vendor"
+VENDORED_LIBRARIES: dict[str, dict[str, str]] = {
+    "chartjs": {
+        "file": "chart.umd.js",
+        "cdn": "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js",
+        "integrity": "sha384-FcQlsUOd0TJjROrBxhJdUhXTUgNJQxTMcxZe6nHbaEfFL1zjQ+bq/uRoBQxb0KMo",
+    },
+    "d3": {
+        "file": "d3.min.js",
+        "cdn": "https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js",
+        "integrity": "sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i",
+    },
+}
+
+
+def script_json(value: Any) -> str:
+    """JSON for embedding in an HTML ``<script>`` element.
+
+    ``json.dumps`` leaves ``</script>`` and ``<!--`` as they are, so a
+    finding title holding them would end the script element early and let
+    the rest run as markup. ``<``, ``>``, ``&`` and ``'`` are written as
+    ``\\u`` escapes instead, which JavaScript reads back as the same
+    characters (the approach of Jinja's ``tojson`` filter).
+    """
+    return (
+        json.dumps(value, default=str)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+    )
+
+
+def _load_vendored_scripts() -> dict[str, str] | None:
+    """Source of every vendored library, or None when one cannot be inlined."""
+    sources: dict[str, str] = {}
+    for name, lib in VENDORED_LIBRARIES.items():
+        path = _VENDOR_DIR / lib["file"]
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "Vendored %s not found (%s); report.html will load it from the CDN", name, exc
+            )
+            return None
+        lowered = text.lower()
+        if "</script" in lowered or "<!--" in lowered:
+            logger.warning(
+                "Vendored %s cannot be inlined safely; report.html will load it from the CDN",
+                name,
+            )
+            return None
+        sources[name] = text
+    return sources
 
 
 def _resolve_template_dir() -> Path:
@@ -47,9 +108,21 @@ class HTMLReportGenerator:
         self,
         template_dir: str | None = None,
         output_dir: str = ".",
+        inline_js: bool = True,
     ) -> None:
+        """
+        Args:
+            template_dir: Directory holding report.html.j2 (default: the
+                packaged templates).
+            output_dir: Where the report is written.
+            inline_js: Embed Chart.js and D3 in the page so it works
+                offline (report.inline_js). False loads them from
+                cdn.jsdelivr.net instead, which makes the file about
+                480 KB smaller.
+        """
         self._template_dir = Path(template_dir) if template_dir else _resolve_template_dir()
         self._output_dir = Path(output_dir)
+        self._inline_js = inline_js
 
     def generate(
         self,
@@ -72,12 +145,14 @@ class HTMLReportGenerator:
 
         # Prepare template data
         template_data = self._prepare_data(scan_result, graph_json)
+        template_data.update(self._script_data())
 
-        # Render template
+        # Render template. Autoescape is on for every template: the file is
+        # report.html.j2, which select_autoescape(["html"]) did not match.
         if self._template_dir.exists():
             env = Environment(
                 loader=FileSystemLoader(str(self._template_dir)),
-                autoescape=select_autoescape(["html"]),
+                autoescape=True,
             )
             try:
                 template = env.get_template("report.html.j2")
@@ -89,11 +164,20 @@ class HTMLReportGenerator:
             logger.warning("Template directory not found, using fallback report")
             html = self._fallback_report(template_data)
 
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(html)
 
         logger.info("Generated HTML report at %s", output_path)
         return output_path
+
+    def _script_data(self) -> dict[str, Any]:
+        """Template data for the Chart.js and D3 script elements."""
+        sources = _load_vendored_scripts() if self._inline_js else None
+        return {
+            "inline_js": sources is not None,
+            "vendored_js": sources or {},
+            "cdn_js": VENDORED_LIBRARIES,
+        }
 
     def _prepare_data(
         self,
@@ -134,26 +218,22 @@ class HTMLReportGenerator:
             "total_assets": len(scan_result.assets),
             "total_findings": len(scan_result.findings),
             "severity_counts": severity_counts,
-            "severity_counts_json": json.dumps(severity_counts),
+            "severity_counts_json": script_json(severity_counts),
             "resource_types": resource_types,
-            "resource_types_json": json.dumps(resource_types),
+            "resource_types_json": script_json(resource_types),
             "source_tools": source_tools,
-            "source_tools_json": json.dumps(source_tools),
+            "source_tools_json": script_json(source_tools),
             "compliance_summary": compliance_summary,
-            "compliance_summary_json": json.dumps(compliance_summary),
+            "compliance_summary_json": script_json(compliance_summary),
             "findings": [f.model_dump(mode="json") for f in scan_result.findings],
-            "findings_json": json.dumps(
-                [f.model_dump(mode="json") for f in scan_result.findings],
-                default=str,
-            ),
+            "findings_json": script_json([f.model_dump(mode="json") for f in scan_result.findings]),
             "assets": [a.model_dump(exclude={"raw_data"}, mode="json") for a in scan_result.assets],
-            "assets_json": json.dumps(
-                [a.model_dump(exclude={"raw_data"}, mode="json") for a in scan_result.assets],
-                default=str,
+            "assets_json": script_json(
+                [a.model_dump(exclude={"raw_data"}, mode="json") for a in scan_result.assets]
             ),
-            "graph_json": json.dumps(enriched_graph, default=str),
-            "hierarchy_json": json.dumps(hierarchy, default=str),
-            "findings_per_resource_json": json.dumps(findings_per_resource, default=str),
+            "graph_json": script_json(enriched_graph),
+            "hierarchy_json": script_json(hierarchy),
+            "findings_per_resource_json": script_json(findings_per_resource),
         }
 
     def _count_severities(self, scan_result: ScanResult) -> dict[str, int]:
@@ -417,10 +497,14 @@ class HTMLReportGenerator:
             )
 
     def _fallback_report(self, data: dict[str, Any]) -> str:
-        """Generate a simple fallback HTML report if Jinja2 template is missing."""
+        """Generate a simple fallback HTML report if Jinja2 template is missing.
+
+        Every value is HTML-escaped: titles, resource IDs and remediation
+        text come from scanner output.
+        """
         findings_rows = ""
         for f in data["findings"]:
-            sev = f.get("severity", "INFO")
+            sev = str(f.get("severity", "INFO"))
             sev_class = {
                 "CRITICAL": "color:#E74C3C;font-weight:bold",
                 "HIGH": "color:#E67E22;font-weight:bold",
@@ -428,14 +512,19 @@ class HTMLReportGenerator:
                 "LOW": "color:#3498DB",
                 "INFO": "color:#95A5A6",
             }.get(sev, "")
+            resource = f.get("resource_arn") or f.get("resource_id") or ""
+            remediation = str(f.get("remediation") or "")[:100]
             findings_rows += f"""
                 <tr>
-                    <td style="{sev_class}">{sev}</td>
-                    <td>{f.get("title", "")}</td>
-                    <td><code>{f.get("resource_arn", f.get("resource_id", ""))}</code></td>
-                    <td>{f.get("source_tool", "")}</td>
-                    <td>{f.get("remediation", "")[:100]}</td>
+                    <td style="{sev_class}">{escape(sev)}</td>
+                    <td>{escape(str(f.get("title") or ""))}</td>
+                    <td><code>{escape(str(resource))}</code></td>
+                    <td>{escape(str(f.get("source_tool") or ""))}</td>
+                    <td>{escape(remediation)}</td>
                 </tr>"""
+        scan_id = escape(str(data["scan_id"]))
+        provider = escape(str(data["provider"]))
+        account_id = escape(str(data["account_id"]))
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -473,7 +562,7 @@ class HTMLReportGenerator:
 <body>
 <div class="container">
     <h1>☁️ CloudG Security Report</h1>
-    <p class="subtitle">Scan ID: {data["scan_id"]} | Provider: {data["provider"]} | Account: {data["account_id"]}</p>
+    <p class="subtitle">Scan ID: {scan_id} | Provider: {provider} | Account: {account_id}</p>
 
     <div class="cards">
         <div class="card"><h3>Total Assets</h3><div class="value">{data["total_assets"]}</div></div>

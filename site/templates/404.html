@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Page not found · cloudg docs{% endblock %}
+{% block body %}
+<script>
+(function(){var m={{ redirects|tojson }};var h=location.hash.slice(1);var p=location.pathname;
+if(h&&m[h]&&(/\/index\.html$/.test(p)||p==='{{ site.base }}')){location.replace(m[h]);}})();
+</script>
+<main id="main" class="nf" tabindex="-1">
+  <div class="nf-field" aria-hidden="true">404</div>
+  <div class="nf-text">
+    <h1>That node isn't in the graph.</h1>
+    <p>The old one-page handbook used <code>#anchors</code>, and most of those now redirect to their new pages. If this one didn't, try searching.</p>
+    <button type="button" class="nf-search" data-search-open>{{ icon('search', 16)|safe }}Search the docs</button>
+    <nav class="nf-links" aria-label="Popular pages">
+      <a href="{{ site.href('guides/quickstart') }}">Quickstart</a>
+      <a href="{{ site.href('cli') }}">CLI reference</a>
+      <a href="{{ site.href('api') }}">Python API</a>
+      <a href="{{ site.href('changelog') }}">Changelog</a>
+    </nav>
+  </div>
+</main>
+{% endblock %}

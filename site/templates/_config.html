@@ -1,0 +1,20 @@
+<div class="cfg" data-cfg>
+  <div class="cfg-keys">
+    <div class="cfg-row cfg-head"><span>Key and meaning</span><span>Type</span><span>Default</span></div>
+    {% for k in s.keys %}
+    <div class="cfg-row{% if '.' in k.path %} cfg-child{% endif %}" id="{{ k.path }}" data-line="{{ k.line }}" tabindex="-1">
+      <a class="mono strong cfg-key" href="#{{ k.path }}">{{ k.path }}</a>
+      <span class="mono">{{ k.type }}</span>
+      <span class="mono cfg-default">{{ k.default }}</span>
+      <span>{{ inline(k.description)|safe }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="cfg-yaml">
+    <figure class="code code--editor code--sticky">
+      <div class="code-bar"><span class="code-file">{{ icon('file-code', 14)|safe }}<span>config.yaml</span></span><span class="code-lang">{{ s.name }}</span><button type="button" class="code-copy" data-copy>{{ icon('copy', 14, 'i-copy')|safe }}{{ icon('check', 14, 'i-check')|safe }}<span class="code-copy-label">Copy</span></button></div>
+      <pre class="code-pre"><code class="lang-yaml">{% for l in yaml_lines %}<span class="line" data-line="{{ loop.index0 }}">{{ l|safe if l else ' ' }}</span>{% if not loop.last %}{{ "\n" }}{% endif %}{% endfor %}</code></pre>
+    </figure>
+  </div>
+</div>
+<p class="table-note">Read from the annotated example <a href="{{ site.blob('config.yaml', page.source_line) }}" rel="noopener"><code>config.yaml</code></a> and the <code>CloudGConfig</code> models in <a href="{{ site.blob('cloudg/config.py') }}" rel="noopener"><code>cloudg/config.py</code></a>. Hover a key to find it in the file.</p>

@@ -66,7 +66,7 @@ Plain pip works too: `pip install -e ".[all]"`. The cloud SDKs are extras, so `p
 
 The external scanners (Prowler, Checkov, Trivy, ScoutSuite) are separate executables, not Python dependencies. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up everything including the scanners and the cloud CLIs.
 
-Docker is the lazy path, since the image bundles all four scanners:
+Docker is the lazy path: the image bundles Prowler, Checkov and Trivy (ScoutSuite is not included, so run it separately and feed its report to `cloudg ingest`):
 
 ```bash
 docker build -t cloudg:latest .
@@ -103,7 +103,7 @@ cloudg deps arn:aws:iam::123456789012:role/app-role
 cloudg map -p aws --regions all --findings ./reports/raw-findings.json
 ```
 
-Outputs: `inventory-map.json` (assets, interconnections, summary), `inventory-map.graphml`, `inventory-graph.json` for viewers, `inventory-dependencies.json` (shared dependencies, blast radius, cross-account edges, security coverage gaps) and, with `--org`, `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week. Every file is specified field by field, with annotated examples, in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md).
+Outputs: `inventory-map.json` (assets, interconnections, collection coverage, summary), `inventory-map.graphml`, `inventory-graph.json` for viewers, `inventory-dependencies.json` (shared dependencies, blast radius, cross-account edges, security coverage gaps) and, with `--org`, `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (each asset with its findings and severity breakdown) and `compliance-map.json` (framework → affected assets). The map never depends on the scanners; you can map today and merge in findings from a scan you run next week. Every file is specified field by field, with annotated examples, in the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md).
 
 All of this is also a library API, see [Using it as a library](#using-it-as-a-library):
 
@@ -201,7 +201,7 @@ graph LR
 
 Collection runs all providers concurrently with asyncio, iterating accounts and regions per provider (regions are auto-discovered when you pass `--regions all`). Assets and network edges go into a directed graph, where BFS from the internet node over network-flow edges finds exposed resources and blast radius scoring estimates what an attacker could reach from each node.
 
-The same inventory feeds three other exports. The ontology module infers 64 typed relations (`INTERNET_REACHABLE`, `ROLE_ASSUMES_ROLE`, `ENCRYPTED_BY_KMS`, `VPC_CONTAINS_SUBNET` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import.sh` to adopt them into state.
+The same inventory feeds three other exports. The ontology module infers 64 typed relations (`INTERNET_REACHABLE`, `ROLE_ASSUMES_ROLE`, `ENCRYPTED_BY_KMS`, `VPC_CONTAINS_SUBNET` and so on) and writes RDF you can query with SPARQL. The RAG exporter chunks the graph three ways (per asset, per Louvain community, per relation domain) into JSONL for retrieval pipelines. The Terraform exporter maps 25+ asset types to `.tf.json` resources with an `import_commands.sh` to adopt them into state.
 
 Scanner findings are deduplicated in two passes (within a scanner by scanner, check ID and resource; across scanners only when both the normalised title and the underlying check semantics in `cloudg/rules/check_equivalence.yaml` match), then rescored against CVSS and mapped to compliance controls.
 
@@ -211,10 +211,12 @@ Scanner findings are deduplicated in two passes (within a scanner by scanner, ch
 
 Findings are tagged with framework controls in four tiers, most precise first:
 
-1. Whatever the scanner itself reports (Prowler ASFF, Checkov check IDs).
-2. Exact check-ID lookup against the shipped rulesets. These are generated from Prowler's public compliance data (Apache-2.0) and cover 28 frameworks with 4,166 controls and 10,236 check mappings across AWS, Azure and GCP: CIS 5.0 for each cloud, NIST 800-53 rev 5, NIST CSF 2.0, PCI DSS 4.0, SOC 2, HIPAA, GDPR, ISO 27001:2022, MITRE ATT&CK, and the AWS Foundational Security Best Practices.
-3. Regex pattern rules for scanners that emit no compliance metadata.
+1. Whatever the scanner itself reports (Prowler ASFF or OCSF, Checkov check IDs).
+2. Exact check-ID lookup against the shipped rulesets: 22 framework files generated from Prowler's public compliance data (Apache-2.0), with 4,166 controls and 10,236 check mappings across AWS, Azure and GCP: CIS 5.0 for each cloud, NIST 800-53 rev 5, NIST CSF 2.0, PCI DSS 4.0, SOC 2, HIPAA, GDPR, ISO 27001:2022, MITRE ATT&CK, and the AWS Foundational Security Best Practices.
+3. Regex pattern rules for scanners that emit no compliance metadata: 9 hand-written files in `cloudg/rules/` with 105 controls. Three of them add to the generated CIS frameworks, so the two sets together cover 28 frameworks and 4,271 controls.
 4. A small built-in fallback table.
+
+A control that a finding maps to is reported as `FAIL`. A control that only Prowler's passing checks map to is reported as `PASS`; every other control was not assessed and is left out.
 
 <details>
 <summary><b>Refreshing and extending the rulesets</b></summary>
@@ -285,10 +287,10 @@ controls:
 |---|---|
 | `report.html` | interactive report, D3 topology plus findings table, works offline |
 | `findings.json` | all findings, assets, edges and compliance results |
-| `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | the graph in three formats |
+| `topology.svg`, `topology.graphml` | the graph as a picture and as GraphML; `topology-cytoscape.json` too with `graph.export_cytoscape: true` |
 | `ontology.ttl`, `ontology.jsonld` | the RDF ontology |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks |
-| `terraform/*.tf.json`, `terraform/import.sh` | recreation files |
+| `terraform/*.tf.json`, `terraform/import_commands.sh` | recreation files |
 | `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map (`cloudg map`) |
 | `asset-map.json`, `compliance-map.json` | inventory merged with scanner findings (`cloudg map --findings`) |
 
@@ -342,7 +344,7 @@ Much more of cloudg is public, importable API than the CLI suggests. The [Python
 | `cloudg.graph.builder.GraphBuilder` | NetworkX graph, attack paths, centrality/blast-radius metrics, D3/Cytoscape/GraphML export |
 | `cloudg.graph.ontology.CloudOntology` | RDF ontology (64 typed relations), SPARQL-queryable, Turtle/JSON-LD |
 | `cloudg.graph.rag_export.RAGExporter` | retrieval-ready JSONL chunks of the infrastructure for LLM pipelines |
-| `cloudg.renderers.terraform_export.TerraformExporter` | `.tf.json` recreation of live infrastructure plus `import.sh` |
+| `cloudg.renderers.terraform_export.TerraformExporter` | `.tf.json` recreation of live infrastructure plus `import_commands.sh` |
 | `cloudg.ingest.parse_report` and the scanner classes | every scanner's parser, usable standalone |
 | `cloudg.normaliser.FindingsNormaliser` | cross-scanner dedupe, CVSS rescoring, compliance mapping |
 | `cloudg.mcp.CloudGMCPLayer` | the MCP layer, in-process or mounted into your own MCP server |

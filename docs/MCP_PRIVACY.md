@@ -164,7 +164,7 @@ Effective settings after `extends` is resolved:
 | Projection | none | drop `raw_data`, `_raw`; strings 20,000; budget 120,000 | also `user_data`; strings 4,000; budget 100,000 | as standard | as standard | as standard | as standard |
 | Annotations | none | report only | report only | report only | report only | inline `_annotations` and `_risk` labels | `_risk` labels on findings tools |
 | Secrets in arguments | accepted | refused | refused | refused | refused | refused | refused |
-| Visible tools (local user) | 74 | 73 | 64 | 66 | 69 | 66 | analyst 61, lead 70, collector 71 |
+| Visible tools (local user) | 74 | 73 | 61 | 66 | 69 | 66 | 62; analyst 60, lead 70, collector 69 |
 
 ### 4.2 The same calls under every profile
 
@@ -212,14 +212,20 @@ The first `list_findings` item is `f-rdp-open` everywhere. `audit` and `soc-anal
 
 The resource read `cloudg://assets/web-1` returns the same document as `get_asset`, transformed the same way, with the report in the content item's `_meta`.
 
-The error message for `get_asset {"ref": "arn:aws:ec2:us-east-1:333333333333:instance/i-0missing"}`:
+The error for `get_asset {"ref": "arn:aws:ec2:us-east-1:333333333333:instance/i-0missing"}` has the same text under every profile:
 
-| Profile | Text of the `isError` result |
-|---|---|
-| all but strict and analyst | `No asset matches 'arn:aws:ec2:us-east-1:333333333333:instance/i-0missing' in dataset 'sample'. Use find_assets(query=...) to search by name, ARN or tag.` |
-| strict, soc-analyst analyst | `No asset matches 'arn:aws:ec2:us-east-1:737255840745:instance/res-014f75562d' in dataset 'sample'. Use find_assets(query=...) to search by name, ARN or tag.` |
+```text
+No asset matches the reference in this dataset. Use find_assets(query=...) to search by name, ARN or tag.
+```
 
-Error text goes through the same pipeline as results because exception messages love to quote ARNs.
+The reference and the dataset name travel in the error data, `_meta["cloudg/error_data"]`:
+
+| Profile | `value` | `dataset` |
+|---|---|---|
+| all but strict and analyst | `arn:aws:ec2:us-east-1:333333333333:instance/i-0missing` | `sample` |
+| strict, soc-analyst analyst | `arn:aws:ec2:us-east-1:737255840745:instance/res-014f75562d` | `ds-a6c8d812e0` |
+
+`suggestions` is an empty list in both. Error data goes through the same pipeline as results, because an error that names the missing resource would otherwise leak it.
 
 The transform report for `strict`, from `_meta["cloudg/transforms"]` of the `get_asset` call:
 
@@ -733,7 +739,7 @@ HTTP 401
 {"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "Unauthorized"}}
 ```
 
-The analyst (`ann`) asks for the bastion host. Ids, names, the owner tag, the URI and the dataset are pseudonymised, the prod account shows as its alias, and the analyst sees 61 tools: `reveal_token`, the restricted metadata tool, everything in the `live` and `export` categories and the export tools elsewhere (`export_ontology`, `subgraph_export`) are absent.
+The analyst (`ann`) asks for the bastion host. Ids, names, the owner tag, the URI and the dataset are pseudonymised, the prod account shows as its alias, and the analyst sees 60 tools: `reveal_token` and the other restricted tools (`get_asset_metadata`, `privacy_audit_log`, `sparql_query`, `subgraph_export`), everything in the `live` and `export` categories and `export_ontology` are absent.
 
 ```json
 {
@@ -764,7 +770,7 @@ Aliases are reversed together with pseudonyms, and the result is not aliased aga
 {"pseudonym": "res-3c1f1e6b50", "found": true, "value": "web-1", "entity_type": "resource_name"}
 ```
 
-The analyst calling `reveal_token` gets `Unknown tool: reveal_token`, and the attempt is audited as `not_found`. A principal with the `collector` role sees 71 tools: the live tools are in category `live`, which its `allow_categories` grants, and its `allow_capabilities` lifts the capability denials. Nobody else can collect.
+The analyst calling `reveal_token` gets `Unknown tool: reveal_token`, and the attempt is audited as `not_found`. A principal with the `collector` role sees 69 tools: the live tools are in category `live`, which its `allow_categories` grants, and its `allow_capabilities` lifts the capability denials. The policy's `confidential` ceiling still hides the five restricted tools from it. Nobody else can collect.
 
 Each lead reveal produces two warnings on `cloudg.mcp.audit`, and with `audit: true` an INFO line as well:
 
@@ -1528,7 +1534,7 @@ All are in category `privacy` and reach the policy through `ctx.layer.policy`.
   "principal": {"id": "local", "roles": ["default", "local"]},
   "max_sensitivity": "confidential",
   "denied_capabilities": ["cloud_access", "exec", "reveal", "write_fs"],
-  "visible_tools": 64,
+  "visible_tools": 61,
   "output_pipeline": [
     {"type": "sanitize"},
     {"type": "redact", "default": "keep",
@@ -1781,7 +1787,7 @@ Measured with principals `c1` (contractor) and `s1` (soc) asking for `web-1`:
 | `name` | `res-3c1f1e6b50` | `web-1` |
 | `arn` | `arn:aws:ec2:us-east-1:544226932392:instance/res-f7ce1c6611` | `arn:aws:ec2:us-east-1:111111111111:instance/i-0web1` |
 | `tags.Owner` | `person-6bbd789f86` | `alice@example.com` |
-| Visible tools | 64, no `reveal_token` | 70, with `reveal_token` |
+| Visible tools | 62, no `reveal_token` | 70, with `reveal_token` |
 
 The contractor can pass the pseudonymised ARN back to `get_asset` and gets the same asset. The SOC member can reveal a sentence a contractor quotes: `reveal_token {"token": "look at arn:aws:ec2:us-east-1:544226932392:instance/res-f7ce1c6611"}` returned `look at arn:aws:ec2:us-east-1:111111111111:instance/i-0web1` with `replaced: 2` (the account and the instance). An account alias rule can be added for both roles; it labels the contractor's pseudonymised account as well (section 10.2). If contractors should not be able to correlate each other's results, use `scope: principal` and give each contractor their own token and id.
 

@@ -18,12 +18,10 @@ from cloudg.schema.models import CloudAsset, ComplianceResult, EdgeType, Finding
 
 logger = logging.getLogger("cloudg.mcp")
 
-# Bounds on directory scans (kind detection, OCSF check): a directory with
-# a huge tree, or a symlink loop, must not stall a tool call.
+# Bounds on directory scans (kind detection): a directory with a huge tree,
+# or a symlink loop, must not stall a tool call.
 SCAN_MAX_DEPTH = 6
 SCAN_MAX_ENTRIES = 10_000
-
-_OCSF_KEYS = {"finding_info", "class_uid", "category_uid", "type_uid", "severity_id"}
 
 
 # ---------------------------------------------------------------------------
@@ -136,11 +134,10 @@ def detect_kind(path: Path) -> str:
         # JSON Lines: Prowler ASFF / OCSF output
         first = text.strip().splitlines()[0] if text.strip() else ""
         try:
-            record = json.loads(first)
+            json.loads(first)
         except (json.JSONDecodeError, IndexError):
             raise InvalidArgumentsError(f"{path} is not JSON.") from None
-        if is_ocsf(record):
-            raise _ocsf_error(path) from None
+        # Prowler ASFF or OCSF JSON Lines; the Prowler parser reads both
         return "prowler"
     return _detect_json_kind(data, path)
 
@@ -148,50 +145,11 @@ def detect_kind(path: Path) -> str:
 def is_ocsf(data: Any) -> bool:
     """Whether ``data`` (a record, or a list / wrapper of records) is OCSF
     (Prowler 4+ default output) rather than AWS Security Finding Format."""
+    from cloudg.scanners.prowler_ocsf import is_ocsf_record
+
     if isinstance(data, list):
         data = data[0] if data else None
-    if not isinstance(data, dict):
-        return False
-    if "ProductArn" in data or "Findings" in data:
-        return False
-    return bool(_OCSF_KEYS & set(data))
-
-
-def _ocsf_error(path: Path) -> InvalidArgumentsError:
-    return InvalidArgumentsError(
-        f"{path} is Prowler OCSF output, which cloudg cannot parse yet (its records would "
-        "become placeholder findings). Re-run prowler with -M json-asff and load the ASFF "
-        "file instead.",
-        data={"format": "ocsf", "hint": "prowler <provider> -M json-asff"},
-    )
-
-
-def _first_json(text: str) -> Any:
-    """The JSON document in ``text``, else its first line (JSON Lines), else None."""
-    stripped = text.strip()
-    if not stripped:
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        try:
-            return json.loads(stripped.splitlines()[0])
-        except json.JSONDecodeError:
-            return None
-
-
-def check_prowler_input(path: Path) -> None:
-    """Refuse Prowler OCSF output (file, or the JSON files of a directory)
-    before cloudg's ASFF-only parser turns it into junk findings."""
-    files = list(iter_files(path, "*.json"))[:20] if path.is_dir() else [path]
-    for f in files:
-        try:
-            text = f.read_text()
-        except OSError:
-            logger.debug("Skipping unreadable file %s in the OCSF check", f)
-            continue
-        if is_ocsf(_first_json(text)):
-            raise _ocsf_error(f)
+    return is_ocsf_record(data)
 
 
 def _detect_dict_kind(data: dict[str, Any]) -> str | None:
@@ -214,9 +172,7 @@ def _detect_dict_kind(data: dict[str, Any]) -> str | None:
 def _detect_list_kind(first: dict[str, Any], path: Path) -> str | None:
     if "check_type" in first:
         return "checkov"
-    if is_ocsf(first):
-        raise _ocsf_error(path)
-    if first.keys() & {"ProductArn", "SchemaVersion"}:
+    if is_ocsf(first) or first.keys() & {"ProductArn", "SchemaVersion"}:
         return "prowler"
     if first.keys() & {"severity", "title", "resource_id"}:
         return "generic"
@@ -264,16 +220,15 @@ def _load_inventory(path: Path, name: str) -> Dataset:
 def _load_scanner_output(path: Path, name: str, kind: str, normalise: bool) -> Dataset:
     from cloudg.ingest import parse_report
 
-    if kind == "prowler":
-        check_prowler_input(path)
     try:
         findings = parse_report(kind, path)
     except (ValueError, FileNotFoundError) as exc:
         raise InvalidArgumentsError(str(exc)) from None
-    ds = Dataset(name=name, findings=findings, source=str(path), kind=kind)
-    if normalise and findings:
+    ds = Dataset(name=name, findings=list(findings), source=str(path), kind=kind)
+    if normalise and (findings or getattr(findings, "passed_checks", None)):
         from cloudg.normaliser import FindingsNormaliser
 
+        # A Prowler FindingList carries its passed checks into the normaliser
         sr = FindingsNormaliser().normalise(findings)
         ds.findings, ds.compliance = sr.findings, sr.compliance
     return ds

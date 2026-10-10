@@ -125,6 +125,12 @@ class InventoryResult:
     #: per-scope counters, human-readable messages, skipped scopes); None when
     #: no API pushed back
     throttling: dict[str, Any] | None = None
+    #: Scanner findings overlaid on the map (:meth:`InventoryMapper.build_asset_map`);
+    #: set by ``CloudGEngine.map_inventory(findings=...)``, otherwise None
+    asset_map: dict[str, Any] | None = None
+    #: Framework to affected assets (:meth:`InventoryMapper.build_compliance_map`);
+    #: set alongside ``asset_map``, otherwise None
+    compliance_map: dict[str, Any] | None = None
 
     @property
     def summary(self) -> dict[str, Any]:
@@ -190,7 +196,8 @@ class InventoryResult:
         """Write the inventory map to disk.
 
         Produces:
-        - ``inventory-map.json``: assets + edges + summary (self-contained)
+        - ``inventory-map.json``: assets + edges + summary + collection
+          coverage records (self-contained)
         - ``inventory-map.graphml``: the interconnection graph
         - ``inventory-graph.json``: D3-compatible graph for viewers
         - ``inventory-dependencies.json``: shared dependencies, blast radius,
@@ -211,6 +218,7 @@ class InventoryResult:
                 "assets": [a.model_dump(mode="json") for a in self.assets],
                 "edges": [e.model_dump(mode="json") for e in self.edges],
                 "unresolved_references": self.unresolved_references,
+                "coverage": [c.model_dump(mode="json") for c in self.coverage],
                 **({"throttling": self.throttling} if self.throttling else {}),
             },
         )
@@ -231,7 +239,11 @@ class InventoryResult:
     @classmethod
     def load(cls, path: str | Path) -> "InventoryResult":
         """Load an ``inventory-map.json`` written by :meth:`export`
-        (or the directory containing it)."""
+        (or the directory containing it).
+
+        Coverage records are restored when the file has them; maps written
+        before they were saved load with an empty ``coverage`` list.
+        """
         p = Path(path)
         if p.is_dir():
             p = p / "inventory-map.json"
@@ -242,6 +254,7 @@ class InventoryResult:
             raw = {k: v for k, v in raw.items() if k != "display_id"}
             assets.append(CloudAsset.model_validate(raw))
         edges = [NetworkEdge.model_validate(e) for e in data.get("edges", [])]
+        coverage = [CollectionCoverage.model_validate(c) for c in data.get("coverage") or []]
         org = None
         org_path = p.parent / "inventory-organization.json"
         if org_path.exists():
@@ -250,6 +263,7 @@ class InventoryResult:
         return cls(
             assets=assets,
             edges=edges,
+            coverage=coverage,
             providers=data.get("providers") or data.get("summary", {}).get("providers", []),
             regions=data.get("regions", {}),
             organization=org,

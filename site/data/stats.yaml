@@ -1,0 +1,19 @@
+# Figures on the docs home page. Entries with `compute` are counted from the
+# code at build time; `value` is the fallback (and the only source for the
+# framework count, which follows the README's way of counting).
+stats:
+  - label: compliance frameworks
+    value: 28
+    href: guides/compliance
+  - label: controls mapped
+    compute: controls
+    value: 4166
+    href: guides/compliance
+  - label: asset types catalogued
+    compute: asset_types
+    value: 156
+    href: reference/catalog
+  - label: MCP tools
+    compute: mcp_tools
+    value: 74
+    href: mcp

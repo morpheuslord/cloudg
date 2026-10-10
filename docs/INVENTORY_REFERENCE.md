@@ -502,7 +502,7 @@ from `cloudg.inventory.mapper` and the package root). A dataclass.
 |---|---|---|
 | `assets` | `list[CloudAsset]` | Every asset after deduplication and linking, including organization / hierarchy assets, external account placeholders and the account nodes added by `add_account_hierarchy`. |
 | `edges` | `list[NetworkEdge]` | Collector edges, then linker edges, then hierarchy edges. The linker adds no edge whose source, target and `edge_type` an earlier edge already has. Parallel collector rules between the same two endpoints (one security group rule per port, say) are kept as separate edges. |
-| `coverage` | `list[CollectionCoverage]` | One record per discovery step and per provider × account × region collection run ([section 10](#10-coverage-records)). Not exported to any file. |
+| `coverage` | `list[CollectionCoverage]` | One record per discovery step and per provider × account × region collection run ([section 10](#10-coverage-records)). Exported under `coverage` in `inventory-map.json`. |
 | `providers` | `list[str]` | The configured providers, lower case (`["aws", "gcp"]`). |
 | `regions` | `dict[str, list[str]]` | Regions actually collected per provider after `all` expansion, e.g. `{"aws": ["us-east-1", "eu-west-1"]}`. |
 | `duration_ms` | `int` | Wall-clock time of `map_inventory()`. `0` after `load()`. |
@@ -543,7 +543,8 @@ The values are `pathlib.Path` objects. JSON files are written with `indent=2` an
 - `providers` comes from the file's `providers`, or `summary.providers` for older files.
 - `regions`, `unresolved_references` and `throttling` are read back.
 - `organization` is read from `inventory-organization.json` next to the map, when present.
-- `coverage` is empty and `duration_ms` is `0`: neither is stored in the files.
+- `coverage` is read back from the file's `coverage` list; a map written before that key existed
+  loads with an empty list. `duration_ms` is `0`: it is not stored in the files.
 - `raw_data` is empty on every asset (it is never serialised). Linking rules that use raw
   payloads (instance profiles, Lambda roles from `Role`) therefore only work on fresh
   collections, not on loaded maps; the declared relations do work.
@@ -984,6 +985,7 @@ The self-contained map. Written by `export()`, read by `load()` and `cloudg deps
 | `assets` | `list[object]` | `CloudAsset.model_dump(mode="json")` for every asset ([section 3](#3-cloudasset)), including `display_id`, excluding `raw_data`. |
 | `edges` | `list[object]` | `NetworkEdge.model_dump(mode="json")` for every edge ([section 5](#5-networkedge)). |
 | `unresolved_references` | `list[object]` | [Section 11](#11-unresolved-references). |
+| `coverage` | `list[object]` | `CollectionCoverage.model_dump(mode="json")` for every coverage record ([section 10](#10-coverage-records)). |
 | `throttling` | `object` | Only when a cloud API throttled the run: the full `InventoryResult.throttling` block. |
 
 Skeleton:
@@ -1005,6 +1007,11 @@ Skeleton:
   ],
   "unresolved_references": [
     {"source": "…", "source_name": "…", "target": "…", "edge_type": "…"}
+  ],
+  "coverage": [
+    {"provider": "aws", "region": "us-east-1", "account_id": "…", "started_at": "…",
+     "completed_at": null, "services": [{"service": "ec2", "status": "SUCCESS",
+     "asset_count": 0, "error": null, "duration_ms": 0}]}
   ]
 }
 ```
@@ -1300,8 +1307,10 @@ which returns `{"asset_map": Path, "compliance_map": Path}`.
 
 ### 19.1 asset-map.json (`build_asset_map`)
 
-A finding is matched to an asset when its `resource_arn` or `resource_id` equals the asset's
-`id`, `arn` or `name`.
+A finding is matched to an asset by `AssetIndex.resolve_finding()`: the asset's `id`, then an
+ARN taken from `resource_id` or `resource_arn`, then a name or an ARN tail that only one asset
+has. A name shared by several assets matches none of them. `compliance-map.json` uses the same
+matching.
 
 | Key | Type | Meaning |
 |---|---|---|

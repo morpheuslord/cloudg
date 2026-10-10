@@ -104,6 +104,36 @@ def _merge_edge_attrs(existing: dict[str, Any], new: dict[str, Any]) -> None:
         existing["relationship"] = new["relationship"]
 
 
+def _graphml_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    """``attrs`` without None values, with lists and dicts as JSON strings
+    and other non-scalar values as ``str()``."""
+    out: dict[str, Any] = {}
+    for key, value in attrs.items():
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, dict, set)):
+            value = json.dumps(sorted(value) if isinstance(value, set) else value, default=str)
+        elif not isinstance(value, (str, int, float, bool)):
+            value = str(value)
+        out[key] = value
+    return out
+
+
+def graphml_safe(graph: nx.DiGraph) -> nx.DiGraph:
+    """A copy of ``graph`` that GraphML can store.
+
+    NetworkX's GraphML writer raises on None attribute values (an asset
+    with no ARN) and on lists or dicts. The copy drops None attributes and
+    writes lists, tuples, sets and dicts as JSON strings; any other value
+    that is not a string, number or boolean becomes its ``str()``.
+    """
+    safe = graph.__class__()
+    safe.graph.update(_graphml_attrs(graph.graph))
+    safe.add_nodes_from((n, _graphml_attrs(d)) for n, d in graph.nodes(data=True))
+    safe.add_edges_from((u, v, _graphml_attrs(d)) for u, v, d in graph.edges(data=True))
+    return safe
+
+
 class GraphBuilder:
     """Builds a NetworkX directed graph from collected cloud assets and edges.
 
@@ -120,8 +150,14 @@ class GraphBuilder:
     its attributes, as NetworkX does.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_nodes_warn: int = 10000) -> None:
+        """
+        Args:
+            max_nodes_warn: :meth:`build` logs a warning when it gets more
+                assets than this (``graph.max_nodes_warn``; 0 turns it off).
+        """
         self._graph = nx.DiGraph()
+        self._max_nodes_warn = max_nodes_warn
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -144,11 +180,12 @@ class GraphBuilder:
         """
         self._graph.clear()
 
-        if len(assets) > 10000:
+        if self._max_nodes_warn and len(assets) > self._max_nodes_warn:
             logger.warning(
-                "Large graph: %d assets. Consider filtering by region or service "
-                "to reduce memory usage.",
+                "Large graph: %d assets (graph.max_nodes_warn is %d). Consider "
+                "filtering by region or service to reduce memory usage.",
                 len(assets),
+                self._max_nodes_warn,
             )
 
         # Add asset nodes
@@ -174,7 +211,7 @@ class GraphBuilder:
             asset_type=asset.asset_type.value,
             provider=asset.provider.value,
             region=asset.region,
-            arn=asset.arn,
+            arn=asset.arn or "",
             account_id=asset.account_id or "",
             tags=json.dumps(asset.tags) if asset.tags else "{}",
             is_internet_exposed=asset.is_internet_exposed,
@@ -260,6 +297,11 @@ class GraphBuilder:
     def save_graphml(self, path: str | Path) -> Path:
         """Save graph to GraphML format for persistence/offline analysis.
 
+        GraphML stores only strings, numbers and booleans, so the graph is
+        written through :func:`graphml_safe`: None attributes are left out
+        and lists or dicts are written as JSON strings. The graph itself is
+        not changed.
+
         Args:
             path: Output file path.
 
@@ -278,7 +320,7 @@ class GraphBuilder:
         except ImportError:
             pass
 
-        nx.write_graphml_xml(self._graph, str(output))
+        nx.write_graphml_xml(graphml_safe(self._graph), str(output))
         logger.info("Saved graph to %s", output)
         return output
 

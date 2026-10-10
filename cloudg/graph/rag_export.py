@@ -6,6 +6,13 @@ Three complementary chunking strategies:
 2. Community-detection: Louvain clusters with aggregate summaries
 3. Relation-group: one chunk per semantic relation group (Network, IAM, etc.)
 
+``rag.chunk_strategy`` picks which of them :meth:`RAGExporter.export_all`
+writes (``hybrid``: all three). ``rag.max_chunk_tokens`` bounds the
+length of a chunk's content, counted as about 4 characters per token: the
+lists in a chunk (relations, findings, community members, triples) are
+cut, in order, when the next line would not fit, and an
+``... and N more`` line says how many were left out.
+
 Relation-group chunks carry the same relations the ontology holds: the
 relations inferred from each edge plus the asset-level ones inferred from
 metadata (``ENCRYPTED_BY_KMS``, VPC containment from ``vpc_id``, tag
@@ -24,16 +31,28 @@ import networkx as nx
 
 from cloudg.graph.ontology import (
     RelationGroup,
-    get_relation_group,
-    infer_relations,
-    iter_asset_relations,
 )
 from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import (
     CloudAsset,
     Finding,
     NetworkEdge,
-    Severity,
+)
+
+from cloudg.graph.rag_text import (
+    CHUNK_STRATEGIES,
+    _index_findings,
+    _graph_index,
+    CHARS_PER_TOKEN,
+    _fit_sections,
+    _cut,
+    _entity_header_lines,
+    _entity_relations,
+    _entity_findings_lines,
+    _summarize_community_members,
+    _count_community_edges,
+    _group_relation_triples,
+    _relation_group_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,277 +124,8 @@ def _detect_communities(graph: nx.DiGraph) -> dict[str, int]:
 # Chunk-shaping helpers
 # ---------------------------------------------------------------------------
 
+
 # Severity → sort rank (lower is more severe)
-_SEVERITY_ORDER = {
-    Severity.CRITICAL: 0,
-    Severity.HIGH: 1,
-    Severity.MEDIUM: 2,
-    Severity.LOW: 3,
-    Severity.INFO: 4,
-}
-_SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "NONE": 5}
-
-
-def _index_findings(
-    findings: list[Finding] | None, index: AssetIndex | None = None
-) -> dict[str, list[Finding]]:
-    """Group findings by the asset ID they resolve to.
-
-    ``index`` matches a finding by ID, ARN, unique name, unique ARN tail
-    or unique ARN resource-part tail (:meth:`AssetIndex.resolve_finding`);
-    findings it cannot place stay keyed by their raw resource_id.
-    """
-    findings_by_resource: dict[str, list[Finding]] = defaultdict(list)
-    if findings:
-        for f in findings:
-            asset_id = index.resolve_finding(f) if index else None
-            findings_by_resource[asset_id or f.resource_id].append(f)
-    return findings_by_resource
-
-
-def _graph_index(
-    graph: nx.DiGraph, assets_by_id: dict[str, CloudAsset] | None = None
-) -> AssetIndex:
-    """Asset index over a graph's nodes, plus any known assets.
-
-    External placeholder nodes are indexed by ID only: their name is
-    the ID itself and says nothing about which asset a finding targets.
-    """
-    index = AssetIndex()
-    for node_id, data in graph.nodes(data=True):
-        if data.get("is_external"):
-            index.add(node_id)
-        else:
-            index.add(node_id, data.get("arn"), data.get("name"))
-    for asset in (assets_by_id or {}).values():
-        index.add(asset.id, asset.arn, asset.name)
-    return index
-
-
-def _entity_header_lines(asset: CloudAsset) -> list[str]:
-    """Build the base descriptive lines for an entity chunk."""
-    content_lines = [
-        f"Resource: {asset.name}",
-        f"Type: {asset.asset_type.value}",
-        f"Provider: {asset.provider.value}",
-        f"Region: {asset.region}",
-    ]
-    if asset.arn:
-        content_lines.append(f"ARN: {asset.arn}")
-    if asset.account_id:
-        content_lines.append(f"Account: {asset.account_id}")
-    if asset.is_internet_exposed:
-        content_lines.append("⚠ INTERNET EXPOSED")
-    if asset.tags:
-        content_lines.append(f"Tags: {json.dumps(asset.tags)}")
-    return content_lines
-
-
-def _edge_evidence(edge: NetworkEdge) -> str:
-    """Format an edge's port/protocol/cidr details as evidence text."""
-    evidence_parts = []
-    if edge.port_range:
-        evidence_parts.append(f"port {edge.port_range}")
-    if edge.protocol:
-        evidence_parts.append(edge.protocol)
-    if edge.cidr:
-        evidence_parts.append(f"cidr {edge.cidr}")
-    return ", ".join(evidence_parts) if evidence_parts else ""
-
-
-def _entity_relations(
-    asset: CloudAsset,
-    assets_by_id: dict[str, CloudAsset],
-    outgoing: dict[str, list[NetworkEdge]],
-    incoming: dict[str, list[NetworkEdge]],
-) -> list[dict[str, str]]:
-    """Collect inferred relations for an asset's 1-hop neighbourhood."""
-    chunk_relations: list[dict[str, str]] = []
-
-    # Outgoing edges
-    for edge in outgoing.get(asset.id, []):
-        tgt_name = assets_by_id.get(edge.target_id, None)
-        tgt_label = tgt_name.name if tgt_name else edge.target_id
-        for rel in infer_relations(edge, assets_by_id):
-            chunk_relations.append(
-                {
-                    "predicate": rel.value,
-                    "direction": "outgoing",
-                    "object": tgt_label,
-                    "object_id": edge.target_id,
-                    "evidence": _edge_evidence(edge),
-                }
-            )
-
-    # Incoming edges
-    for edge in incoming.get(asset.id, []):
-        src_name = assets_by_id.get(edge.source_id, None)
-        src_label = src_name.name if src_name else edge.source_id
-        for rel in infer_relations(edge, assets_by_id):
-            chunk_relations.append(
-                {
-                    "predicate": rel.value,
-                    "direction": "incoming",
-                    "object": src_label,
-                    "object_id": edge.source_id,
-                    "evidence": "",
-                }
-            )
-
-    return chunk_relations
-
-
-def _entity_findings_lines(
-    resource_findings: list[Finding],
-) -> tuple[list[str], str, set[str]]:
-    """Render findings lines; returns (lines, max severity, compliance frameworks)."""
-    if not resource_findings:
-        return [], "NONE", set()
-
-    lines = [f"\nFindings ({len(resource_findings)}):"]
-    sorted_findings = sorted(resource_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 5))
-    severity_max = sorted_findings[0].severity.value if sorted_findings else "NONE"
-    compliance_frameworks: set[str] = set()
-    for f in sorted_findings[:10]:
-        lines.append(f"  [{f.severity.value}] {f.title}")
-        compliance_frameworks.update(f.compliance_frameworks)
-    return lines, severity_max, compliance_frameworks
-
-
-def _summarize_community_members(
-    graph: nx.DiGraph,
-    members: list[str],
-    findings_by_resource: dict[str, list[Finding]],
-) -> dict[str, Any]:
-    """Aggregate per-member stats and summary lines for a community."""
-    type_counts: dict[str, int] = defaultdict(int)
-    member_lines: list[str] = []
-    total_findings = 0
-    max_severity = "NONE"
-    frameworks: set[str] = set()
-    exposed_count = 0
-
-    for node_id in members:
-        node_data = graph.nodes.get(node_id, {})
-        asset_type = node_data.get("asset_type", "UNKNOWN")
-        type_counts[asset_type] += 1
-
-        if node_data.get("is_internet_exposed"):
-            exposed_count += 1
-
-        name = node_data.get("name", node_id)
-        member_lines.append(f"  • {name} ({asset_type})")
-
-        for f in findings_by_resource.get(node_id, []):
-            total_findings += 1
-            if _SEVERITY_RANK.get(f.severity.value, 5) < _SEVERITY_RANK.get(max_severity, 5):
-                max_severity = f.severity.value
-            frameworks.update(f.compliance_frameworks)
-
-    return {
-        "type_counts": type_counts,
-        "member_lines": member_lines,
-        "total_findings": total_findings,
-        "max_severity": max_severity,
-        "frameworks": frameworks,
-        "exposed_count": exposed_count,
-    }
-
-
-def _count_community_edges(graph: nx.DiGraph, member_set: set[str]) -> tuple[int, int]:
-    """Count a community's internal vs external edges."""
-    internal_edges = 0
-    external_edges = 0
-    for u, v in graph.edges():
-        if u in member_set and v in member_set:
-            internal_edges += 1
-        elif u in member_set or v in member_set:
-            external_edges += 1
-    return internal_edges, external_edges
-
-
-def _label(asset_id: str, assets_by_id: dict[str, CloudAsset]) -> str:
-    """Display name of an asset id, or the id itself when it is not an asset."""
-    asset = assets_by_id.get(asset_id)
-    return asset.name if asset else asset_id
-
-
-def _triple(
-    subject_id: str, predicate: str, object_id: str, assets_by_id: dict[str, CloudAsset]
-) -> dict[str, str]:
-    """A relation triple with display labels and empty edge evidence."""
-    return {
-        "subject": _label(subject_id, assets_by_id),
-        "subject_id": subject_id,
-        "predicate": predicate,
-        "object": _label(object_id, assets_by_id),
-        "object_id": object_id,
-        "port_range": "",
-        "protocol": "",
-        "cidr": "",
-    }
-
-
-def _group_relation_triples(
-    edges: list[NetworkEdge],
-    assets_by_id: dict[str, CloudAsset],
-) -> dict[RelationGroup, list[dict[str, str]]]:
-    """Group relation triples by their relation group.
-
-    The triples are the relations inferred from every edge (with the
-    edge's port, protocol and CIDR as evidence) followed by the asset-level
-    relations of every asset in ``assets_by_id``, the same two sources the
-    ontology is built from.
-    """
-    group_triples: dict[RelationGroup, list[dict[str, str]]] = defaultdict(list)
-
-    for edge in edges:
-        for rel in infer_relations(edge, assets_by_id):
-            triple = _triple(edge.source_id, rel.value, edge.target_id, assets_by_id)
-            triple["port_range"] = edge.port_range or ""
-            triple["protocol"] = edge.protocol or ""
-            triple["cidr"] = edge.cidr or ""
-            group_triples[get_relation_group(rel)].append(triple)
-
-    for asset, rel, object_id in iter_asset_relations(list(assets_by_id.values())):
-        group_triples[get_relation_group(rel)].append(
-            _triple(asset.id, rel.value, object_id, assets_by_id)
-        )
-
-    return group_triples
-
-
-def _triple_evidence(triple: dict[str, str]) -> str:
-    """Format optional port/protocol/cidr evidence for a triple line."""
-    if not (triple["port_range"] or triple["protocol"] or triple["cidr"]):
-        return ""
-    parts = [p for p in [triple["port_range"], triple["protocol"], triple["cidr"]] if p]
-    return f" [{', '.join(parts)}]"
-
-
-def _relation_group_lines(
-    group: RelationGroup, triples: list[dict[str, str]], type_counts: dict[str, int]
-) -> list[str]:
-    """Content lines of a relation-group chunk: totals, distribution, triples."""
-    content_lines = [
-        f"Relation Group: {group.value}",
-        f"Total relations: {len(triples)}",
-        "",
-        "Relation type distribution:",
-    ]
-    for rt_name, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-        content_lines.append(f"  {rt_name}: {count}")
-
-    content_lines.append("\nTriples:")
-    for t in triples[:50]:  # Cap for chunk size
-        content_lines.append(
-            f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
-        )
-    if len(triples) > 50:
-        content_lines.append(f"  ... and {len(triples) - 50} more")
-    return content_lines
-
-
 def _write_export(out: Path, all_chunks: list[RAGChunk], counts: dict[str, int]) -> dict[str, Path]:
     """Write the JSONL chunks and the metadata index; return both paths."""
     # Write JSONL (one JSON object per line, the usual vector DB input)
@@ -416,8 +166,37 @@ class RAGExporter:
        Best for "show me all IAM access rules" or "list all network paths".
     """
 
-    def __init__(self, max_chunk_tokens: int = 2000) -> None:
+    def __init__(self, max_chunk_tokens: int = 2000, chunk_strategy: str = "hybrid") -> None:
+        """
+        Args:
+            max_chunk_tokens: Approximate content size limit of one chunk
+                (``rag.max_chunk_tokens``), counted as
+                :data:`CHARS_PER_TOKEN` characters per token. Lists that
+                do not fit are cut with an ``... and N more`` line; the
+                fixed lines of a chunk (an asset's name, type, ARN, tags)
+                are always kept, so one chunk can still go over the limit.
+            chunk_strategy: Chunk kinds :meth:`export_all` writes
+                (``rag.chunk_strategy``): ``entity``, ``community``,
+                ``relation_group``, or ``hybrid`` for all three.
+
+        Raises:
+            ValueError: ``max_chunk_tokens`` is below 1 or
+                ``chunk_strategy`` is not one of the four names.
+        """
+        if max_chunk_tokens < 1:
+            raise ValueError(f"max_chunk_tokens must be at least 1, got {max_chunk_tokens}")
+        if chunk_strategy not in CHUNK_STRATEGIES:
+            raise ValueError(
+                f"Unknown chunk_strategy {chunk_strategy!r}; expected one of "
+                + ", ".join(CHUNK_STRATEGIES)
+            )
         self._max_tokens = max_chunk_tokens
+        self._strategy = chunk_strategy
+
+    @property
+    def _budget(self) -> int:
+        """Content size limit of one chunk, in characters."""
+        return self._max_tokens * CHARS_PER_TOKEN
 
     # ------------------------------------------------------------------
     # Strategy 1: Entity-centric chunks
@@ -459,20 +238,31 @@ class RAGExporter:
         resource_findings: list[Finding],
     ) -> RAGChunk:
         """Assemble content, metadata, and relations into one entity chunk."""
-        content_lines = _entity_header_lines(asset)
-
-        # Add relations to content
-        if chunk_relations:
-            content_lines.append(f"\nRelations ({len(chunk_relations)}):")
-            for rel in chunk_relations[:30]:  # Cap to avoid huge chunks
-                arrow = "→" if rel["direction"] == "outgoing" else "←"
-                content_lines.append(f"  {arrow} {rel['predicate']}: {rel['object']}")
-
-        # Findings
+        header = _entity_header_lines(asset)
+        relation_lines = [
+            f"  {'→' if rel['direction'] == 'outgoing' else '←'} "
+            f"{rel['predicate']}: {rel['object']}"
+            for rel in chunk_relations
+        ]
         finding_lines, severity_max, compliance_frameworks = _entity_findings_lines(
             resource_findings
         )
-        content_lines.extend(finding_lines)
+        relations_title = [f"\nRelations ({len(chunk_relations)}):"] if chunk_relations else []
+        findings_title = [f"\nFindings ({len(resource_findings)}):"] if resource_findings else []
+
+        # Both lists share the chunk budget; see _fit_sections
+        n_relations, n_findings = _fit_sections(
+            [*header, *relations_title, *findings_title],
+            [relation_lines, finding_lines],
+            self._budget,
+        )
+        content_lines = [
+            *header,
+            *relations_title,
+            *_cut(relation_lines, n_relations),
+            *findings_title,
+            *_cut(finding_lines, n_findings),
+        ]
 
         # Metadata
         metadata = {
@@ -542,16 +332,18 @@ class RAGExporter:
         total_findings = summary["total_findings"]
         exposed_count = summary["exposed_count"]
 
-        content_lines = [f"Community {comm_id} ({len(members)} resources):"]
-        content_lines.extend(summary["member_lines"])
-        content_lines.append(f"\nAsset types: {dict(summary['type_counts'])}")
-        content_lines.append(f"Internal edges: {internal_edges}, External edges: {external_edges}")
+        title = [f"Community {comm_id} ({len(members)} resources):"]
+        tail = [
+            f"\nAsset types: {dict(summary['type_counts'])}",
+            f"Internal edges: {internal_edges}, External edges: {external_edges}",
+        ]
         if exposed_count:
-            content_lines.append(f"⚠ {exposed_count} internet-exposed resources")
+            tail.append(f"⚠ {exposed_count} internet-exposed resources")
         if total_findings:
-            content_lines.append(
-                f"Findings: {total_findings} (max severity: {summary['max_severity']})"
-            )
+            tail.append(f"Findings: {total_findings} (max severity: {summary['max_severity']})")
+        member_lines = summary["member_lines"]
+        (shown,) = _fit_sections([*title, *tail], [member_lines], self._budget)
+        content_lines = [*title, *_cut(member_lines, shown), *tail]
 
         risk_score = min(10.0, len(members) * 0.3 + total_findings * 0.5 + exposed_count * 2.0)
 
@@ -605,7 +397,7 @@ class RAGExporter:
         type_counts: dict[str, int] = defaultdict(int)
         for t in triples:
             type_counts[t["predicate"]] += 1
-        content_lines = _relation_group_lines(group, triples, type_counts)
+        content_lines, shown = _relation_group_lines(group, triples, type_counts, self._budget)
 
         metadata = {
             "relation_group": group.value,
@@ -626,7 +418,7 @@ class RAGExporter:
                     "object": t["object"],
                     "evidence": f"{t['port_range']} {t['protocol']} {t['cidr']}".strip(),
                 }
-                for t in triples[:50]
+                for t in triples[:shown]
             ],
         )
 
@@ -642,7 +434,11 @@ class RAGExporter:
         findings: list[Finding] | None = None,
         output_dir: str | Path = "./reports",
     ) -> dict[str, Path]:
-        """Export all chunk types to files.
+        """Export the chunk kinds of the chunk strategy to files.
+
+        With the default ``hybrid`` strategy that is all three kinds; any
+        other strategy writes one kind and counts the others as 0 in
+        rag_metadata_index.json.
 
         Returns:
             Dict mapping chunk type → output file path.
@@ -651,9 +447,22 @@ class RAGExporter:
         out.mkdir(parents=True, exist_ok=True)
 
         assets_by_id = {a.id: a for a in assets}
-        entity_chunks = self.export_entity_chunks(assets, edges, findings)
-        community_chunks = self.export_community_chunks(graph, assets_by_id, findings)
-        relation_chunks = self.export_relation_chunks(edges, assets_by_id)
+        kinds = (
+            {"entity", "community", "relation_group"}
+            if self._strategy == "hybrid"
+            else {self._strategy}
+        )
+        entity_chunks = (
+            self.export_entity_chunks(assets, edges, findings) if "entity" in kinds else []
+        )
+        community_chunks = (
+            self.export_community_chunks(graph, assets_by_id, findings)
+            if "community" in kinds
+            else []
+        )
+        relation_chunks = (
+            self.export_relation_chunks(edges, assets_by_id) if "relation_group" in kinds else []
+        )
         all_chunks = [*entity_chunks, *community_chunks, *relation_chunks]
         paths = _write_export(
             out,

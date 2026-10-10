@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import click
 
 from cloudg import ui
-from cloudg.cli_helpers import _parse_region_flag
+from cloudg.cli_helpers import _check_account_scope, _parse_region_flag
 from cloudg.ui import console
 
 if TYPE_CHECKING:
@@ -254,9 +254,13 @@ def _merge_findings(
 @click.option(
     "--accounts",
     default=None,
-    help="AWS: comma-separated account IDs to map (assumes --role-name in each)",
+    help="AWS: comma-separated account IDs to map; needs --role-name (or aws.role_name)",
 )
-@click.option("--role-name", default=None, help="AWS: role to assume in each mapped account")
+@click.option(
+    "--role-name",
+    default=None,
+    help="AWS: role to assume in each account of --accounts (aws.role_name)",
+)
 @click.option(
     "--org/--no-org",
     "org",
@@ -270,7 +274,11 @@ def _merge_findings(
     help="AWS: role assumed in member accounts (default AWSControlTowerExecution)",
 )
 @click.option(
-    "--ou", "ous", multiple=True, help="AWS: only accounts under this OU (ID or name). Repeatable."
+    "--ou",
+    "ous",
+    multiple=True,
+    help="AWS: only accounts under this OU (ID, ARN or name). Repeatable. "
+    "An OU that matches nothing is an error.",
 )
 @click.option(
     "--exclude-account",
@@ -309,10 +317,9 @@ def _merge_findings(
 )
 @click.option(
     "--sweep/--no-sweep",
-    default=True,
-    show_default=True,
+    default=None,
     help="Catch-all sweep (AWS Resource Groups Tagging API) for resources "
-    "without a dedicated collector",
+    "without a dedicated collector. Default: inventory.tagging_sweep (on).",
 )
 @click.option("-o", "--output", default="./reports", help="Output directory")
 @click.pass_context
@@ -352,9 +359,11 @@ def map_inventory(ctx: click.Context, **kwargs: Any) -> None:
     _apply_scope_overrides(cfg, kwargs)
     _apply_org_overrides(cfg, kwargs)
     _apply_inventory_overrides(cfg, kwargs)
-    _show_map_config(cfg, kwargs["sweep"])
+    _check_account_scope(cfg)
+    sweep = cfg.inventory.tagging_sweep if kwargs["sweep"] is None else kwargs["sweep"]
+    _show_map_config(cfg, sweep)
 
-    mapper = InventoryMapper(cfg, tagging_sweep=kwargs["sweep"])
+    mapper = InventoryMapper(cfg, tagging_sweep=sweep)
     try:
         with console.status("[accent]Mapping infrastructure inventory…[/]", spinner="dots"):
             result = mapper.map_inventory_sync()
@@ -383,7 +392,9 @@ def map_inventory(ctx: click.Context, **kwargs: Any) -> None:
 
 
 def _print_json(data: Any) -> None:
-    console.print_json(json.dumps(data, default=str))
+    # Straight to stdout: the Rich console goes to stderr with --json, and
+    # nothing else may share stdout with the JSON document.
+    click.echo(json.dumps(data, indent=2, default=str))
 
 
 def _show_asset_deps(graph: Any, kwargs: dict[str, Any]) -> None:

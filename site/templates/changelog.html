@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="shell shell--changelog">
+  <aside class="sidebar release-list" id="sidebar" aria-label="Releases" data-sidebar>
+    <div class="side-title release-title">Releases</div>
+    {% for r in page.extra.releases %}
+    <a href="#{{ r.rel.anchor }}" class="release-link{% if r.rel.version == site.version %} is-active{% endif %}"><span class="mono">{{ r.rel.version }}</span><span>{{ r.rel.date }}</span></a>
+    {% endfor %}
+  </aside>
+  <div class="scrim" data-scrim hidden></div>
+  <main id="main" class="content" tabindex="-1">
+    <article class="article article--wide">
+      <h1 class="page-title">Changelog</h1>
+      {% if page.lede %}<p class="lede">{{ page.lede|safe }}</p>{% endif %}
+      {% for r in page.extra.releases %}
+      <section class="release" id="{{ r.rel.anchor }}">
+        <div class="release-head">
+          <div class="release-version mono">{{ r.rel.version }}</div>
+          {% if r.rel.date %}<div class="release-date">{{ r.rel.date }}</div>{% endif %}
+          {% if r.rel.version == site.version %}<span class="tag tag-accent">latest</span>{% elif not r.rel.date and r.rel.version == 'Unreleased' %}<span class="tag tag-neutral">on main</span>{% endif %}
+        </div>
+        <div class="release-body prose">
+          {% if r.intro %}<div class="release-intro">{{ r.intro|safe }}</div>{% endif %}
+          {% for label, html in r.blocks %}
+          <div class="release-block">
+            <span class="release-label{% if label == 'Added' %} is-added{% endif %}">{{ label }}</span>
+            <div>{{ html|safe }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </article>
+  </main>
+</div>
+{% endblock %}

@@ -14,12 +14,14 @@ import click
 from cloudg import ui
 from cloudg.cli_helpers import (
     _apply_run_overrides,
+    _check_account_scope,
     _resolve_run_images,
     _resolve_run_scanners,
     _show_run_config,
 )
 from cloudg.cli_run_helpers import (
     _collect_assets,
+    _collection_verdict,
     _export_rag_phase,
     _graph_phase,
     RunProducts,
@@ -116,10 +118,16 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     """Run the full pipeline: collect → scan → normalise → render.
 
     Supports multi-provider scanning:
+
+    \b
         cloudg run -p aws -p azure
         cloudg run -p all
         cloudg run -p aws --regions all
         cloudg run -p aws --aws-key AKIAXX --aws-secret yyy
+
+    Exit status: 0 when the run finished, also when some accounts, regions
+    or scanners failed; 3 when collection failed for every target (the
+    reports then hold scanner findings only).
     """
     ui.section("Full Pipeline")
 
@@ -132,6 +140,7 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
     # then apply CLI overrides
     cfg: CloudGConfig = ctx.obj or CloudGConfig()
     _apply_run_overrides(cfg, kwargs)
+    _check_account_scope(cfg)
 
     scanner_list = _resolve_run_scanners(cfg, kwargs["scanners"])
     _show_run_config(cfg, scanner_list, output_dir)
@@ -153,6 +162,10 @@ def run(ctx: click.Context, **kwargs: Any) -> None:
 
     # Phases 3b to 5: ontology, RAG update, normalisation, reports, summary
     _post_scan_phases(cfg, kwargs, products, scanner_findings, iam_findings, output_dir)
+
+    status = _collection_verdict(products)
+    if status:
+        ctx.exit(status)
 
 
 def _pre_scan_phases(

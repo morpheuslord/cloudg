@@ -1,0 +1,26 @@
+Third-party JavaScript bundled with cloudg
+==========================================
+
+The HTML report (report.html) inlines these two libraries when
+report.inline_js is true (the default), so the report works without
+network access. The files are the unmodified builds published on npm;
+their own licence headers are kept.
+
+chart.umd.js
+  Chart.js 4.4.0, file dist/chart.umd.js of the npm package chart.js@4.4.0
+  https://www.chartjs.org
+  Copyright (c) 2014-2022 Chart.js Contributors
+  MIT License, see LICENSE-chartjs.md
+  sha256 321e3a3fa98da4aaa957d10be57cbb514de0989eed8f9d726b5d05902cd01904
+
+d3.min.js
+  D3 7.9.0, file dist/d3.min.js of the npm package d3@7.9.0
+  https://d3js.org
+  Copyright 2010-2023 Mike Bostock
+  ISC License, see LICENSE-d3.txt
+  sha256 f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539
+
+To update a library, replace the file with the build from the new npm
+release, update this notice, and update the version, CDN URL and SRI hash
+in cloudg/renderers/html_report.py (tests/test_html_report.py checks that
+the hashes match the files).

@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MEMBER_ROLE = "AWSControlTowerExecution"
 
+
+class OrganizationScopeError(ValueError):
+    """The requested organization scope (an OU filter) names nothing in the org.
+
+    Raised instead of quietly mapping only the caller's account.
+    """
+
+
 _POLICY_TYPES = [
     "SERVICE_CONTROL_POLICY",
     "RESOURCE_CONTROL_POLICY",
@@ -127,6 +135,11 @@ class OrganizationTopology:
                 return unit.id
         return None
 
+    def _known_ous(self) -> str:
+        """Every root and OU as "name (id)", for error messages."""
+        units = self.roots + sorted(self.ous.values(), key=lambda u: (u.path, u.name))
+        return ", ".join(f"{u.name} ({u.id})" for u in units) or "none"
+
     def _descendant_ous(self, ou_id: str) -> set[str]:
         out = {ou_id}
         changed = True
@@ -145,29 +158,59 @@ class OrganizationTopology:
         include_management_account: bool = True,
         include_suspended: bool = False,
     ) -> list[str]:
-        """Account IDs to collect, after OU / exclusion / status filters."""
-        allowed_ous: set[str] | None = None
-        if include_ous:
-            allowed_ous = set()
-            for ref in include_ous:
-                ou_id = self._resolve_ou(ref)
-                if ou_id is None:
-                    logger.warning("OU filter %r matched no OU in the organization", ref)
-                    continue
-                allowed_ous |= self._descendant_ous(ou_id)
+        """Account IDs to collect, after OU / exclusion / status filters.
+
+        ``include_ous`` entries are OU (or root) IDs, ARNs or names.
+
+        Raises:
+            OrganizationScopeError: an ``include_ous`` entry matches no OU;
+                the message lists the OUs the organization has.
+        """
+        allowed_ous = self._allowed_ous(include_ous) if include_ous else None
         excluded = set(exclude_accounts or [])
-        selected = []
-        for acct in self.accounts.values():
-            if acct.id in excluded:
-                continue
-            if acct.status != "ACTIVE" and not include_suspended:
-                continue
-            if acct.id == self.management_account_id and not include_management_account:
-                continue
-            if allowed_ous is not None and acct.parent_id not in allowed_ous:
-                continue
-            selected.append(acct.id)
-        return sorted(selected)
+        return sorted(
+            acct.id
+            for acct in self.accounts.values()
+            if acct.id not in excluded
+            and self._passes_filters(
+                acct, allowed_ous, include_management_account, include_suspended
+            )
+        )
+
+    def _passes_filters(
+        self,
+        acct: Any,
+        allowed_ous: set[str] | None,
+        include_management_account: bool,
+        include_suspended: bool,
+    ) -> bool:
+        """Status, management-account and OU filters of target_accounts()."""
+        if acct.status != "ACTIVE" and not include_suspended:
+            return False
+        if acct.id == self.management_account_id and not include_management_account:
+            return False
+        return allowed_ous is None or acct.parent_id in allowed_ous
+
+    def _allowed_ous(self, include_ous: list[str]) -> set[str]:
+        """OU IDs under the ``include_ous`` references (nested OUs included).
+
+        Raises:
+            OrganizationScopeError: a reference matches no OU.
+        """
+        allowed: set[str] = set()
+        unmatched: list[str] = []
+        for ref in include_ous:
+            ou_id = self._resolve_ou(ref)
+            if ou_id is None:
+                unmatched.append(ref)
+            else:
+                allowed |= self._descendant_ous(ou_id)
+        if unmatched:
+            raise OrganizationScopeError(
+                f"OU filter {', '.join(repr(r) for r in unmatched)} matched no OU in the "
+                f"organization. Known OUs: {self._known_ous()}"
+            )
+        return allowed
 
     # ------------------------------------------------------------------
     # Map nodes and edges
@@ -457,6 +500,7 @@ __all__ = [
     "discover_control_tower",
     "discover_organization",
     "OrgAccount",
+    "OrganizationScopeError",
     "OrganizationTopology",
     "OrgPolicy",
     "OrgUnit",

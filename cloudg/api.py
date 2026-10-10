@@ -25,14 +25,14 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
-from dataclasses import dataclass, field
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from cloudg.config import CloudGConfig
-from cloudg.coverage import CollectionCoverage
 from cloudg.schema.models import (
     CloudAsset,
     Finding,
@@ -40,7 +40,20 @@ from cloudg.schema.models import (
     ScanResult,
 )
 
-# resolve_iac_dirs lives with the scanner runs; re-exported here (public API)
+# Result objects and resolve_iac_dirs live in their own modules; re-exported here (public API)
+from cloudg.api_results import (
+    AnalysisResult,
+    CollectionResult,
+    OnAnalysisComplete,
+    OnCollectionComplete,
+    OnError,
+    OnFinding,
+    OnPhaseStart,
+    OnScanComplete,
+    PipelineResult,
+    collection_failed,
+    failed_collection_targets,
+)
 from cloudg.api_scanners import ScannerRunsMixin, resolve_iac_dirs
 
 __all__ = [
@@ -48,118 +61,25 @@ __all__ = [
     "CloudGEngine",
     "CollectionResult",
     "PipelineResult",
+    "collection_failed",
+    "failed_collection_targets",
     "resolve_iac_dirs",
 ]
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Result dataclasses
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class CollectionResult:
-    """Output of the collection phase."""
-
-    assets: list[CloudAsset] = field(default_factory=list)
-    edges: list[NetworkEdge] = field(default_factory=list)
-    coverage: list[CollectionCoverage] = field(default_factory=list)
-    providers_scanned: list[str] = field(default_factory=list)
-    regions_scanned: dict[str, list[str]] = field(default_factory=dict)
-    duration_ms: int = 0
-
-
-@dataclass
-class AnalysisResult:
-    """Output of the analysis phase (graph, ontology, RAG)."""
-
-    graph_nodes: int = 0
-    graph_edges: int = 0
-    ontology_triples: int = 0
-    ontology_path: Path | None = None
-    rag_chunks_path: Path | None = None
-    rag_chunk_count: int = 0
-    terraform_paths: dict[str, Path] = field(default_factory=dict)
-    attack_paths: list[Any] = field(default_factory=list)
-    reachability_findings: list[Finding] = field(default_factory=list)
-
-
-@dataclass
-class PipelineResult:
-    """Complete pipeline output: a single object for downstream consumption.
-
-    This is the primary return type for `CloudGEngine.run_pipeline()`.
-    Designed for easy serialisation and integration with larger systems.
-    """
-
-    # Core data
-    assets: list[CloudAsset] = field(default_factory=list)
-    edges: list[NetworkEdge] = field(default_factory=list)
-    findings: list[Finding] = field(default_factory=list)
-    scan_result: ScanResult | None = None
-
-    # Analysis outputs
-    graph_nodes: int = 0
-    graph_edges: int = 0
-    ontology_triples: int = 0
-    rag_chunks_path: Path | None = None
-    terraform_paths: dict[str, Path] = field(default_factory=dict)
-    attack_paths: list[Any] = field(default_factory=list)
-
-    # Metadata
-    providers_scanned: list[str] = field(default_factory=list)
-    regions_scanned: dict[str, list[str]] = field(default_factory=dict)
-    coverage: list[CollectionCoverage] = field(default_factory=list)
-    report_paths: dict[str, Path] = field(default_factory=dict)
-    duration_ms: int = 0
-    errors: list[str] = field(default_factory=list)
-
-    @property
-    def total_assets(self) -> int:
-        return len(self.assets)
-
-    @property
-    def total_findings(self) -> int:
-        return len(self.findings)
-
-    @property
-    def severity_breakdown(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for f in self.findings:
-            sev = f.severity.value
-            counts[sev] = counts.get(sev, 0) + 1
-        return counts
-
-    def to_summary(self) -> dict[str, Any]:
-        """Return a summary dict for downstream consumption."""
-        return {
-            "total_assets": self.total_assets,
-            "total_findings": self.total_findings,
-            "severity_breakdown": self.severity_breakdown,
-            "providers_scanned": self.providers_scanned,
-            "regions_scanned": self.regions_scanned,
-            "graph_nodes": self.graph_nodes,
-            "graph_edges": self.graph_edges,
-            "ontology_triples": self.ontology_triples,
-            "attack_paths_count": len(self.attack_paths),
-            "duration_ms": self.duration_ms,
-            "errors": self.errors,
-        }
-
-
-# ---------------------------------------------------------------------------
-# Event hook types
-# ---------------------------------------------------------------------------
-
-# Callback signatures (all optional)
-OnCollectionComplete = Callable[[CollectionResult], None]
-OnScanComplete = Callable[[list[Finding]], None]
-OnFinding = Callable[[Finding], None]
-OnAnalysisComplete = Callable[[AnalysisResult], None]
-OnPhaseStart = Callable[[str], None]  # phase name
-OnError = Callable[[str, Exception], None]  # phase name, exception
+def _run_sync(coro: Any, name: str) -> Any:
+    """``asyncio.run(coro)`` with a clear error inside a running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    coro.close()
+    raise RuntimeError(
+        f"{name}_sync() cannot run inside a running event loop (Jupyter and async "
+        f"applications run one); use 'await engine.{name}()' there instead"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +110,13 @@ class CloudGEngine(ScannerRunsMixin):
         self.on_phase_start: OnPhaseStart | None = None
         self.on_error: OnError | None = None
 
+        # While run_pipeline() runs, every emitted error is also kept here
+        self._error_sink: list[str] | None = None
+
+    def _output_dir(self, output_dir: str | Path | None) -> Path:
+        """``output_dir``, or ``report.output_dir`` from the config when None."""
+        return Path(output_dir if output_dir is not None else self.config.report.output_dir)
+
     def _emit_phase_start(self, phase: str) -> None:
         if self.on_phase_start:
             try:
@@ -197,7 +124,20 @@ class CloudGEngine(ScannerRunsMixin):
             except Exception:
                 logger.debug("Event hook raised; ignoring", exc_info=True)
 
+    @contextlib.contextmanager
+    def _collect_errors(self, errors: list[str]) -> Iterator[None]:
+        """Record every error emitted inside the block in ``errors`` too."""
+        previous = getattr(self, "_error_sink", None)
+        self._error_sink = errors
+        try:
+            yield
+        finally:
+            self._error_sink = previous
+
     def _emit_error(self, phase: str, exc: Exception) -> None:
+        sink = getattr(self, "_error_sink", None)
+        if sink is not None:
+            sink.append(f"{phase}: {exc}")
         if self.on_error:
             try:
                 self.on_error(phase, exc)
@@ -265,9 +205,10 @@ class CloudGEngine(ScannerRunsMixin):
         Args:
             output_dir: When set, exports inventory-map.json / .graphml /
                 inventory-graph.json there.
-            findings: Optional scanner findings produced elsewhere; when
-                given (with output_dir), asset-map.json and
-                compliance-map.json are exported as well.
+            findings: Optional scanner findings produced elsewhere. When
+                given, the overlay is stored on the returned result as
+                ``asset_map`` and ``compliance_map``; with output_dir set,
+                asset-map.json and compliance-map.json are exported too.
             tagging_sweep: Override config.inventory.tagging_sweep
                 (False skips the AWS tagging-API sweep).
 
@@ -285,6 +226,9 @@ class CloudGEngine(ScannerRunsMixin):
             self._emit_error("inventory_mapping", exc)
             raise
 
+        if findings:
+            result.asset_map = mapper.build_asset_map(result, findings)
+            result.compliance_map = mapper.build_compliance_map(result, findings)
         if output_dir is not None:
             result.export(output_dir)
             if findings:
@@ -297,8 +241,12 @@ class CloudGEngine(ScannerRunsMixin):
         findings: list[Finding] | None = None,
         tagging_sweep: bool | None = None,
     ) -> "Any":
-        """Synchronous wrapper for :meth:`map_inventory`."""
-        return asyncio.run(self.map_inventory(output_dir, findings, tagging_sweep))
+        """Synchronous wrapper for :meth:`map_inventory`.
+
+        Raises RuntimeError inside a running event loop; await
+        :meth:`map_inventory` there instead.
+        """
+        return _run_sync(self.map_inventory(output_dir, findings, tagging_sweep), "map_inventory")
 
     # ------------------------------------------------------------------
     # Phase 2: Scanning
@@ -311,46 +259,69 @@ class CloudGEngine(ScannerRunsMixin):
         iac_dir: str | None = None,
         images: list[str] | None = None,
         profile: str | None = None,
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> list[Finding]:
         """Run security scanners and graph analysis.
 
-        Runs all scanners enabled in config.scanners.enabled in parallel.
+        Runs all scanners enabled in config.scanners.enabled in parallel,
+        built-in ones and plugins registered under the ``cloudg.scanners``
+        entry point group. Unknown names and scanners whose CLI is not
+        installed are logged and skipped. Without images, Trivy scans the
+        IaC directories instead; the IAM linter runs only when ``iam`` is
+        enabled (and there are assets). Each scanner process is killed
+        after config.scanners.timeout_seconds; timeouts and failures are
+        reported through ``on_error``.
 
         Args:
             assets: Collected cloud assets.
             edges: Network edges between assets.
-            iac_dir: IaC directory for Checkov (falls back to config).
+            iac_dir: IaC directory for Checkov and Trivy (falls back to config).
             images: Container images for Trivy (falls back to config).
-            profile: AWS profile name for scanner auth.
-            output_dir: Directory for scanner output files.
+            profile: AWS profile for scanner auth (falls back to the
+                configured AWS auth, aws.profile included).
+            output_dir: Directory for scanner output files (default:
+                ``report.output_dir``).
 
         Returns:
-            List of all findings.
+            List of all findings. ``on_finding`` receives copies of each
+            scanner's findings as that scanner finishes.
         """
         self._emit_phase_start("scanning")
-        all_findings: list[Finding] = []
-        out = Path(output_dir)
+        from cloudg.normaliser import FindingList
+
+        # A FindingList, so Prowler's passing checks reach the normaliser
+        all_findings = FindingList()
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        scanner_list = [s.strip().lower() for s in self.config.scanners.enabled]
+        from cloudg.api_scanners import plan_scanner_jobs
 
         # Graph-based reachability analysis
-        all_findings.extend(self._run_reachability_analysis(assets, edges))
+        reachability = self._run_reachability_analysis(assets, edges)
+        self._emit_findings(reachability)
+        all_findings.extend(reachability)
 
-        resolved_iac_dirs = self._resolve_scan_iac_dirs(iac_dir, scanner_list, assets, edges, out)
+        resolved_iac_dirs = self._resolve_scan_iac_dirs(iac_dir, assets, edges, out)
 
         # Resolve images
         resolved_images: list[str] = images or list(self.config.scanners.trivy_images)
 
-        # Run all scanners concurrently
-        all_findings.extend(
-            self._run_scanners_parallel(
-                scanner_list, assets, resolved_iac_dirs, resolved_images, profile, out
-            )
+        plan = plan_scanner_jobs(
+            self.config,
+            list(self.config.scanners.enabled),
+            providers=list(self.config.providers),
+            profile=profile,
+            out=out,
+            assets=assets,
+            iac_dirs=resolved_iac_dirs,
+            images=resolved_images,
         )
+        # Run all scanners concurrently
+        scanner_findings = self._run_scan_plan(plan)
+        all_findings.extend(scanner_findings)
+        all_findings.passed_checks.update(getattr(scanner_findings, "passed_checks", None) or ())
 
-        self._emit_scan_results(all_findings)
+        self._emit_scan_complete(all_findings)
 
         return all_findings
 
@@ -393,18 +364,23 @@ class CloudGEngine(ScannerRunsMixin):
         """
         from cloudg.normaliser import FindingsNormaliser
 
-        normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
+        normaliser = FindingsNormaliser(
+            rules_dir=self.config.rulesets.rules_dir,
+            load_external=self.config.rulesets.load_external,
+        )
         return normaliser.normalise(findings, assets=assets or [])
 
     async def run_from_reports(
         self,
         reports: dict[str, list[str | Path]],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> PipelineResult:
         """Run the cloudg pipeline on existing scanner outputs.
 
         Needs no cloud access and no scanner binaries. Phases: ingest,
-        normalise, reports (JSON + HTML). Collection does not run, so
+        normalise, reports (JSON and HTML, as ``report.formats`` allows;
+        written to ``report.output_dir`` when ``output_dir`` is None).
+        Collection does not run, so
         graph/ontology/Terraform outputs that need live assets are empty;
         combine with `collect()` + `analyze()` when cloud credentials are
         available.
@@ -413,10 +389,19 @@ class CloudGEngine(ScannerRunsMixin):
             PipelineResult with findings, scan_result, and report paths.
         """
         start = time.time()
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
+        with self._collect_errors(errors):
+            return self._run_from_reports(reports, out, start, errors)
 
+    def _run_from_reports(
+        self,
+        reports: dict[str, list[str | Path]],
+        out: Path,
+        start: float,
+        errors: list[str],
+    ) -> PipelineResult:
         findings = self.ingest_reports(reports)
 
         self._emit_phase_start("normalisation")
@@ -426,10 +411,10 @@ class CloudGEngine(ScannerRunsMixin):
             scan_result = self.normalise_findings(findings)
             all_findings = scan_result.findings
         except Exception as exc:
-            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
+            self._record_phase_error("normalisation", "Normalisation failed", exc)
 
         self._emit_phase_start("reporting")
-        report_paths = self._write_reports(scan_result, out, errors) if scan_result else {}
+        report_paths = self._write_reports(scan_result, out) if scan_result else {}
 
         return PipelineResult(
             findings=all_findings,
@@ -439,44 +424,61 @@ class CloudGEngine(ScannerRunsMixin):
             errors=errors,
         )
 
-    def _record_phase_error(
-        self, phase: str, label: str, exc: Exception, errors: list[str]
-    ) -> None:
-        """Log a failed pipeline phase, keep it in ``errors`` and emit it."""
+    def _record_phase_error(self, phase: str, label: str, exc: Exception) -> None:
+        """Log a failed pipeline phase and emit it (which also records it
+        in the running pipeline's ``errors``)."""
         logger.error("%s: %s", label, exc)
-        errors.append(f"{phase}: {exc}")
         self._emit_error(phase, exc)
 
     def _write_reports(
         self,
         scan_result: ScanResult,
         out: Path,
-        errors: list[str],
         graph_json: dict[str, Any] | None = None,
+        collection: CollectionResult | None = None,
     ) -> dict[str, Path]:
-        """Write the JSON and HTML reports; a failure is recorded in ``errors``."""
+        """Write the reports in ``report.formats``; a failure is emitted as an error.
+
+        The SVG map needs collected assets, so it is only written when
+        ``collection`` is given.
+        """
         report_paths: dict[str, Path] = {}
+        formats = self.config.report.formats
         try:
-            from cloudg.renderers.json_export import JSONExporter
+            if "json" in formats:
+                from cloudg.renderers.json_export import JSONExporter
 
-            exporter = JSONExporter(output_dir=str(out))
-            report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
+                exporter = JSONExporter(output_dir=str(out))
+                report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
 
-            from cloudg.renderers.html_report import HTMLReportGenerator
+            if "html" in formats:
+                from cloudg.renderers.html_report import HTMLReportGenerator
 
-            html_gen = HTMLReportGenerator(output_dir=str(out))
-            report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+                html_gen = HTMLReportGenerator(
+                    output_dir=str(out), inline_js=self.config.report.inline_js
+                )
+                report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+
+            if "svg" in formats and collection is not None:
+                from cloudg.renderers.svg import SVGRenderer
+
+                svg = SVGRenderer(output_dir=str(out))
+                report_paths["svg"] = Path(svg.render(collection.assets, collection.edges))
         except Exception as exc:
-            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+            self._record_phase_error("reporting", "Report generation failed", exc)
         return report_paths
 
     def run_from_reports_sync(
         self,
         reports: dict[str, list[str | Path]],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> PipelineResult:
-        """Synchronous wrapper for `run_from_reports()`."""
-        return asyncio.run(self.run_from_reports(reports, output_dir))
+        """Synchronous wrapper for `run_from_reports()`.
+
+        Raises RuntimeError inside a running event loop; await
+        `run_from_reports()` there instead.
+        """
+        return _run_sync(self.run_from_reports(reports, output_dir), "run_from_reports")
 
     # ------------------------------------------------------------------
     # Phase 3: Analysis (ontology, RAG, terraform)
@@ -487,15 +489,17 @@ class CloudGEngine(ScannerRunsMixin):
         assets: list[CloudAsset],
         edges: list[NetworkEdge],
         findings: list[Finding],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> AnalysisResult:
         """Run ontology, RAG, and Terraform analysis.
+
+        Files go to ``output_dir``, or ``report.output_dir`` when it is None.
 
         Returns:
             AnalysisResult with all analysis outputs.
         """
         self._emit_phase_start("analysis")
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         result = AnalysisResult()
 
@@ -535,7 +539,7 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.graph.builder import GraphBuilder
 
-            builder = GraphBuilder()
+            builder = GraphBuilder(max_nodes_warn=self.config.graph.max_nodes_warn)
             graph = builder.build(assets, edges)
             result.graph_nodes = graph.number_of_nodes()
             result.graph_edges = graph.number_of_edges()
@@ -565,18 +569,22 @@ class CloudGEngine(ScannerRunsMixin):
         findings: list[Finding],
         out: Path,
     ) -> None:
-        """Build the ontology and export it in the configured formats."""
-        try:
-            from cloudg.graph.ontology import CloudOntology
+        """Build the ontology and export it in the configured formats.
 
-            ontology = CloudOntology()
+        Each format is written to ``ontology.<ext>`` with the extension
+        :func:`~cloudg.graph.ontology.ontology_extension` gives it, so
+        N-Triples no longer overwrites the Turtle file.
+        """
+        try:
+            from cloudg.graph.ontology import CloudOntology, ontology_extension
+
+            ontology = CloudOntology(include_raw_metadata=self.config.ontology.include_raw_metadata)
             ontology.build(assets, edges, findings)
             stats = ontology.stats()
             result.ontology_triples = stats["total_triples"]
 
             for fmt in self.config.ontology.export_formats:
-                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf"}
-                ext = ext_map.get(fmt, "ttl")
+                ext = ontology_extension(fmt)
                 path = ontology.save(out / f"ontology.{ext}", fmt=fmt)
                 result.ontology_path = path
         except Exception as exc:
@@ -596,9 +604,15 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.graph.rag_export import RAGExporter
 
-            rag = RAGExporter(max_chunk_tokens=self.config.rag.max_chunk_tokens)
+            rag = RAGExporter(
+                max_chunk_tokens=self.config.rag.max_chunk_tokens,
+                chunk_strategy=self.config.rag.chunk_strategy,
+            )
             rag_paths = rag.export_all(assets, edges, graph, findings, output_dir=out)
             result.rag_chunks_path = rag_paths["chunks"]
+            # One chunk per non-empty line of rag_chunks.jsonl
+            with open(rag_paths["chunks"]) as f:
+                result.rag_chunk_count = sum(1 for line in f if line.strip())
         except Exception as exc:
             logger.error("RAG export failed: %s", exc)
             self._emit_error("rag_export", exc)
@@ -612,9 +626,9 @@ class CloudGEngine(ScannerRunsMixin):
     ) -> None:
         """Export the Terraform recreation of the collected assets."""
         try:
-            from cloudg.renderers.terraform_export import TerraformExporter
+            from cloudg.renderers.terraform_export import TerraformExporter, terraform_output_dir
 
-            tf_dir = self.config.terraform.output_dir or str(out / "terraform")
+            tf_dir = terraform_output_dir(self.config.terraform, out)
             tf = TerraformExporter(output_dir=tf_dir)
             result.terraform_paths = tf.export(assets, edges)
         except Exception as exc:
@@ -625,37 +639,59 @@ class CloudGEngine(ScannerRunsMixin):
     # Full pipeline
     # ------------------------------------------------------------------
 
-    async def run_pipeline(self, output_dir: str | Path = "./reports") -> PipelineResult:
+    async def run_pipeline(self, output_dir: str | Path | None = None) -> PipelineResult:
         """Run the complete CloudG pipeline.
 
         Phases: 1. collection (multi-provider, multi-region), 2. scanning
-        (reachability, IAM linting), 3. analysis (ontology, RAG, Terraform),
-        4. normalisation, 5. report generation.
+        (reachability and every enabled scanner), 3. analysis (ontology,
+        RAG, Terraform), 4. normalisation, 5. report generation
+        (``report.formats``). Files go to ``output_dir``, or
+        ``report.output_dir`` when it is None.
 
         Returns:
-            PipelineResult with all outputs.
+            PipelineResult with all outputs. ``errors`` lists every failure
+            of the run, each as ``"<phase>: <message>"``: everything
+            reported through ``on_error`` (scanners, analysis,
+            normalisation, reporting), plus one ``collection:`` line per
+            provider, account or region that could not be collected.
         """
         start = time.time()
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
+        with self._collect_errors(errors):
+            return await self._run_pipeline(out, start, errors)
 
+    async def _run_pipeline(self, out: Path, start: float, errors: list[str]) -> PipelineResult:
         # Phase 1: Collect
         collection = await self.collect()
+        errors.extend(
+            f"collection: {line}" for line in failed_collection_targets(collection.coverage)
+        )
+        if collection_failed(collection.assets, collection.coverage) and not any(
+            e.startswith("collection:") for e in errors
+        ):
+            errors.append("collection: no assets collected and no collector succeeded")
 
-        # Phase 2: Scan (all enabled scanners in parallel)
-        findings = await self.scan(collection.assets, collection.edges, output_dir=out)
+        # Phase 2: Scan (all enabled scanners in parallel), with the
+        # configured AWS auth (aws.profile included)
+        findings = await self.scan(
+            collection.assets,
+            collection.edges,
+            profile=self.config.aws.profile,
+            output_dir=out,
+        )
 
         # Phase 3: Analyse
         analysis = await self.analyze(collection.assets, collection.edges, findings, output_dir=out)
 
         # Phase 4: Normalise
         scan_result, all_findings = self._normalise_pipeline_findings(
-            collection, findings, analysis, errors
+            collection, findings, analysis
         )
 
         # Phase 5: Reports
-        report_paths = self._generate_pipeline_reports(scan_result, collection, out, errors)
+        report_paths = self._generate_pipeline_reports(scan_result, collection, out)
 
         return PipelineResult(
             assets=collection.assets,
@@ -688,7 +724,6 @@ class CloudGEngine(ScannerRunsMixin):
         collection: CollectionResult,
         findings: list[Finding],
         analysis: AnalysisResult,
-        errors: list[str],
     ) -> tuple[ScanResult | None, list[Finding]]:
         """Normalise pipeline findings; returns (scan_result, all_findings)."""
         self._emit_phase_start("normalisation")
@@ -697,7 +732,10 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.normaliser import FindingsNormaliser
 
-            normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
+            normaliser = FindingsNormaliser(
+                rules_dir=self.config.rulesets.rules_dir,
+                load_external=self.config.rulesets.load_external,
+            )
             scan_result = normaliser.normalise(
                 analysis.reachability_findings,
                 findings,
@@ -707,7 +745,7 @@ class CloudGEngine(ScannerRunsMixin):
             scan_result.edges = collection.edges
             all_findings = scan_result.findings
         except Exception as exc:
-            self._record_phase_error("normalisation", "Normalisation failed", exc, errors)
+            self._record_phase_error("normalisation", "Normalisation failed", exc)
         return scan_result, all_findings
 
     def _generate_pipeline_reports(
@@ -715,30 +753,31 @@ class CloudGEngine(ScannerRunsMixin):
         scan_result: ScanResult | None,
         collection: CollectionResult,
         out: Path,
-        errors: list[str],
     ) -> dict[str, Path]:
-        """Generate JSON and HTML reports (with graph JSON) for the pipeline."""
+        """Generate the pipeline reports (with graph JSON) in ``report.formats``."""
         self._emit_phase_start("reporting")
         if not scan_result:
             return {}
         try:
             from cloudg.graph.builder import GraphBuilder
 
-            builder = GraphBuilder()
+            builder = GraphBuilder(max_nodes_warn=self.config.graph.max_nodes_warn)
             builder.build(collection.assets, collection.edges)
             graph_json = builder.to_d3_json()
         except Exception as exc:
-            self._record_phase_error("reporting", "Report generation failed", exc, errors)
+            self._record_phase_error("reporting", "Report generation failed", exc)
             return {}
-        return self._write_reports(scan_result, out, errors, graph_json=graph_json)
+        return self._write_reports(scan_result, out, graph_json=graph_json, collection=collection)
 
     # ------------------------------------------------------------------
     # Sync wrapper
     # ------------------------------------------------------------------
 
-    def run_pipeline_sync(self, output_dir: str | Path = "./reports") -> PipelineResult:
-        """Synchronous wrapper for `run_pipeline()`.
+    def run_pipeline_sync(self, output_dir: str | Path | None = None) -> PipelineResult:
+        """Synchronous wrapper for `run_pipeline()`, for scripts and other
+        code that is not already running an event loop.
 
-        Convenience for non-async callers (e.g. scripts, notebooks).
+        Raises RuntimeError when an event loop is already running in this
+        thread; use ``await engine.run_pipeline()`` there instead.
         """
-        return asyncio.run(self.run_pipeline(output_dir))
+        return _run_sync(self.run_pipeline(output_dir), "run_pipeline")

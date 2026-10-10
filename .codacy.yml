@@ -4,11 +4,13 @@
 # tests/ are excluded from analysis: pytest asserts (Bandit B101) and
 # moto's documented fake credentials (B105 "testing") are correct usage
 # there, and they accounted for ~290 false positives. Shipped code under
-# cloudg/ stays fully analysed.
+# cloudg/ stays fully analysed, except the unmodified third-party
+# Chart.js and D3 builds the HTML report inlines (templates/vendor/NOTICE).
 exclude_paths:
   - "tests/**"
   - "docs/**"
   - "assets/**"
+  - "cloudg/templates/vendor/**"
 
 engines:
   # dodgy pattern-matches the word "secret" in any assignment, which the

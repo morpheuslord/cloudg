@@ -54,6 +54,29 @@ AWS_REGIONS_FALLBACK: list[str] = [
     "sa-east-1",
 ]
 
+# Regions enabled in every AWS account (no opt-in needed). Region discovery
+# falls back to these: opt-in regions in AWS_REGIONS_FALLBACK fail with auth
+# errors in accounts that have not enabled them.
+AWS_DEFAULT_ENABLED_REGIONS: list[str] = [
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "ap-south-1",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "ca-central-1",
+    "eu-central-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-north-1",
+    "sa-east-1",
+]
+
 AZURE_LOCATIONS_FALLBACK: list[str] = [
     "eastus",
     "eastus2",
@@ -163,16 +186,24 @@ class RegionDiscovery:
         """Discover all enabled AWS regions.
 
         Args:
-            session: boto3.Session (optional). If None, uses default.
+            session: boto3.Session built from the run's resolved credentials
+                (see cloudg.credentials.build_aws_session). If None, a
+                default-chain session is used. The call goes to the
+                session's region (us-east-1 when it has none).
 
         Returns:
             List of region names (e.g. ['us-east-1', 'eu-west-1', ...]).
+            When the API call fails: the regions enabled by default in every
+            account (AWS_DEFAULT_ENABLED_REGIONS), never opt-in regions.
         """
         try:
             import boto3
 
             sess = session or boto3.Session()
-            ec2 = sess.client("ec2", region_name="us-east-1")
+            region = getattr(sess, "region_name", None)
+            if not isinstance(region, str) or not region or region.upper() == "ALL":
+                region = "us-east-1"
+            ec2 = sess.client("ec2", region_name=region)
             response = ec2.describe_regions(
                 Filters=[{"Name": "opt-in-status", "Values": ["opt-in-not-required", "opted-in"]}]
             )
@@ -183,10 +214,15 @@ class RegionDiscovery:
         except ImportError:
             logger.warning("boto3 not installed, using fallback AWS regions")
         except Exception as exc:
-            logger.warning("AWS region discovery failed (%s), using fallback", exc)
+            logger.warning(
+                "AWS region discovery failed (%s); scanning the %d regions enabled by "
+                "default in every account. Pass --regions to choose them yourself.",
+                exc,
+                len(AWS_DEFAULT_ENABLED_REGIONS),
+            )
 
-        logger.info("Using %d fallback AWS regions", len(AWS_REGIONS_FALLBACK))
-        return AWS_REGIONS_FALLBACK
+        logger.info("Using %d fallback AWS regions", len(AWS_DEFAULT_ENABLED_REGIONS))
+        return list(AWS_DEFAULT_ENABLED_REGIONS)
 
     async def discover_azure(
         self,
@@ -314,7 +350,7 @@ class RegionDiscovery:
                     logger.error("Region discovery failed for %s: %s", provider, regions_or_exc)
                     # Use fallback
                     fallbacks = {
-                        "aws": AWS_REGIONS_FALLBACK,
+                        "aws": AWS_DEFAULT_ENABLED_REGIONS,
                         "azure": AZURE_LOCATIONS_FALLBACK,
                         "gcp": GCP_REGIONS_FALLBACK,
                     }

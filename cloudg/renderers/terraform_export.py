@@ -386,6 +386,30 @@ _TRANSFORMERS: dict[AssetType, Any] = {
 
 
 # ---------------------------------------------------------------------------
+# Output directory
+# ---------------------------------------------------------------------------
+
+# The old built-in terraform.output_dir. config.yaml ships it verbatim, so
+# this exact value still counts as "not set" and follows the run's output.
+_LEGACY_DEFAULT_DIR = "./reports/terraform"
+
+
+def terraform_output_dir(terraform_cfg: Any, output_dir: str | Path) -> Path:
+    """Where the Terraform recreation goes for a run writing to ``output_dir``.
+
+    ``<output_dir>/terraform`` unless terraform.output_dir is set to
+    something else. The old default ``./reports/terraform`` (also the value
+    in the shipped config.yaml) counts as unset, so ``-o`` and
+    ``run_pipeline(output_dir=...)`` move the Terraform files along with
+    every other output.
+    """
+    configured = getattr(terraform_cfg, "output_dir", None)
+    if configured and Path(configured) != Path(_LEGACY_DEFAULT_DIR):
+        return Path(configured)
+    return Path(output_dir) / "terraform"
+
+
+# ---------------------------------------------------------------------------
 # Terraform Exporter
 # ---------------------------------------------------------------------------
 

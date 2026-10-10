@@ -30,8 +30,13 @@ class TrivyScanner:
     def __init__(
         self,
         extra_args: list[str] | None = None,
+        timeout_seconds: int = 1800,
     ) -> None:
+        """``timeout_seconds`` applies to each image or directory scan."""
         self._extra_args = extra_args or []
+        self._timeout_seconds = timeout_seconds
+        #: Why scans did not finish (timeouts, launch failures); empty on success
+        self.errors: list[str] = []
 
     @staticmethod
     def is_available() -> bool:
@@ -72,14 +77,18 @@ class TrivyScanner:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=1800,
+                timeout=self._timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            logger.error("Trivy scan timed out for image %s", image)
+            logger.error(
+                "Trivy scan timed out after %ds for image %s", self._timeout_seconds, image
+            )
+            self.errors.append(f"timed out after {self._timeout_seconds}s scanning {image}")
             return []
         except Exception as exc:
             logger.error("Failed to run Trivy for %s: %s", image, exc)
+            self.errors.append(f"could not scan {image}: {exc}")
             return []
 
         return self._parse_output(result.stdout, image)
@@ -140,14 +149,20 @@ class TrivyScanner:
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=1800,
+                    timeout=self._timeout_seconds,
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                logger.error("Trivy filesystem scan timed out for %s", directory)
+                logger.error(
+                    "Trivy filesystem scan timed out after %ds for %s",
+                    self._timeout_seconds,
+                    directory,
+                )
+                self.errors.append(f"timed out after {self._timeout_seconds}s scanning {directory}")
                 continue
             except Exception as exc:
                 logger.error("Failed to run Trivy fs for %s: %s", directory, exc)
+                self.errors.append(f"could not scan {directory}: {exc}")
                 continue
 
             findings = self._parse_fs_output(result.stdout, directory)

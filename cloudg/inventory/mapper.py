@@ -57,6 +57,7 @@ from typing import Any
 
 from cloudg.config import CloudGConfig
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.inventory.dependencies import AssetIndex
 
 # InventoryResult and _service_of live in mapper_result; re-exported here
 from cloudg.inventory.mapper_result import (
@@ -430,6 +431,8 @@ class InventoryMapper:
         """
         if not ("aws" in cfg.providers and cfg.aws.organization.enabled):
             return None
+        from cloudg.inventory.organization import OrganizationScopeError
+
         cov = CollectionCoverage(provider="aws", region="global")
         coverage.append(cov)
         t0 = time.time()
@@ -444,6 +447,8 @@ class InventoryMapper:
             if topology.errors:
                 cov.record("controltower", ServiceStatus.PARTIAL, error="; ".join(topology.errors))
             return topology
+        except OrganizationScopeError:
+            raise  # a filter typo must not quietly become a caller-account-only map
         except Exception as exc:
             logger.error("Organization discovery failed; mapping the caller account only: %s", exc)
             cov.record("organizations", ServiceStatus.FAILED, error=str(exc))
@@ -542,21 +547,32 @@ class InventoryMapper:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _findings_for(asset: CloudAsset, findings: list[Finding]) -> list[Finding]:
-        ids = {asset.id, asset.arn, asset.name}
-        matched = []
+    def _findings_by_asset(
+        result: InventoryResult, findings: list[Finding]
+    ) -> dict[str, list[Finding]]:
+        """Group findings by the inventory asset they resolve to.
+
+        Uses :meth:`AssetIndex.resolve_finding`, the matcher the ontology
+        and RAG exports use: internal ID, then ARN from ``resource_id`` or
+        ``resource_arn``, then unique name, then unique ARN tail. A name
+        shared by several assets never matches, so a finding for table
+        ``orders`` is not attached to a queue that is also named ``orders``.
+        Findings that resolve to no asset are left out.
+        """
+        index = AssetIndex(result.assets)
+        grouped: dict[str, list[Finding]] = {}
         for f in findings:
-            if f.resource_arn and f.resource_arn in ids:
-                matched.append(f)
-            elif f.resource_id in ids:
-                matched.append(f)
-        return matched
+            asset_id = index.resolve_finding(f)
+            if asset_id:
+                grouped.setdefault(asset_id, []).append(f)
+        return grouped
 
     def build_asset_map(self, result: InventoryResult, findings: list[Finding]) -> dict[str, Any]:
-        """Overlay scanner findings onto the inventory: asset → risk view."""
+        """Overlay scanner findings onto the inventory: asset to risk view."""
+        by_asset = self._findings_by_asset(result, findings)
         entries = []
         for asset in result.assets:
-            matched = self._findings_for(asset, findings)
+            matched = by_asset.get(asset.id, [])
             severity: dict[str, int] = {}
             for f in matched:
                 severity[f.severity.value] = severity.get(f.severity.value, 0) + 1
@@ -585,13 +601,18 @@ class InventoryMapper:
     def build_compliance_map(
         self, result: InventoryResult, findings: list[Finding]
     ) -> dict[str, Any]:
-        """Compliance framework → affected assets, from finding mappings."""
-        arn_index = {a.arn: a for a in result.assets if a.arn}
+        """Compliance framework to affected assets, from finding mappings.
+
+        Findings are matched to assets the way :meth:`build_asset_map`
+        matches them (:meth:`AssetIndex.resolve_finding`); a finding that
+        matches no asset counts its ``resource_arn`` as the affected asset.
+        """
+        index = AssetIndex(result.assets)
         id_index = {a.id: a for a in result.assets}
 
         frameworks: dict[str, dict[str, Any]] = {}
         for f in findings:
-            asset = arn_index.get(f.resource_arn or "") or id_index.get(f.resource_id)
+            asset = id_index.get(index.resolve_finding(f) or "")
             for fw in f.compliance_frameworks:
                 entry = frameworks.setdefault(
                     fw,

@@ -33,10 +33,14 @@ class CheckovScanner:
         target_dir: str = ".",
         frameworks: list[str] | None = None,
         extra_args: list[str] | None = None,
+        timeout_seconds: int = 1800,
     ) -> None:
         self._target_dir = target_dir
         self._frameworks = frameworks or []
         self._extra_args = extra_args or []
+        self._timeout_seconds = timeout_seconds
+        #: Why the last run did not finish (timeout, launch failure); empty on success
+        self.errors: list[str] = []
 
     @staticmethod
     def is_available() -> bool:
@@ -82,14 +86,18 @@ class CheckovScanner:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=1800,
+                timeout=self._timeout_seconds,
                 check=False,  # Checkov returns non-zero on failures found
             )
         except subprocess.TimeoutExpired:
-            logger.error("Checkov scan timed out")
+            logger.error("Checkov scan timed out after %ds", self._timeout_seconds)
+            self.errors.append(
+                f"timed out after {self._timeout_seconds}s scanning {self._target_dir}"
+            )
             return []
         except Exception as exc:
             logger.error("Failed to run Checkov: %s", exc)
+            self.errors.append(f"could not run: {exc}")
             return []
 
         return self._parse_output(result.stdout)

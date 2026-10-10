@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}cloudg docs · map, scan and graph AWS, Azure and GCP{% endblock %}
+{% block body %}
+<script>
+(function(){var m={{ redirects|tojson }};var h=location.hash.slice(1);if(h&&m[h]){location.replace(m[h]);}})();
+</script>
+<main id="main" class="home" tabindex="-1">
+  <section class="hero">
+    <div class="hero-text">
+      <div class="kicker mono">CLOUD GRAPHING · AWS / AZURE / GCP</div>
+      <h1>Map the cloud. Scan it. Merge everything.</h1>
+      <p class="hero-lede">cloudg collects your infrastructure into a graph, fans out to the security scanners you already trust and merges every finding against {{ stats['items'][0]['value'] }} compliance frameworks. You can also skip scanning completely and just map what you have.</p>
+      <div class="hero-actions">
+        <a href="{{ site.href('guides/quickstart') }}" class="btn btn-primary btn-hero">Get started{{ icon('arrow-right', 16)|safe }}</a>
+        <div class="install-pill">
+          <code><span class="muted">$</span> pip install "cloudg[aws]"</code>
+          <button type="button" class="btn btn-icon" aria-label="Copy install command" data-copy-text='pip install "cloudg[aws]"'>{{ icon('copy', 14, 'i-copy')|safe }}{{ icon('check', 14, 'i-check')|safe }}</button>
+        </div>
+      </div>
+    </div>
+    <figure class="hero-art" aria-label="An example map: an internet-facing load balancer, the instances behind it, their database, role and bucket">
+      {% include "_hero_graph.html" %}
+      <figcaption class="mono">An example map. Red marks the path in from the internet.</figcaption>
+    </figure>
+  </section>
+
+  <section class="stats" aria-label="cloudg in numbers">
+    {% for s in stats['items'] %}
+    <a class="stat" href="{{ site.href(s.href) if s.href else '#' }}"><span class="stat-value">{{ s.value }}</span><span class="stat-label">{{ s.label }}</span></a>
+    {% endfor %}
+  </section>
+
+  <section class="home-section">
+    <h2>Three ways in</h2>
+    <div class="ways">
+      <a class="way" href="{{ site.href('guides/pipeline') }}">
+        <span class="way-num mono">01 · full pipeline</span>
+        <span class="way-title">Collect, scan, report</span>
+        <span class="way-desc">Every provider in parallel, all four scanners and every report format, in one command.</span>
+        <code class="way-cmd">cloudg run -p all --regions all</code>
+      </a>
+      <a class="way" href="{{ site.href('guides/ingesting') }}">
+        <span class="way-num mono">02 · ingest only</span>
+        <span class="way-title">Merge output you already have</span>
+        <span class="way-desc">No cloud credentials and no scanner binaries. Point it at the files and get the same reports.</span>
+        <code class="way-cmd">cloudg ingest --prowler ./out/</code>
+      </a>
+      <a class="way" href="{{ site.href('guides/inventory-mapping') }}">
+        <span class="way-num mono">03 · map only</span>
+        <span class="way-title">Inventory, every service linked</span>
+        <span class="way-desc">Typed edges such as INVOKES, ASSUMES_ROLE and PROTECTS, with no scanner involved.</span>
+        <code class="way-cmd">cloudg map -p aws --org</code>
+      </a>
+    </div>
+  </section>
+
+  <section class="home-section home-flow">
+    <div class="home-flow-text">
+      <h2>What happens in a run</h2>
+      <p>Collectors read each provider concurrently and hand assets and edges to a NetworkX graph. Scanners run in parallel against the same accounts, their output is normalised into one finding model, deduplicated and matched to compliance controls. The same data then leaves as an HTML report, JSON, GraphML, an RDF ontology, RAG chunks and, if you want it, an MCP server for your AI assistant.</p>
+      <p><a href="{{ site.href('guides/pipeline') }}">Read about the pipeline</a></p>
+    </div>
+    <figure class="diagram"><div class="diagram-body"><pre class="mermaid">flowchart LR
+  P["AWS, Azure, GCP"] --> C[Collectors]
+  C --> G[(Graph)]
+  P --> S[Scanners]
+  S --> N[Normaliser]
+  G --> N
+  N --> R["report.html, JSON, SVG"]
+  G --> O["Ontology and RAG"]
+  N --> M["MCP server"]
+  O --> M</pre></div></figure>
+  </section>
+
+  <section class="home-links" aria-label="Sections">
+    <a href="{{ site.href('guides/introduction') }}"><span class="hl-title">Guides</span><span class="muted">Install, authenticate, map, scan</span></a>
+    <a href="{{ site.href('cli') }}"><span class="hl-title">CLI reference</span><span class="muted">{{ stats.commands }} commands and every flag</span></a>
+    <a href="{{ site.href('api') }}"><span class="hl-title">Python API</span><span class="muted">CloudGEngine and the modules behind it</span></a>
+    <a href="{{ site.href('mcp') }}"><span class="hl-title">MCP server</span><span class="muted">Claude Desktop, Claude Code, Cursor, VS Code</span></a>
+  </section>
+  <footer class="site-foot">
+    <span>cloudg v{{ site.version }} · MIT licence</span>
+    <a href="{{ site.href('changelog') }}">Changelog</a>
+    <a href="https://github.com/morpheuslord/cloudg" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/cloudg/" rel="noopener">PyPI</a>
+  </footer>
+</main>
+{% endblock %}

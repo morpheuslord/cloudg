@@ -167,13 +167,16 @@ async def test_list_asset_types_accounts_regions_tags(call):
 
 
 async def test_coverage_report(call, workspace, sample_dataset):
-    out = await call("coverage_report")
-    # inventory-map.json does not persist coverage
-    assert out["records"] == [] and "note" in out
-    workspace.add(sample_dataset, activate=True, replace=True)
+    # inventory-map.json keeps the coverage records and loading restores them
     out = await call("coverage_report")
     assert out["failed"] == 1 and out["coverage_pct"] == 66.7
     assert out["records"][0]["failures"][0]["service"] == "rds"
+    workspace.add(sample_dataset, activate=True, replace=True)
+    out = await call("coverage_report")
+    assert out["failed"] == 1 and out["coverage_pct"] == 66.7
+    workspace.add(Dataset(name="bare"), activate=True, replace=True)
+    out = await call("coverage_report")
+    assert out["records"] == [] and "note" in out
 
 
 async def test_unresolved_references(call):

@@ -440,7 +440,7 @@ async def test_explain_edge_type_attachment_and_nacl(call):
     out = await call("explain_edge_type", edge_type="ATTACHED_TO")
     assert "PROTECTED_BY_SG" in out["ontology_relations"]
     out = await call("explain_edge_type", edge_type="NACL_RULE")
-    assert out["ontology_relations"].startswith("none")
+    assert out["ontology_relations"].startswith("as SECURITY_GROUP_RULE")
     out = await call("explain_edge_type", edge_type="CONTAINS")
     assert "ORG_CONTAINS_ACCOUNT" in out["ontology_relations"]
 

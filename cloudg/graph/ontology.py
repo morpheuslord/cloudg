@@ -10,7 +10,9 @@ that downstream chunking and retrieval systems can exploit.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +42,8 @@ __all__ = [
     "CM",
     "CMP",
     "CMR",
+    "NEIGHBOURHOOD_RELATIONS",
+    "ONTOLOGY_FORMATS",
     "CloudOntology",
     "RelationGroup",
     "RelationType",
@@ -48,6 +52,8 @@ __all__ = [
     "infer_asset_relations",
     "infer_relations",
     "iter_asset_relations",
+    "ontology_extension",
+    "ontology_format",
 ]
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,56 @@ logger = logging.getLogger(__name__)
 CM = Namespace("https://cloudg.io/ontology#")
 CMR = Namespace("https://cloudg.io/resource/")
 CMP = Namespace("https://cloudg.io/property/")
+
+
+# Export format name (lower case) -> (rdflib serializer, file extension).
+# CloudOntology.save(), CloudGEngine.analyze() and `cloudg run` all use this
+# table, so a format is always written to a file with the matching extension.
+ONTOLOGY_FORMATS: dict[str, tuple[str, str]] = {
+    "turtle": ("turtle", "ttl"),
+    "ttl": ("turtle", "ttl"),
+    "json-ld": ("json-ld", "jsonld"),
+    "jsonld": ("json-ld", "jsonld"),
+    "xml": ("xml", "rdf"),
+    "rdfxml": ("xml", "rdf"),
+    "rdf": ("xml", "rdf"),
+    "nt": ("nt", "nt"),
+    "ntriples": ("nt", "nt"),
+    "n-triples": ("nt", "nt"),
+}
+
+
+def ontology_format(fmt: str) -> tuple[str, str]:
+    """(rdflib serializer, file extension) of an ontology export format.
+
+    Names are matched case-insensitively against :data:`ONTOLOGY_FORMATS`.
+    An unknown name is written as Turtle (``.ttl``), as
+    :meth:`CloudOntology.save` always did, with a warning.
+    """
+    found = ONTOLOGY_FORMATS.get((fmt or "").strip().lower())
+    if found is None:
+        logger.warning("Unknown ontology format %r; writing Turtle instead", fmt)
+        return ONTOLOGY_FORMATS["turtle"]
+    return found
+
+
+def ontology_extension(fmt: str) -> str:
+    """File extension (without the dot) for an ontology export format:
+    ``ttl``, ``jsonld``, ``rdf`` or ``nt``."""
+    return ontology_format(fmt)[1]
+
+
+# Relations query_asset_neighbourhood() follows (forwards) beyond one hop
+NEIGHBOURHOOD_RELATIONS: tuple[RelationType, ...] = (
+    RelationType.INGRESS_ALLOWED,
+    RelationType.EGRESS_ALLOWED,
+    RelationType.CONTAINS,
+    RelationType.VPC_CONTAINS_SUBNET,
+    RelationType.SUBNET_CONTAINS_INSTANCE,
+    RelationType.INTERNET_REACHABLE,
+    RelationType.PROTECTED_BY_SG,
+    RelationType.LB_TARGETS_INSTANCE,
+)
 
 
 # AssetType → OWL class URI mapping
@@ -260,9 +316,17 @@ class CloudOntology:
 
     Constructs OWL class hierarchy, typed object/data properties, and
     individual instances from CloudG's Pydantic models.
+
+    Args:
+        include_raw_metadata: Also store each asset's provider metadata
+            (``CloudAsset.metadata``) as a JSON-encoded string literal on
+            ``cmp:hasRawMetadata`` (``ontology.include_raw_metadata``).
+            Off by default: the metadata can be large and may hold
+            configuration details you do not want in the ontology files.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, include_raw_metadata: bool = False) -> None:
+        self._include_raw_metadata = include_raw_metadata
         self._graph = Graph()
         self._graph.bind("cm", CM)
         self._graph.bind("cmr", CMR)
@@ -319,6 +383,8 @@ class CloudOntology:
         for dp_name in _DATA_PROPERTIES:
             dp_uri = CMP[dp_name]
             g.add((dp_uri, RDF.type, OWL.DatatypeProperty))
+        if self._include_raw_metadata:
+            g.add((CMP["hasRawMetadata"], RDF.type, OWL.DatatypeProperty))
 
     # ------------------------------------------------------------------
     # Instance population (ABox)
@@ -393,6 +459,9 @@ class CloudOntology:
             self._graph.add((uri, CMP["hasARN"], Literal(asset.arn)))
         if asset.account_id:
             self._graph.add((uri, CMP["hasAccountId"], Literal(asset.account_id)))
+        if self._include_raw_metadata and asset.metadata:
+            raw = json.dumps(asset.metadata, default=str, sort_keys=True)
+            self._graph.add((uri, CMP["hasRawMetadata"], Literal(raw)))
 
         # Tags as triples
         for key, value in asset.tags.items():
@@ -463,11 +532,25 @@ class CloudOntology:
     # SPARQL queries
     # ------------------------------------------------------------------
 
-    def query(self, sparql: str) -> list[dict[str, Any]]:
-        """Execute a SPARQL query and return results as list of dicts."""
+    def query(self, sparql: str, bindings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a SPARQL query and return results as list of dicts.
+
+        Values are strings; a variable the row leaves unbound (an
+        ``OPTIONAL`` that did not match) is None, not the string "None".
+
+        Args:
+            sparql: The query. The ``cm``, ``cmr``, ``cmp``, ``owl``,
+                ``rdf`` and ``rdfs`` prefixes are predefined.
+            bindings: Initial variable bindings (name without ``?`` to an
+                rdflib term), passed to rdflib as ``initBindings``. Use
+                them for values such as resource IRIs instead of formatting
+                them into the query text.
+        """
         results = []
-        for row in self._graph.query(sparql):
-            results.append({str(var): str(val) for var, val in zip(row.labels, row)})
+        for row in self._graph.query(sparql, initBindings=bindings or {}):
+            results.append(
+                {str(var): (None if val is None else str(val)) for var, val in zip(row.labels, row)}
+            )
         return results
 
     def query_internet_exposed(self) -> list[dict[str, str]]:
@@ -503,31 +586,64 @@ class CloudOntology:
         """
         return self.query(sparql)
 
-    def query_asset_neighbourhood(self, asset_id: str, hops: int = 1) -> list[dict[str, str]]:
-        """Find all resources within N hops of a given asset."""
-        # For 1-hop we query direct predicates; for N-hop we use property paths
-        if hops == 1:
-            sparql = f"""
-            SELECT ?predicate ?neighbour ?neighbourName WHERE {{
-                {{
-                    cmr:{asset_id} ?predicate ?neighbour .
+    def query_asset_neighbourhood(self, asset_id: str, hops: int = 1) -> list[dict[str, Any]]:
+        """Find all resources within N hops of a given asset.
+
+        ``asset_id`` is the asset's id as given to :meth:`build` (the local
+        part of its ``cmr:`` IRI); ids holding ``:``, ``/`` or other
+        characters that are not valid in a prefixed name work, since the
+        IRI is bound as a value rather than written into the query.
+
+        With ``hops`` 1 (or less) every ``cmp:`` triple that has the asset
+        as subject or object is returned as ``{"predicate", "neighbour",
+        "neighbourName"}``. With more hops the walk follows the network
+        relations in :data:`NEIGHBOURHOOD_RELATIONS` forwards, up to
+        ``hops`` steps, and returns each resource reached once as
+        ``{"neighbour", "neighbourName", "hops"}`` (``hops`` is the
+        shortest distance), nearest first. ``neighbourName`` is None for a
+        node with no ``cmp:hasName``.
+        """
+        start = CMR[asset_id]
+        if hops <= 1:
+            sparql = """
+            SELECT ?predicate ?neighbour ?neighbourName WHERE {
+                {
+                    ?asset ?predicate ?neighbour .
                     FILTER(STRSTARTS(STR(?predicate), STR(cmp:)))
-                }} UNION {{
-                    ?neighbour ?predicate cmr:{asset_id} .
+                } UNION {
+                    ?neighbour ?predicate ?asset .
                     FILTER(STRSTARTS(STR(?predicate), STR(cmp:)))
-                }}
-                OPTIONAL {{ ?neighbour cmp:hasName ?neighbourName }}
-            }}
+                }
+                OPTIONAL { ?neighbour cmp:hasName ?neighbourName }
+            }
             """
-        else:
-            # N-hop uses transitive path (up to hops length)
-            sparql = f"""
-            SELECT DISTINCT ?neighbour ?neighbourName WHERE {{
-                cmr:{asset_id} (cmp:INGRESS_ALLOWED|cmp:EGRESS_ALLOWED|cmp:CONTAINS|cmp:VPC_CONTAINS_SUBNET|cmp:SUBNET_CONTAINS_INSTANCE|cmp:INTERNET_REACHABLE|cmp:PROTECTED_BY_SG|cmp:LB_TARGETS_INSTANCE){{1,{hops}}} ?neighbour .
-                OPTIONAL {{ ?neighbour cmp:hasName ?neighbourName }}
-            }}
-            """
-        return self.query(sparql)
+            return self.query(sparql, bindings={"asset": start})
+
+        predicates = [CMP[rt.value] for rt in NEIGHBOURHOOD_RELATIONS]
+        name_p = CMP["hasName"]
+        distance: dict[Any, int] = {start: 0}
+        queue: deque[Any] = deque([start])
+        rows: list[dict[str, Any]] = []
+        while queue:
+            node = queue.popleft()
+            depth = distance[node]
+            if depth >= hops:
+                continue
+            for pred in predicates:
+                for nxt in self._graph.objects(node, pred):
+                    if nxt in distance:
+                        continue
+                    distance[nxt] = depth + 1
+                    queue.append(nxt)
+                    name = self._graph.value(nxt, name_p)
+                    rows.append(
+                        {
+                            "neighbour": str(nxt),
+                            "neighbourName": None if name is None else str(name),
+                            "hops": depth + 1,
+                        }
+                    )
+        return rows
 
     def query_compliance_gaps(self) -> list[dict[str, str]]:
         """Find resources affected by findings with compliance frameworks."""
@@ -567,8 +683,11 @@ class CloudOntology:
         """Save ontology to file.
 
         Args:
-            path: Output file path.
-            fmt: Serialization format (turtle, json-ld, xml, nt).
+            path: Output file path, written as given; use
+                :func:`ontology_extension` to pick a matching extension.
+            fmt: Serialization format, a key of :data:`ONTOLOGY_FORMATS`
+                (turtle, json-ld, xml, nt and their aliases); an unknown
+                name writes Turtle.
 
         Returns:
             Path to saved file.
@@ -576,17 +695,7 @@ class CloudOntology:
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
 
-        format_map = {
-            "turtle": "turtle",
-            "ttl": "turtle",
-            "json-ld": "json-ld",
-            "jsonld": "json-ld",
-            "xml": "xml",
-            "rdfxml": "xml",
-            "nt": "nt",
-            "ntriples": "nt",
-        }
-        rdflib_fmt = format_map.get(fmt.lower(), "turtle")
+        rdflib_fmt = ontology_format(fmt)[0]
 
         self._graph.serialize(destination=str(output), format=rdflib_fmt)
         logger.info("Saved ontology (%d triples) to %s as %s", len(self._graph), output, rdflib_fmt)

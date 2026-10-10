@@ -1,0 +1,60 @@
+# Descriptions for config.yaml keys that have no comment in the file and no
+# Field(description=...) in cloudg/config.py. Keys are "<section>.<path>".
+# A bare section name sets that page's intro.
+
+aws: Credentials, regions and accounts for the AWS collectors. Any auth method can be combined with role assumption.
+azure: Credentials, subscriptions and regions for the Azure collectors.
+gcp: Credentials, projects and scope for the GCP collectors.
+scanners: Which scanners `cloudg run` and `cloudg scan` start, and the extra arguments each one gets.
+graph: Settings for the NetworkX graph built from collected assets and edges.
+ontology: The RDF ontology export (Turtle and JSON-LD).
+rag: Chunked exports for retrieval-augmented generation pipelines.
+terraform: Terraform files that recreate the collected infrastructure. Off by default.
+report: Which report files are written and where.
+rulesets: Where the compliance rulesets are read from.
+
+aws.regions: Regions to collect. `ALL` discovers every region enabled for the account.
+aws.role_session_name: Session name used when cloudg assumes a role.
+aws.organization.exclude_accounts: Account IDs to leave out of an Organizations run.
+aws.organization.include_management_account: Map the management account as well as the members.
+aws.organization.include_suspended: Include suspended accounts.
+azure.tenant_id: Directory (tenant) ID for service principal, certificate or federated auth.
+azure.client_id: Application (client) ID of the service principal or workload identity.
+azure.client_secret: Client secret for service principal auth.
+azure.certificate_path: Path to a PEM certificate for certificate-based service principal auth.
+azure.federated_token_file: Path to a federated (OIDC) token file for workload identity federation.
+azure.use_managed_identity: Authenticate with the managed identity of the machine cloudg runs on.
+gcp.organization_id: Organization to list from. Needed for the folder and project hierarchy.
+gcp.credentials_file: Path to a service account key file. Leave null to use Application Default Credentials.
+gcp.org_policies: Collect Organization Policy constraints.
+gcp.vpc_service_controls: Collect VPC Service Controls perimeters.
+scanners.enabled: Scanners to run. Any of prowler, scoutsuite, checkov, trivy and iam (the built-in IAM linter).
+scanners.prowler_extra_args: Extra command-line arguments passed to Prowler.
+scanners.scoutsuite_extra_args: Extra command-line arguments passed to ScoutSuite.
+scanners.checkov_extra_args: Extra command-line arguments passed to Checkov.
+scanners.trivy_extra_args: Extra command-line arguments passed to Trivy.
+scanners.trivy_images: Container images for Trivy to scan.
+scanners.iac_directories: Infrastructure-as-code directories for Checkov to scan.
+scanners.timeout_seconds: Time limit for each scanner process, in seconds (minimum 60).
+inventory.cloud_control_exclude: CloudFormation types or prefixes the Cloud Control sweep skips.
+inventory.cloud_control_concurrency: Parallel Cloud Control list calls (1 to 32).
+inventory.exclude_services: Service families or collector names to skip.
+inventory.kubernetes_timeout: Seconds to wait on each Kubernetes API call (1 to 120).
+inventory.max_images_per_repository: Image digests sampled per ECR repository (0 to 1000).
+graph.persist_graphml: "`cloudg run` writes the graph as `topology.graphml` in the output directory."
+graph.max_nodes_warn: "`cloudg run` and `CloudGEngine` log a memory warning when they build a graph from more assets than this. `0` turns the warning off."
+graph.compute_attack_paths: "`cloudg run` searches the graph for lateral movement paths and prints their count."
+graph.export_cytoscape: "`cloudg run` also writes the graph as `topology-cytoscape.json`, for Cytoscape.js."
+ontology.enabled: Build and export the ontology.
+ontology.export_formats: Serialisations to write.
+ontology.include_raw_metadata: "Copy each asset's metadata dict into the ontology as a JSON string (`cmp:hasRawMetadata`)."
+rag.enabled: Write RAG chunks.
+rag.max_chunk_tokens: "Size budget of one chunk's text, in tokens counted as about 4 characters each (minimum 100). Lists that do not fit end with an `... and N more` line."
+terraform.enabled: Write Terraform files.
+terraform.output_dir: "Where the Terraform files go. Unset, or left at `./reports/terraform`, they go to `terraform/` under the run's output directory (`-o`, or the `output_dir` given to `CloudGEngine`); any other value is used as given."
+report.formats: "Reports that `cloudg run`, `CloudGEngine.run_pipeline()` and `run_from_reports()` write: `html`, `json`, `svg`. `run_from_reports()` never writes `svg`. Unknown names are dropped with a warning. `cloudg report` and `cloudg ingest` use `--format` instead."
+report.output_dir: "Output directory of the `CloudGEngine` methods called without `output_dir`, and the MCP workspace root. The CLI commands use `-o` instead."
+rulesets.load_external: "Load the YAML rulesets from `rules_dir`. `false` maps compliance only from the scanners' own fields and the built-in fallback patterns, with no exact control IDs. `check_equivalence.yaml` is loaded either way."
+ratelimit.enabled: Turn the shared rate limiter on or off for every provider.
+ratelimit.aws.services: Per-service overrides of the built-in limits.
+general.verbose: Log at debug level.

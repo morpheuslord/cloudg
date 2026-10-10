@@ -52,9 +52,11 @@ pip install cloudg[mcp]       # + the official MCP SDK (mcp>=1.30,<3), see MCP s
 pip install cloudg[all]       # every provider SDK and the MCP SDK
 ```
 
+There is also a `full` extra (`diagrams`, `weasyprint`, `policy-sentry`), which `install.sh` and `install.bat` try to install. No code path uses `diagrams` or `weasyprint`, and the IAM linter only checks whether `policy_sentry` can be imported, so the extra changes nothing in the output today.
+
 The cloud SDKs are optional extras, pulled in only when you collect from that provider. The core package alone ships the graph engine, the ontology builder, the findings normaliser, the report renderers and `cloudg ingest`. That is enough to aggregate existing scan results on a machine with no cloud access at all.
 
-The external scanners are separate executables, not Python dependencies: [Prowler](https://github.com/prowler-cloud/prowler) (`pip install prowler`), [ScoutSuite](https://github.com/nccgroup/ScoutSuite) (`pip install scoutsuite`), [Checkov](https://github.com/bridgecrewio/checkov) (`pip install checkov`) and [Trivy](https://trivy.dev/) (binary install). Install whichever subset you want. cloudg checks `PATH` at run time and skips anything missing with a warning; the rest of the pipeline is unaffected. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up all of them plus the cloud CLIs, and the Docker image bundles the four scanner binaries.
+The external scanners are separate executables, not Python dependencies: [Prowler](https://github.com/prowler-cloud/prowler) (`pip install prowler`), [ScoutSuite](https://github.com/nccgroup/ScoutSuite) (`pip install scoutsuite`), [Checkov](https://github.com/bridgecrewio/checkov) (`pip install checkov`) and [Trivy](https://trivy.dev/) (binary install). Install whichever subset you want. cloudg checks `PATH` at run time and skips anything missing with a warning; the rest of the pipeline is unaffected. `install.sh` (Linux/macOS) and `install.bat` (Windows) set up all of them plus the cloud CLIs. The Docker image bundles Prowler, Checkov and Trivy, but not ScoutSuite (see [Docker](#docker)).
 
 Requires Python 3.11 or newer.
 
@@ -188,7 +190,7 @@ Coverage comes in four layers.
 3. The relationship linker. Collectors declare what each asset talks to; the linker resolves those identifiers across services, regions and accounts into typed edges, then applies provider rules and a generic reference pass. See [Relationships](#relationships) below.
 4. Account hierarchy. Every account gets a `CLOUD_ACCOUNT` node that contains its top-level resources. With `--org`, accounts hang under the OU tree, next to SCPs, the Control Tower landing zone and its enabled controls.
 
-Outputs: `inventory-map.json` (assets, edges, unresolved references, and a summary covering services, types, regions, accounts, relationship counts, cross-account edges, external accounts, security service gaps, internet exposure and unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3, with account and relationship attributes), `inventory-dependencies.json` (most shared dependencies, largest blast radius, cross-account edges, security coverage including workloads no vulnerability scanner covers and internet-facing endpoints without a WAF), and with `--org` `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, riskiest first) and `compliance-map.json` (framework → findings and affected assets). The map does not depend on the scanners; findings from any earlier run merge in whenever they exist.
+Outputs: `inventory-map.json` (assets, edges, unresolved references, collection coverage records, and a summary covering services, types, regions, accounts, relationship counts, cross-account edges, external accounts, security service gaps, internet exposure and unlinked assets), `inventory-map.graphml`, `inventory-graph.json` (D3, with account and relationship attributes), `inventory-dependencies.json` (most shared dependencies, largest blast radius, cross-account edges, security coverage including workloads no vulnerability scanner covers and internet-facing endpoints without a WAF), and with `--org` `inventory-organization.json`. With `--findings`, additionally `asset-map.json` (per-asset finding counts and severity breakdowns, riskiest first) and `compliance-map.json` (framework → findings and affected assets). The map does not depend on the scanners; findings from any earlier run merge in whenever they exist.
 
 #### Relationships
 
@@ -249,7 +251,7 @@ cloudg ingest \
 
 | Flag | Accepts |
 |---|---|
-| `--prowler` | ASFF JSON or JSONL file, or Prowler's `-o` output directory (searched recursively for `*.json`) |
+| `--prowler` | OCSF or ASFF JSON or JSONL file, or Prowler's `-o` output directory (searched recursively for `*.json`) |
 | `--scoutsuite` | the `scoutsuite_results_*.js` file, or the `--report-dir` directory |
 | `--checkov` | a `checkov --output json` file (or `results_json.json`), or a directory containing it |
 | `--trivy` | a `trivy image` or `trivy fs` JSON file, or a directory of them |
@@ -266,7 +268,7 @@ Re-render reports from a previous run's `findings.json`. No cloud, no scanners.
 cloudg report -i ./reports/findings.json --format html
 ```
 
-`--format` takes `html`, `json`, `svg` or `all`.
+`--format` takes `html`, `json`, `svg` or `all`. The run is restored as written: metadata, assets, findings, compliance results, edges and graph. A `raw-findings.json` from `cloudg scan` or `cloudg ingest` is normalised first. The command refuses to write `findings.json` over its own input (exit status 1); pick another `-o`, render `--format html` or `svg` only, or pass `--overwrite`.
 
 ## Input requirements
 
@@ -274,13 +276,14 @@ This section pins down exactly what each ingest path expects, and the command th
 
 ### Prowler
 
-Produce:
+Produce either format:
 
 ```bash
-prowler aws -M json-asff -o ./prowler-output
+prowler aws -o ./prowler-output                # OCSF (*.ocsf.json), Prowler 4's default
+prowler aws -M json-asff -o ./prowler-output   # ASFF
 ```
 
-cloudg accepts the output directory itself or any single file from it. Files may be a JSON array or JSONL (one ASFF object per line); both parse. The fields cloudg reads from each ASFF finding:
+cloudg accepts the output directory itself or any single file from it. Files may be a JSON array, JSONL (one record per line) or an ASFF `{"Findings": [...]}` batch. Each record is read as OCSF when it has OCSF keys (`finding_info`, `class_uid` and so on) and as ASFF otherwise; a directory holding both formats gives each check twice, and normalisation merges the pair. From an OCSF record cloudg reads `status_code` (`PASS` gives no finding), `status` (`Suppressed` marks a muted finding), `severity`, `finding_info.title`, `finding_info.desc` and `finding_info.uid`, `metadata.event_code` (the check name), `resources[0].uid` or `name`, the keys of `unmapped.compliance`, `remediation.desc` and `status_detail`. The fields cloudg reads from each ASFF finding:
 
 ```json
 {
@@ -294,7 +297,7 @@ cloudg accepts the output directory itself or any single file from it. Files may
 }
 ```
 
-Findings with `Compliance.Status` of `PASSED` are skipped. The check name embedded in `Id` (the third dash-separated token) becomes the dedupe key.
+Findings with `Compliance.Status` of `PASSED` give no finding; their check names are kept, and the ruleset controls that only passing checks map to get a `PASS` compliance result. The check name embedded in `Id` (`prowler-<check>-...` or `prowler-<provider>-<check>-...`) becomes the dedupe key.
 
 ### ScoutSuite
 
@@ -333,14 +336,14 @@ All commands write into the output directory (`./reports` by default).
 
 | File | Contents |
 |---|---|
-| `report.html` | interactive report: D3 topology, findings table, compliance matrix. Self-contained, works offline. |
+| `report.html` | interactive report: D3 topology, findings table, compliance matrix. Self-contained, with Chart.js and D3 embedded, so it works offline (`report.inline_js: false` loads them from a CDN instead). |
 | `findings.json` | the machine-readable result, structure below |
 | `raw-findings.json` | pre-normalisation findings (from `scan` and `ingest`) |
-| `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | the graph in three formats |
+| `topology.svg`, `topology.graphml` | the graph as a picture and as GraphML; `topology-cytoscape.json` too with `graph.export_cytoscape: true` |
 | `ontology.ttl`, `ontology.jsonld` | RDF ontology, 64 inferred relation types, SPARQL-queryable |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | retrieval-ready chunks, one JSON object per line |
-| `terraform/*.tf.json`, `terraform/import.sh` | Terraform recreation of live infrastructure, 25+ asset types |
-| `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, summary (`cloudg map`) |
+| `terraform/*.tf.json`, `terraform/import_commands.sh` | Terraform recreation of live infrastructure, 25+ asset types |
+| `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` | scanner-independent inventory map: assets, interconnections, collection coverage, summary (`cloudg map`) |
 | `inventory-dependencies.json` | shared dependencies, blast radius, cross-account edges, security service coverage (`cloudg map`) |
 | `inventory-organization.json` | AWS Organization / Control Tower topology (`cloudg map --org`) |
 | `asset-map.json`, `compliance-map.json` | inventory overlaid with scanner findings (`cloudg map --findings`) |
@@ -356,8 +359,8 @@ The inventory files are specified field by field in the [inventory reference](ht
     "provider": "AWS",
     "account_id": "...",
     "region": "...",
-    "started_at": "...",
-    "completed_at": "..."
+    "started_at": "2026-10-10T05:47:10.313561",
+    "completed_at": "2026-10-10T05:47:10.313549"
   },
   "summary": {
     "total_assets": 0,
@@ -369,11 +372,12 @@ The inventory files are specified field by field in the [inventory reference](ht
   "assets": [],
   "findings": [],
   "compliance": [],
+  "edges": [],
   "graph": {"nodes": [], "links": []}
 }
 ```
 
-`assets`, `findings` and `compliance` are lists of the models below, serialised with Pydantic's JSON mode. `graph` is D3 force-layout data. `cloudg report -i` accepts this same file back, so the format round-trips.
+`assets`, `findings`, `compliance` and `edges` are lists of the models below, serialised with Pydantic's JSON mode. The timestamps are ISO 8601, and an unset `completed_at` is `null`. `graph` is D3 force-layout data. `cloudg report -i` accepts this same file back and restores all of it, so the format round-trips.
 
 ## Data models
 
@@ -457,7 +461,7 @@ The aggregate container the normaliser returns and the renderers consume: `asset
 
 ## Configuration
 
-`config.yaml` mirrors every CLI flag and adds persistent settings; pass it with `-c` or keep it next to where you run. Everything is optional, defaults are sensible. The shipped [config.yaml](https://github.com/morpheuslord/cloudg/blob/main/config.yaml) documents each field inline. The structure, with defaults:
+`config.yaml` mirrors every CLI flag and adds persistent settings. It is read only when you pass it with `-c` / `--config`: no command looks for a `config.yaml` in the working directory, so without the flag cloudg runs on the defaults. Everything is optional, defaults are sensible. The shipped [config.yaml](https://github.com/morpheuslord/cloudg/blob/main/config.yaml) documents each field inline. The structure, with defaults:
 
 ```yaml
 providers: [aws]                # aws, azure, gcp; several at once is fine
@@ -548,7 +552,7 @@ rag:
 
 terraform:
   enabled: false
-  output_dir: ./reports/terraform
+  output_dir: ./reports/terraform   # this value or unset: terraform/ under -o
 
 report:
   formats: [html, json, svg]
@@ -622,32 +626,34 @@ Hook signatures:
 
 | Hook | Signature | Fires |
 |---|---|---|
-| `on_phase_start` | `(phase: str) -> None` | at each phase: `collection`, `scanning`, `ingest`, `analysis`, `normalisation`, `reporting` |
+| `on_phase_start` | `(phase: str) -> None` | at each phase: `collection`, `inventory_mapping`, `scanning`, `ingest`, `analysis`, `normalisation`, `reporting` |
 | `on_collection_complete` | `(result: CollectionResult) -> None` | after collection |
-| `on_finding` | `(finding: Finding) -> None` | once per finding, after scan or ingest |
+| `on_finding` | `(finding: Finding) -> None` | once per finding, as each scanner finishes (a deep copy, not changed by normalisation); after ingest for `ingest_reports()` |
 | `on_scan_complete` | `(findings: list[Finding]) -> None` | after scan or ingest |
 | `on_analysis_complete` | `(result: AnalysisResult) -> None` | after analysis |
-| `on_error` | `(phase: str, exc: Exception) -> None` | on any phase failure |
+| `on_error` | `(phase: str, exc: Exception) -> None` | when `collection`, `inventory_mapping`, `normalisation` or `reporting` fails, when the graph analysis inside the scan phase fails (`graph_analysis`), when a scanner job fails or times out (its job name, such as `prowler-aws`) or its AWS credentials do not resolve (`scanner_auth`), or when one of the analysis steps `graph_build`, `ontology`, `rag_export`, `terraform` fails |
+
+During `run_pipeline()` and `run_from_reports()` every `on_error` call also lands in `PipelineResult.errors` as `"<phase>: <message>"`, next to one `collection: ...` line per target that could not be collected.
 
 Exceptions raised inside a hook are swallowed, so a broken callback cannot take the pipeline down.
 
 ### Methods
 
-`run_pipeline(output_dir="./reports") -> PipelineResult` and its sync twin `run_pipeline_sync()` run everything: collect, scan, analyse, normalise, report.
+`run_pipeline(output_dir=None) -> PipelineResult` and its sync twin `run_pipeline_sync()` run everything: collect, scan, analyse, normalise, report (the formats in `report.formats`). An `output_dir` of `None` means `report.output_dir` from the config, here and in every method below. The sync twins raise `RuntimeError` inside a running event loop; `await` the async method there.
 
 `collect() -> CollectionResult` runs multi-provider collection alone. The result carries `assets` (`list[CloudAsset]`), `edges` (`list[NetworkEdge]`), per-service `coverage` records, `providers_scanned`, `regions_scanned` and `duration_ms`.
 
-`scan(assets, edges, iac_dir=None, images=None, profile=None, output_dir="./reports") -> list[Finding]` runs the scanners from `config.scanners.enabled` in parallel, plus graph reachability analysis and the IAM linter. Missing binaries are skipped.
+`scan(assets, edges, iac_dir=None, images=None, profile=None, output_dir=None) -> list[Finding]` runs the scanners from `config.scanners.enabled` in parallel (built-ins and scanner plugins), plus graph reachability analysis; the IAM linter runs when `iam` is enabled. Each scanner process is limited by `scanners.timeout_seconds`. Missing binaries and unknown names are skipped with a warning.
 
 `ingest_reports(reports: dict[str, list[str | Path]]) -> list[Finding]` parses existing scanner outputs instead of running anything. Keys are tool names (`prowler`, `scoutsuite`, `checkov`, `trivy`), values are lists of report paths, file or directory. Unparseable paths are logged and skipped rather than raising.
 
 `normalise_findings(findings, assets=None) -> ScanResult` applies the full dedupe, cross-scanner merge, CVSS rescoring and compliance mapping. This is the same code path `run_pipeline` uses.
 
-`analyze(assets, edges, findings, output_dir="./reports") -> AnalysisResult` builds the graph and produces the ontology, RAG chunks, Terraform files, attack paths and reachability findings, gated by the corresponding config sections.
+`analyze(assets, edges, findings, output_dir=None) -> AnalysisResult` builds the graph and produces the ontology, RAG chunks, Terraform files, attack paths and reachability findings, gated by the corresponding config sections.
 
-`run_from_reports(reports, output_dir="./reports") -> PipelineResult` and `run_from_reports_sync(...)` chain ingest, normalise and report generation in one call.
+`run_from_reports(reports, output_dir=None) -> PipelineResult` and `run_from_reports_sync(...)` chain ingest, normalise and report generation in one call.
 
-`map_inventory(output_dir=None, findings=None, tagging_sweep=None) -> InventoryResult` and `map_inventory_sync(...)` run the scanner-independent inventory mapping: deep collection across all configured providers, catch-all sweeps, and relationship linking. Passing `output_dir` exports the map files; passing `findings` as well exports the merged asset and compliance maps.
+`map_inventory(output_dir=None, findings=None, tagging_sweep=None) -> InventoryResult` and `map_inventory_sync(...)` run the scanner-independent inventory mapping: deep collection across all configured providers, catch-all sweeps, and relationship linking. Passing `findings` stores the merged asset and compliance maps on the result (`asset_map`, `compliance_map`); passing `output_dir` exports the map files, and the merged maps too when there are findings.
 
 ### Inventory mapping API
 
@@ -725,11 +731,11 @@ Modules the pipeline uses internally that are equally useful standalone:
 | Module | Class | What it does from code |
 |---|---|---|
 | `cloudg.graph.builder` | `GraphBuilder` | `build(assets, edges)` → NetworkX DiGraph, with parallel security group, NACL and internet-exposure rules between the same two nodes merged into one edge (`port_range` and `protocol` become comma lists); `find_attack_paths(src, dst)`, `find_lateral_movement_paths()`, `compute_centrality()` for blast-radius scoring; `to_d3_json()`, `to_cytoscape_json()`, `save_graphml()` / `load_graphml()` |
-| `cloudg.graph.reachability` | `ReachabilityAnalyzer`, `network_flow_graph`, `finding_id`, `asset_key` | BFS from the internet over network-flow edges only. Entry points are `0.0.0.0/0`, `::/0` and the Azure `Internet`, `Any` and `*` sources. The walk follows `INTERNET_EXPOSED`, ingress `SECURITY_GROUP_RULE` and `NACL_RULE` edges, `ROUTE`, `PEERING` and `LOAD_BALANCER_TARGET` source to target; `ATTACHED_TO` backwards into a security group, NSG or NACL and forwards from a network interface or Elastic IP; `CONTAINS` only from a VPC, VNet or subnet. It never follows IAM edges, and not `INVOKES` either, so a function behind a public API gateway is not flagged. Security groups, NSGs, NACLs and target groups are hops: they are marked exposed but get no exposure finding of their own. `generate_findings()` returns exposure and sensitive-port findings with deterministic ids; `flow_hops()`, `flow_successors()`, `internet_entry_points()` and `network_flow_graph()` expose the same walk; `compute_blast_radius(node)` follows every edge type |
+| `cloudg.graph.reachability` | `ReachabilityAnalyzer`, `network_flow_graph`, `finding_id`, `asset_key` | BFS from the internet over network-flow edges only. Entry points are `0.0.0.0/0`, `::/0` and the Azure `Internet`, `Any` and `*` sources. The walk follows `INTERNET_EXPOSED`, ingress `SECURITY_GROUP_RULE` and `NACL_RULE` edges, `ROUTE`, `PEERING` and `LOAD_BALANCER_TARGET` source to target; `ATTACHED_TO` backwards into a security group, NSG or NACL and forwards from a network interface or Elastic IP; `CONTAINS` only from a VPC, VNet or subnet. It never follows IAM edges, and not `INVOKES` either, so a function behind a public API gateway is not flagged. Security groups, NSGs, NACLs and target groups are hops: they are marked exposed but get no exposure finding of their own. `generate_findings()` returns exposure and sensitive-port findings with deterministic ids; `flow_hops()`, `flow_successors()`, `internet_entry_points()` and `network_flow_graph()` expose the same walk; `compute_blast_radius(node)` follows every edge type and stops at the internet placeholders `0.0.0.0/0` and `::/0` |
 | `cloudg.graph.ports` | `parse_port_ranges`, `edge_port_ranges`, `port_in_ranges`, `is_internet_source` | the port and edge rules the builder, the reachability analysis and the ontology share: `port_range` strings parsed into numeric ranges, filter rule and egress checks, internet sources |
 | `cloudg.graph.ontology` | `CloudOntology` | `build(assets, edges, findings)` infers 64 typed RDF relations; `save(path, fmt)` writes Turtle/JSON-LD/XML; query the graph with SPARQL via rdflib |
 | `cloudg.graph.rag_export` | `RAGExporter` | `export_all(...)` chunks the infrastructure three ways (entity, community, relation group) into JSONL for retrieval pipelines |
-| `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import.sh`; `preview(assets)` reports mappable coverage first |
+| `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import_commands.sh`; `preview(assets)` reports mappable coverage first |
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
 | `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone; no engine, no credentials |
 | `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
@@ -1080,7 +1086,7 @@ Under `strict` the names, account ids and ARNs come back pseudonymised; passing 
 | `cloudg mcp read URI` | Read a resource in-process |
 | `cloudg mcp config` | Print a client configuration snippet |
 
-All of them except `config` accept `--policy`, `--dataset [NAME=]PATH` (repeatable), `--prefix`, `--include-category` / `--exclude-category`, `--include-tool` / `--exclude-tool`, `--read-only` (drops tools that touch the cloud, run processes or write files), `--audit-log FILE`, `--timeout` and `--registry MODULE:ATTR`.
+All of them except `config` accept `--policy`, `--dataset [NAME=]PATH` (repeatable), `--prefix`, `--include-category` / `--exclude-category`, `--include-tool` / `--exclude-tool`, `--read-only` (drops tools that touch the cloud, run processes or write files, and the destructive `unload_dataset`), `--audit-log FILE`, `--timeout` and `--registry MODULE:ATTR`.
 
 ### Catalog
 
@@ -1164,7 +1170,7 @@ A misspelled key anywhere under `ratelimit` is logged as `Unknown config key rat
 
 ## Plugin system
 
-Custom collectors and scanners register through setuptools entry points; no core changes needed. `PluginRegistry` (in `cloudg.registry`) discovers them at startup and falls back to the built-ins for any name not overridden.
+Custom collectors and scanners register through setuptools entry points; no core changes needed. `PluginRegistry` (in `cloudg.registry`) discovers them on first use. The built-in names always win: an entry point from another package that reuses one (`prowler`, `aws`) is ignored with a warning, and when two packages register the same new name the first one found is kept.
 
 A minimal scanner plugin:
 
@@ -1199,7 +1205,7 @@ myscanner = "my_package.scanner:MyScanner"
 mycloud = "my_package.collector:MyCollector"
 ```
 
-After `pip install`, the name is available in `scanners.enabled` and `--scanners`. Collectors follow the base interface in `cloudg/collectors/base.py`. A collector plugin's assets join the inventory map like the built-in ones: declare what each asset talks to in `metadata["relations"]` and extra identifiers in `metadata["aliases"]`, and the relationship linker resolves them (see [Inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md#156-declare-relations-from-your-own-collector-or-plugin)). If your scanner emits a stable check ID in `source_finding_id`, you can add it to `cloudg/rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
+After `pip install`, the name is available in `scanners.enabled` and `--scanners`: `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` run the plugin next to the built-in scanners. The constructor receives only the keyword arguments it declares out of `config`, `provider`, `profile`, `output_dir`, `assets`, `iac_dirs`, `images` and `timeout_seconds` (all of them with `**kwargs`, as above), and `run()` may return `Finding` objects or dicts in the same shape. Collector plugins are not wired into the CLI's `-p`; drive them from Python through `PluginRegistry.get_collector()`. Collectors follow the base interface in `cloudg/collectors/base.py`. A collector plugin's assets join the inventory map like the built-in ones: declare what each asset talks to in `metadata["relations"]` and extra identifiers in `metadata["aliases"]`, and the relationship linker resolves them (see [Inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md#156-declare-relations-from-your-own-collector-or-plugin)). If your scanner emits a stable check ID in `source_finding_id`, you can add it to `cloudg/rules/check_equivalence.yaml` so its findings merge with equivalent checks from other tools.
 
 ## Authentication
 
@@ -1215,7 +1221,7 @@ GCP: a credentials file via `--gcp-credentials-file` (service account key JSON o
 
 ## Docker
 
-The image bundles all four scanner binaries, so it is the shortest path to the full pipeline:
+The image bundles Prowler, Checkov and Trivy, so it is the shortest path to the pipeline:
 
 ```bash
 docker pull ghcr.io/morpheuslord/cloudg:latest
@@ -1223,6 +1229,8 @@ docker compose run --rm cloudg run -p aws --regions us-east-1
 ```
 
 Or build locally with `docker build -t cloudg:latest .`
+
+ScoutSuite is not in the image, so `cloudg run` skips it with a warning; run ScoutSuite elsewhere and pass its report to `cloudg ingest --scoutsuite`, or build on top of the image. The image installs the `aws`, `azure` and `gcp` extras but not `mcp`, so `cloudg mcp serve` there uses the native flavor; the `sdk` flavor needs `pip install "cloudg[mcp]"`.
 
 ---
 

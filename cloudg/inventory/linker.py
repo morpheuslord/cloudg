@@ -99,6 +99,9 @@ class RelationshipLinker(RuleLinksMixin, IdentifierIndex):
 
     def __init__(self, assets: list[CloudAsset], materialize_external: bool = True) -> None:
         super().__init__(assets)  # builds the identifier index
+        # Edges registered by seed_existing(); every link() starts from them
+        self._seeded_edge_keys: set[tuple[str, str, str]] = set()
+        self._seeded_pair_keys: set[tuple[str, str]] = set()
         self._edge_keys: set[tuple[str, str, str]] = set()
         self._pair_keys: set[tuple[str, str]] = set()
         self._materialize_external = materialize_external
@@ -292,9 +295,18 @@ class RelationshipLinker(RuleLinksMixin, IdentifierIndex):
         on :attr:`external_assets`; unresolvable declared references on
         :attr:`unresolved`.
 
+        Each call links from scratch and returns every derived edge, so
+        calling it again gives the same edges and the same
+        :attr:`unresolved` list (not an empty list and a doubled one). Only
+        edges registered with :meth:`seed_existing` are left out. Account
+        placeholders are created once and reused.
+
         Args:
             include_generic: Also run the generic reference scan (pass 3).
         """
+        self._edge_keys = set(self._seeded_edge_keys)
+        self._pair_keys = set(self._seeded_pair_keys)
+        self.unresolved = []
         edges: list[NetworkEdge] = []
         for asset in self._assets:
             try:
@@ -327,8 +339,11 @@ class RelationshipLinker(RuleLinksMixin, IdentifierIndex):
     def seed_existing(self, edges: list[NetworkEdge]) -> None:
         """Register already-collected edges so the linker won't duplicate them."""
         for edge in edges:
-            self._edge_keys.add((edge.source_id, edge.target_id, edge.edge_type.value))
-            self._pair_keys.add((edge.source_id, edge.target_id))
+            key = (edge.source_id, edge.target_id, edge.edge_type.value)
+            self._seeded_edge_keys.add(key)
+            self._seeded_pair_keys.add(key[:2])
+            self._edge_keys.add(key)
+            self._pair_keys.add(key[:2])
 
 
 # Public API, including names re-exported from the split-out modules

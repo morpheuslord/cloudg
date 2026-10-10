@@ -247,7 +247,7 @@ class ReachabilityAnalyzer:
     1. Find all nodes reachable from the internet over network-flow edges
        ("internet-exposed"); see the module docstring for the traversal rules.
     2. From any node, BFS over every edge type to find what it can reach
-       ("blast radius").
+       ("blast radius"), stopping at the internet placeholders.
     3. Cross-reference with asset type to generate severity-scored findings.
     """
 
@@ -335,8 +335,19 @@ class ReachabilityAnalyzer:
         for nxt, _data, _reversed in self.flow_hops(node_id):
             yield nxt
 
+    def _is_internet_node(self, node_id: str) -> bool:
+        """Whether ``node_id`` is an internet placeholder (``0.0.0.0/0``, ``::/0``)."""
+        return self._graph.nodes[node_id].get("name", node_id) in INTERNET_CIDRS
+
     def compute_blast_radius(self, node_id: str) -> dict[str, Any]:
         """Compute blast radius: all nodes reachable from a given node.
+
+        A breadth-first walk over every out-edge, identity and inventory
+        edges included. The internet placeholders (``0.0.0.0/0``,
+        ``::/0``) are reached but not walked through: an egress rule to
+        the internet means the node can send traffic out, not that every
+        resource the internet can reach is in its blast radius. Starting
+        the walk at a placeholder still follows its edges.
 
         Args:
             node_id: Starting node for BFS.
@@ -347,15 +358,18 @@ class ReachabilityAnalyzer:
         if node_id not in self._graph:
             return {"reachable_nodes": [], "depth": 0, "risk_score": 0.0}
 
-        reachable = nx.descendants(self._graph, node_id)
-        bfs_tree = nx.bfs_tree(self._graph, node_id)
-
-        # Calculate max depth
-        if len(bfs_tree) > 1:
-            lengths = nx.single_source_shortest_path_length(bfs_tree, node_id)
-            max_depth = max(lengths.values()) if lengths else 0
-        else:
-            max_depth = 0
+        distance = {node_id: 0}
+        queue = deque([node_id])
+        while queue:
+            current = queue.popleft()
+            if current != node_id and self._is_internet_node(current):
+                continue  # stop at the internet placeholder
+            for nxt in self._graph.successors(current):
+                if nxt not in distance:
+                    distance[nxt] = distance[current] + 1
+                    queue.append(nxt)
+        reachable = set(distance) - {node_id}
+        max_depth = max(distance.values())
 
         # Risk score based on number of reachable nodes and their types
         risk_score = min(10.0, len(reachable) * 0.5)

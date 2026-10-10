@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ page.title }} · cloudg docs{% endblock %}</title>
+<meta name="description" content="{{ page.description or 'cloudg maps your AWS, Azure and GCP estate into a graph, runs the security scanners you already use and merges every finding against 28 compliance frameworks.' }}">
+<meta name="generator" content="site/build.py">
+<link rel="icon" href="{{ site.asset('static/img/favicon.svg') }}" type="image/svg+xml">
+<script>
+(function(){try{var t=localStorage.getItem('cloudg-docs-theme');if(t!=='light'&&t!=='dark'){t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&family=JetBrains+Mono:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="{{ site.asset('static/css/docs.css') }}">
+<meta property="og:title" content="{{ page.title }}">
+<meta property="og:site_name" content="cloudg docs">
+<meta property="og:image" content="{{ site.asset('static/img/logo.svg') }}">
+</head>
+<body data-base="{{ site.base }}" data-version="{{ site.version }}" data-page="{{ page.url }}"{% if page.kind %} data-kind="{{ page.kind }}"{% endif %}>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="hdr-row">
+    <div class="hdr-brand">
+      <button type="button" class="menu-btn" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false" data-menu>{{ icon('menu', 18)|safe }}</button>
+      <a class="brand" href="{{ site.href('') }}" aria-label="cloudg docs home">
+        {% include "_logo_mark.html" %}
+        <span class="brand-word">cloud<span class="brand-g">g</span></span>
+      </a>
+      <div class="ver">
+        <button type="button" class="ver-btn" aria-haspopup="true" aria-expanded="false" data-version-toggle>v{{ site.version }}{{ icon('chevron-down', 14)|safe }}</button>
+        <div class="ver-menu" role="menu" hidden data-version-menu>
+          {% for v in versions %}
+          <a role="menuitem" class="ver-item{% if v.latest %} is-latest{% endif %}" href="{{ v.url }}"><span class="mono">{{ 'v' ~ v.version if v.version != 'main' else 'main' }}</span><span>{{ 'latest' if v.latest else v.date }}</span></a>
+          {% endfor %}
+          <a role="menuitem" class="ver-all" href="{{ site.href('changelog') }}">All versions and changelog</a>
+        </div>
+      </div>
+    </div>
+    <div class="hdr-search">
+      <button type="button" class="search-trigger" data-search-open aria-label="Search the docs">
+        {{ icon('search', 16)|safe }}
+        <span class="search-placeholder">Search guides, commands, API</span>
+        <span class="kbd-group" aria-hidden="true"><kbd data-mod>⌘</kbd><kbd>K</kbd></span>
+      </button>
+    </div>
+    <nav class="hdr-links" aria-label="Project links">
+      <a href="https://github.com/morpheuslord/cloudg" rel="noopener">{{ icon('github', 16)|safe }}<span class="hide-sm">GitHub</span></a>
+      <a href="https://pypi.org/project/cloudg/" rel="noopener" class="hide-sm">PyPI</a>
+      <button type="button" class="theme-btn" aria-label="Toggle dark mode" data-theme-toggle><span class="i-moon">{{ icon('moon', 18)|safe }}</span><span class="i-sun">{{ icon('sun', 18)|safe }}</span></button>
+    </nav>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    {% for t in tabs %}
+    <a href="{{ site.href(t.root) }}"{% if t.id == page.tab %} aria-current="page" class="is-active"{% endif %}>{{ t.label }}</a>
+    {% endfor %}
+  </nav>
+</header>
+{% block body %}{% endblock %}
+<div class="search-modal" hidden data-search-modal>
+  <div class="search-backdrop" data-search-close></div>
+  <div class="search-dialog" role="dialog" aria-modal="true" aria-label="Search the docs">
+    <div class="search-input-row">
+      {{ icon('search', 20)|safe }}
+      <input type="search" class="search-input" placeholder="Search guides, commands, API" autocomplete="off" spellcheck="false" aria-label="Search" aria-controls="search-results" data-search-input>
+      <button type="button" class="kbd-btn" data-search-close aria-label="Close search">esc</button>
+    </div>
+    <div class="search-filters" role="tablist" aria-label="Filter results" data-search-filters>
+      {% for f in ['All', 'Guides', 'CLI', 'Python API', 'MCP', 'Config', 'Reference'] %}
+      <button type="button" role="tab" aria-selected="{{ 'true' if loop.first else 'false' }}" data-filter="{{ f }}">{{ f }}</button>
+      {% endfor %}
+    </div>
+    <div class="search-results" id="search-results" role="listbox" data-search-results>
+      <p class="search-empty">Type to search {{ 'v' ~ site.version }}. Try <code>rate limit</code>, <code>--org</code> or <code>CloudGEngine</code>.</p>
+    </div>
+    <div class="search-foot"><span><b>↑↓</b> move</span><span><b>↵</b> open</span><span><b>tab</b> filter</span><span class="search-scope">Searching v{{ site.version }}</span></div>
+  </div>
+</div>
+<div class="sr-only" aria-live="polite" data-live></div>
+<script type="module" src="{{ site.asset('static/js/docs.js') }}"></script>
+</body>
+</html>
