@@ -50,6 +50,19 @@ def _get(item: dict[str, Any], *keys: str) -> Any:
     return "" if value is None else value
 
 
+# Keyword settings ProwlerScanner accepts on top of its positional arguments
+_PROWLER_SETTINGS = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_regions",
+        "timeout_seconds",
+        "env",
+    }
+)
+
+
 class ProwlerScanner:
     """Wraps Prowler CLI to run cloud security checks and parse ASFF JSON output.
 
@@ -64,40 +77,47 @@ class ProwlerScanner:
         profile: str | None = None,
         output_dir: str | None = None,
         extra_args: list[str] | None = None,
-        aws_access_key_id: str | None = None,
-        aws_secret_access_key: str | None = None,
         aws_region: str | None = None,
-        aws_session_token: str | None = None,
-        timeout_seconds: int = 3600,
-        env: dict[str, str] | None = None,
-        aws_regions: list[str] | None = None,
+        **settings: Any,
     ) -> None:
         """Args beyond the provider and paths:
+
+        aws_region: AWS_DEFAULT_REGION for the process; None or "ALL"
+            leaves it unset.
+
+        Keyword-only settings (all optional):
 
         aws_access_key_id / aws_secret_access_key / aws_session_token:
             Credentials exported to the Prowler process (and AWS_PROFILE
             removed from its environment so they take effect).
-        aws_region: AWS_DEFAULT_REGION for the process; None or "ALL"
-            leaves it unset.
         aws_regions: Regions to scan, passed as ``-f``. None, empty or
             ["ALL"] passes nothing, so Prowler scans every region. An
             ``-f`` / ``--region`` / ``--filter-region`` in ``extra_args``
             wins.
-        timeout_seconds: How long Prowler may run before it is killed.
+        timeout_seconds: How long Prowler may run before it is killed
+            (default 3600).
         env: Extra environment variables for the process.
+
+        Raises:
+            TypeError: an unknown setting is passed.
         """
+        unknown = set(settings) - _PROWLER_SETTINGS
+        if unknown:
+            raise TypeError(f"ProwlerScanner got unexpected settings: {', '.join(sorted(unknown))}")
         self._provider = provider
         self._profile = profile
         self._output_dir = output_dir or tempfile.mkdtemp(prefix="prowler_")
         self._extra_args = extra_args or []
-        self._aws_access_key_id = aws_access_key_id
-        self._aws_secret_access_key = aws_secret_access_key
-        self._aws_session_token = aws_session_token
+        self._aws_access_key_id = settings.get("aws_access_key_id")
+        self._aws_secret_access_key = settings.get("aws_secret_access_key")
+        self._aws_session_token = settings.get("aws_session_token")
         self._aws_region = aws_region
-        self._timeout_seconds = timeout_seconds
-        self._env = dict(env or {})
+        self._timeout_seconds = settings.get("timeout_seconds", 3600)
+        self._env = dict(settings.get("env") or {})
         self._aws_regions = [
-            r for r in (aws_regions or []) if r and r.strip() and r.strip().upper() != "ALL"
+            r
+            for r in (settings.get("aws_regions") or [])
+            if r and r.strip() and r.strip().upper() != "ALL"
         ]
         #: Why the last run did not finish (timeout, launch failure); empty on success
         self.errors: list[str] = []

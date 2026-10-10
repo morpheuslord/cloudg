@@ -217,31 +217,21 @@ def scan_iam(assets: list[CloudAsset]) -> list[Finding]:
     return IAMLinter().analyze_policies(assets)
 
 
-def scan_plugin(
-    scanner_cls: Any,
-    config: Any,
-    name: str,
-    *,
-    profile: str | None,
-    out: Path,
-    assets: list[CloudAsset],
-    iac_dirs: list[str],
-    images: list[str],
-    providers: list[str] | None = None,
-) -> list[Finding]:
+def scan_plugin(scanner_cls: Any, name: str, inputs: _ScanInputs) -> list[Finding]:
     """Run a scanner plugin registered under the ``cloudg.scanners`` entry point group."""
     from cloudg.registry import run_plugin_scanner
 
-    providers = list(providers if providers is not None else config.providers)
+    config = inputs.config
+    providers = list(inputs.providers if inputs.providers is not None else config.providers)
     return run_plugin_scanner(
         scanner_cls,
         config=config,
         provider=providers[0] if providers else None,
-        profile=profile or config.aws.profile,
-        output_dir=str(out / name),
-        assets=assets,
-        iac_dirs=iac_dirs,
-        images=images,
+        profile=inputs.profile or config.aws.profile,
+        output_dir=str(inputs.out / name),
+        assets=inputs.assets,
+        iac_dirs=inputs.iac_dirs,
+        images=inputs.images,
         timeout_seconds=config.scanners.timeout_seconds,
     )
 
@@ -250,12 +240,27 @@ def scan_plugin(
 # Planning
 # ---------------------------------------------------------------------------
 
-_SCANNER_CLASSES = {
-    "prowler": "cloudg.scanners.prowler:ProwlerScanner",
-    "scoutsuite": "cloudg.scanners.scoutsuite:ScoutSuiteScanner",
-    "checkov": "cloudg.scanners.checkov:CheckovScanner",
-    "trivy": "cloudg.scanners.trivy:TrivyScanner",
-}
+
+def _scanner_class(name: str) -> Any:
+    """The built-in scanner class for ``name``, imported on first use; None for iam."""
+    if name == "prowler":
+        from cloudg.scanners.prowler import ProwlerScanner
+
+        return ProwlerScanner
+    if name == "scoutsuite":
+        from cloudg.scanners.scoutsuite import ScoutSuiteScanner
+
+        return ScoutSuiteScanner
+    if name == "checkov":
+        from cloudg.scanners.checkov import CheckovScanner
+
+        return CheckovScanner
+    if name == "trivy":
+        from cloudg.scanners.trivy import TrivyScanner
+
+        return TrivyScanner
+    return None
+
 
 _INSTALL_HINTS = {
     "prowler": "pip install prowler",
@@ -278,13 +283,8 @@ def scanner_available(name: str) -> bool:
 
     The IAM linter is part of cloudg and always available.
     """
-    path = _SCANNER_CLASSES.get(name)
-    if path is None:
-        return True
-    import importlib
-
-    module_path, class_name = path.split(":")
-    return bool(getattr(importlib.import_module(module_path), class_name).is_available())
+    scanner_cls = _scanner_class(name)
+    return scanner_cls is None or bool(scanner_cls.is_available())
 
 
 @dataclass
@@ -355,18 +355,7 @@ def plan_scanner_jobs(
         else:
             plan.notes.append(("skip", f"{_LABELS[name]}: not installed ({_INSTALL_HINTS[name]})"))
     for name, scanner_cls in selection.plugins.items():
-        fn = functools.partial(
-            scan_plugin,
-            scanner_cls,
-            config,
-            name,
-            profile=profile,
-            out=out,
-            assets=assets,
-            iac_dirs=iac_dirs,
-            images=images,
-            providers=providers,
-        )
+        fn = functools.partial(scan_plugin, scanner_cls, name, inputs)
         plan.jobs.append(ScanJob(name, f"{name} (plugin)", name, fn))
     return plan
 
