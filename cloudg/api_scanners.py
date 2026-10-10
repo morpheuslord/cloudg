@@ -64,7 +64,7 @@ class ScannerRunsMixin:
             from cloudg.graph.builder import GraphBuilder
             from cloudg.graph.reachability import ReachabilityAnalyzer
 
-            builder = GraphBuilder()
+            builder = GraphBuilder(max_nodes_warn=self.config.graph.max_nodes_warn)
             graph = builder.build(assets, edges)
             analyzer = ReachabilityAnalyzer(graph)
             return analyzer.generate_findings()

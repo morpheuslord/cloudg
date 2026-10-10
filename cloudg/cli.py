@@ -326,7 +326,9 @@ def report(input_file: str, output: str, fmt: str) -> None:
     if fmt in ("html", "all"):
         from cloudg.renderers.html_report import HTMLReportGenerator
 
-        generator = HTMLReportGenerator(output_dir=str(output_dir))
+        generator = HTMLReportGenerator(
+            output_dir=str(output_dir), inline_js=_config.report.inline_js if _config else True
+        )
         path = generator.generate(scan_result, graph_json=graph_data)
         ui.artifact("HTML", path)
 
@@ -344,7 +346,10 @@ def _normalise_and_report_ingest(
     from cloudg.normaliser import FindingsNormaliser
 
     cfg = _config
-    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir if cfg else None)
+    normaliser = FindingsNormaliser(
+        rules_dir=cfg.rulesets.rules_dir if cfg else None,
+        load_external=cfg.rulesets.load_external if cfg else True,
+    )
     scan_result = normaliser.normalise(all_findings)
 
     output_dir = Path(output)
@@ -356,7 +361,9 @@ def _normalise_and_report_ingest(
         dumped = [fi.model_dump(mode="json") for fi in all_findings]
         json.dump(dumped, f, indent=2, default=str)
 
-    _render_ingest_reports(scan_result, fmt, output_dir)
+    _render_ingest_reports(
+        scan_result, fmt, output_dir, inline_js=cfg.report.inline_js if cfg else True
+    )
 
     ui.artifact("Raw findings", raw_path)
 

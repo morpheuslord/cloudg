@@ -160,10 +160,10 @@ inventory:
 
 # ── Graph Engine ──
 graph:
-  persist_graphml: true
-  max_nodes_warn: 10000
+  persist_graphml: true    # cloudg run writes topology.graphml
+  max_nodes_warn: 10000    # warn when a graph is built from more assets (0 = never)
   compute_attack_paths: true
-  export_cytoscape: false
+  export_cytoscape: false  # cloudg run also writes topology-cytoscape.json
 
 # ── Ontology ──
 ontology:
@@ -176,7 +176,9 @@ ontology:
 # ── RAG Export ──
 rag:
   enabled: true
-  chunk_strategy: hybrid   # entity | community | relation_group | hybrid
+  chunk_strategy: hybrid   # chunk kinds written: entity | community | relation_group | hybrid (all)
+  # Approximate content size of one chunk (about 4 characters per token);
+  # longer lists in a chunk end with an "... and N more" line
   max_chunk_tokens: 2000 # nosemgrep: codacy.yaml.security.hard-coded-tokens -- LLM chunk size, not a token value
 
 # ── Terraform Recreation ──
@@ -186,18 +188,20 @@ terraform:
 
 # ── Reports ──
 report:
-  formats:
+  formats:                 # reports written by cloudg run and CloudGEngine
     - html
     - json
     - svg
-  inline_js: true          # Bundle JS inline (no CDN) for air-gapped environments
-  output_dir: ./reports
+  inline_js: true          # embed Chart.js and D3 in report.html so it works offline
+                           # (false: load them from cdn.jsdelivr.net)
+  output_dir: ./reports    # CloudGEngine and MCP default; the CLI uses -o
 
-# ── External Rulesets ──
+# ── Compliance Rulesets ──
 rulesets:
-  # rules_dir: ./my-rules  # Override to use your own rulesets; by default the
-  #                        # rulesets shipped inside the package are used
-  load_external: true
+  # rules_dir: ./my-rules  # Override to use your own rulesets; unset or null
+  #                        # uses the rulesets shipped inside the package
+  load_external: true      # false: skip the YAML rulesets, map compliance only from
+                           # scanner fields and the built-in fallback patterns
 
 # ── Cloud API throttling resilience ──
 # cloudg paces every cloud API call with shared adaptive token buckets
@@ -266,4 +270,6 @@ ratelimit:
 # ── General ──
 log_file: null             # null = console only; set path for file logging
 verbose: false
-concurrency_limit: 5       # Max concurrent API calls per provider
+concurrency_limit: 5       # Collection units (AWS account x region, Azure subscription,
+                           # GCP project or org) collected at once, all providers together.
+                           # API call rates are set under ratelimit.

@@ -420,3 +420,138 @@ class TestFindingResolution:
             graph, {a.id: a for a in assets}, [_scanner_finding("prod-db")]
         )
         assert sum(c.metadata["finding_count"] for c in chunks) == 1
+
+
+# ── Chunk size budget (rag.max_chunk_tokens) and strategy (rag.chunk_strategy) ──
+
+
+def _hub(
+    n_spokes: int, n_findings: int
+) -> tuple[list[CloudAsset], list[NetworkEdge], list[Finding]]:
+    """One security group with ``n_spokes`` attached instances and
+    ``n_findings`` findings on the group."""
+    sg = CloudAsset(
+        id="sg-hub",
+        name="hub-sg",
+        asset_type=AssetType.SECURITY_GROUP,
+        provider=CloudProvider.AWS,
+        region="us-east-1",
+    )
+    spokes = [
+        CloudAsset(
+            id=f"i-{i:03d}",
+            name=f"instance-{i:03d}",
+            asset_type=AssetType.EC2,
+            provider=CloudProvider.AWS,
+            region="us-east-1",
+        )
+        for i in range(n_spokes)
+    ]
+    edges = [
+        NetworkEdge(source_id=s.id, target_id=sg.id, edge_type=EdgeType.SECURITY_GROUP_RULE)
+        for s in spokes
+    ]
+    findings = [
+        Finding(
+            resource_id=sg.id,
+            severity=Severity.CRITICAL if i == n_findings - 1 else Severity.LOW,
+            title=f"finding number {i:03d}",
+            description="d",
+            source_tool="test",
+            compliance_frameworks=[f"FW{i}"],
+        )
+        for i in range(n_findings)
+    ]
+    return [sg, *spokes], edges, findings
+
+
+class TestChunkBudget:
+    def test_small_entity_chunk_keeps_every_line(self):
+        assets, edges, findings = _hub(5, 3)
+        chunk = _entity(RAGExporter().export_entity_chunks(assets, edges, findings), "sg-hub")
+        assert chunk.content.count("instance-") == 5
+        assert chunk.content.count("finding number") == 3
+        assert "more" not in chunk.content
+        # Most severe first
+        assert chunk.content.index("finding number 002") < chunk.content.index("finding number 000")
+
+    def test_default_budget_lifts_the_old_fixed_caps(self):
+        # 40 relations and 20 findings used to be cut to 30 and 10
+        assets, edges, findings = _hub(40, 20)
+        chunk = _entity(RAGExporter().export_entity_chunks(assets, edges, findings), "sg-hub")
+        assert chunk.content.count("instance-") == 40
+        assert chunk.content.count("finding number") == 20
+        assert chunk.metadata["compliance_frameworks"] == sorted(f"FW{i}" for i in range(20))
+
+    def test_long_lists_are_cut_to_the_budget(self):
+        assets, edges, findings = _hub(400, 200)
+        exporter = RAGExporter(max_chunk_tokens=500)
+        chunk = _entity(exporter.export_entity_chunks(assets, edges, findings), "sg-hub")
+        assert len(chunk.content) <= 500 * 4
+        shown_rel = chunk.content.count("instance-")
+        shown_find = chunk.content.count("finding number")
+        assert 0 < shown_rel < 400 and 0 < shown_find < 200
+        # Both lists get a share, and each says how much was left out
+        assert f"... and {400 - shown_rel} more" in chunk.content
+        assert f"... and {200 - shown_find} more" in chunk.content
+        assert "finding number 199" in chunk.content  # the CRITICAL one comes first
+        # The structured relations and the counts still cover everything
+        assert len(chunk.relations) == 400
+        assert chunk.metadata["finding_count"] == 200
+
+    def test_relation_group_chunk_is_cut_to_the_budget(self):
+        assets, edges, _ = _hub(300, 0)
+        by_id = {a.id: a for a in assets}
+        small = RAGExporter(max_chunk_tokens=200).export_relation_chunks(edges, by_id)
+        big = RAGExporter().export_relation_chunks(edges, by_id)
+        for chunk in small:
+            assert len(chunk.content) <= 200 * 4
+        small_net = next(c for c in small if c.metadata["total_relations"] >= 300)
+        shown = small_net.content.count("instance-")
+        assert f"... and {small_net.metadata['total_relations'] - shown} more" in small_net.content
+        assert len(small_net.relations) == shown
+        big_net = next(c for c in big if c.chunk_id == small_net.chunk_id)
+        assert big_net.content.count("instance-") > 50  # no fixed cap of 50 any more
+
+    def test_community_member_list_is_cut_to_the_budget(self):
+        from cloudg.graph.builder import GraphBuilder
+
+        assets, edges, _ = _hub(300, 0)
+        graph = GraphBuilder().build(assets, edges)
+        chunks = RAGExporter(max_chunk_tokens=200).export_community_chunks(graph)
+        big = max(chunks, key=lambda c: c.metadata["member_count"])
+        assert len(big.content) <= 200 * 4
+        assert "more" in big.content
+        assert "Internal edges:" in big.content
+        assert big.metadata["member_count"] == 301
+
+    def test_invalid_arguments(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            RAGExporter(max_chunk_tokens=0)
+        with pytest.raises(ValueError):
+            RAGExporter(chunk_strategy="everything")
+
+
+class TestChunkStrategy:
+    def _kinds(self, tmp_path, strategy: str) -> tuple[set[str], dict]:
+        exporter = RAGExporter(chunk_strategy=strategy)
+        paths = exporter.export_all(
+            _make_assets(), _make_edges(), _build_graph(), _make_findings(), output_dir=tmp_path
+        )
+        lines = paths["chunks"].read_text().splitlines()
+        index = json.loads(paths["index"].read_text())
+        return {json.loads(line)["chunk_type"] for line in lines}, index
+
+    def test_hybrid_writes_all_three(self, tmp_path):
+        kinds, index = self._kinds(tmp_path, "hybrid")
+        assert kinds == {"entity", "community", "relation_group"}
+        assert index["entity_chunks"] and index["relation_group_chunks"]
+
+    def test_single_strategies(self, tmp_path):
+        for strategy in ("entity", "community", "relation_group"):
+            kinds, index = self._kinds(tmp_path / strategy, strategy)
+            assert kinds == {strategy}
+            others = {"entity", "community", "relation_group"} - {strategy}
+            assert all(index[f"{k}_chunks"] == 0 for k in others)

@@ -52,20 +52,22 @@ def _graph_phase(
     from cloudg.graph.builder import GraphBuilder
     from cloudg.graph.reachability import ReachabilityAnalyzer
 
-    graph_builder = GraphBuilder()
+    graph_builder = GraphBuilder(max_nodes_warn=cfg.graph.max_nodes_warn)
     graph = graph_builder.build(assets, edges)
     graph_json = graph_builder.to_d3_json()
 
     # Persist graph as GraphML
-    graphml_path = output_dir / "topology.graphml"
-    graph_builder.save_graphml(graphml_path)
-    ui.artifact("GraphML", graphml_path)
+    if cfg.graph.persist_graphml:
+        graphml_path = output_dir / "topology.graphml"
+        graph_builder.save_graphml(graphml_path)
+        ui.artifact("GraphML", graphml_path)
 
     # Cytoscape export
-    cytoscape_path = output_dir / "topology-cytoscape.json"
-    with open(cytoscape_path, "w") as f:
-        json.dump(graph_builder.to_cytoscape_json(), f, indent=2, default=str)
-    ui.artifact("Cytoscape", cytoscape_path)
+    if cfg.graph.export_cytoscape:
+        cytoscape_path = output_dir / "topology-cytoscape.json"
+        with open(cytoscape_path, "w") as f:
+            json.dump(graph_builder.to_cytoscape_json(), f, indent=2, default=str)
+        ui.artifact("Cytoscape", cytoscape_path)
 
     analyzer = ReachabilityAnalyzer(graph)
     reachability_findings = analyzer.generate_findings()
@@ -97,7 +99,9 @@ def _export_rag_phase(
     try:
         from cloudg.graph.rag_export import RAGExporter
 
-        rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
+        rag = RAGExporter(
+            max_chunk_tokens=cfg.rag.max_chunk_tokens, chunk_strategy=cfg.rag.chunk_strategy
+        )
         rag_paths = rag.export_all(assets, edges, graph, findings=findings, output_dir=output_dir)
         ui.artifact("RAG chunks", rag_paths["chunks"])
         ui.artifact("RAG index", rag_paths["index"])
@@ -117,7 +121,9 @@ def _update_rag_export(
     try:
         from cloudg.graph.rag_export import RAGExporter
 
-        rag = RAGExporter(max_chunk_tokens=cfg.rag.max_chunk_tokens)
+        rag = RAGExporter(
+            max_chunk_tokens=cfg.rag.max_chunk_tokens, chunk_strategy=cfg.rag.chunk_strategy
+        )
         rag.export_all(assets, edges, graph, findings=findings, output_dir=output_dir)
     except Exception:
         # RAG already ran in Phase 2c, this is an update pass
@@ -465,25 +471,32 @@ def _render_run_reports(
     assets: list[Any],
     edges: list[Any],
     output_dir: Path,
+    cfg: CloudGConfig | None = None,
 ) -> None:
-    """Phase 5: render JSON, SVG and HTML reports."""
+    """Phase 5: render the reports in ``report.formats`` (JSON, SVG, HTML)."""
     ui.phase("Phase 5 · Report Generation")
 
+    from cloudg.config import ReportConfig
     from cloudg.renderers.html_report import HTMLReportGenerator
     from cloudg.renderers.json_export import JSONExporter
     from cloudg.renderers.svg import SVGRenderer
 
-    exporter = JSONExporter(output_dir=str(output_dir))
-    json_path = exporter.export(scan_result, graph_json=graph_json)
-    ui.artifact("JSON", json_path)
+    report_cfg = cfg.report if cfg is not None else ReportConfig()
 
-    svg_renderer = SVGRenderer(output_dir=str(output_dir))
-    svg_path = svg_renderer.render(assets, edges)
-    ui.artifact("SVG", svg_path)
+    if "json" in report_cfg.formats:
+        exporter = JSONExporter(output_dir=str(output_dir))
+        json_path = exporter.export(scan_result, graph_json=graph_json)
+        ui.artifact("JSON", json_path)
 
-    html_gen = HTMLReportGenerator(output_dir=str(output_dir))
-    html_path = html_gen.generate(scan_result, graph_json=graph_json)
-    ui.artifact("HTML", html_path)
+    if "svg" in report_cfg.formats:
+        svg_renderer = SVGRenderer(output_dir=str(output_dir))
+        svg_path = svg_renderer.render(assets, edges)
+        ui.artifact("SVG", svg_path)
+
+    if "html" in report_cfg.formats:
+        html_gen = HTMLReportGenerator(output_dir=str(output_dir), inline_js=report_cfg.inline_js)
+        html_path = html_gen.generate(scan_result, graph_json=graph_json)
+        ui.artifact("HTML", html_path)
 
 
 @dataclass
@@ -527,7 +540,9 @@ def _post_scan_phases(
 
     # Phase 4: Normalise (with external rulesets)
     ui.phase("Phase 4 · Normalisation")
-    normaliser = FindingsNormaliser(rules_dir=cfg.rulesets.rules_dir)
+    normaliser = FindingsNormaliser(
+        rules_dir=cfg.rulesets.rules_dir, load_external=cfg.rulesets.load_external
+    )
     scan_result = normaliser.normalise(
         reachability_findings, scanner_findings, iam_findings, assets=assets
     )
@@ -535,7 +550,7 @@ def _post_scan_phases(
     ui.success(f"[metric]{len(scan_result.findings)}[/] normalised findings")
 
     # Phase 5: Render
-    _render_run_reports(scan_result, products.graph_json, assets, edges, output_dir)
+    _render_run_reports(scan_result, products.graph_json, assets, edges, output_dir, cfg)
 
     # Summary
     ui.section("Results")

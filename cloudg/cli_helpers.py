@@ -174,7 +174,9 @@ def _parse_ingest_reports(reports: dict[str, list[str]]) -> tuple[list[Any], dic
     return all_findings, per_tool
 
 
-def _render_ingest_reports(scan_result: Any, fmt: str, output_dir: Path) -> None:
+def _render_ingest_reports(
+    scan_result: Any, fmt: str, output_dir: Path, inline_js: bool = True
+) -> None:
     """Render the requested report formats for `cloudg ingest`."""
     if fmt in ("json", "all"):
         from cloudg.renderers.json_export import JSONExporter
@@ -186,7 +188,7 @@ def _render_ingest_reports(scan_result: Any, fmt: str, output_dir: Path) -> None
     if fmt in ("html", "all"):
         from cloudg.renderers.html_report import HTMLReportGenerator
 
-        generator = HTMLReportGenerator(output_dir=str(output_dir))
+        generator = HTMLReportGenerator(output_dir=str(output_dir), inline_js=inline_js)
         path = generator.generate(scan_result)
         ui.artifact("HTML", path)
 

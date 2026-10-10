@@ -190,6 +190,10 @@ class CloudGEngine(ScannerRunsMixin):
         self.on_phase_start: OnPhaseStart | None = None
         self.on_error: OnError | None = None
 
+    def _output_dir(self, output_dir: str | Path | None) -> Path:
+        """``output_dir``, or ``report.output_dir`` from the config when None."""
+        return Path(output_dir if output_dir is not None else self.config.report.output_dir)
+
     def _emit_phase_start(self, phase: str) -> None:
         if self.on_phase_start:
             try:
@@ -311,7 +315,7 @@ class CloudGEngine(ScannerRunsMixin):
         iac_dir: str | None = None,
         images: list[str] | None = None,
         profile: str | None = None,
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> list[Finding]:
         """Run security scanners and graph analysis.
 
@@ -323,14 +327,15 @@ class CloudGEngine(ScannerRunsMixin):
             iac_dir: IaC directory for Checkov (falls back to config).
             images: Container images for Trivy (falls back to config).
             profile: AWS profile name for scanner auth.
-            output_dir: Directory for scanner output files.
+            output_dir: Directory for scanner output files (default:
+                ``report.output_dir``).
 
         Returns:
             List of all findings.
         """
         self._emit_phase_start("scanning")
         all_findings: list[Finding] = []
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
         scanner_list = [s.strip().lower() for s in self.config.scanners.enabled]
@@ -393,18 +398,23 @@ class CloudGEngine(ScannerRunsMixin):
         """
         from cloudg.normaliser import FindingsNormaliser
 
-        normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
+        normaliser = FindingsNormaliser(
+            rules_dir=self.config.rulesets.rules_dir,
+            load_external=self.config.rulesets.load_external,
+        )
         return normaliser.normalise(findings, assets=assets or [])
 
     async def run_from_reports(
         self,
         reports: dict[str, list[str | Path]],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> PipelineResult:
         """Run the cloudg pipeline on existing scanner outputs.
 
         Needs no cloud access and no scanner binaries. Phases: ingest,
-        normalise, reports (JSON + HTML). Collection does not run, so
+        normalise, reports (JSON and HTML, as ``report.formats`` allows;
+        written to ``report.output_dir`` when ``output_dir`` is None).
+        Collection does not run, so
         graph/ontology/Terraform outputs that need live assets are empty;
         combine with `collect()` + `analyze()` when cloud credentials are
         available.
@@ -413,7 +423,7 @@ class CloudGEngine(ScannerRunsMixin):
             PipelineResult with findings, scan_result, and report paths.
         """
         start = time.time()
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
 
@@ -453,19 +463,35 @@ class CloudGEngine(ScannerRunsMixin):
         out: Path,
         errors: list[str],
         graph_json: dict[str, Any] | None = None,
+        collection: CollectionResult | None = None,
     ) -> dict[str, Path]:
-        """Write the JSON and HTML reports; a failure is recorded in ``errors``."""
+        """Write the reports in ``report.formats``; a failure is recorded in ``errors``.
+
+        The SVG map needs collected assets, so it is only written when
+        ``collection`` is given.
+        """
         report_paths: dict[str, Path] = {}
+        formats = self.config.report.formats
         try:
-            from cloudg.renderers.json_export import JSONExporter
+            if "json" in formats:
+                from cloudg.renderers.json_export import JSONExporter
 
-            exporter = JSONExporter(output_dir=str(out))
-            report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
+                exporter = JSONExporter(output_dir=str(out))
+                report_paths["json"] = Path(exporter.export(scan_result, graph_json=graph_json))
 
-            from cloudg.renderers.html_report import HTMLReportGenerator
+            if "html" in formats:
+                from cloudg.renderers.html_report import HTMLReportGenerator
 
-            html_gen = HTMLReportGenerator(output_dir=str(out))
-            report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+                html_gen = HTMLReportGenerator(
+                    output_dir=str(out), inline_js=self.config.report.inline_js
+                )
+                report_paths["html"] = Path(html_gen.generate(scan_result, graph_json=graph_json))
+
+            if "svg" in formats and collection is not None:
+                from cloudg.renderers.svg import SVGRenderer
+
+                svg = SVGRenderer(output_dir=str(out))
+                report_paths["svg"] = Path(svg.render(collection.assets, collection.edges))
         except Exception as exc:
             self._record_phase_error("reporting", "Report generation failed", exc, errors)
         return report_paths
@@ -473,7 +499,7 @@ class CloudGEngine(ScannerRunsMixin):
     def run_from_reports_sync(
         self,
         reports: dict[str, list[str | Path]],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> PipelineResult:
         """Synchronous wrapper for `run_from_reports()`."""
         return asyncio.run(self.run_from_reports(reports, output_dir))
@@ -487,15 +513,17 @@ class CloudGEngine(ScannerRunsMixin):
         assets: list[CloudAsset],
         edges: list[NetworkEdge],
         findings: list[Finding],
-        output_dir: str | Path = "./reports",
+        output_dir: str | Path | None = None,
     ) -> AnalysisResult:
         """Run ontology, RAG, and Terraform analysis.
+
+        Files go to ``output_dir``, or ``report.output_dir`` when it is None.
 
         Returns:
             AnalysisResult with all analysis outputs.
         """
         self._emit_phase_start("analysis")
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         result = AnalysisResult()
 
@@ -535,7 +563,7 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.graph.builder import GraphBuilder
 
-            builder = GraphBuilder()
+            builder = GraphBuilder(max_nodes_warn=self.config.graph.max_nodes_warn)
             graph = builder.build(assets, edges)
             result.graph_nodes = graph.number_of_nodes()
             result.graph_edges = graph.number_of_edges()
@@ -596,7 +624,10 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.graph.rag_export import RAGExporter
 
-            rag = RAGExporter(max_chunk_tokens=self.config.rag.max_chunk_tokens)
+            rag = RAGExporter(
+                max_chunk_tokens=self.config.rag.max_chunk_tokens,
+                chunk_strategy=self.config.rag.chunk_strategy,
+            )
             rag_paths = rag.export_all(assets, edges, graph, findings, output_dir=out)
             result.rag_chunks_path = rag_paths["chunks"]
         except Exception as exc:
@@ -625,18 +656,19 @@ class CloudGEngine(ScannerRunsMixin):
     # Full pipeline
     # ------------------------------------------------------------------
 
-    async def run_pipeline(self, output_dir: str | Path = "./reports") -> PipelineResult:
+    async def run_pipeline(self, output_dir: str | Path | None = None) -> PipelineResult:
         """Run the complete CloudG pipeline.
 
         Phases: 1. collection (multi-provider, multi-region), 2. scanning
         (reachability, IAM linting), 3. analysis (ontology, RAG, Terraform),
-        4. normalisation, 5. report generation.
+        4. normalisation, 5. report generation (``report.formats``). Files go
+        to ``output_dir``, or ``report.output_dir`` when it is None.
 
         Returns:
             PipelineResult with all outputs.
         """
         start = time.time()
-        out = Path(output_dir)
+        out = self._output_dir(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
 
@@ -697,7 +729,10 @@ class CloudGEngine(ScannerRunsMixin):
         try:
             from cloudg.normaliser import FindingsNormaliser
 
-            normaliser = FindingsNormaliser(rules_dir=self.config.rulesets.rules_dir)
+            normaliser = FindingsNormaliser(
+                rules_dir=self.config.rulesets.rules_dir,
+                load_external=self.config.rulesets.load_external,
+            )
             scan_result = normaliser.normalise(
                 analysis.reachability_findings,
                 findings,
@@ -717,26 +752,28 @@ class CloudGEngine(ScannerRunsMixin):
         out: Path,
         errors: list[str],
     ) -> dict[str, Path]:
-        """Generate JSON and HTML reports (with graph JSON) for the pipeline."""
+        """Generate the pipeline reports (with graph JSON) in ``report.formats``."""
         self._emit_phase_start("reporting")
         if not scan_result:
             return {}
         try:
             from cloudg.graph.builder import GraphBuilder
 
-            builder = GraphBuilder()
+            builder = GraphBuilder(max_nodes_warn=self.config.graph.max_nodes_warn)
             builder.build(collection.assets, collection.edges)
             graph_json = builder.to_d3_json()
         except Exception as exc:
             self._record_phase_error("reporting", "Report generation failed", exc, errors)
             return {}
-        return self._write_reports(scan_result, out, errors, graph_json=graph_json)
+        return self._write_reports(
+            scan_result, out, errors, graph_json=graph_json, collection=collection
+        )
 
     # ------------------------------------------------------------------
     # Sync wrapper
     # ------------------------------------------------------------------
 
-    def run_pipeline_sync(self, output_dir: str | Path = "./reports") -> PipelineResult:
+    def run_pipeline_sync(self, output_dir: str | Path | None = None) -> PipelineResult:
         """Synchronous wrapper for `run_pipeline()`.
 
         Convenience for non-async callers (e.g. scripts, notebooks).

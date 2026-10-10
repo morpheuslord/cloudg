@@ -154,7 +154,9 @@ def export_report(
     elif format == "html":
         from cloudg.renderers.html_report import HTMLReportGenerator
 
-        p = HTMLReportGenerator(output_dir=str(out)).generate(
+        report_cfg = getattr(ctx.workspace.config, "report", None)
+        inline_js = getattr(report_cfg, "inline_js", True)
+        p = HTMLReportGenerator(output_dir=str(out), inline_js=inline_js).generate(
             _scan_result(ds), graph_json=ds.builder.to_d3_json()
         )
         files["html"] = str(p)

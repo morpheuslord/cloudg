@@ -191,14 +191,22 @@ class FindingsNormaliser:
     Scoring: composite of severity + CVSS
     """
 
-    def __init__(self, rules_dir: str | Path | None = None) -> None:
+    def __init__(self, rules_dir: str | Path | None = None, load_external: bool = True) -> None:
+        """
+        Args:
+            rules_dir: Directory of YAML rulesets (default: the packaged ones).
+            load_external: False skips the YAML rulesets
+                (``rulesets.load_external``), so compliance comes only from
+                scanner-native fields and the built-in fallback patterns.
+                check_equivalence.yaml is still loaded for deduplication.
+        """
         if rules_dir is None:
             from cloudg.config import _default_rules_dir
 
             rules_dir = _default_rules_dir()
         self._findings: list[Finding] = []
         self._compliance: list[ComplianceResult] = []
-        self._external_rules = _load_external_rulesets(rules_dir)
+        self._external_rules = _load_external_rulesets(rules_dir) if load_external else {}
         self._check_equivalence = _load_check_equivalence(rules_dir)
         # Exact-match index: scanner check ID -> [(framework, control_id, title)]
         self._check_index: dict[str, list[tuple[str, str, str]]] = {}

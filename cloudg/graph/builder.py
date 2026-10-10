@@ -120,8 +120,14 @@ class GraphBuilder:
     its attributes, as NetworkX does.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_nodes_warn: int = 10000) -> None:
+        """
+        Args:
+            max_nodes_warn: :meth:`build` logs a warning when it gets more
+                assets than this (``graph.max_nodes_warn``; 0 turns it off).
+        """
         self._graph = nx.DiGraph()
+        self._max_nodes_warn = max_nodes_warn
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -144,11 +150,12 @@ class GraphBuilder:
         """
         self._graph.clear()
 
-        if len(assets) > 10000:
+        if self._max_nodes_warn and len(assets) > self._max_nodes_warn:
             logger.warning(
-                "Large graph: %d assets. Consider filtering by region or service "
-                "to reduce memory usage.",
+                "Large graph: %d assets (graph.max_nodes_warn is %d). Consider "
+                "filtering by region or service to reduce memory usage.",
                 len(assets),
+                self._max_nodes_warn,
             )
 
         # Add asset nodes

@@ -191,9 +191,13 @@ def renormalise(ws: Any, ds: Dataset, *extra: list[Finding]) -> None:
     results are merged with the new ones (see :func:`merge_compliance`)."""
     from cloudg.normaliser import FindingsNormaliser
 
-    rules = getattr(getattr(ws.config, "rulesets", None), "rules_dir", None)
+    rulesets = getattr(ws.config, "rulesets", None)
+    rules = getattr(rulesets, "rules_dir", None)
+    load_external = getattr(rulesets, "load_external", True)
     suppressed = {f.id for f in ds.findings if f.is_suppressed}
-    sr = FindingsNormaliser(rules_dir=rules).normalise(ds.findings, *extra, assets=ds.assets)
+    sr = FindingsNormaliser(rules_dir=rules, load_external=load_external).normalise(
+        ds.findings, *extra, assets=ds.assets
+    )
     for f in sr.findings:
         if f.id in suppressed:
             f.is_suppressed = True

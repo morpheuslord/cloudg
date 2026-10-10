@@ -6,6 +6,13 @@ Three complementary chunking strategies:
 2. Community-detection: Louvain clusters with aggregate summaries
 3. Relation-group: one chunk per semantic relation group (Network, IAM, etc.)
 
+``rag.chunk_strategy`` picks which of them :meth:`RAGExporter.export_all`
+writes (``hybrid``: all three). ``rag.max_chunk_tokens`` bounds the
+length of a chunk's content, counted as about 4 characters per token: the
+lists in a chunk (relations, findings, community members, triples) are
+cut, in order, when the next line would not fit, and an
+``... and N more`` line says how many were left out.
+
 Relation-group chunks carry the same relations the ontology holds: the
 relations inferred from each edge plus the asset-level ones inferred from
 metadata (``ENCRYPTED_BY_KMS``, VPC containment from ``vpc_id``, tag
@@ -152,6 +159,58 @@ def _graph_index(
     return index
 
 
+# Rough size of one token for chunk budgets: about 4 characters of
+# English or identifier text per token for common embedding tokenizers.
+CHARS_PER_TOKEN = 4
+
+# Room kept for one "... and N more" line per cut list
+_MORE_LINE_RESERVE = 24
+
+CHUNK_STRATEGIES: tuple[str, ...] = ("entity", "community", "relation_group", "hybrid")
+
+
+def _line_cost(lines: list[str]) -> int:
+    """Characters ``lines`` add to a chunk's content (one newline each)."""
+    return sum(len(line) + 1 for line in lines)
+
+
+def _fit_sections(fixed: list[str], sections: list[list[str]], budget: int) -> list[int]:
+    """How many lines of each section fit into ``budget`` characters.
+
+    ``fixed`` lines are always kept. When everything fits, every line of
+    every section is kept. Otherwise the sections take turns adding their
+    next line, so a long list cannot crowd out a short one, and a section
+    stops at the first line that does not fit (lines are never skipped).
+    Room for an ``... and N more`` line per section is set aside first.
+    """
+    full = [len(section) for section in sections]
+    if _line_cost(fixed) + sum(_line_cost(s) for s in sections) <= budget:
+        return full
+    avail = budget - _line_cost(fixed) - _MORE_LINE_RESERVE * len(sections)
+    counts = [0] * len(sections)
+    open_ = [bool(section) for section in sections]
+    while any(open_):
+        for i, section in enumerate(sections):
+            if not open_[i]:
+                continue
+            cost = len(section[counts[i]]) + 1
+            if cost > avail:
+                open_[i] = False
+                continue
+            avail -= cost
+            counts[i] += 1
+            if counts[i] == len(section):
+                open_[i] = False
+    return counts
+
+
+def _cut(section: list[str], count: int) -> list[str]:
+    """The first ``count`` lines of ``section`` plus a line for the rest."""
+    if count >= len(section):
+        return section
+    return [*section[:count], f"  ... and {len(section) - count} more"]
+
+
 def _entity_header_lines(asset: CloudAsset) -> list[str]:
     """Build the base descriptive lines for an entity chunk."""
     content_lines = [
@@ -228,15 +287,18 @@ def _entity_relations(
 def _entity_findings_lines(
     resource_findings: list[Finding],
 ) -> tuple[list[str], str, set[str]]:
-    """Render findings lines; returns (lines, max severity, compliance frameworks)."""
+    """Render one line per finding, most severe first.
+
+    Returns (lines, max severity, compliance frameworks of all findings).
+    """
     if not resource_findings:
         return [], "NONE", set()
 
-    lines = [f"\nFindings ({len(resource_findings)}):"]
     sorted_findings = sorted(resource_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 5))
-    severity_max = sorted_findings[0].severity.value if sorted_findings else "NONE"
+    severity_max = sorted_findings[0].severity.value
     compliance_frameworks: set[str] = set()
-    for f in sorted_findings[:10]:
+    lines: list[str] = []
+    for f in sorted_findings:
         lines.append(f"  [{f.severity.value}] {f.title}")
         compliance_frameworks.update(f.compliance_frameworks)
     return lines, severity_max, compliance_frameworks
@@ -354,9 +416,15 @@ def _triple_evidence(triple: dict[str, str]) -> str:
 
 
 def _relation_group_lines(
-    group: RelationGroup, triples: list[dict[str, str]], type_counts: dict[str, int]
-) -> list[str]:
-    """Content lines of a relation-group chunk: totals, distribution, triples."""
+    group: RelationGroup,
+    triples: list[dict[str, str]],
+    type_counts: dict[str, int],
+    budget: int,
+) -> tuple[list[str], int]:
+    """Content lines of a relation-group chunk: totals, distribution, triples.
+
+    Returns the lines and how many triples fit into ``budget`` characters.
+    """
     content_lines = [
         f"Relation Group: {group.value}",
         f"Total relations: {len(triples)}",
@@ -367,13 +435,11 @@ def _relation_group_lines(
         content_lines.append(f"  {rt_name}: {count}")
 
     content_lines.append("\nTriples:")
-    for t in triples[:50]:  # Cap for chunk size
-        content_lines.append(
-            f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}"
-        )
-    if len(triples) > 50:
-        content_lines.append(f"  ... and {len(triples) - 50} more")
-    return content_lines
+    triple_lines = [
+        f"  {t['subject']} → {t['predicate']} → {t['object']}{_triple_evidence(t)}" for t in triples
+    ]
+    (shown,) = _fit_sections(content_lines, [triple_lines], budget)
+    return [*content_lines, *_cut(triple_lines, shown)], shown
 
 
 def _write_export(out: Path, all_chunks: list[RAGChunk], counts: dict[str, int]) -> dict[str, Path]:
@@ -416,8 +482,37 @@ class RAGExporter:
        Best for "show me all IAM access rules" or "list all network paths".
     """
 
-    def __init__(self, max_chunk_tokens: int = 2000) -> None:
+    def __init__(self, max_chunk_tokens: int = 2000, chunk_strategy: str = "hybrid") -> None:
+        """
+        Args:
+            max_chunk_tokens: Approximate content size limit of one chunk
+                (``rag.max_chunk_tokens``), counted as
+                :data:`CHARS_PER_TOKEN` characters per token. Lists that
+                do not fit are cut with an ``... and N more`` line; the
+                fixed lines of a chunk (an asset's name, type, ARN, tags)
+                are always kept, so one chunk can still go over the limit.
+            chunk_strategy: Chunk kinds :meth:`export_all` writes
+                (``rag.chunk_strategy``): ``entity``, ``community``,
+                ``relation_group``, or ``hybrid`` for all three.
+
+        Raises:
+            ValueError: ``max_chunk_tokens`` is below 1 or
+                ``chunk_strategy`` is not one of the four names.
+        """
+        if max_chunk_tokens < 1:
+            raise ValueError(f"max_chunk_tokens must be at least 1, got {max_chunk_tokens}")
+        if chunk_strategy not in CHUNK_STRATEGIES:
+            raise ValueError(
+                f"Unknown chunk_strategy {chunk_strategy!r}; expected one of "
+                + ", ".join(CHUNK_STRATEGIES)
+            )
         self._max_tokens = max_chunk_tokens
+        self._strategy = chunk_strategy
+
+    @property
+    def _budget(self) -> int:
+        """Content size limit of one chunk, in characters."""
+        return self._max_tokens * CHARS_PER_TOKEN
 
     # ------------------------------------------------------------------
     # Strategy 1: Entity-centric chunks
@@ -459,20 +554,31 @@ class RAGExporter:
         resource_findings: list[Finding],
     ) -> RAGChunk:
         """Assemble content, metadata, and relations into one entity chunk."""
-        content_lines = _entity_header_lines(asset)
-
-        # Add relations to content
-        if chunk_relations:
-            content_lines.append(f"\nRelations ({len(chunk_relations)}):")
-            for rel in chunk_relations[:30]:  # Cap to avoid huge chunks
-                arrow = "→" if rel["direction"] == "outgoing" else "←"
-                content_lines.append(f"  {arrow} {rel['predicate']}: {rel['object']}")
-
-        # Findings
+        header = _entity_header_lines(asset)
+        relation_lines = [
+            f"  {'→' if rel['direction'] == 'outgoing' else '←'} "
+            f"{rel['predicate']}: {rel['object']}"
+            for rel in chunk_relations
+        ]
         finding_lines, severity_max, compliance_frameworks = _entity_findings_lines(
             resource_findings
         )
-        content_lines.extend(finding_lines)
+        relations_title = [f"\nRelations ({len(chunk_relations)}):"] if chunk_relations else []
+        findings_title = [f"\nFindings ({len(resource_findings)}):"] if resource_findings else []
+
+        # Both lists share the chunk budget; see _fit_sections
+        n_relations, n_findings = _fit_sections(
+            [*header, *relations_title, *findings_title],
+            [relation_lines, finding_lines],
+            self._budget,
+        )
+        content_lines = [
+            *header,
+            *relations_title,
+            *_cut(relation_lines, n_relations),
+            *findings_title,
+            *_cut(finding_lines, n_findings),
+        ]
 
         # Metadata
         metadata = {
@@ -542,16 +648,18 @@ class RAGExporter:
         total_findings = summary["total_findings"]
         exposed_count = summary["exposed_count"]
 
-        content_lines = [f"Community {comm_id} ({len(members)} resources):"]
-        content_lines.extend(summary["member_lines"])
-        content_lines.append(f"\nAsset types: {dict(summary['type_counts'])}")
-        content_lines.append(f"Internal edges: {internal_edges}, External edges: {external_edges}")
+        title = [f"Community {comm_id} ({len(members)} resources):"]
+        tail = [
+            f"\nAsset types: {dict(summary['type_counts'])}",
+            f"Internal edges: {internal_edges}, External edges: {external_edges}",
+        ]
         if exposed_count:
-            content_lines.append(f"⚠ {exposed_count} internet-exposed resources")
+            tail.append(f"⚠ {exposed_count} internet-exposed resources")
         if total_findings:
-            content_lines.append(
-                f"Findings: {total_findings} (max severity: {summary['max_severity']})"
-            )
+            tail.append(f"Findings: {total_findings} (max severity: {summary['max_severity']})")
+        member_lines = summary["member_lines"]
+        (shown,) = _fit_sections([*title, *tail], [member_lines], self._budget)
+        content_lines = [*title, *_cut(member_lines, shown), *tail]
 
         risk_score = min(10.0, len(members) * 0.3 + total_findings * 0.5 + exposed_count * 2.0)
 
@@ -605,7 +713,7 @@ class RAGExporter:
         type_counts: dict[str, int] = defaultdict(int)
         for t in triples:
             type_counts[t["predicate"]] += 1
-        content_lines = _relation_group_lines(group, triples, type_counts)
+        content_lines, shown = _relation_group_lines(group, triples, type_counts, self._budget)
 
         metadata = {
             "relation_group": group.value,
@@ -626,7 +734,7 @@ class RAGExporter:
                     "object": t["object"],
                     "evidence": f"{t['port_range']} {t['protocol']} {t['cidr']}".strip(),
                 }
-                for t in triples[:50]
+                for t in triples[:shown]
             ],
         )
 
@@ -642,7 +750,11 @@ class RAGExporter:
         findings: list[Finding] | None = None,
         output_dir: str | Path = "./reports",
     ) -> dict[str, Path]:
-        """Export all chunk types to files.
+        """Export the chunk kinds of the chunk strategy to files.
+
+        With the default ``hybrid`` strategy that is all three kinds; any
+        other strategy writes one kind and counts the others as 0 in
+        rag_metadata_index.json.
 
         Returns:
             Dict mapping chunk type → output file path.
@@ -651,9 +763,22 @@ class RAGExporter:
         out.mkdir(parents=True, exist_ok=True)
 
         assets_by_id = {a.id: a for a in assets}
-        entity_chunks = self.export_entity_chunks(assets, edges, findings)
-        community_chunks = self.export_community_chunks(graph, assets_by_id, findings)
-        relation_chunks = self.export_relation_chunks(edges, assets_by_id)
+        kinds = (
+            {"entity", "community", "relation_group"}
+            if self._strategy == "hybrid"
+            else {self._strategy}
+        )
+        entity_chunks = (
+            self.export_entity_chunks(assets, edges, findings) if "entity" in kinds else []
+        )
+        community_chunks = (
+            self.export_community_chunks(graph, assets_by_id, findings)
+            if "community" in kinds
+            else []
+        )
+        relation_chunks = (
+            self.export_relation_chunks(edges, assets_by_id) if "relation_group" in kinds else []
+        )
         all_chunks = [*entity_chunks, *community_chunks, *relation_chunks]
         paths = _write_export(
             out,
