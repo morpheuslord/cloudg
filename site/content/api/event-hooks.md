@@ -11,8 +11,8 @@ Every hook starts as `None` in `CloudGEngine.__init__`. Assign a callable before
 |---|---|---|---|
 | `on_phase_start` | `OnPhaseStart` | `(phase: str) -> None` | a phase begins: `collection`, `inventory_mapping`, `scanning`, `ingest`, `analysis`, `normalisation`, `reporting` |
 | `on_collection_complete` | `OnCollectionComplete` | `(result: CollectionResult) -> None` | `collect()` finished without the collector raising |
-| `on_finding` | `OnFinding` | `(finding: Finding) -> None` | once per finding, at the end of `scan()` or `ingest_reports()` |
-| `on_scan_complete` | `OnScanComplete` | `(findings: list[Finding]) -> None` | right after the last `on_finding` call of `scan()` or `ingest_reports()` |
+| `on_finding` | `OnFinding` | `(finding: Finding) -> None` | once per finding, as each scanner finishes in `scan()`; at the end of `ingest_reports()` |
+| `on_scan_complete` | `OnScanComplete` | `(findings: list[Finding]) -> None` | once, after the last `on_finding` call of `scan()` or `ingest_reports()` |
 | `on_analysis_complete` | `OnAnalysisComplete` | `(result: AnalysisResult) -> None` | at the end of every `analyze()`, including one where every step failed |
 | `on_error` | `OnError` | `(phase: str, exc: Exception) -> None` | a phase, a scanner or an analysis step failed and the engine carried on |
 
@@ -38,9 +38,10 @@ sequenceDiagram
   E->>App: on_phase_start("collection")
   E->>App: on_collection_complete(CollectionResult)
   E->>App: on_phase_start("scanning")
+  E->>App: on_finding(Finding), reachability findings
   Note over E: scanners run in a thread pool
+  E->>App: on_finding(Finding), per finding as each scanner finishes
   E->>App: on_error("prowler-aws", exc), per failed scanner
-  E->>App: on_finding(Finding), once per finding
   E->>App: on_scan_complete(list of Finding)
   E->>App: on_phase_start("analysis")
   E->>App: on_analysis_complete(AnalysisResult)
@@ -74,17 +75,21 @@ Other entry points use a subset:
 | `inventory_mapping` | `map_inventory()` |
 | `graph_analysis` | the reachability pass at the start of `scan()` |
 | `terraform` | generating the Terraform recreation, in `scan()` (for Checkov) or in `analyze()` |
-| `prowler-<provider>`, `scoutsuite-<provider>` | one scanner run per provider, such as `prowler-aws` |
+| `scanner_auth` | resolving the AWS credentials for Prowler and ScoutSuite (an `aws.role_arn` that cannot be assumed, say); both are then skipped |
+| `prowler-<provider>`, `scoutsuite-<provider>` | one scanner run per provider, such as `prowler-aws`, including a run killed at `scanners.timeout_seconds` |
 | `checkov-<directory>` | one Checkov run per IaC directory |
-| `trivy`, `iam` | the Trivy image scan, the IAM policy linter |
+| `trivy`, `trivy-fs`, `iam` | the Trivy image scan, the Trivy filesystem scan, the IAM policy linter |
+| a plugin's name | a [scanner plugin](/api/entry-points/) run |
 | `graph_build`, `ontology`, `rag_export` | the steps of `analyze()` |
-| `normalisation`, `reporting` | the last two pipeline phases; these also land in `PipelineResult.errors` |
+| `normalisation`, `reporting` | the last two pipeline phases |
+
+During `run_pipeline()` and `run_from_reports()`, every `on_error` call is also recorded in `PipelineResult.errors` as `"<phase>: <message>"`.
 
 ### Timing
 
 All hooks run synchronously, on the thread that runs the engine method, and the engine waits for each one to return. A slow callback slows the run down by exactly that much.
 
-`on_finding` is not a live feed from the scanners. `scan()` waits for every scanner in its thread pool to finish, then calls `on_finding` for each collected finding in one burst, then `on_scan_complete`. The findings at that point are raw: not yet deduplicated, rescored or mapped to compliance frameworks. Normalisation later updates those same objects in place, so a finding you stored by reference may change severity after your hook saw it. If you forward findings, serialise them in the hook (`finding.model_dump(mode="json")`) to keep what you were given, or forward `result.findings` after the run to get the final list.
+`on_finding` follows the scanners. `scan()` first calls it for the reachability findings, then, as each scanner in its thread pool finishes, once for each of that scanner's findings, so a fast Checkov run reaches you while ScoutSuite is still going. `on_scan_complete` comes once at the end with every finding of the scan. The findings at that point are raw: not yet deduplicated, rescored or mapped to compliance frameworks. Each hook call gets a deep copy, so normalisation, which updates the engine's own objects in place, never changes a finding you kept. Forward `result.findings` after the run if you want the final, merged list.
 
 ### Exceptions inside a hook
 

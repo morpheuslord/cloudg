@@ -14,7 +14,7 @@ flowchart LR
   RP --> S["scan()"]
   RP --> A["analyze()"]
   RP --> N["FindingsNormaliser"]
-  RP --> R["findings.json, report.html"]
+  RP --> R["findings.json, report.html, topology.svg"]
   RFR["run_from_reports()"] --> I["ingest_reports()"]
   RFR --> NF["normalise_findings()"]
   NF --> N
@@ -29,17 +29,19 @@ flowchart LR
 | Credentials, and only want to know what exists and how it connects | `map_inventory()` | yes | no |
 | Your own assets, or a need to stop between phases | `collect()`, `scan()`, `analyze()`, `normalise_findings()` | for `collect()` and the cloud scanners | for `scan()` |
 
-The `*_sync` variants wrap the async method in `asyncio.run()`. Use them from plain scripts. Inside a running event loop (a Jupyter notebook, say) `asyncio.run()` refuses to start, so `await` the async method instead.
+The `*_sync` variants wrap the async method in `asyncio.run()`. Use them from plain scripts. Inside a running event loop (a Jupyter notebook, say) they raise `RuntimeError` with a message naming the async method to `await` instead.
+
+`output_dir` is optional on `scan()`, `analyze()`, `run_from_reports()`, `run_pipeline()` and their sync wrappers. Left out (or `None`), it is `report.output_dir` from the config, `./reports` by default.
 
 ### What run_pipeline does, phase by phase
 
-`run_pipeline(output_dir)` creates `output_dir`, then:
+`run_pipeline(output_dir=None)` creates the output directory, then:
 
 1. `collect()` runs the collectors for every provider in `config.providers`, across `aws.regions`, `aws.accounts`, the Azure subscriptions and the GCP projects you configured.
-2. `scan()` builds a graph of the collected assets and runs the reachability analysis on it, then starts every scanner in `scanners.enabled` in a thread pool: Prowler and ScoutSuite once per provider, Checkov once per IaC directory, Trivy once over `scanners.trivy_images`. The IAM policy linter runs whenever there are assets.
+2. `scan()` builds a graph of the collected assets and runs the reachability analysis on it, then starts every scanner in `scanners.enabled` in a thread pool with one worker per job: Prowler and ScoutSuite once per provider, with `aws.profile` and the rest of the configured AWS credentials and regions; Checkov once per IaC directory; Trivy once over `scanners.trivy_images`, or over the IaC directories when there are no images; scanner plugins by name. The IAM policy linter runs when `iam` is in the list and there are assets. Unknown names are logged and skipped.
 3. `analyze()` rebuilds the graph and records node and edge counts, reachability findings and lateral movement paths. It then writes the ontology (`ontology.enabled`), the RAG chunks (`rag.enabled`) and the Terraform recreation (`terraform.enabled`).
 4. The scanner findings and the reachability findings go through [`FindingsNormaliser`](/api/findingsnormaliser/): deduplication, cross-scanner merging, CVSS rescoring and compliance mapping. The reachability analysis ran in both step 2 and step 3. Both runs produce the same check on the same resource, so the deduplication pass folds the copies into one.
-5. The JSON and HTML reports are written to `output_dir/findings.json` and `output_dir/report.html`, with the D3 graph embedded.
+5. The reports in `report.formats` are written: `findings.json` and `report.html` with the D3 graph embedded, and `topology.svg`.
 
 Everything ends up in one [`PipelineResult`](/api/results/).
 
@@ -73,7 +75,7 @@ async def main() -> None:
     result = await engine.run_pipeline(output_dir="./reports")
 
     print(json.dumps(result.to_summary(), indent=2))
-    print(result.report_paths)  # {'json': .../findings.json, 'html': .../report.html}
+    print(result.report_paths)  # {'json': ..., 'html': ..., 'svg': ...}
 
     # Collection failures don't raise; they are recorded per service
     for cov in result.coverage:
@@ -240,19 +242,17 @@ engine.run_from_reports_sync({"trivy": ["./trivy.json"]}, output_dir="./reports"
 
 ## Notes
 
-`PipelineResult.errors` is not the full error list. It only holds normalisation and reporting failures. A provider that could not be collected shows up as a `FAILED` entry in `result.coverage`; a scanner that crashed, a graph that could not be built, an ontology or RAG export that failed are reported through `on_error` and the `cloudg.api` logger only. If you need to know that a run was complete, set `on_error` and check `coverage`.
+`PipelineResult.errors` is the run's full error list, one `"<phase>: <message>"` string per failure. It holds everything reported through `on_error` during the run (scanners, scanner credentials, graph, ontology, RAG, Terraform, normalisation, reporting) plus one `collection: ...` line per provider, account or region that could not be collected. An empty list means the run was complete. `result.coverage` still has the per-service detail.
 
 `collect()` never raises for a collection problem. When the collector itself throws, the engine calls `on_error("collection", exc)` and returns an empty `CollectionResult`, and `run_pipeline()` carries on with no assets.
 
-`on_finding` and `on_scan_complete` fire after `scan()` or `ingest_reports()`, before normalisation. The findings they receive have not been deduplicated or rescored yet. Normalisation then changes those same objects in place (severity, `source_tool`, `compliance_frameworks`). For the final list, read `result.findings` after the run.
+`on_finding` fires once per finding as each scanner finishes in `scan()` (and when `ingest_reports()` returns); `on_scan_complete` fires once at the end. Both run before normalisation, so the findings have not been deduplicated or rescored yet. They receive deep copies, which normalisation does not change later. For the final list, read `result.findings` after the run.
 
-`map_inventory(findings=...)` only uses `findings` when `output_dir` is set too. Without it the findings are ignored. To overlay findings on a map you already hold, call [`InventoryMapper.export_merged()`](/api/inventorymapper/) yourself.
+`map_inventory(findings=...)` stores the overlay on the returned result as `result.asset_map` and `result.compliance_map`, with or without `output_dir`. With `output_dir` set, it also writes `asset-map.json` and `compliance-map.json` there. To overlay findings on a map you already hold, call [`InventoryMapper.export_merged()`](/api/inventorymapper/) yourself.
 
-`terraform.output_dir` defaults to `./reports/terraform`, relative to the current directory, and it is not derived from the `output_dir` you pass to `run_pipeline()` or `analyze()`. Set both when you move the reports somewhere else.
+The Terraform recreation goes to `<output_dir>/terraform`, following the `output_dir` you pass to `run_pipeline()`, `analyze()` or `scan()`. A `terraform.output_dir` set in the config replaces it, except the old default `./reports/terraform`, which counts as unset.
 
-`scanners.timeout_seconds` does not stop a slow scanner in 0.6.0. The engine passes it to `future.result()` only after `as_completed()` has handed over a finished future. The limits that do apply are the subprocess timeouts inside the scanner wrappers: 3600 seconds for Prowler and ScoutSuite, 1800 for Checkov and for each Trivy image.
-
-The IAM linter runs whenever `scan()` has assets, whether or not `iam` is in `scanners.enabled`.
+`scanners.timeout_seconds` (default 3600) is the subprocess timeout of each scanner job: each Prowler or ScoutSuite run, each Checkov directory, each Trivy image or directory. A job that runs over is killed and reported through `on_error` under its job name, and the findings it produced before that are kept. A scanner that fails to launch is reported the same way.
 
 ## Related
 

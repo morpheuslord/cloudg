@@ -170,13 +170,22 @@ def collection_failed(assets: list[Any], coverage: list[CollectionCoverage]) -> 
     """True when collection produced nothing because it failed.
 
     That is: no assets, and no collector reported success (an empty but
-    readable account still has successful coverage records).
+    readable account still has successful coverage records). The per-target
+    records (``aws_full`` and the like) only count when they report SUCCESS:
+    with no usable credentials every service fails on its own and the
+    target record says PARTIAL, which is still a complete failure.
     """
     if assets:
         return False
-    return not any(
-        svc.status.value in ("SUCCESS", "PARTIAL") for cov in coverage for svc in cov.services
-    )
+    for cov in coverage:
+        for svc in cov.services:
+            status = svc.status.value
+            if svc.service in _TARGET_RECORDS:
+                if status == "SUCCESS":
+                    return False
+            elif status in ("SUCCESS", "PARTIAL"):
+                return False
+    return True
 
 
 # Coverage records that mean a whole provider / account / region failed
@@ -188,15 +197,27 @@ def failed_collection_targets(coverage: list[CollectionCoverage]) -> list[str]:
     """One line per provider, account or region whose collection failed as a
     whole, e.g. ``"aws 123456789012/eu-west-1: AccessDenied ..."``.
 
-    Single services that failed inside an otherwise collected target are
-    left out; they are in the coverage records.
+    A target also counts as failed when every one of its services failed,
+    even though its own record says PARTIAL (what happens with no usable
+    credentials). Single services that failed inside an otherwise collected
+    target are left out; they are in the coverage records.
     """
     lines: list[str] = []
     for cov in coverage:
-        for svc in cov.services:
-            if svc.status.value == "FAILED" and svc.service in _TARGET_RECORDS:
-                where = "/".join(x for x in (cov.account_id, cov.region) if x) or "all"
-                lines.append(f"{cov.provider} {where}: {svc.error or 'failed'}")
+        where = "/".join(x for x in (cov.account_id, cov.region) if x) or "all"
+        targets = [svc for svc in cov.services if svc.service in _TARGET_RECORDS]
+        services = [svc for svc in cov.services if svc.service not in _TARGET_RECORDS]
+        failed_targets = [svc for svc in targets if svc.status.value == "FAILED"]
+        for svc in failed_targets:
+            lines.append(f"{cov.provider} {where}: {svc.error or 'failed'}")
+        if (
+            not failed_targets
+            and targets
+            and services
+            and all(svc.status.value == "FAILED" for svc in services)
+        ):
+            error = next((svc.error for svc in services if svc.error), None)
+            lines.append(f"{cov.provider} {where}: every service failed ({error or 'no detail'})")
     return lines
 
 

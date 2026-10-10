@@ -5,7 +5,7 @@ source: docs/DOCUMENTATION.md
 since: "0.6.0"
 ---
 
-Every command writes into one output directory, `-o` / `--output`, which defaults to `./reports` and is created when missing. Files with the same name are overwritten without a prompt, so give each run its own directory when you want to keep history. The exceptions to "everything goes into `-o`" are the Terraform export, the Cloud Control type cache and the MCP server's audit log and vault, listed in their sections below.
+Every command writes into one output directory, `-o` / `--output`, which defaults to `./reports` and is created when missing. Files with the same name are overwritten without a prompt, so give each run its own directory when you want to keep history. The exceptions to "everything goes into `-o`" are the Cloud Control type cache, the MCP server's audit log and vault, and a Terraform export sent elsewhere with `terraform.output_dir`, listed in their sections below.
 
 ## cloudg run
 
@@ -18,7 +18,7 @@ flowchart LR
   E --> F["Ontology"]
   F --> G["Normalise"]
   G --> H["Render"]
-  B -.-> B1["topology.graphml, topology-cytoscape.json"]
+  B -.-> B1["topology.graphml"]
   C -.-> C1["rag_chunks.jsonl, rag_metadata_index.json"]
   E -.-> E1["prowler/, scoutsuite/"]
   F -.-> F1["ontology.ttl, ontology.jsonld"]
@@ -27,19 +27,19 @@ flowchart LR
 
 | File | Written by | Contents |
 |---|---|---|
-| `topology.graphml` | graph phase, always | The asset graph from [GraphBuilder](/api/graphbuilder/), for Gephi, yEd or `networkx.read_graphml`. Saved before the reachability walk, so `is_internet_exposed` is the collector's flag |
-| `topology-cytoscape.json` | graph phase, always | The same graph as Cytoscape.js `elements` |
+| `topology.graphml` | graph phase, unless `graph.persist_graphml: false` | The asset graph from [GraphBuilder](/api/graphbuilder/), for Gephi, yEd or `networkx.read_graphml`. Saved before the reachability walk, so `is_internet_exposed` is the collector's flag |
+| `topology-cytoscape.json` | graph phase, with `graph.export_cytoscape: true` (off by default) | The same graph as Cytoscape.js `elements` |
 | `rag_chunks.jsonl` | RAG export, unless `--no-rag-export` or `rag.enabled: false` | One retrieval chunk per line: entity, community and relation-group chunks ([RAGExporter](/api/ragexporter/)). Written once after the graph phase and rewritten after the scanners with every finding |
 | `rag_metadata_index.json` | RAG export | Chunk counts per kind, every `chunk_id` in file order, the chunk types |
-| `provider.tf.json`, `variables.tf.json`, `main.tf.json`, `import_commands.sh` | Terraform phase, with `--terraform` or `terraform.enabled: true` | Terraform JSON that recreates the collected resources, and a script of `terraform import` commands. Written to `terraform.output_dir` (default `./reports/terraform`, relative to the working directory, whatever `-o` says) |
+| `provider.tf.json`, `variables.tf.json`, `main.tf.json`, `import_commands.sh` | Terraform phase, with `--terraform` or `terraform.enabled: true` | Terraform JSON that recreates the collected resources, and a script of `terraform import` commands. Written to `<output dir>/terraform`, so it follows `-o`. A `terraform.output_dir` set in `config.yaml` replaces that directory, except the old default `./reports/terraform`, which counts as unset |
 | `prowler/<provider>/` | Prowler, when it runs | Prowler's own JSON-ASFF output files, which cloudg parses |
 | `scoutsuite/<provider>/` | ScoutSuite, when it runs | ScoutSuite's report directory |
 | `ontology.ttl`, `ontology.jsonld` | ontology phase, unless `--no-ontology` or `ontology.enabled: false` | The RDF graph with 64 relation types and the findings ([CloudOntology](/api/cloudontology/)). One file per `ontology.export_formats` entry; `xml` adds `ontology.rdf`, `nt` adds `ontology.nt` |
-| `findings.json` | render phase | The normalised result: metadata, summary, assets, findings, compliance mappings, D3 graph. Shape below |
+| `findings.json` | render phase | The normalised result: metadata, summary, assets, findings, compliance mappings, edges, D3 graph. Shape below |
 | `topology.svg` | render phase | Static topology diagram |
-| `report.html` | render phase | Interactive report: topology, findings table, compliance matrix. The data is embedded, but the page loads Chart.js and D3 from `cdn.jsdelivr.net`, so the charts and the topology need network access when it is opened. `report.inline_js` is not read in 0.6.0 |
+| `report.html` | render phase | Interactive report: topology, findings table, compliance matrix. The data, Chart.js 4.4.0 and D3 7.9.0 are embedded, so it works offline. With `report.inline_js: false` the page loads the two libraries from `cdn.jsdelivr.net` instead |
 
-Checkov and Trivy write nothing to disk; cloudg reads their stdout. `cloudg run` writes no `raw-findings.json` and no inventory map. All three render files are written whatever `report.formats` says, and `topology.graphml` and `topology-cytoscape.json` are written whatever `graph.persist_graphml` and `graph.export_cytoscape` say: those keys are not read in 0.6.0.
+Checkov and Trivy write nothing to disk; cloudg reads their stdout. `cloudg run` writes no `raw-findings.json` and no inventory map. The render phase writes the files that `report.formats` lists, all three by default.
 
 ## cloudg collect
 
@@ -52,8 +52,8 @@ Checkov and Trivy write nothing to disk; cloudg reads their stdout. `cloudg run`
 | File | Written by | Contents |
 |---|---|---|
 | `raw-findings.json` | every scan | A JSON list of `Finding` objects from all scanners, before normalisation: no deduplication, no compliance mapping |
-| `prowler/` | Prowler | Prowler's JSON-ASFF output (not split per provider, unlike `cloudg run`) |
-| `scoutsuite/` | ScoutSuite | ScoutSuite's report directory |
+| `prowler/<provider>/` | Prowler | Prowler's JSON-ASFF output, as for `cloudg run` |
+| `scoutsuite/<provider>/` | ScoutSuite | ScoutSuite's report directory |
 
 `cloudg map --findings` accepts this file, or a `findings.json`.
 
@@ -61,7 +61,7 @@ Checkov and Trivy write nothing to disk; cloudg reads their stdout. `cloudg run`
 
 | File | Written by | Contents |
 |---|---|---|
-| `inventory-map.json` | every map | The self-contained map: `summary`, `providers`, `regions`, `assets`, `edges`, `unresolved_references`, and `throttling` when a cloud API pushed back. Read by `cloudg deps`, `InventoryResult.load()` and the MCP workspace. Field reference: [inventory-map.json](/reference/inventory/inventory-map-json/) |
+| `inventory-map.json` | every map | The self-contained map: `summary`, `providers`, `regions`, `assets`, `edges`, `coverage`, `unresolved_references`, and `throttling` when a cloud API pushed back. Read by `cloudg deps`, `InventoryResult.load()` and the MCP workspace. Field reference: [inventory-map.json](/reference/inventory/inventory-map-json/) |
 | `inventory-map.graphml` | every map | The map's graph, with parallel rule edges merged ([field list](/reference/inventory/inventory-map-graphml/)) |
 | `inventory-graph.json` | every map | D3 `nodes` and `links` for `docs/viewer.html` and other front ends ([field list](/reference/inventory/inventory-graph-json/)) |
 | `inventory-dependencies.json` | every map | Shared dependencies and largest blast radius (top 25 each), every cross-account edge, security service coverage, unresolved references |
@@ -69,7 +69,7 @@ Checkov and Trivy write nothing to disk; cloudg reads their stdout. `cloudg run`
 | `asset-map.json` | `--findings`, when at least one finding loads | Every asset with its matched findings, sorted by finding count |
 | `compliance-map.json` | `--findings`, when at least one finding loads | Per framework: finding count, severity breakdown, affected assets |
 
-The map's coverage records (which service was collected, partly collected or failed) are shown in the terminal but not saved in `inventory-map.json`.
+The map's coverage records (which service was collected, partly collected or failed) are shown in the terminal and saved in `inventory-map.json` under `coverage`. `InventoryResult.load()` reads them back; a map written before the key existed loads with an empty list.
 
 Outside the output directory, the AWS Cloud Control sweep caches the list of resource types it can enumerate in `~/.cache/cloudg/cloudcontrol-types.json` (or `$CLOUDG_CACHE_DIR/cloudcontrol-types.json`) for seven days.
 
@@ -101,13 +101,11 @@ The key-by-key shapes are in [cloudg deps --json](/reference/inventory/cloudg-de
 
 | File | Written by | Contents |
 |---|---|---|
-| `findings.json` | `--format json` or `all` (default) | Rewritten from the input's `assets`, `findings` and `graph` |
+| `findings.json` | `--format json` or `all` (default) | The input's run as it was: metadata, assets, findings, compliance, edges and graph. A `raw-findings.json` input is normalised first |
 | `topology.svg` | `--format svg` or `all` | Diagram of the input's assets |
 | `report.html` | `--format html` or `all` | The HTML report |
 
-:::warning cloudg report does not round-trip everything
-`cloudg report -i` rebuilds the result from `assets`, `findings` and `graph` only. The `findings.json` it writes has an empty `compliance` list, a new `scan_id`, `total_edges: 0` and `completed_at: "None"`, and `topology.svg` is drawn without edges. With the default `-o ./reports`, running it on `./reports/findings.json` overwrites the original. Point `-o` somewhere else.
-:::
+`cloudg report` will not write `findings.json` over its own input. With the default `-o ./reports`, running it on `./reports/findings.json` stops with exit status 1 and asks for another `-o`, `--format html` or `svg`, or `--overwrite`.
 
 ## cloudg mcp
 
@@ -121,7 +119,7 @@ The key-by-key shapes are in [cloudg deps --json](/reference/inventory/cloudg-de
 | `terraform/*.tf.json`, `terraform/import_commands.sh` | the `export_terraform` tool | As for `cloudg run`, in the workspace output directory |
 | `ontology.ttl` (or `.jsonld`, `.rdf`, `.nt`) | the `export_ontology` tool | The dataset's ontology; the file name comes from its `filename` argument |
 | `scans/` | the `run_scanners` live tool | Scanner output, as for `cloudg scan` |
-| `pipeline/` | the `run_pipeline` live tool | What `CloudGEngine.run_pipeline()` writes: `findings.json`, `report.html`, ontology and RAG files |
+| `pipeline/` | the `run_pipeline` live tool | What `CloudGEngine.run_pipeline()` writes: the reports in `report.formats` (`findings.json`, `report.html`, `topology.svg`), ontology and RAG files |
 
 The tools refuse paths that escape the output directory. `cloudg mcp config` prints client configuration to stdout and writes no file.
 
@@ -134,12 +132,12 @@ The global option `cloudg --log-file PATH <command>` (or `log_file` in `config.y
 ```json title="reports/findings.json"
 {
   "metadata": {
-    "scan_id": "cfc19759-897f-407f-b866-a0b977325467",
+    "scan_id": "a4925291-f41e-4ae8-8dee-d282ec7677a2",
     "provider": null,
     "account_id": null,
     "region": null,
-    "started_at": "2026-10-09 16:47:09.228244",
-    "completed_at": "2026-10-09 16:47:09.228230"
+    "started_at": "2026-10-10T05:55:45.301456",
+    "completed_at": "2026-10-10T05:55:45.301442"
   },
   "summary": {"total_assets": 2, "total_findings": 2, "total_edges": 2, "severity_breakdown": {"CRITICAL": 1, "HIGH": 1}, "compliance_frameworks": ["PCI-DSS", "SOC2", "NIST-800-53", "CIS", "ISO-27001"]},
   "assets": [
@@ -194,6 +192,12 @@ The global option `cloudg --log-file PATH <command>` (or `log_file` in `config.y
       "resource_arn": null
     }
   ],
+  "edges": [
+    {"id": "3c681167-27ce-4e1e-9c20-04e773dc22c2", "source_id": "0.0.0.0/0", "target_id": "sg-web",
+     "edge_type": "SECURITY_GROUP_RULE", "ports": [], "port_range": "22", "protocol": "TCP",
+     "cidr": "0.0.0.0/0", "direction": "ingress", "description": null, "relationship": null,
+     "properties": {}}
+  ],
   "graph": {
     "nodes": [
       {"id": "web-1", "name": "web-1", "type": "EC2", "provider": "AWS", "region": "eu-west-1", "arn": "arn:aws:ec2:eu-west-1:123456789012:instance/i-0web1", "account_id": "123456789012", "is_internet_exposed": false, "is_external": false}
@@ -207,14 +211,15 @@ The global option `cloudg --log-file PATH <command>` (or `log_file` in `config.y
 
 | Key | Notes |
 |---|---|
-| `metadata` | Run identity. The timestamps are Python `str(datetime)` (a space, not `T`), and a missing value is the string `"None"`, not `null`. The CLI and the engine leave `provider`, `account_id` and `region` at `null` |
-| `summary` | Counts. `total_edges` counts the collected `NetworkEdge` objects, which `findings.json` does not otherwise contain |
+| `metadata` | Run identity. The timestamps are ISO 8601 strings, like the ones on assets and findings, and an unset `completed_at` is `null`. The CLI and the engine leave `provider`, `account_id` and `region` at `null` |
+| `summary` | Counts. `total_edges` counts the entries in `edges` |
 | `assets` | `CloudAsset` in JSON mode, without `raw_data`, with the computed `display_id` (ARN, else id). Fields: [CloudAsset](/reference/inventory/cloudasset/) |
 | `findings` | `Finding` in JSON mode, sorted by severity, with the computed `risk_score` (severity base, averaged with `cvss_score` when present). Reachability findings have deterministic UUID5 ids; most scanner findings get a fresh UUID on every run. The normaliser can add frameworks the scanner did not set |
 | `compliance` | One `ComplianceResult` per framework control, with the ids of the findings that failed it. `<framework>-aggregate` collects findings mapped to a framework but to no specific control |
-| `graph` | D3 force-layout data, the same shape as `inventory-graph.json`. Rule edges on the same pair are merged here, so `links` can be shorter than the edge count |
+| `edges` | Every collected `NetworkEdge` in JSON mode, parallel rules kept. `cloudg report` draws `topology.svg` from them |
+| `graph` | D3 force-layout data, the same shape as `inventory-graph.json`. Rule edges on the same pair are merged here, so `links` can be shorter than `edges` |
 
-Read it back with the models: `CloudAsset.model_validate(...)` and `Finding.model_validate(...)` accept these entries as they are, which is what `cloudg report` does.
+Read it back with the models: `CloudAsset.model_validate(...)`, `Finding.model_validate(...)`, `ComplianceResult.model_validate(...)` and `NetworkEdge.model_validate(...)` accept these entries as they are, which is what `cloudg report` does.
 
 ## inventory-map.json
 
@@ -255,7 +260,13 @@ The map `cloudg map` writes, and `cloudg deps` and the MCP workspace read. The s
      "cidr": "0.0.0.0/0", "direction": "ingress", "description": null, "relationship": null,
      "properties": {}}
   ],
-  "unresolved_references": []
+  "unresolved_references": [],
+  "coverage": [
+    {"provider": "aws", "region": "eu-west-1", "account_id": "123456789012",
+     "started_at": "2026-10-10T05:56:40.765047", "completed_at": null,
+     "services": [{"service": "ec2", "status": "SUCCESS", "asset_count": 2, "error": null,
+                   "duration_ms": 840}]}
+  ]
 }
 ```
 
@@ -265,6 +276,7 @@ The map `cloudg map` writes, and `cloudg deps` and the MCP workspace read. The s
 | `assets` | Every asset, linked and deduplicated. Real collector assets carry rich `metadata`, including the `relations` the linker resolved |
 | `edges` | Every edge, parallel rules kept. An endpoint can be a CIDR or another non-asset string, so look endpoints up with `.get()` |
 | `unresolved_references` | Declared relations the linker could not resolve, with `source`, `source_name`, `target` and `edge_type` |
+| `coverage` | One record per provider, region and account collected: per service, `status` (`SUCCESS`, `PARTIAL`, `FAILED` or `SKIPPED`), `asset_count`, `error` and `duration_ms`. Trimmed to one service above |
 | `throttling` | Only when a cloud API throttled the run: the full throttling report of the run |
 
 `edges` here and `links` in `inventory-graph.json` differ in length whenever parallel rules were merged for the graph. Count edges in this file. For every field of every structure, see the [inventory reference](/reference/inventory/inventory-map-json/).

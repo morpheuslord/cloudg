@@ -10,7 +10,7 @@ since: "0.6.0"
 
 ## What build() does
 
-Each asset becomes a node keyed by `asset.id`. The node carries `name`, `asset_type`, `provider`, `region`, `arn`, `account_id`, `tags` (the tag dict serialised as a JSON string, so GraphML can store it) and `is_internet_exposed`. Metadata and `raw_data` stay behind.
+Each asset becomes a node keyed by `asset.id`. The node carries `name`, `asset_type`, `provider`, `region`, `arn` (an empty string when the asset has none), `account_id`, `tags` (the tag dict serialised as a JSON string, so GraphML can store it) and `is_internet_exposed`. Metadata and `raw_data` stay behind.
 
 Each edge then joins `source_id` to `target_id`. Collectors write edges whose endpoints are not assets at all: a CIDR such as `0.0.0.0/0`, an Azure service tag or an unresolved reference. For those, `build()` creates a placeholder node with `asset_type` and `provider` set to `EXTERNAL` and `is_external=True`.
 
@@ -199,12 +199,12 @@ Edges whose other end lies outside the filter bring that end back as an `EXTERNA
 ## Notes
 
 - `build()` clears the graph first, so one builder can be reused, but `builder.graph` always holds the last build.
-- Past 10,000 assets `build()` logs a warning about memory. The threshold is fixed in code; the `graph.max_nodes_warn` key in `config.yaml` is not read by the builder.
+- Past `max_nodes_warn` assets (default 10,000) `build()` logs a warning about memory. `cloudg run` and `CloudGEngine` pass `graph.max_nodes_warn` from `config.yaml`; `GraphBuilder(max_nodes_warn=0)` turns the warning off.
 - `find_attack_paths()` runs `nx.all_simple_paths` with a `cutoff` of `max_depth` (default 10). On a large, dense graph the number of simple paths explodes; pick specific endpoints and keep the depth low. An unknown node id gives `[]`, not an exception.
 - `find_lateral_movement_paths()` collects paths of at most 8 hops from every node with `is_internet_exposed` or `is_external` set to the target of each `IAM_TRUST` edge, over every edge type, and stops after about 100 paths. Every placeholder counts as a starting point, private CIDRs included. `cloudg run` calls it when `graph.compute_attack_paths` is on and prints only the count.
 - `compute_centrality()` returns normalised degree, in-degree, out-degree and betweenness per node. Betweenness is exact (`nx.betweenness_centrality`), so it is slow on graphs of tens of thousands of nodes.
 - `subgraph(node_ids)` returns an independent copy, so changes to it do not touch `builder.graph`.
-- `save_graphml()` creates missing parent directories and writes with `nx.write_graphml_xml`. `load_graphml()` reads back through `nx.read_graphml`, which returns a `DiGraph` with string attributes; booleans such as `is_internet_exposed` come back as Python booleans because GraphML stores their type.
+- `save_graphml()` creates missing parent directories and writes with `nx.write_graphml_xml` through `graphml_safe()`, a copy of the graph without `None` attributes and with lists and dicts stored as JSON strings. `builder.graph` itself is not changed. `load_graphml()` reads back through `nx.read_graphml`, which returns a `DiGraph` with string attributes; booleans such as `is_internet_exposed` come back as Python booleans because GraphML stores their type.
 - The D3 export (`to_d3_json`, `to_json_str`) has `nodes` and `links`. Cytoscape's has `elements.nodes` and `elements.edges` with a smaller attribute set (no ARN or CIDR). The field reference for the D3 form is [inventory-graph.json](/reference/inventory/inventory-graph-json/).
 
 ## Related

@@ -39,9 +39,9 @@ Cloud API throttling does not fail a map. Calls are rate limited and retried acc
 
 The last three methods never call a cloud API or a scanner. They take a finished `InventoryResult` and a list of findings from anywhere: `CloudGEngine.scan()`, `ingest_reports()`, a saved findings file.
 
-`build_asset_map(result, findings)` returns one entry per asset in the map: `id`, `arn`, `name`, `type`, `provider`, `region`, `account_id`, `internet_exposed`, `finding_count`, `severity_breakdown` and `finding_ids`, sorted with the most findings first, plus `total_assets` and `assets_with_findings` at the top level. A finding belongs to an asset when its `resource_arn` or its `resource_id` equals the asset's `id`, `arn` or `name`.
+`build_asset_map(result, findings)` returns one entry per asset in the map: `id`, `arn`, `name`, `type`, `provider`, `region`, `account_id`, `internet_exposed`, `finding_count`, `severity_breakdown` and `finding_ids`, sorted with the most findings first, plus `total_assets` and `assets_with_findings` at the top level. Findings are matched to assets through `AssetIndex.resolve_finding()`, the matcher the ontology and RAG exports use: the asset's internal id, then an ARN taken from `resource_id` or `resource_arn`, then a unique name, then a unique ARN tail. A name that several assets share matches none of them, so a finding for a table named `orders` does not land on a queue also named `orders`.
 
-`build_compliance_map(result, findings)` groups by compliance framework. Each framework gets `findings`, `severity_breakdown`, `affected_assets` (the asset's ARN, or the finding's own `resource_arn` when no asset matched) and `affected_asset_count`. It reads `finding.compliance_frameworks` as it is, so run the findings through [`FindingsNormaliser`](/api/findingsnormaliser/) first if you want the framework mapping cloudg adds on top of what the scanner reported.
+`build_compliance_map(result, findings)` groups by compliance framework. Each framework gets `findings`, `severity_breakdown`, `affected_assets` (the ARN of the asset the finding matched in the same way, or the finding's own `resource_arn` when no asset matched) and `affected_asset_count`. It reads `finding.compliance_frameworks` as it is, so run the findings through [`FindingsNormaliser`](/api/findingsnormaliser/) first if you want the framework mapping cloudg adds on top of what the scanner reported.
 
 `export_merged(result, findings, output_dir)` writes both: `asset-map.json` and `compliance-map.json`, and returns their paths under the keys `asset_map` and `compliance_map`.
 
@@ -126,13 +126,11 @@ The mapper needs a config only to exist; the merge methods ignore it. `Inventory
 
 ## Notes
 
-Asset matching in `build_asset_map()` includes the asset's `name`, and it checks `resource_id` even when the finding carries a `resource_arn` that points elsewhere. Two assets with the same name (an SQS queue and a DynamoDB table both called `orders`) can therefore both receive a finding meant for one of them. `build_compliance_map()` resolves by ARN first and does not have this problem. When names repeat in your estate, prefer findings with `resource_arn` set and check `asset-map.json` for duplicates.
-
 `map_inventory()` and the sync wrapper keep no state between calls except `mapper.organization`, which is overwritten by every run. One mapper can map several times.
 
 `map_inventory_sync()` uses `asyncio.run()`. In a notebook or any code that already runs an event loop, `await mapper.map_inventory()` instead.
 
-`InventoryResult.coverage` is not written to any export file. Read it from the returned object if you want the failure list; the CLI prints the failed collectors after a `cloudg map` run.
+`InventoryResult.coverage` is saved in `inventory-map.json` under `coverage`, and `InventoryResult.load()` reads it back. The CLI also prints the failed collectors after a `cloudg map` run.
 
 ## Related
 

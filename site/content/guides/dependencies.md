@@ -219,16 +219,14 @@ for item in coverage["workloads_without_vulnerability_scanning"]:
 
 `--json` prints the tree view (with an asset) or the overview (without one) as JSON. The tree has an `asset` descriptor and, depending on `--direction`, `depends_on` and `dependents` lists. Each node is a descriptor (`id`, `name`, `arn`, `type`, `account_id`, `region`) plus `via` (the edge type), `relationship` and `children`. The overview has `shared_dependencies`, `largest_blast_radius` and `cross_account_edges`; that last list is complete, since `--top` only trims the table view.
 
-:::warning The banner goes to stdout too
-cloudg prints its banner on stdout before every command, `--json` included, so redirecting the output straight to a file does not give you valid JSON. Drop everything before the first line that starts with `{`:
-:::
+With `--json` the banner and log lines go to stderr, so you can redirect stdout straight to a file:
 
 ```bash
-cloudg deps arn:aws:iam::123456789012:role/orders-worker --json | sed -n '/^{/,$p' > role-deps.json
-cloudg deps --map ./reports --top 50 --json | sed -n '/^{/,$p' > overview.json
+cloudg deps arn:aws:iam::123456789012:role/orders-worker --json > role-deps.json
+cloudg deps --map ./reports --top 50 --json > overview.json
 ```
 
-For anything more than a one-off, the Python API below returns the same structures without the parsing step.
+For anything more than a one-off, the Python API below returns the same structures without the files.
 
 ## Working in Python
 

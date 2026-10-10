@@ -4,6 +4,46 @@ Notable changes per release. Patch releases are folded into the major entry they
 
 ## Unreleased
 
+A round of fixes found while documenting every command and API for the new docs site, plus that site. Several commands now behave the way their help text always said, so check the Changed list if you script `cloudg report`, `cloudg scan` or the exit codes.
+
+Security:
+
+- report.html no longer runs markup or script that arrives in scanner output. Finding titles, descriptions, evidence, resource IDs, asset names and compliance framework names are escaped wherever the page writes them, the page header is autoescaped, and data embedded in the page's script can no longer close the script element.
+- A package can no longer take over a built-in scanner (such as `prowler`) by registering a `cloudg.scanners` entry point with the same name. Built-in names always win and the duplicate is ignored with a warning.
+
+Fixed:
+
+- report.html works offline. Chart.js 4.4.0 and D3 7.9.0 ship with cloudg and are embedded in the page when `report.inline_js` is true (the default). With `inline_js: false` the page loads the same pinned builds from cdn.jsdelivr.net with Subresource Integrity. Clicking a row in a filtered findings table now opens that finding.
+- Config keys that were accepted but ignored now take effect: `graph.persist_graphml`, `graph.export_cytoscape`, `graph.max_nodes_warn`, `rag.chunk_strategy`, `rag.max_chunk_tokens`, `report.formats`, `report.inline_js`, `report.output_dir` (as the default of the `CloudGEngine` methods), `rulesets.load_external` and `ontology.include_raw_metadata`. A misspelt key in any section is logged as `Unknown config key <section>.<key> is ignored`, not only under `ratelimit`. `rulesets.rules_dir: null` loads the packaged rulesets instead of failing validation.
+- `cloudg deps --json` writes only JSON to stdout. Whenever `--json` is used, and for `cloudg mcp`, the banner and logs go to stderr.
+- `cloudg report -i` keeps the scan ID, timestamps, compliance results and edges of a findings.json, rebuilds edges for older files that lack them, and accepts raw-findings.json.
+- `scanners.timeout_seconds` limits each scanner process in `cloudg run`, `cloudg scan` and `CloudGEngine.scan()`. Before, the limits were hard-coded at 3600 and 1800 seconds. A scanner that times out is reported as failed and its partial findings are kept.
+- `cloudg scan` reads `-c config.yaml`, no longer scans the current directory unless asked, runs the IAM linter when given `--assets`, and exits 1 when no requested scanner could run. `cloudg collect` uses the credentials and regions in config.yaml. `cloudg map --sweep` follows `inventory.tagging_sweep` unless the flag is given.
+- Prowler and ScoutSuite get the credentials cloudg was given: session token, the assumed `role_arn`, web identity and `aws.profile` from the config, and real regions. `AWS_DEFAULT_REGION=ALL` is no longer set. Region discovery for `--regions all` uses the same credentials, and falls back to the 17 regions enabled by default in every account when discovery fails.
+- `cloudg run` exits 3 when collection failed for every target, including a run with no credentials at all where every service fails on its own, and lists the targets that failed. Partial collection still exits 0, with a warning.
+- `--accounts` without `--role-name` (or `aws.role_name`) is an error instead of mapping the caller's own account once per listed ID. `aws.role_arn` is assumed first and the member role from there, instead of replacing the member role. An `--ou` that matches nothing is an error that lists the organization's OUs.
+- Scanner plugins registered under `cloudg.scanners` run from `scanners.enabled` and `--scanners`, and unknown scanner names produce a warning. The IAM linter follows `scanners.enabled` and `--scanners` too.
+- `CloudGEngine.run_pipeline()` passes `aws.profile` to the scanners, `PipelineResult.errors` lists collection, scanner and analysis failures as well, `on_finding` fires as each scanner finishes and receives copies normalisation does not change, and the `*_sync` wrappers raise a clear error inside a running event loop. `CloudGEngine.scan()` falls back to a Trivy filesystem scan when no images are set, like the CLI.
+- Prowler compliance control IDs name the check (`CIS/iam_root_hardware_mfa_enabled`) instead of including the account ID, so one check across several accounts is one control. When findings from two scanners are merged, both scanners' check-ID mappings are kept.
+- Compliance results are no longer all FAIL. A control fails when a finding maps to it and passes when only Prowler passing checks (ASFF `PASSED`, OCSF `PASS`) map to it; controls nothing assessed are left out. `FindingsNormaliser.normalise()` takes `passed_checks=`, and the Prowler parser returns them on the list it gives back.
+- Prowler OCSF output (`*.ocsf.json`, the Prowler 4 default) is parsed: status, severity, resource, check ID, compliance and muted findings. Before, every record became an "Unknown Prowler Finding", passing checks included. The MCP loaders accept OCSF instead of refusing it. ScoutSuite documentation URLs no longer show up as compliance frameworks.
+- `build_asset_map()` and `build_compliance_map()` match findings to assets the way the ontology and RAG exports do, so a finding no longer attaches to every asset that shares its name. `CloudGEngine.map_inventory(findings=...)` applies the overlay without `output_dir` too (`result.asset_map`, `result.compliance_map`).
+- GraphML export (`cloudg run`, `InventoryResult.export()`, the MCP export) no longer fails on assets without an ARN. `RelationshipLinker.link()` can be called more than once. `inventory-map.json` saves the collection coverage records and `InventoryResult.load()` restores them.
+- Each ontology format gets its own file (`.ttl`, `.jsonld`, `.rdf`, `.nt`). N-Triples no longer overwrite the Turtle file, and spellings such as `jsonld` no longer land in `ontology.ttl`. `AnalysisResult.rag_chunk_count` is filled in.
+- `CloudOntology.query_asset_neighbourhood()` works with `hops` above 1 and with IDs containing `:` or `/`, and `query()` returns None for unbound variables. `NACL_RULE` edges get the same ontology relations as `SECURITY_GROUP_RULE` edges.
+- `ReachabilityAnalyzer.compute_blast_radius()` stops at the internet placeholder instead of following an egress rule out to everything the internet reaches.
+- findings.json metadata timestamps are ISO 8601, and an unset `completed_at` is `null` rather than `"None"`.
+
+Changed:
+
+- `cloudg report` refuses to write findings.json over its own input; pass `-o` to write elsewhere, or `--overwrite`. findings.json now has an `edges` list.
+- `cloudg scan --scanners` defaults to `scanners.enabled` instead of `prowler,checkov`, and `cloudg scan -p` accepts only aws, azure and gcp.
+- The Terraform recreation goes to `<output>/terraform`, following `-o`, unless `terraform.output_dir` is set to another path. The old default `./reports/terraform` counts as unset.
+- `cloudg run` writes `topology-cytoscape.json` only with `graph.export_cytoscape: true`, and skips `topology.graphml` with `graph.persist_graphml: false`. `run_pipeline()` writes the formats in `report.formats` and now includes `topology.svg`.
+- RAG chunks are sized by `rag.max_chunk_tokens` (about 4 characters per token) instead of fixed caps of 30 relations, 10 findings and 50 triples. Long lists end with an "... and N more" line, and community chunks are bounded too.
+- report.html is about 485 KB larger with the libraries embedded.
+- `query_asset_neighbourhood()` rows for more than one hop are `{neighbour, neighbourName, hops}`. D3 graph JSON has `"arn": ""` instead of `null` for assets without an ARN. `cloudg.mcp.state.check_prowler_input` was removed.
+
 Documentation:
 
 - The handbook at morpheuslord.github.io/cloudg is now a site of separate pages instead of one long `docs/index.html`. Guides, the CLI, the Python API, the MCP server, the reference documents and this changelog each have their own tab and sidebar. `site/build.py` builds it: the CLI options tables come from the click definitions, the API pages from the docstrings, the config pages from `config.yaml` and the `CloudGConfig` models, and the long `docs/*.md` references are split into one page per section. Writing rules for new pages are in `site/AUTHORING.md`.

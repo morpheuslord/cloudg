@@ -31,7 +31,7 @@ flowchart LR
 
 ## The graph
 
-`GraphBuilder().build(assets, edges)` returns an `nx.DiGraph`. Each asset becomes a node keyed by its `id`, carrying `name`, `asset_type`, `provider`, `region`, `arn`, `account_id`, `tags` (as a JSON string) and `is_internet_exposed`. Each edge becomes a graph edge with `edge_type`, `relationship`, `port_range`, `protocol`, `cidr`, `direction` and `description`. An edge whose endpoint is not a collected asset, such as the CIDR `0.0.0.0/0` or an Azure service tag, gets a placeholder node with `asset_type` and `provider` set to `EXTERNAL` and `is_external` true.
+`GraphBuilder().build(assets, edges)` returns an `nx.DiGraph`. Each asset becomes a node keyed by its `id`, carrying `name`, `asset_type`, `provider`, `region`, `arn` (empty when the asset has none), `account_id`, `tags` (as a JSON string) and `is_internet_exposed`. Each edge becomes a graph edge with `edge_type`, `relationship`, `port_range`, `protocol`, `cidr`, `direction` and `description`. An edge whose endpoint is not a collected asset, such as the CIDR `0.0.0.0/0` or an Azure service tag, gets a placeholder node with `asset_type` and `provider` set to `EXTERNAL` and `is_external` true.
 
 A `DiGraph` holds one edge per ordered pair, and collectors often emit several rules for one pair: two ingress rules from `0.0.0.0/0` into the same security group, one for 443 and one for 22. Since 0.6.0 `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` edges on the same pair are merged into one graph edge when their CIDR and direction match, and the merged `port_range` lists every port:
 
@@ -53,10 +53,6 @@ Other methods on the builder:
 | `to_d3_json()`, `to_cytoscape_json()` | the dicts behind the HTML report's topology view and `topology-cytoscape.json` |
 | `save_graphml(path)`, `load_graphml(path)` | GraphML round trip |
 | `subgraph(node_ids)` | a copy restricted to those nodes |
-
-:::warning GraphML and assets without an ARN
-In 0.6.0 `save_graphml` raises `NetworkXError: GraphML writer does not support <class 'NoneType'> as data values` when any asset in the graph has `arn=None`, because the node attribute is stored as `None`. The collectors set ARNs, so this mostly hits hand-built assets. Give each asset an `arn` (any stable identifier will do) before exporting GraphML.
-:::
 
 ## Reachability and internet exposure
 
@@ -101,7 +97,7 @@ Only `sg-web` admits the internet, yet the database is flagged. That is because 
 
 ## Blast radius
 
-`compute_blast_radius(node_id)` answers the opposite question: if this node is compromised, what can it reach? Unlike exposure it follows every edge type, identity included, because a stolen role reaches whatever the role is granted.
+`compute_blast_radius(node_id)` answers the opposite question: if this node is compromised, what can it reach? Unlike exposure it follows every edge type, identity included, because a stolen role reaches whatever the role is granted. It stops at the internet placeholders `0.0.0.0/0` and `::/0`: an egress rule to the internet means the node can send traffic out, not that everything the internet reaches is in its blast radius. Only a walk that starts at a placeholder goes through it.
 
 ```console
 blast radius of web-1: {'reachable_nodes': ['sg-web', 'role-app', 'sg-db', 'db-1'], 'depth': 2, 'risk_score': 4.0}
@@ -137,7 +133,7 @@ Edges are not copied as-is. `infer_relations()` derives typed relations from the
 
 A few inference rules worth knowing, several of them changed in 0.6.0:
 
-- A security group rule yields `INGRESS_ALLOWED` or `EGRESS_ALLOWED`, `INTERNET_REACHABLE` for an internet source, `CIDR_RESTRICTED` for any other CIDR, and port relations from the parsed ranges: `ALL_TRAFFIC` for every port, else `ONLY_SSH` / `ONLY_HTTP` / `ONLY_HTTPS` / `ONLY_RDP` for 22, 80, 443 and 3389 inside the ranges, else `PORT_RESTRICTED`. `NACL_RULE` edges yield no relation unless they declare one.
+- A security group rule or NACL rule yields `INGRESS_ALLOWED` or `EGRESS_ALLOWED`, `INTERNET_REACHABLE` for an internet source, `CIDR_RESTRICTED` for any other CIDR, and port relations from the parsed ranges: `ALL_TRAFFIC` for every port, else `ONLY_SSH` / `ONLY_HTTP` / `ONLY_HTTPS` / `ONLY_RDP` for 22, 80, 443 and 3389 inside the ranges, else `PORT_RESTRICTED`. A rule edge describes allowed traffic, so it never yields `PROTECTED_BY_NACL`.
 - `PROTECTED_BY_SG` and `PROTECTED_BY_NACL` come from `ATTACHED_TO` edges, so the triple reads `web-alb PROTECTED_BY_SG sg-web`. Other attachments are `DEPENDS_ON`.
 - `CONTAINS` edges get a specific relation only when both endpoint types fit it; organization to OU, account to VPC or resource group to resource stay plain `CONTAINS`.
 - A relationship declared on the edge (`NetworkEdge.relationship`, such as the linker's `TRIGGERED_BY`) replaces the inferred one on containment, attachment and the typed inventory edges, and comes first on the others.
@@ -238,7 +234,7 @@ Without leaving Python, `CloudOntology` has the same entry point plus canned que
 
 `RAGExporter().export_all(assets, edges, graph, findings, output_dir)` writes `rag_chunks.jsonl` (one chunk per line, the usual vector-store input) and `rag_metadata_index.json` (counts and every `chunk_id`). Each chunk has `chunk_id`, `chunk_type`, `content` (plain text to embed), `metadata` (to filter on) and `relations`. There are three kinds.
 
-Entity chunks, `entity::<asset id>`, one per asset: a header with name, type, provider, region, ARN, account and tags, up to 30 relations from its one-hop neighbourhood, and up to 10 findings, most severe first. The metadata carries `asset_type`, `provider`, `region`, `account_id`, `is_internet_exposed`, `relation_types`, `severity_max`, `compliance_frameworks`, `neighbour_count`, `finding_count` and `arn`. This is the chunk for "tell me about orders-db":
+Entity chunks, `entity::<asset id>`, one per asset: a header with name, type, provider, region, ARN, account and tags, the relations from its one-hop neighbourhood, and its findings, most severe first. The metadata carries `asset_type`, `provider`, `region`, `account_id`, `is_internet_exposed`, `relation_types`, `severity_max`, `compliance_frameworks`, `neighbour_count`, `finding_count` and `arn`. This is the chunk for "tell me about orders-db":
 
 ```json title="rag_chunks.jsonl (one line, formatted)"
 {
@@ -262,7 +258,9 @@ Entity chunks, `entity::<asset id>`, one per asset: a header with name, type, pr
 
 Community chunks, `community::<n>`: Louvain communities of the undirected graph (python-louvain is a core dependency; without it cloudg falls back to connected components), singletons skipped. They list members, type counts, internal and external edge counts, internet-exposed members and findings, with a `risk_score` of `0.3` per member plus `0.5` per finding plus `2.0` per exposed member, capped at 10. These answer "what is around this subnet" questions. Their `internet_exposed_count` reads the graph's flags, so it reflects the reachability walk when that ran on the same graph.
 
-Relation-group chunks, `relation_group::<GROUP>`: one per relation group, holding the distribution of relation types and the first 50 triples with port, protocol and CIDR as evidence, for "list every network path" questions. They include the asset-level relations as well as the edge relations, so they match what the ontology holds.
+Relation-group chunks, `relation_group::<GROUP>`: one per relation group, holding the distribution of relation types and the triples with port, protocol and CIDR as evidence, for "list every network path" questions. They include the asset-level relations as well as the edge relations, so they match what the ontology holds.
+
+`rag.max_chunk_tokens` (default 2000) caps the size of each chunk's text at about 4 characters per token. A list that does not fit (relations, findings, community members, triples) is cut, and its last line says how many were left out, such as `  ... and 12 more`. `rag.chunk_strategy` picks the kinds written: `entity`, `community`, `relation_group`, or `hybrid` (the default) for all three.
 
 `finding_count` is the field to filter on when you want only chunks with problems. Since 0.6.0 both exporters resolve findings to assets the same way the ontology does, so findings keyed by ARN or display name count against the right asset; before, they left `finding_count` at 0. The sample exports 8 entity, 3 community and 5 relation-group chunks.
 
@@ -279,20 +277,20 @@ Asset types without a Terraform mapping are counted under `unmapped_asset_types`
 
 ## Configuration keys
 
-| Key | Default | Effect in 0.6.0 |
+| Key | Default | Effect |
 |---|---|---|
 | `graph.compute_attack_paths` | `true` | `cloudg run` computes lateral movement paths and prints their count |
-| `graph.persist_graphml` | `true` | not read: `cloudg run` always writes `topology.graphml` |
-| `graph.export_cytoscape` | `false` | not read: `cloudg run` always writes `topology-cytoscape.json` |
-| `graph.max_nodes_warn` | `10000` | not read: the builder warns above a fixed 10,000 assets |
+| `graph.persist_graphml` | `true` | `cloudg run` writes `topology.graphml` |
+| `graph.export_cytoscape` | `false` | `cloudg run` also writes `topology-cytoscape.json` |
+| `graph.max_nodes_warn` | `10000` | the builder logs a memory warning above this many assets; `0` turns it off |
 | `ontology.enabled` | `true` | builds the ontology (`run` also needs `--ontology`, the default) |
-| `ontology.export_formats` | `[turtle, json-ld]` | one file per format: `turtle` to `ontology.ttl`, `json-ld` to `ontology.jsonld`, `xml` to `ontology.rdf` |
-| `ontology.include_raw_metadata` | `false` | not read |
+| `ontology.export_formats` | `[turtle, json-ld]` | one file per format: `turtle` to `ontology.ttl`, `json-ld` to `ontology.jsonld`, `xml` to `ontology.rdf`, `nt` to `ontology.nt` |
+| `ontology.include_raw_metadata` | `false` | adds each asset's metadata dict as a JSON string (`cmp:hasRawMetadata`); read by `cloudg run` and `analyze()` |
 | `rag.enabled` | `true` | writes the chunks (`run` also needs `--rag-export`, the default) |
-| `rag.chunk_strategy` | `hybrid` | not read: all three chunk kinds are always written |
-| `rag.max_chunk_tokens` | `2000` | passed to `RAGExporter` but not applied; chunk size is bounded by fixed caps (30 relations, 10 findings, 50 triples) |
+| `rag.chunk_strategy` | `hybrid` | the chunk kinds written: `entity`, `community`, `relation_group`, or `hybrid` for all three |
+| `rag.max_chunk_tokens` | `2000` | size budget of one chunk's text, at about 4 characters per token |
 | `terraform.enabled` | `false` | writes the Terraform files (`run --terraform` does the same) |
-| `terraform.output_dir` | `./reports/terraform` | used as given, not relative to `-o`; set it explicitly when you change the output directory |
+| `terraform.output_dir` | `./reports/terraform` | left at this value, the files go to `<output dir>/terraform` and follow `-o`; any other value is used as given |
 
 ```yaml title="config.yaml"
 graph:
@@ -304,19 +302,18 @@ rag:
   enabled: true
 terraform:
   enabled: true
-  output_dir: ./out/terraform     # match your -o directory
 ```
 
 ## Output files
 
 | File | Written by | Contents |
 |---|---|---|
-| `topology.graphml` | `cloudg run` | the graph, for Gephi, yEd or `GraphBuilder.load_graphml` |
-| `topology-cytoscape.json` | `cloudg run` | Cytoscape.js elements |
+| `topology.graphml` | `cloudg run` (`graph.persist_graphml`) | the graph, for Gephi, yEd or `GraphBuilder.load_graphml` |
+| `topology-cytoscape.json` | `cloudg run` with `graph.export_cytoscape: true` | Cytoscape.js elements |
 | `topology.svg` | `cloudg run` | static topology diagram |
 | `findings.json` (`graph` key) | `cloudg run`, `run_pipeline` | D3 nodes and links, used by `report.html` |
 | `inventory-map.graphml`, `inventory-graph.json` | `cloudg map` | the same graph built from the inventory map |
-| `ontology.ttl`, `ontology.jsonld` | `cloudg run`, `analyze()` | RDF, per `ontology.export_formats` |
+| `ontology.ttl`, `ontology.jsonld`, `ontology.rdf`, `ontology.nt` | `cloudg run`, `analyze()` | RDF, one file per entry in `ontology.export_formats` |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | `cloudg run`, `analyze()` | the chunks and their index |
 | `terraform/*.tf.json`, `terraform/import_commands.sh` | `cloudg run --terraform`, `analyze()` with `terraform.enabled` | Terraform recreation |
 

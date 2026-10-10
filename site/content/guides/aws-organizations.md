@@ -210,7 +210,7 @@ By default every `ACTIVE` account in the organization is mapped, the management 
 |---|---|---|
 | `--ou` | `aws.organization.include_ous` | Only accounts under this OU, nested OUs included. Takes an OU ID, an OU ARN, or a name (case-insensitive). Repeatable. |
 | `--exclude-account` | `aws.organization.exclude_accounts` | Skip this account ID. Repeatable. |
-| `--accounts` | `aws.accounts` | Comma-separated IDs. With `--org`, the discovered list is intersected with this one. |
+| `--accounts` | `aws.accounts` | Comma-separated IDs. With `--org`, the discovered list is intersected with this one. Without `--org`, it needs `--role-name` (or `aws.role_name`), the role to assume in each account; `cloudg map` and `cloudg run` stop with exit status 2 when it is missing. |
 | none | `aws.organization.include_management_account` | `true` by default. |
 | none | `aws.organization.include_suspended` | `false` by default, so `SUSPENDED` and `PENDING_CLOSURE` accounts are skipped. |
 
@@ -221,7 +221,7 @@ cloudg map -p aws --org --org-role cloudg-readonly --ou Workloads --exclude-acco
 cloudg map -p aws --org --org-role cloudg-readonly --ou ou-7h3o-ljevwujv --ou ou-7h3o-bqhq9yxz
 ```
 
-OU names are matched against the whole tree and the first match wins. If two OUs share a name (a `Prod` under `Workloads` and another under `Sandbox`), pass the ID. A name that matches no OU is logged as a warning and ignored, and if none of your `--ou` values match, no account is selected and cloudg falls back to mapping the caller's own account. Run with `-v` when the account count looks wrong.
+OU names are matched against the whole tree and the first match wins. If two OUs share a name (a `Prod` under `Workloads` and another under `Sandbox`), pass the ID. An `--ou` value that matches no OU is an error: the run stops with an "Inventory mapping failed" panel and exit status 1, and the message names the unmatched value and lists every root and OU of the organization as `name (id)`, so you can copy the right one.
 
 ## Control Tower and regions
 
@@ -256,9 +256,7 @@ For each selected account and each region, cloudg builds a session from your bas
 
 An account whose role can't be assumed records `sts_assume_role: FAILED` for that region, and nothing else is collected there. The rest of the organization carries on.
 
-:::note
-`aws.role_arn` takes precedence over the member role when it is set without a web identity token file: every account would then be collected through that single role, which is not what you want for an organization. Leave `aws.role_arn` unset with `--org`, or use it together with `aws.web_identity_token_file` (the GitHub Actions and GitLab CI pattern), where it is the role the pipeline starts from and the member role is assumed on top.
-:::
+When `aws.role_arn` is set, it is assumed first and the member role from there (role chaining), with or without a web identity token file. That fits a hub-and-spoke setup: a central audit role in the security account, trusted by the member roles. The member roles' trust policies must then name the `role_arn` role, or its account, rather than the account your base credentials come from. The account `role_arn` lives in is collected with the `role_arn` session itself, since member roles usually do not exist there.
 
 ## inventory-organization.json
 
@@ -383,7 +381,8 @@ It raises `RuntimeError` when the caller can't describe or list the organization
 | `sts_assume_role` failed for some accounts | the member role is missing there, or its trust policy doesn't name the caller's account | check the StackSet instances for those accounts |
 | `sts_assume_role` failed for the management account when running from a delegated administrator | the StackSet never deploys to the management account, and `AWSControlTowerExecution` doesn't exist there | `--exclude-account` it, set `include_management_account: false`, or create the role there by hand |
 | Control Tower reported as absent | running from a delegated administrator, or the home region isn't in the probe list | run from the management account; pass `--ct-home-region` |
-| Far fewer accounts than expected | an `--ou` value matched nothing, or matched a different OU of the same name | use OU IDs; run with `-v` to see the warning |
+| "OU filter ... matched no OU in the organization" | a typo in `--ou`, or an OU name that does not exist | pick the name or ID from the list of known OUs in the message |
+| Far fewer accounts than expected | an `--ou` value matched a different OU of the same name | use OU IDs |
 | Fewer regions than `--regions all` would give | Control Tower governed regions replaced `all` | set `use_governed_regions: false`, or pass the regions explicitly |
 
 :::links

@@ -537,7 +537,7 @@ def _normalise_and_report_ingest(
     "--prowler",
     "prowler_paths",
     multiple=True,
-    help="Prowler ASFF JSON output (file or output directory). Repeatable.",
+    help="Prowler ASFF or OCSF JSON output (file or output directory). Repeatable.",
 )
 @click.option(
     "--scoutsuite",

@@ -22,9 +22,9 @@ Every chunk has the same five keys: `chunk_id`, `chunk_type`, `content` (the tex
 |---|---|---|
 | `entity` | `asset_type`, `provider`, `region`, `account_id`, `arn`, `is_internet_exposed`, `relation_types`, `severity_max`, `compliance_frameworks`, `neighbour_count`, `finding_count` | every inferred relation of the asset's edges, with `predicate`, `direction` (`outgoing` or `incoming`), `object`, `object_id`, `evidence` |
 | `community` | `community_id`, `member_count`, `asset_types`, `internal_edges`, `external_edges`, `internet_exposed_count`, `finding_count`, `severity_max`, `compliance_frameworks`, `risk_score` | empty |
-| `relation_group` | `relation_group`, `total_relations`, `relation_type_counts`, `unique_subjects`, `unique_objects` | the first 50 triples, with `predicate`, `object`, `evidence` |
+| `relation_group` | `relation_group`, `total_relations`, `relation_type_counts`, `unique_subjects`, `unique_objects` | the triples that fit into the chunk's text, with `predicate`, `object`, `evidence` |
 
-`severity_max` is the worst severity among the matched findings, or `"NONE"`. A community's `risk_score` is `0.3` per member plus `0.5` per finding plus `2.0` per internet-exposed member, capped at 10.
+`severity_max` is the worst severity among the matched findings, or `"NONE"`. `compliance_frameworks` lists the frameworks of every matched finding, including findings cut from the chunk's text. A community's `risk_score` is `0.3` per member plus `0.5` per finding plus `2.0` per internet-exposed member, capped at 10.
 
 The relations are the ones the [ontology](/api/cloudontology/) uses: `infer_relations()` on each edge (so a security group rule from `0.0.0.0/0` on port 443 becomes `INGRESS_ALLOWED`, `INTERNET_REACHABLE` and `ONLY_HTTPS`), plus the asset-level relations from metadata (`ENCRYPTED_BY_KMS`, VPC containment from `vpc_id`, tag ownership, key rotation, EC2 security group membership). Relation-group chunks carry both; entity chunks carry the edge relations only.
 
@@ -32,7 +32,7 @@ Findings attach to assets through `AssetIndex`, so a finding whose `resource_id`
 
 ## Output files
 
-`export_all()` writes two files into `output_dir` (created if missing) and returns their paths as `{"chunks": Path, "index": Path}`.
+`export_all()` writes two files into `output_dir` (created if missing) and returns their paths as `{"chunks": Path, "index": Path}`. Which chunk kinds go in depends on `chunk_strategy`: `hybrid` (the default) writes all three, `entity`, `community` or `relation_group` writes that kind only, and the index counts the other kinds as 0.
 
 | File | Contents |
 |---|---|
@@ -231,7 +231,8 @@ for chunk in RAGExporter().export_relation_chunks(result.edges, assets_by_id):
 
 ## Notes
 
-- All three kinds are always written. The `rag.chunk_strategy` key in `config.yaml` (`entity`, `community`, `relation_group` or `hybrid`) is validated but not read by the exporter, and `max_chunk_tokens` (the constructor argument and `rag.max_chunk_tokens`) is stored but not applied. Chunk size is bounded by fixed caps instead: 30 relations and 10 findings in an entity chunk's text, 50 triples in a relation-group chunk. A community chunk lists every member, so a very large community makes a very long chunk; split such chunks yourself before embedding.
+- `RAGExporter(max_chunk_tokens=2000, chunk_strategy="hybrid")` takes the two `rag` keys of `config.yaml`, and `cloudg run` and `CloudGEngine.analyze()` pass them in. An unknown strategy or a `max_chunk_tokens` below 1 raises `ValueError`.
+- `max_chunk_tokens` is a size budget for each chunk's `content`, counted as about 4 characters per token. The lists in a chunk (an entity's relations and findings, a community's members, a relation group's triples) are cut when the next line would not fit, and a last line such as `  ... and 12 more` says how many were left out. When an entity chunk has both relations and findings, the two lists take turns, so a long one cannot push the other out. The fixed lines (name, type, ARN, tags) are always kept, so a chunk can still run over the budget by a little.
 - Community numbers come from python-louvain's `best_partition` without a fixed seed, so `community::3` in one run is not the same cluster as `community::3` in the next. Key on members, not on the id. Without python-louvain installed, the exporter logs a warning and uses connected components instead.
 - Communities are found on the undirected version of the graph, and nodes left alone in a community (singletons) produce no chunk. Placeholder nodes such as `0.0.0.0/0` take part in clustering like any other node.
 - Entity chunks are built from the `NetworkEdge` list, so two rules on the same pair appear separately there. Community chunks read the graph, where `GraphBuilder` has merged them, and take `is_internet_exposed` from the graph's node attributes.

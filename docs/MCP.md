@@ -2146,14 +2146,17 @@ a `map_inventory` call naming an existing dataset:
 | JSON object with `check_type`, or whose `results` is an object | `checkov` |
 | JSON object with `Findings` | `prowler` |
 | JSON list whose first item has `check_type` | `checkov` |
-| JSON list whose first item has `ProductArn` or `SchemaVersion` | `prowler` |
-| JSON list, JSON Lines or a directory whose first record is OCSF (`finding_info`, `class_uid`, `category_uid`, `type_uid` or `severity_id`, and no `ProductArn`) | refused with `InvalidArgumentsError`: cloudg reads Prowler's ASFF output only, so re-run Prowler with `-M json-asff` |
+| JSON list whose first item has `ProductArn` or `SchemaVersion` (ASFF) | `prowler` |
+| JSON list whose first item is an OCSF record (`finding_info`, `class_uid`, `category_uid`, `type_uid` or `severity_id`, and no `ProductArn`), Prowler 4's default output | `prowler`, parsed as OCSF |
 | JSON list whose first item has `severity`, `title` or `resource_id` | `generic` |
-| JSON Lines (first line parses, whole file does not) | `prowler` |
+| JSON Lines (first line parses, whole file does not) | `prowler` (ASFF or OCSF records) |
 
 Anything else raises `InvalidArgumentsError` asking for an explicit `kind`, one of
-`inventory`, `report`, `generic`, `prowler`, `scoutsuite`, `checkov`, `trivy`. Scanner output
-is normalized (deduplicated and mapped to compliance frameworks) unless `normalise=False`. A
+`inventory`, `report`, `generic`, `prowler`, `scoutsuite`, `checkov`, `trivy`. A Prowler output
+directory needs `kind="prowler"`; its `*.json` files are read as ASFF or OCSF, record by
+record. Scanner output is normalized (deduplicated and mapped to compliance frameworks) unless
+`normalise=False`. Prowler's passing checks give `PASS` results for the ruleset controls that
+only they cover. A
 `report` that has `graph` but no `edges` gets its edges rebuilt from the D3 graph.
 
 The default dataset name is the parent directory's name for `inventory-map.json` and the file

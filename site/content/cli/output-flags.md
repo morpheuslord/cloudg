@@ -24,7 +24,7 @@ File names are fixed, so a second run into the same directory overwrites the fir
 cloudg run -p aws --regions all -o "./reports/$(date +%F)"
 ```
 
-`report.output_dir` in `config.yaml` does not change the default of `-o`. It is the default output directory of the MCP workspace, where MCP tools write exports.
+`report.output_dir` in `config.yaml` does not change the default of `-o`. It is the default output directory of the `CloudGEngine` methods and of the MCP workspace, where MCP tools write exports.
 
 ## The output directory
 
@@ -36,7 +36,7 @@ reports/
 ├── report.html                  interactive report (run, ingest, report)
 ├── topology.svg                 static topology (run, report)
 ├── topology.graphml             graph for Gephi, yEd, NetworkX (run)
-├── topology-cytoscape.json      graph for Cytoscape.js (run)
+├── topology-cytoscape.json      graph for Cytoscape.js (run, graph.export_cytoscape)
 ├── ontology.ttl                 RDF, Turtle (run, --ontology)
 ├── ontology.jsonld              RDF, JSON-LD (run, --ontology)
 ├── rag_chunks.jsonl             retrieval chunks, one per line (run, --rag-export)
@@ -50,16 +50,14 @@ reports/
 ├── asset-map.json               findings per asset (map --findings)
 ├── compliance-map.json          framework to assets (map --findings)
 ├── inventory-aws.json           assets and edges of one provider (collect)
-├── prowler/aws/                 Prowler's ASFF output (run; scan writes prowler/)
-├── scoutsuite/aws/              ScoutSuite's report (run; scan writes scoutsuite/)
+├── prowler/aws/                 Prowler's ASFF output (run, scan)
+├── scoutsuite/aws/              ScoutSuite's report (run, scan)
 └── terraform/                   provider.tf.json, variables.tf.json, main.tf.json, import_commands.sh (run, --terraform)
 ```
 
 The [output files reference](/reference/output-files/) describes each file's structure.
 
-:::note The Terraform folder doesn't follow -o
-The Terraform recreation goes to `terraform.output_dir`, which defaults to `./reports/terraform` whatever `-o` says. cloudg uses `<output>/terraform` only when that key is set to an empty string. If you change `-o`, set `terraform.output_dir` in your config as well.
-:::
+The Terraform recreation goes to `<output>/terraform`, so it follows `-o`. A `terraform.output_dir` in your config sends it somewhere else, except the old default value `./reports/terraform`, which counts as unset.
 
 ## --format
 
@@ -72,7 +70,7 @@ Two commands let you pick formats:
 
 `json` writes `findings.json`, `html` writes `report.html`, and `svg` writes `topology.svg`. `ingest` has no SVG choice, since it has no inventory to draw.
 
-`run` has no `--format` and always writes all three. The `report.formats` key in `config.yaml` is not read by the CLI. `map` writes its fixed set of inventory files.
+`run` has no `--format`; it writes the formats listed in `report.formats` in `config.yaml`, all three by default. `report` and `ingest` ignore that key and go by `--format`. `map` writes its fixed set of inventory files.
 
 ## --ontology, --rag-export, --terraform
 
@@ -91,8 +89,8 @@ What each one writes is shaped by config:
 | Output | Settings |
 |---|---|
 | Ontology | One file per entry in `ontology.export_formats`. `turtle` gives `ontology.ttl`, `json-ld` gives `ontology.jsonld`, `xml` gives `ontology.rdf`, `nt` gives `ontology.nt`. The default is Turtle and JSON-LD. |
-| RAG export | `rag.max_chunk_tokens` (default 2000) caps the size of each chunk. |
-| Terraform | `terraform.output_dir`, see the note above. |
+| RAG export | `rag.chunk_strategy` picks the chunk kinds (`hybrid`, the default, writes all three). `rag.max_chunk_tokens` (default 2000) caps the size of each chunk at about 4 characters per token. |
+| Terraform | `<output>/terraform`, or `terraform.output_dir`; see above. |
 
 Turn off the ontology and the RAG export when you only need findings:
 
@@ -115,10 +113,10 @@ cloudg run -p aws --no-ontology --no-rag-export
 
 `cloudg mcp call` prints JSON without a flag, and `--raw` there gives the whole `CallToolResult`.
 
-The `mcp` commands send the banner and logs to stderr, so their stdout can be piped straight into `jq`. `deps` does not: the root banner is printed to stdout first. Strip it before parsing:
+With `--json`, and for every `mcp` command, the banner, progress and log lines go to stderr, so stdout can be piped straight into `jq`:
 
 ```bash
-cloudg deps --json | sed -n '/^{/,$p' | jq '.shared_dependencies[:3]'
+cloudg deps --json | jq '.shared_dependencies[:3]'
 ```
 
 ## Logs

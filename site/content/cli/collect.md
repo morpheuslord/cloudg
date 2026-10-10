@@ -9,17 +9,17 @@ intro: |
 
 `-p/--provider` is required and takes exactly one of `aws`, `azure` or `gcp` (case-insensitive). There is no `all` here.
 
-The command does not read `config.yaml`. Credentials come from the flags on this page, the environment and each provider's default chain, through `CredentialResolver`. That means the config-only methods (direct keys, role ARNs, service principals in config, credential files, impersonation) are not available. Use [cloudg run](/cli/run/) or `cloudg map` with a config file for those.
+Credentials and scope come from the flags on this page, then from the provider's section of the config passed with `cloudg -c` (`aws`, `azure` or `gcp`), then from the environment and each provider's default chain, through `CredentialResolver`. Every method the config supports works here: direct keys, `role_arn` and web identity on AWS, a service principal, workload identity or managed identity on Azure, a credentials file or impersonation on GCP. See [Auth flags](/cli/auth-flags/) for the order within each provider.
 
 How each provider resolves its identity:
 
 | Provider | Scope | Credentials |
 |---|---|---|
-| `aws` | One region: `--region`, default `us-east-1`. The account ID comes from `sts:GetCallerIdentity`. | `--profile`, else `AWS_PROFILE`, else the boto3 default chain (environment keys, SSO cache, instance or task role) |
-| `azure` | One subscription: `--subscription-id`, else `AZURE_SUBSCRIPTION_ID`. One of them is required. | A service principal or workload identity when `AZURE_TENANT_ID` and `AZURE_CLIENT_ID` are set together with `AZURE_CLIENT_SECRET` or `AZURE_FEDERATED_TOKEN_FILE`, else `DefaultAzureCredential` (which includes `az login`) |
-| `gcp` | One project: `--project-id`, else `GOOGLE_CLOUD_PROJECT`, else the project of the application default credentials | Application default credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server) |
+| `aws` | One region: `--region`, else the first of `aws.regions`, else `AWS_DEFAULT_REGION`, else `us-east-1`. The account ID comes from `sts:GetCallerIdentity`. | The `aws` section of the config with `--profile` replacing `aws.profile`: keys, OIDC, profile and `role_arn` as for `cloudg run`. With none set, `AWS_PROFILE`, then the boto3 default chain (environment keys, SSO cache, instance or task role) |
+| `azure` | One subscription: `--subscription-id`, else the first of `azure.subscription_ids`, else `AZURE_SUBSCRIPTION_ID`. One of them is required. | The `azure` section of the config; with nothing there, a service principal or workload identity when `AZURE_TENANT_ID` and `AZURE_CLIENT_ID` are set together with `AZURE_CLIENT_SECRET` or `AZURE_FEDERATED_TOKEN_FILE`, else `DefaultAzureCredential` (which includes `az login`) |
+| `gcp` | One project: `--project-id`, else the first of `gcp.project_ids`, else `GOOGLE_CLOUD_PROJECT`, else the project of the credentials | The `gcp` section of the config (credentials file, impersonation); with nothing there, application default credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default login`, or the metadata server) |
 
-`--region` only matters for AWS, and because it always has a value, `AWS_DEFAULT_REGION` is never used. `--profile` only matters for AWS. `--subscription-id` and `--project-id` only matter for their provider. There is no `--regions`; to collect several AWS regions, run the command once per region with a different `-o`, or use `cloudg run` or `cloudg map`.
+`--region` only matters for AWS. An `aws.regions` of `ALL` counts as unset for it. `--profile` only matters for AWS. `--subscription-id` and `--project-id` only matter for their provider. There is no `--regions`; to collect several AWS regions, run the command once per region with a different `-o`, or use `cloudg run` or `cloudg map`.
 
 The AWS collector here is the standard one used by `cloudg run`. It covers the core services (EC2, S3, RDS, VPCs, subnets, security groups, IAM, Lambda, load balancers, ECS, DynamoDB, CloudFront, Secrets Manager, KMS and a few more). It does not run the deep inventory collectors, the Cloud Control sweep or the relationship linker that `cloudg map` uses.
 
@@ -31,6 +31,12 @@ Collect the default AWS region with your current credentials:
 
 ```bash
 cloudg collect -p aws
+```
+
+Collect with the credentials in your config (a `role_arn`, say) and the first region of `aws.regions`:
+
+```bash
+cloudg -c config.yaml collect -p aws
 ```
 
 Collect one AWS region with a named profile:

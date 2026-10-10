@@ -6,9 +6,9 @@ lede: "Takes findings from any number of scanners and returns one `ScanResult`: 
 
 ## What normalise does
 
-`FindingsNormaliser(rules_dir=None)` loads its rules once, at construction: every `*.yaml` file under `rules_dir` (searched recursively) as a compliance ruleset, and `check_equivalence.yaml` from the top of `rules_dir` as the cross-scanner equivalence map. With `rules_dir=None` it uses the directory shipped inside the package, `cloudg/rules/`, which holds CIS, NIST 800-53, PCI DSS, SOC 2, ISO 27001, HIPAA and GDPR rulesets plus the per-provider framework mappings under `frameworks/`.
+`FindingsNormaliser(rules_dir=None, load_external=True)` loads its rules once, at construction: every `*.yaml` file under `rules_dir` (searched recursively) as a compliance ruleset, and `check_equivalence.yaml` from the top of `rules_dir` as the cross-scanner equivalence map. With `rules_dir=None` it uses the directory shipped inside the package, `cloudg/rules/`, which holds CIS, NIST 800-53, PCI DSS, SOC 2, ISO 27001, HIPAA and GDPR rulesets plus the per-provider framework mappings under `frameworks/`. `load_external=False` (the `rulesets.load_external` key) skips the rulesets and keeps only the equivalence map.
 
-`normalise(*finding_lists, assets=None)` accepts any number of lists, one per source, and runs them through one pass:
+`normalise(*finding_lists, assets=None, passed_checks=None)` accepts any number of lists, one per source, and runs them through one pass:
 
 ```mermaid caption="FindingsNormaliser.normalise()"
 flowchart TD
@@ -23,11 +23,11 @@ flowchart TD
 
 ### Deduplication
 
-The first pass works inside one scanner. Findings with the same `source_tool`, the same check ID and the same resource (`resource_arn`, or `resource_id` when there is no ARN) are one finding reported twice, for example once per output format. The check ID is the scanner's own: the check name embedded in a Prowler ASFF `Id` (`s3_bucket_default_encryption` out of `prowler-aws-s3_bucket_default_encryption-123456789012-...`), or `source_finding_id` as it is for Checkov, Trivy and ScoutSuite. A finding without a check ID is keyed on its normalised title instead, so two different checks that happen to share a generic title are not collapsed.
+The first pass works inside one scanner. Findings with the same `source_tool`, the same check ID and the same resource (`resource_arn`, or `resource_id` when there is no ARN) are one finding reported twice, for example once per output format. The check ID is the scanner's own: the check name embedded in a Prowler finding ID (`s3_bucket_default_encryption` out of `prowler-aws-s3_bucket_default_encryption-123456789012-...` or `prowler-s3_bucket_default_encryption-123456789012-...`), or `source_finding_id` as it is for Checkov, Trivy and ScoutSuite. A finding without a check ID is keyed on its normalised title instead, so two different checks that happen to share a generic title are not collapsed.
 
 The second pass works across scanners, and it is deliberately strict. Two findings from different tools merge only when they are about the same resource, their titles are equal after normalisation (lower case, leading `[Checkov/terraform]`-style tags removed, punctuation collapsed), and both check IDs map to the same canonical ID in `check_equivalence.yaml`. Findings without check IDs merge with each other on title alone. A finding with a check ID never merges with one without. When in doubt, cloudg keeps both: a visible duplicate is better than a scanner's result quietly disappearing.
 
-A merge keeps the finding with the higher severity, joins the tool names into `source_tool` (`"trivy, prowler"`) and unions `compliance_frameworks`. The survivor keeps its own `id`, title and `source_finding_id`.
+A merge keeps the finding with the higher severity, joins the tool names into `source_tool` (`"trivy, prowler"`) and unions `compliance_frameworks`. The survivor keeps its own `id`, title and `source_finding_id`, and the normaliser remembers the source IDs of every finding merged into it for the compliance step.
 
 ### Scoring
 
@@ -38,13 +38,13 @@ A `cvss_score` of 9.0 or more sets the severity to `CRITICAL`. A score from 7.0 
 Frameworks are added to `finding.compliance_frameworks` from four sources, in this order:
 
 1. what the scanner reported itself (Prowler's `RelatedRequirements`, for example), already on the finding when it arrives
-2. an exact match of the check ID against the `checks` lists in the rulesets, which also yields the real control ID and title
+2. an exact match of the check ID against the `checks` lists in the rulesets, which also yields the real control ID and title. The source IDs of every finding merged into this one are matched too
 3. only if the finding still has no framework: the `patterns` regexes in the rulesets, matched against title and description
 4. only if that found nothing either: a small built-in regex table for CIS, NIST 800-53, PCI DSS, GDPR, SOC 2 and HIPAA
 
-Then each (framework, control) pair becomes one `ComplianceResult` with the ids of the findings behind it. For exact matches the control ID and title come from the ruleset. Otherwise the control ID is built from the finding: `<framework>/CKV_...` for Checkov, `<framework>/CVE-...` for Trivy CVEs, a Prowler-derived ID, or `<framework>-aggregate` when nothing better exists. Pattern matches always land in the aggregate control.
+Then each (framework, control) pair becomes one `ComplianceResult` with the ids of the findings behind it. For exact matches the control ID and title come from the ruleset. Otherwise the control ID is built from the finding: `<framework>/CKV_...` for Checkov, `<framework>/CVE-...` for Trivy CVEs, `<framework>/<check name>` for Prowler (`CIS/s3_bucket_default_encryption`), or `<framework>-aggregate` when nothing better exists. Pattern matches always land in the aggregate control.
 
-Every `ComplianceResult` this produces has status `FAIL`, because it is built from failing findings. Controls without findings are not listed, so the absence of a control does not mean it passed.
+These results have status `FAIL`. Passing checks add `PASS` results: a ruleset control that a passed check name maps to through `checks`, and that no finding fails, gets a `PASS` result with an empty `finding_ids`. The passed checks come from the `passed_checks` argument and from the `passed_checks` attribute of each list you pass. Prowler's parser returns a `FindingList`, a `list` subclass that carries the checks that passed (ASFF `PASSED`, OCSF `PASS` records), so `normalise(parse_report("prowler", path))` picks them up with no extra argument. Controls with neither a finding nor a passing check are not listed: the absence of a control means it was not assessed.
 
 ## Examples
 
@@ -89,12 +89,12 @@ print(len(result.compliance), "compliance results")
 ```console
 $ python normalise_demo.py
 CRITICAL  9.7 trivy            openssl: buffer overflow ['HIPAA', 'NIST-800-53', 'PCI-DSS', 'SOC2']
-HIGH      7.5 trivy, prowler   [Trivy] S3 bucket default encryption ['CIS-AWS', 'GDPR', 'ISO-27001', 'SOC2']
+HIGH      7.5 trivy, prowler   [Trivy] S3 bucket default encryption ['GDPR-AWS', 'HIPAA-AWS', 'ISO27001-AWS', 'MITRE-ATTACK-AWS']
 LOW       2.5 custom           CloudTrail logging disabled in eu-west-1 ['GDPR', 'HIPAA', 'ISO-27001', 'NIST-800-53']
-11 compliance results
+38 compliance results
 ```
 
-Five findings in, three out. The two Prowler copies collapsed in pass 1. The result merged with the Trivy check in pass 2, because `s3_bucket_default_encryption` and `AVD-AWS-0088` share the canonical ID `aws-s3-default-encryption` and the titles match once `[Trivy]` is dropped. The Trivy finding survived because it was `HIGH`. The CVE went from `MEDIUM` to `CRITICAL` on its CVSS score.
+Five findings in, three out. The two Prowler copies collapsed in pass 1. The result merged with the Trivy check in pass 2, because `s3_bucket_default_encryption` and `AVD-AWS-0088` share the canonical ID `aws-s3-default-encryption` and the titles match once `[Trivy]` is dropped. The Trivy finding survived because it was `HIGH`, and it still carries the ruleset frameworks that Prowler's check name maps to, such as `HIPAA-AWS`. The CVE went from `MEDIUM` to `CRITICAL` on its CVSS score.
 
 ### Add your own framework
 
@@ -161,7 +161,9 @@ Scanner names are the lower-case `source_tool` values.
 
 `normalise()` changes the findings you pass in. Severity, `source_tool` and `compliance_frameworks` are updated on the original objects, and the duplicates that lost a merge are simply left out of the result. Pass copies (`[f.model_copy(deep=True) for f in findings]`) if you need the originals untouched.
 
-The merge keeps the survivor's `source_finding_id`, and the exact check-ID mapping runs after the merge. When a Trivy finding survives over a Prowler one, the Prowler check name is no longer there to look up, and the controls it would have matched are not added. Frameworks the scanners reported natively are kept, because those are unioned during the merge.
+The merge keeps the survivor's `source_finding_id`, but the exact check-ID mapping looks up the source IDs of every merged finding. When a Trivy finding survives over a Prowler one, Prowler's check name still maps its controls.
+
+A `FindingList` keeps its own `passed_checks` when you `+=` or `extend()` it, but does not take over those of the list you add, and `a + b` or `list(a)` gives a plain list without any. Simplest is to pass each parsed list to `normalise()` as a separate argument; otherwise collect the passed checks yourself and pass `normalise(..., passed_checks=...)`.
 
 A `rules_dir` that does not exist is not an error. The normaliser then has no rulesets and no equivalence map, and only the built-in regex table maps frameworks. Check the path when compliance results look thin.
 

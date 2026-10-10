@@ -184,6 +184,9 @@ rag:
 # ── Terraform Recreation ──
 terraform:
   enabled: false
+  # Unset or left at ./reports/terraform: the files go to terraform/ under the
+  # run's output directory (-o, or CloudGEngine's output_dir). Any other value
+  # is used as given.
   output_dir: ./reports/terraform
 
 # ── Reports ──

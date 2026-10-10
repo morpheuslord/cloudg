@@ -27,13 +27,16 @@ flowchart TD
   B -->|no| C["profile set?"]
   C -->|yes| P["Named profile, SSO included"]
   C -->|no| D["boto3 default chain"]
-  K --> R{"role_arn, or account plus role_name?"}
+  K --> R{"role_arn not used yet?"}
   P --> R
   D --> R
   W --> R
-  R -->|yes| S["sts:AssumeRole, optional ExternalId"]
-  R -->|no| Done[Session ready]
-  S --> Done
+  R -->|yes| S["sts:AssumeRole role_arn, optional ExternalId"]
+  R -->|no| M{"account plus role_name?"}
+  S --> M
+  M -->|yes| T["sts:AssumeRole the member role"]
+  M -->|no| Done[Session ready]
+  T --> Done
 ```
 
 | Order | Method | Settings that select it |
@@ -42,7 +45,7 @@ flowchart TD
 | 2 | OIDC web identity | `role_arn` together with `web_identity_token_file` or `$AWS_WEB_IDENTITY_TOKEN_FILE` |
 | 3 | Named profile | `profile` (plain or SSO) |
 | 4 | Default provider chain | nothing set: env vars, shared config, container credentials, instance role |
-| then | STS AssumeRole | `role_arn` (when not already used by step 2), or `accounts` plus `role_name` |
+| then | STS AssumeRole | `role_arn` (when not already used by step 2), then, for each account in `accounts`, `role_name` in that account |
 
 Whatever the base method, the session is instrumented with cloudg's rate limiter before it is used, so STS, Organizations and every collector call are paced. See [rate limits](/guides/rate-limits/).
 
@@ -137,10 +140,12 @@ cloudg run -p aws --regions all
 
 ### Role assumption and external IDs
 
-STS `AssumeRole` sits on top of whichever base method won. It runs in two situations:
+STS `AssumeRole` sits on top of whichever base method won. It runs in two situations, and both can apply at once:
 
-- `role_arn` is set and step 2 did not consume it. This is a single-account hop, for example from your own account into a customer's audit role.
-- cloudg is collecting a specific account and `role_name` is set. It builds `arn:aws:iam::<account>:role/<role_name>` for each account in `accounts`.
+- `role_arn` is set and step 2 did not consume it. On its own this is a single-account hop, for example from your own account into a customer's audit role.
+- cloudg is collecting a specific account from `accounts`. It builds `arn:aws:iam::<account>:role/<role_name>` and assumes it, from the `role_arn` session when there is one (role chaining). `role_arn` never replaces the member role, so a hub role in a security account can fan out to member roles that trust it.
+
+`accounts` needs `role_name`: `cloudg run` and `cloudg map` stop with exit status 2 when the list is set without one (unless `--org` is on, where the member role defaults to `AWSControlTowerExecution`).
 
 `external_id` is passed as `ExternalId` when set, which is the standard confused-deputy protection for third-party auditors. Sessions last 3600 seconds (fixed in the code) and use `role_session_name`.
 
@@ -168,17 +173,15 @@ aws:
   role_name: cloudg-readonly
 ```
 
-When `accounts` and `role_name` are set and `role_arn` is not, cloudg first calls `GetCallerIdentity` to learn its own account. If that account is in the list it is collected with the base credentials, because roles such as `AWSControlTowerExecution` do not exist in the management account. For whole organizations, `cloudg map --org` discovers the account list for you; see [AWS Organizations](/guides/aws-organizations/).
+When `accounts` is set, cloudg first calls `GetCallerIdentity` to learn its own account (with `role_arn` set, that is the role's account). If that account is in the list it is collected with that session, without the member role, because roles such as `AWSControlTowerExecution` do not exist in the management account. For whole organizations, `cloudg map --org` discovers the account list for you; see [AWS Organizations](/guides/aws-organizations/).
 
 A failed AssumeRole does not stop the run. The account and region get a coverage record for `sts_assume_role` with status FAILED and the STS error, and the other accounts carry on. Check the coverage table at the end of `cloudg run`, or `coverage` in the result, before trusting a quiet map.
 
 ### What the scanners receive
 
-The collectors use the resolved session. Prowler and ScoutSuite are separate processes with their own credential handling, and they get less. Prowler runs with a copy of cloudg's environment plus `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_DEFAULT_REGION` from the config, and `-p <profile>` when `--profile` was given. ScoutSuite gets `--profile`. Neither receives `session_token`, the assumed role, or the OIDC exchange.
+The collectors use the resolved session. Prowler and ScoutSuite are separate processes, so cloudg resolves the same credentials for them in the same order and passes them on. With `role_arn` (directly or through web identity), cloudg assumes the role and exports its temporary keys and session token. With direct keys, it exports the keys and `session_token`. Otherwise `aws.profile` becomes `-p` for Prowler and `--profile` for ScoutSuite, and with no profile they use the default chain. Explicit regions go to Prowler as `-f` and to ScoutSuite as `--regions`, and `AWS_DEFAULT_REGION` is never `ALL`.
 
-:::tip Give the scanners the same identity
-When the scanners should run as the same role as the collectors, put the credentials in the environment (the standard `AWS_*` variables, or `AWS_ROLE_ARN` with `AWS_WEB_IDENTITY_TOKEN_FILE`) rather than in cloudg flags. Every process in the job then resolves the same identity. `aws-actions/configure-aws-credentials` does exactly that in GitHub Actions.
-:::
+The scanners run once per provider, against the account those credentials reach: the caller's, or `role_arn`'s. They do not repeat per member account of `accounts` or `--org`; only collection fans out.
 
 ## Azure
 

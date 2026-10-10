@@ -28,16 +28,14 @@ What each flag accepts:
 
 | Flag | Accepts | Produce it with |
 |---|---|---|
-| `--prowler` | An ASFF JSON array or JSONL file, or Prowler's output directory (searched recursively for `*.json`) | `prowler aws -M json-asff -o ./prowler-output` |
+| `--prowler` | An OCSF or ASFF JSON array or JSONL file, or Prowler's output directory (searched recursively for `*.json`) | `prowler aws -o ./prowler-output` (OCSF, the default since Prowler 4) or `prowler aws -M json-asff -o ./prowler-output` |
 | `--scoutsuite` | The `scoutsuite_results_*.js` file, or the report directory | `scout aws --report-dir ./scoutsuite-report --no-browser` |
 | `--checkov` | A `checkov --output json` file, or a directory holding `results_json.json` | `checkov -d ./iac --output json > results_json.json` |
 | `--trivy` | A `trivy image` or `trivy fs` JSON file, or a directory of them | `trivy image --format json myrepo/app:latest > trivy-image.json` |
 
 [Ingesting existing output](/guides/ingesting/) lists the exact fields cloudg reads from each format.
 
-:::warning Prowler needs ASFF
-Prowler 4 and later write OCSF JSON by default. The CLI parser only understands ASFF, and it does not reject OCSF: each OCSF record becomes a placeholder finding titled "Unknown Prowler Finding" with no resource and MEDIUM severity. Run Prowler with `-M json-asff`. The MCP server's `load_dataset` and `ingest_reports` tools do detect OCSF and refuse it with a clear error.
-:::
+Prowler's two JSON formats both work. Each record is read as OCSF when it has OCSF keys (`finding_info`, `class_uid` and so on) and as ASFF otherwise, so one directory can hold both. When it does, Prowler reports the same check twice, and normalisation merges the pair into one finding. A muted OCSF finding comes in with `is_suppressed` set. The MCP server's `load_dataset` and `ingest_reports` tools read OCSF the same way.
 
 A run on three small test files (the samples in `tests/test_ingest.py`), with one missing path, prints this:
 
@@ -60,14 +58,14 @@ $ cloudg ingest --prowler prowler.asff.json --checkov results_json.json --trivy 
   ✓ Ingested 3 findings from 3 tool(s), 3 after deduplication
 ```
 
-The INFO log lines between those rows are left out. The Prowler sample holds two records, but one of them has `Compliance.Status: PASSED`, and passed checks are dropped, which is why it reports 1.
+The INFO log lines between those rows are left out. The Prowler sample holds two records, but one of them has `Compliance.Status: PASSED`. A passing check gives no finding, which is why it reports 1; cloudg keeps its name, and the compliance controls that only passing checks map to get a PASS result.
 
 ## Examples
 
 Turn a single Prowler run into an HTML report:
 
 ```bash
-prowler aws -M json-asff -o ./prowler-output
+prowler aws -o ./prowler-output
 cloudg ingest --prowler ./prowler-output/ -o ./reports
 ```
 

@@ -31,7 +31,7 @@ Three namespaces are bound on the graph, so they appear as prefixes in every ser
 In order, `build()` adds:
 
 1. The schema. An OWL class for every asset type (EC2, VIRTUAL_MACHINE and GCE_INSTANCE all map to `cm:ComputeInstance`; types without a hand-picked name get the CamelCase of the enum name), each a subclass of `cm:CloudResource`. Every `RelationType` becomes an `owl:ObjectProperty` with an `rdfs:label` and a `cm:relationGroup` literal. This part alone is 636 triples, so an empty inventory still produces a sizeable file.
-2. One individual per asset: `rdf:type`, `cmp:hasName`, `cmp:hasProvider`, `cmp:hasRegion`, `cmp:isInternetExposed` (an `xsd:boolean`), and `cmp:hasARN` and `cmp:hasAccountId` when set. Each tag adds a `cmp:TAGGED_WITH` link to a `cm:TagValue` node named `tag_<key>_<value>`.
+2. One individual per asset: `rdf:type`, `cmp:hasName`, `cmp:hasProvider`, `cmp:hasRegion`, `cmp:isInternetExposed` (an `xsd:boolean`), and `cmp:hasARN` and `cmp:hasAccountId` when set. Each tag adds a `cmp:TAGGED_WITH` link to a `cm:TagValue` node named `tag_<key>_<value>`. With `CloudOntology(include_raw_metadata=True)` (the `ontology.include_raw_metadata` key, read by `cloudg run` and `CloudGEngine.analyze()`), each asset's `metadata` dict is added too, as one JSON string literal under `cmp:hasRawMetadata`.
 3. For each edge, the relations from `infer_relations()`, as `source relation target`. Endpoints that are not assets (`0.0.0.0/0`) become `cm:CloudResource` individuals named after the id. An edge with a CIDR, port or protocol also gets a blank node of type `cm:EdgeMetadata` with `cm:fromNode`, `cm:toNode`, `cmp:hasCIDR`, `cmp:hasPort` and `cmp:hasProtocol`.
 4. Asset-level relations from metadata: `OWNED_BY`, `COST_ALLOCATED_TO` and `MONITORED_BY` from tags such as `owner`, `team`, `costcenter` and `monitoring`; `VPC_CONTAINS_SUBNET` and `CONTAINS` from a VPC to the assets that share its `vpc_id`; `ENCRYPTED_BY_KMS` from an encrypted asset to its key; `ROTATES_SECRET`; and `PROTECTED_BY_SG` from an EC2 instance's `security_groups` metadata.
 5. Each finding as a `cm:SecurityFinding` with `cmp:hasName` (the title), `cmp:hasSeverity` and `cmp:hasRiskScore`, linked by `cmp:FINDING_AFFECTS` to the asset it resolves to. Each compliance framework on the finding becomes `cmr:compliance_<name>` with a `cmp:COMPLIANCE_GOVERNS` link to the same asset.
@@ -42,7 +42,7 @@ Findings are matched to assets through `AssetIndex`: by asset id, then ARN (from
 
 | Edge | Relations |
 |---|---|
-| `SECURITY_GROUP_RULE` | `INGRESS_ALLOWED` or `EGRESS_ALLOWED`; `INTERNET_REACHABLE` when the source is `0.0.0.0/0`, `::/0` or an Azure `Internet`, `Any` or `*` tag; `CIDR_RESTRICTED` for any other CIDR; then `ALL_TRAFFIC` for an all-ports rule, else `ONLY_SSH`, `ONLY_HTTP`, `ONLY_HTTPS`, `ONLY_RDP` for each of 22, 80, 443, 3389 inside the ranges, else `PORT_RESTRICTED` |
+| `SECURITY_GROUP_RULE`, `NACL_RULE` | `INGRESS_ALLOWED` or `EGRESS_ALLOWED`; `INTERNET_REACHABLE` when the source is `0.0.0.0/0`, `::/0` or an Azure `Internet`, `Any` or `*` tag; `CIDR_RESTRICTED` for any other CIDR; then `ALL_TRAFFIC` for an all-ports rule, else `ONLY_SSH`, `ONLY_HTTP`, `ONLY_HTTPS`, `ONLY_RDP` for each of 22, 80, 443, 3389 inside the ranges, else `PORT_RESTRICTED` |
 | `ATTACHED_TO` | `PROTECTED_BY_SG` when the target is a security group or NSG, `PROTECTED_BY_NACL` for a NACL, `DEPENDS_ON` otherwise |
 | `CONTAINS` | `VPC_CONTAINS_SUBNET`, `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE` or `ORG_CONTAINS_ACCOUNT` when both endpoint types fit, plain `CONTAINS` otherwise |
 | `IAM_TRUST` | `ROLE_ASSUMES_ROLE`, plus `CROSS_ACCOUNT_TRUST` when the two accounts differ |
@@ -52,7 +52,6 @@ Findings are matched to assets through `AssetIndex`: by asset id, then ARN (from
 | `INVOKES`, `LOGS_TO` | the relation of the same name |
 | `USES_IMAGE`, `ASSUMES_ROLE` | `RUNS_ON` |
 | `GRANTS_ACCESS`, `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS`, `REFERENCES` | `POLICY_ALLOWS_ACTION`, `PROTECTED_BY_WAF`, `MONITORED_BY`, `OWNED_BY`, `COMPLIANCE_GOVERNS`, `DEPENDS_ON` |
-| `NACL_RULE` | nothing; only the `EdgeMetadata` node |
 
 A `relationship` declared on the edge (any `RelationType` name, as the linker writes them) changes this. On `CONTAINS`, `ATTACHED_TO` and the typed inventory edges it replaces the inferred relation. On the network and IAM edges it comes first and the inferred ones follow.
 
@@ -72,16 +71,14 @@ Several of these, `TRIGGERED_BY` and `READS_FROM` among them, are never inferred
 
 ### Serialisation formats
 
-| `fmt` passed to `save()` | rdflib format | File `cloudg run` writes |
+| `fmt` passed to `save()` | rdflib format | File `cloudg run` and `CloudGEngine.analyze()` write |
 |---|---|---|
 | `turtle`, `ttl` | Turtle | `ontology.ttl` |
 | `json-ld`, `jsonld` | JSON-LD | `ontology.jsonld` |
-| `xml`, `rdfxml` | RDF/XML | `ontology.rdf` |
-| `nt`, `ntriples` | N-Triples | `ontology.nt` |
+| `xml`, `rdfxml`, `rdf` | RDF/XML | `ontology.rdf` |
+| `nt`, `ntriples`, `n-triples` | N-Triples | `ontology.nt` |
 
-`save()` falls back to Turtle for any other value instead of raising, and creates missing parent directories. `cloudg run` writes one file per entry in `ontology.export_formats` (default `["turtle", "json-ld"]`), and `--no-ontology` or `ontology.enabled: false` skips the phase.
-
-Use the first spelling in each row in `config.yaml`. The file name is picked from a separate table that only knows `turtle`, `json-ld`, `xml` and `nt`, so `jsonld` writes JSON-LD into `ontology.ttl`. `CloudGEngine` has the same table without `nt`, so N-Triples from the Python engine also land in `ontology.ttl`, replacing the Turtle file when both formats are configured.
+Names are matched without regard to case. `save()` writes Turtle, with a warning, for any other value instead of raising, and creates missing parent directories. `cloudg run` and `analyze()` write one file per entry in `ontology.export_formats` (default `["turtle", "json-ld"]`), and `--no-ontology` or `ontology.enabled: false` skips the phase. The table is `ONTOLOGY_FORMATS` in `cloudg.graph.ontology`; `ontology_format(name)` gives the rdflib format and extension of a name, and `ontology_extension(name)` the extension alone.
 
 ## Examples
 
@@ -251,9 +248,9 @@ The same query works against `ontology.jsonld` with `Graph().parse("ontology.jso
 
 ## Notes
 
-- `query()` returns every value as a string, including literals such as `"false"` and `"9.5"`. An `OPTIONAL` variable that stays unbound comes back as the string `"None"`, not as Python `None`.
-- `query_asset_neighbourhood(asset_id)` puts the id into the query as `cmr:<asset_id>`. That works for ids made of letters, digits, `-` and `_`, such as the UUIDs collectors assign, but an id containing `/` or `:` makes the query fail to parse; write the query yourself with the full IRI in angle brackets. The one-hop result includes data properties (`hasName`, `hasRegion`) next to the relations.
-- In 0.6.0, `query_asset_neighbourhood()` with `hops` greater than 1 raises a pyparsing `ParseException`: the generated `{1,n}` path quantifier is not SPARQL 1.1, and rdflib rejects it. For a multi-hop walk, use a SPARQL property path such as `cmr:web-1 (cmp:PROTECTED_BY_SG|cmp:CONTAINS)+ ?n` through `query()`, or the MCP `ontology_neighbourhood` tool.
+- `query()` returns every value as a string, including literals such as `"false"` and `"9.5"`. An `OPTIONAL` variable that stays unbound comes back as Python `None`. `query(sparql, bindings={"asset": URIRef(...)})` passes initial variable bindings to rdflib, which is the safe way to put an IRI or a value into a query.
+- `query_asset_neighbourhood(asset_id)` binds the asset's IRI as a value instead of writing it into the query text, so ids holding `:`, `/` or spaces (`0.0.0.0/0`, an ARN) work. The one-hop result has `predicate`, `neighbour` and `neighbourName` per triple, and includes data properties (`hasName`, `hasRegion`) next to the relations.
+- With `hops` greater than 1, `query_asset_neighbourhood()` walks hop by hop in Python, forwards over the network and containment relations in `NEIGHBOURHOOD_RELATIONS` (`INGRESS_ALLOWED`, `EGRESS_ALLOWED`, `CONTAINS`, `VPC_CONTAINS_SUBNET`, `SUBNET_CONTAINS_INSTANCE`, `INTERNET_REACHABLE`, `PROTECTED_BY_SG`, `LB_TARGETS_INSTANCE`). It returns each resource reached once as `{"neighbour", "neighbourName", "hops"}`, nearest first, with `hops` the shortest distance. In the example above, `query_asset_neighbourhood("web-1", hops=2)` gives `[{'neighbour': 'https://cloudg.io/resource/sg-web', 'neighbourName': 'sg-web', 'hops': 1}]`.
 - The tag node name is `tag_<key>_<value>` with spaces and `/` replaced by `_`. Other characters pass through into the IRI as they are.
 - Each `build()` call adds to the same graph. Create a new `CloudOntology` per inventory.
 - The JSON-LD output uses rdflib's serialiser without a framing context, so it is a flat list of nodes.

@@ -30,13 +30,13 @@ The CLI prints each phase as it starts, with the same numbering:
 | Banner | Runs when | Writes |
 |---|---|---|
 | Phase 1 · Asset Collection | always | nothing |
-| Phase 2 · Graph Analysis | always | `topology.graphml`, `topology-cytoscape.json` |
+| Phase 2 · Graph Analysis | always | `topology.graphml` (`graph.persist_graphml`, on by default), `topology-cytoscape.json` (`graph.export_cytoscape`, off by default) |
 | Phase 2c · RAG Export | `--rag-export` (default) and `rag.enabled` | `rag_chunks.jsonl`, `rag_metadata_index.json` |
 | Phase 2d · Terraform Recreation | `--terraform` or `terraform.enabled` | `provider.tf.json`, `variables.tf.json`, `main.tf.json`, `import_commands.sh` |
 | Phase 3 · Security Scanning | always | each scanner's own output under `prowler/<provider>/` and `scoutsuite/<provider>/` |
 | Phase 3b · Semantic Ontology | `--ontology` (default) and `ontology.enabled` | `ontology.ttl`, `ontology.jsonld` |
 | Phase 4 · Normalisation | always | nothing |
-| Phase 5 · Report Generation | always | `findings.json`, `topology.svg`, `report.html` |
+| Phase 5 · Report Generation | always | `findings.json`, `topology.svg`, `report.html`, as `report.formats` lists them (all three by default) |
 
 ## Phase 1: collect
 
@@ -46,13 +46,13 @@ Collection reads the configuration (providers, regions, accounts, credentials) a
 
 | Provider | Unit of work | Notes |
 |---|---|---|
-| AWS | one task per account and region | Each task runs the pipeline's 15 service collectors (EC2, S3, RDS, VPCs, subnets, security groups, IAM users and roles, Lambda, ELBv2, ECS, DynamoDB, CloudFront, Secrets Manager, KMS). With `accounts` and `role_name` in the config, cloudg assumes that role in each account; the caller's own account uses the base credentials. |
+| AWS | one task per account and region | Each task runs the pipeline's 15 service collectors (EC2, S3, RDS, VPCs, subnets, security groups, IAM users and roles, Lambda, ELBv2, ECS, DynamoDB, CloudFront, Secrets Manager, KMS). With `accounts` and `role_name` in the config, cloudg assumes that role in each account (after `role_arn`, when that is set too); the caller's own account uses the base credentials. |
 | Azure | one task per subscription | List calls return every location at once, so locations are not iterated. With no `subscription_ids`, every enabled subscription the credential can see is collected. |
 | GCP | one Cloud Asset Inventory listing per project, or one for the whole organization | Set `gcp.organization_id` for a single organization-scope listing; `project_ids` then filter it. |
 
 `--regions all` turns into `["ALL"]` for all three providers, and region discovery replaces it with the enabled regions before collection starts. Without `--regions`, AWS uses `us-east-1` (or `--region`), while Azure and GCP default to all.
 
-Two limits keep collection polite. An `asyncio.Semaphore` sized by `concurrency_limit` (default 5) caps how many AWS account and region tasks run at once. Below that, every API call passes through the shared rate limiter configured under `ratelimit`, which paces calls per service, honours Retry-After, and opens a circuit breaker on an API that stays throttled. [Rate limits](/guides/rate-limits/) explains the knobs.
+Two limits keep collection polite. An `asyncio.Semaphore` sized by `concurrency_limit` (default 5) caps how many tasks run at once: AWS account and region pairs, Azure subscriptions and GCP projects or organizations, all providers together. Below that, every API call passes through the shared rate limiter configured under `ratelimit`, which paces calls per service, honours Retry-After, and opens a circuit breaker on an API that stays throttled. [Rate limits](/guides/rate-limits/) explains the knobs.
 
 ### When collection fails
 
@@ -63,24 +63,26 @@ Failures are contained at the smallest unit that can fail:
 - A whole provider raises: the other providers still finish, and a `<provider>_full` coverage record holds the error.
 - Collection as a whole raises: the run continues with zero assets.
 
-None of these stop the run or change its exit code. You see them in two places: a log line per failed collector during the run ("Collector ec2 failed: ..."), and the Collection Coverage table after the results, with one row per region and account, a coverage percentage and the names of the services that failed. A run with no credentials at all finishes "successfully" with an empty inventory, so read that table before trusting a quiet report. From Python, the same records are in `result.coverage`, with the error text for each service.
+None of these stop the run. You see them in three places: a log line per failed collector during the run ("Collector ec2 failed: ..."), a "Not collected: ..." line per failed account, region or provider at the end of phase 1, and the Collection Coverage table after the results, with one row per region and account, a coverage percentage and the names of the services that failed.
+
+The exit status tells the two outcomes apart. When some targets were collected and others failed, the run prints a "Collection was partial" warning and exits 0. When collection failed for every target, it still writes the reports (with scanner findings only), then prints a "Collection failed for every target" panel and exits 3. A profile that does not exist or a role that cannot be assumed fails the whole target this way. So does a run with no credentials at all: each collector fails on its own, and a target where every service failed counts as failed, even though its own coverage record says PARTIAL. From Python, the same records are in `result.coverage`, with the error text for each service, and `result.errors` has one `collection: ...` line per failed target.
 
 ## Phase 2: graph and analysis
 
-`GraphBuilder.build(assets, edges)` turns the inventory into a NetworkX `DiGraph`. Assets become nodes. Edge endpoints that are not assets, such as the `0.0.0.0/0` on a security group rule, become external nodes. The graph is saved straight away as `topology.graphml` and `topology-cytoscape.json`.
+`GraphBuilder.build(assets, edges)` turns the inventory into a NetworkX `DiGraph`. Assets become nodes. Edge endpoints that are not assets, such as the `0.0.0.0/0` on a security group rule, become external nodes. The graph is saved straight away as `topology.graphml`, and as `topology-cytoscape.json` when `graph.export_cytoscape` is on.
 
 `ReachabilityAnalyzer` then runs a breadth-first search from the internet sources (`0.0.0.0/0`, `::/0`) over network-flow edges. Every asset it reaches can produce a finding, for example "Security group allows SSH (port 22) from 0.0.0.0/0", and those findings carry deterministic IDs, so the same exposure keeps its ID from one run to the next. With `graph.compute_attack_paths` (on by default) the builder also looks for lateral movement paths and prints a warning with the count when it finds any.
 
 Two exports hang off the graph:
 
 - RAG export (2c) chunks the infrastructure per asset, per Louvain community and per relation group, and writes `rag_chunks.jsonl` and its index. At this point it only knows the reachability findings. After the scanners finish, a silent second pass rewrites both files with every finding included.
-- Terraform recreation (2d) maps the collected assets to `.tf.json` resources. It writes to `terraform.output_dir`, which defaults to `./reports/terraform` and does not follow `-o`. Set `terraform.output_dir` in `config.yaml` if you write reports somewhere else.
+- Terraform recreation (2d) maps the collected assets to `.tf.json` resources and writes `import_commands.sh` next to them. The files go to `<output dir>/terraform`, so they follow `-o`. A `terraform.output_dir` set in `config.yaml` replaces that directory, except the old default `./reports/terraform`, which counts as unset.
 
 An exception in the RAG or Terraform export prints a failure line and the run continues without those files.
 
 ## Phase 3: scan
 
-The scanners run in a `ThreadPoolExecutor`. Each one is a subprocess, so threads are enough. The pool is sized at the number of enabled scanners plus the number of providers plus one, which fits every job of a typical run at once. The jobs submitted depend on what is enabled and what there is to scan:
+The scanners run in a `ThreadPoolExecutor` with one worker per job, so every job starts at once. Each scanner is a subprocess, so threads are enough. The jobs submitted depend on what is enabled, what is installed and what there is to scan:
 
 | Job | Submitted | Target |
 |---|---|---|
@@ -88,19 +90,18 @@ The scanners run in a `ThreadPoolExecutor`. Each one is a subprocess, so threads
 | ScoutSuite | once per provider | the live account, report in `reports/scoutsuite/<provider>/` |
 | Checkov | once per IaC directory | the resolved IaC directories |
 | Trivy | once | `--images` if given, otherwise a filesystem scan of the IaC directories |
-| IAM linter | whenever any assets were collected | IAM roles and policies from the inventory, via Parliament |
+| IAM linter | when `iam` is enabled and assets were collected | IAM roles and policies from the inventory, via Parliament |
+| Scanner plugin | once per plugin named in the scanner list | whatever the plugin scans |
 
-The scanner list comes from `--scanners`, or from `scanners.enabled` in `config.yaml` (all five by default).
+The scanner list comes from `--scanners`, or from `scanners.enabled` in `config.yaml` (all five by default). A name that is neither a built-in scanner nor an installed plugin is skipped with a warning. Prowler and ScoutSuite get the run's AWS credentials (keys, session token, `role_arn`, web identity or `aws.profile`) and its regions, but they audit the caller's account, or `role_arn`'s, not each member account in `aws.accounts`.
 
 IaC directories are resolved in this order: `--iac-dir`, then `scanners.iac_directories`, then the Terraform directory from phase 2d if it holds `*.tf.json` files. There is no fallback to the current directory. A clean Checkov scan of whatever folder you happened to run cloudg from would look like a clean bill of health for your cloud, so with nothing to scan, Checkov and Trivy print a warning and are left out. `--terraform` on its own is enough to give them a target: Checkov then audits the Terraform representation of what is really deployed.
 
 ### When a scanner fails
 
-A missing executable is not an error: the wrapper logs that the tool is not installed and returns no findings. A scanner that exits badly or produces output cloudg cannot parse is marked failed in the progress display with its error, and the other scanners are unaffected. Each wrapper bounds its own subprocess: 3600 seconds for Prowler and ScoutSuite, 1800 seconds for Checkov and each Trivy invocation.
+A missing executable is not an error: the scanner is left out before the pool starts, and the run prints a line such as `Prowler: not installed (pip install prowler)`. A scanner that exits badly or produces output cloudg cannot parse is marked failed in the progress display, its error is printed after the pool finishes, and the other scanners are unaffected.
 
-:::note About scanners.timeout_seconds
-The pipeline reads `scanners.timeout_seconds` (default 3600) when it collects each scanner's result, but it only does so after the scanner has finished, so in 0.6.0 it does not cut a slow scanner short. The per-scanner subprocess limits above are what actually apply.
-:::
+`scanners.timeout_seconds` (default 3600) bounds each scanner process: Prowler and ScoutSuite per provider, Checkov per directory, Trivy per image or directory. A process that runs over is killed, the job shows as "did not finish", and the findings it produced before that (the images Trivy did scan, for example) are kept.
 
 ### Phase 3b: ontology
 
@@ -121,11 +122,11 @@ Rulesets come from the package unless `rulesets.rules_dir` points elsewhere. The
 
 Three renderers write the final files:
 
-- `JSONExporter` writes `findings.json`: metadata, summary, assets, findings, compliance and the D3 graph data. `cloudg report -i findings.json` reads it back, so you can re-render without collecting again.
+- `JSONExporter` writes `findings.json`: metadata, summary, assets, findings, compliance, edges and the D3 graph data. `cloudg report -i findings.json` reads all of it back, so you can re-render without collecting again.
 - `SVGRenderer` writes `topology.svg`.
-- `HTMLReportGenerator` writes `report.html` with the data embedded. The page loads Chart.js and D3 from cdn.jsdelivr.net when opened.
+- `HTMLReportGenerator` writes `report.html` with the data, Chart.js and D3 embedded, so it opens offline.
 
-After that the CLI prints the summary table (assets, findings, severity breakdown, frameworks) and the coverage table, and exits with status 0.
+`report.formats` decides which of the three are written. After that the CLI prints the summary table (assets, findings, severity breakdown, frameworks) and the coverage table, and exits with status 0, or 3 when collection failed for every target.
 
 ## The whole run, step by step
 
@@ -174,7 +175,7 @@ cloudg -c config.yaml run -p all --regions all -o ./reports/2026-10-09
 
 ## Running it from Python
 
-`CloudGEngine` implements the same phases. `run_pipeline()` is the async version and `run_pipeline_sync()` wraps it in `asyncio.run` for scripts and notebooks:
+`CloudGEngine` implements the same phases. `run_pipeline()` is the async version and `run_pipeline_sync()` wraps it in `asyncio.run` for plain scripts. Inside a running event loop (Jupyter runs one) the sync wrapper raises `RuntimeError`; `await engine.run_pipeline()` there instead:
 
 ```python tab="Sync" title="run_pipeline.py"
 from cloudg import CloudGConfig, CloudGEngine
@@ -228,11 +229,10 @@ CLI flags become config fields or method arguments:
 The engine's pipeline is close to the CLI's but not identical, and the differences matter if you compare outputs:
 
 - The engine order is collect, scan, analyse, normalise, report. Reachability runs inside `scan()`, and `analyze()` builds the graph, ontology, RAG chunks and Terraform together after the scanners.
-- `run_pipeline()` writes `findings.json` and `report.html`, plus the ontology and RAG files. It does not write `topology.svg`, `topology.graphml` or `topology-cytoscape.json`; use `GraphBuilder` if you need them.
-- `run_pipeline()` calls `scan()` without a profile, so Prowler and ScoutSuite use the default credential chain (for example `AWS_PROFILE`). Collection uses `config.aws.profile`.
-- Trivy runs only when there are images. The CLI's filesystem fallback is not in `scan()`.
+- `run_pipeline()` writes the reports in `report.formats` (`findings.json`, `report.html` and `topology.svg` by default), plus the ontology and RAG files. It does not write `topology.graphml` or `topology-cytoscape.json`; use `GraphBuilder` if you need them.
+- `run_pipeline()` passes `config.aws.profile` to `scan()`, so Prowler and ScoutSuite authenticate the way collection does.
 - When Terraform is enabled and no IaC directory is configured, `scan()` generates the Terraform first so Checkov has a target, the same outcome as `--terraform` on the CLI.
-- `PipelineResult.errors` records failures in normalisation and reporting. Collection, scanner, graph, ontology, RAG and Terraform failures go to the `on_error` hook and the log instead, and collection problems also show in `result.coverage`.
+- `PipelineResult.errors` lists every failure reported through `on_error` (scanners, scanner credentials, graph, ontology, RAG, Terraform, normalisation, reporting), each as `"<phase>: <message>"`, plus one `collection: ...` line per provider, account or region that could not be collected.
 
 ### Event hooks
 
@@ -242,12 +242,12 @@ Hooks are plain attributes on the engine. Set them before you call a method; an 
 |---|---|---|
 | `on_phase_start` | phase name | `collection`, `scanning`, `analysis`, `normalisation`, `reporting`; also `ingest` and `inventory_mapping` from those methods |
 | `on_collection_complete` | `CollectionResult` | after a successful collection |
-| `on_finding` | `Finding` | once per finding when `scan()` or `ingest_reports()` returns |
-| `on_scan_complete` | `list[Finding]` | right after the `on_finding` calls |
+| `on_finding` | `Finding` | once per finding, as each scanner finishes in `scan()`; for `ingest_reports()`, when it returns |
+| `on_scan_complete` | `list[Finding]` | after the last `on_finding` call |
 | `on_analysis_complete` | `AnalysisResult` | at the end of `analyze()` |
-| `on_error` | phase name, exception | `collection`, `graph_analysis`, `graph_build`, `ontology`, `rag_export`, `terraform`, `normalisation`, `reporting`, or the scanner job name (`prowler-aws`, `scoutsuite-azure`, `checkov-./infra`, `trivy`, `iam`) |
+| `on_error` | phase name, exception | `collection`, `graph_analysis`, `graph_build`, `ontology`, `rag_export`, `terraform`, `normalisation`, `reporting`, `scanner_auth`, or the scanner job name (`prowler-aws`, `scoutsuite-azure`, `checkov-./infra`, `trivy`, `trivy-fs`, `iam`, a plugin's name) |
 
-`on_finding` fires after all scanners have finished, not as each one completes, and it sees findings before normalisation, so duplicates across scanners are still separate at that point. Use `result.findings` from the pipeline if you want the merged set.
+`on_finding` fires for each scanner's findings as soon as that scanner finishes, so a slow ScoutSuite run does not hold back Checkov's results. It sees findings before normalisation, so duplicates across scanners are still separate at that point; each call gets a deep copy, which normalisation does not change later. Use `result.findings` from the pipeline if you want the merged set.
 
 ### Running the phases yourself
 

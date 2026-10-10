@@ -37,7 +37,10 @@ class MultiAccountCollector:
     For Azure: iterates subscriptions × locations.
     For GCP: iterates projects × regions.
 
-    Uses asyncio.Semaphore to limit concurrent API calls.
+    An asyncio.Semaphore sized by ``concurrency_limit`` caps how many
+    collection units run at once, shared by all providers. A unit is one AWS
+    account and region, one Azure subscription, or one GCP project or
+    organization. API call rates are paced separately (``ratelimit``).
     """
 
     def __init__(

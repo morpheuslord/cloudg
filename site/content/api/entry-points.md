@@ -21,9 +21,7 @@ trivy = "cloudg.scanners.trivy:TrivyScanner"
 iam = "cloudg.scanners.iam_linter:IAMLinter"
 ```
 
-:::warning The CLI does not load plugins in 0.6.0
-`cloudg run`, `cloudg scan` and `cloudg map` choose their collectors and scanners by name in their own code and never ask `PluginRegistry`. A plugin scanner's name in `--scanners` or `scanners.enabled` is silently ignored, and `-p` accepts only `aws`, `azure` and `gcp`. Drive plugins from Python, as in the example below, and hand the results to the normaliser and renderers. The handbook's statement that an installed scanner "is available in `scanners.enabled` and `--scanners`" does not match the code.
-:::
+Scanner plugins run wherever the built-in scanners run. Name one in `scanners.enabled` or `--scanners`, and `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` (so `run_pipeline()` too) start it in the scanner thread pool next to the built-ins, normalise its findings with theirs and report its failures the same way. A name that is neither a built-in nor an installed plugin is skipped with a warning. Collector plugins are not wired into the CLI: `-p` accepts only `aws`, `azure` and `gcp`, so drive a collector plugin from Python, as in the example below.
 
 ## How discovery works
 
@@ -32,24 +30,25 @@ Discovery is lazy and happens once per `PluginRegistry` instance, on the first `
 ```mermaid caption="What the first get or list call does"
 flowchart TD
   A["First get_* or list_* call"] --> B["Read entry points in cloudg.collectors"]
-  B --> C{"ep.load() works?"}
+  B --> N{"Built-in name?"}
+  N -->|yes| S["Skip; a foreign one is warned about"]
+  N -->|no| C{"Name free and ep.load() works?"}
   C -->|yes| D["Register under the entry point name"]
   C -->|no| E["Log a warning, skip it"]
   D --> F["Same for cloudg.scanners"]
   E --> F
-  F --> G{"Built-in name still missing?"}
-  G -->|yes| H["Import it from the fallback table"]
-  G -->|no| I["Cached for this registry"]
-  H --> I
+  S --> F
+  F --> H["Import the built-ins from the table in registry.py"]
+  H --> I["Cached for this registry"]
 ```
 
-The fallback table in `cloudg/registry.py` maps the same eight names as the entry points above to the same classes. It matters when cloudg runs from a source checkout that was never installed, so its own entry point metadata is missing; in a normal install the built-ins arrive through their entry points and the fallback adds nothing. A built-in whose import fails (a missing optional SDK, say) is left out quietly, at debug log level.
+The built-ins always come from the table in `cloudg/registry.py`, which maps the same eight names as the entry points above to the same classes, so they load the same way from an installed package and from a source checkout that was never installed. A built-in whose import fails (a missing optional SDK, say) is left out quietly, at debug log level.
 
 What the registry returns is the class itself. It does not instantiate anything and does not check the class's interface, so constructor arguments are between you and the plugin.
 
 Two more behaviours to know before you name a plugin:
 
-- Don't reuse a built-in name. cloudg's own `prowler` entry point and yours would both be loaded under the same key, and whichever `importlib.metadata` lists last wins. That order is not something you control.
+- Don't reuse a built-in name. Built-ins always win: an entry point from another package named `prowler` (or any other built-in name) is ignored, with a warning on the `cloudg.registry` logger. When two packages register the same new name, the first one found is kept and the others are ignored with a warning.
 - A registry instance never looks again. After installing a plugin into a running process, create a new `PluginRegistry`.
 
 ## Writing a plugin
@@ -65,6 +64,8 @@ Collectors subclass `cloudg.collectors.base.BaseCollector`, an abstract class wi
 | `async run()` | `(assets, edges)` | calls the two above in order |
 
 Scanners have no base class in cloudg. The built-ins share an informal shape, and following it keeps your scanner interchangeable with them: a static `is_available()` that says whether the tool can run, `run()` returning `list[Finding]`, and a class method `parse_report(path)` that turns saved output back into findings (what `cloudg ingest` relies on for the built-ins). `IAMLinter` and `TrivyScanner` deviate from it (`analyze_policies(assets)`, `scan_images(images)`), so code that drives scanners generically should not assume more than the shape you define.
+
+When the CLI or the engine runs a scanner plugin, it builds the class with only the keyword arguments its constructor declares, out of `config` (the `CloudGConfig`), `provider` (the first configured provider), `profile`, `output_dir` (`<output>/<plugin name>`), `assets`, `iac_dirs`, `images` and `timeout_seconds`; a constructor that takes `**kwargs` gets all of them. Parameters with defaults that are not on that list keep their defaults. It then calls `run()`, which may return `Finding` objects or dicts in the same shape, validated into findings.
 
 Every asset needs a `provider` from `CloudProvider`, which has three values: `AWS`, `AZURE` and `GCP`. A collector for another platform has to file its assets under one of them.
 
@@ -273,7 +274,7 @@ print("wrote", path)
 ```console
 $ python run_plugins.py
 collectors: ['cmdb', 'aws', 'azure', 'gcp']
-scanners: ['tagpolicy', 'checkov', 'iam', 'prowler', 'scoutsuite', 'trivy']
+scanners: ['tagpolicy', 'prowler', 'scoutsuite', 'checkov', 'trivy', 'iam']
 edge: ASSUMES_ROLE 
 LOW  Missing required tags: owner (arn:aws:iam::123456789012:role/billing-app)
 LOW  Missing required tags: owner (arn:aws:s3:::invoices)
@@ -281,7 +282,13 @@ wrote reports/findings.json
 $ cloudg report -i reports/findings.json -o reports/html --format html
 ```
 
-The list order follows entry point discovery, so yours may differ. The last command renders `report.html` from the plugin's findings; `cloudg report` reads any `findings.json` in this shape, whoever wrote it.
+Plugins are listed first, in entry point discovery order, then the built-ins. The last command renders `report.html` from the plugin's findings; `cloudg report` reads any `findings.json` in this shape, whoever wrote it.
+
+`TagPolicyScanner` declares `assets`, so the CLI can run it as it is, against the assets it collected:
+
+```bash
+cloudg run -p aws --regions us-east-1 --scanners prowler,tagpolicy
+```
 
 To merge your scanner's findings with an equivalent check from Prowler, Checkov or Trivy, add your `source_tool` and `source_finding_id` to a `check_equivalence.yaml` and point the normaliser at it with `FindingsNormaliser(rules_dir=...)` (or `rulesets.rules_dir` in `config.yaml`). That directory replaces the bundled `cloudg/rules` rather than adding to it, so start from a copy of it.
 

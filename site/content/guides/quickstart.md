@@ -52,7 +52,7 @@ open reports/report.html        # macOS
 xdg-open reports/report.html    # Linux
 ```
 
-`report.html` is a single file with the findings, assets and graph data embedded in it: the topology graph, the findings table and the compliance matrix. It loads Chart.js and D3 from cdn.jsdelivr.net, though, so the charts and the topology view need network access when you open it.
+`report.html` is a single file with the findings, assets and graph data embedded in it: the topology graph, the findings table and the compliance matrix. Chart.js and D3 are embedded too, so it opens without network access.
 ::::
 
 ### What lands in ./reports
@@ -63,7 +63,6 @@ reports/
 ├── findings.json             assets, normalised findings, compliance, graph data
 ├── topology.svg              static picture of the graph
 ├── topology.graphml          the graph for Gephi, yEd or NetworkX
-├── topology-cytoscape.json   the graph for Cytoscape
 ├── ontology.ttl              RDF ontology (Turtle)
 ├── ontology.jsonld           RDF ontology (JSON-LD)
 ├── rag_chunks.jsonl          retrieval chunks, one JSON object per line
@@ -71,9 +70,9 @@ reports/
 └── prowler/aws/              Prowler's own ASFF output
 ```
 
-ScoutSuite, when installed, writes its report under `reports/scoutsuite/aws/`. Add `--terraform` and you also get `reports/terraform/` with `.tf.json` files that recreate what was collected.
+ScoutSuite, when installed, writes its report under `reports/scoutsuite/aws/`. Set `graph.export_cytoscape: true` in `config.yaml` to also get `topology-cytoscape.json`, the graph for Cytoscape. Add `--terraform` and you also get `reports/terraform/` with `.tf.json` files that recreate what was collected.
 
-If the summary says 0 assets, collection did not authenticate. The Collection Coverage table at the end shows 0% for the region and lists the failed services, and the log lines above it carry the reason: "could not be found" (a missing profile) or "Unable to locate credentials" means boto3 found nothing to use. The run itself does not fail in that case, so check the table before trusting an empty report.
+If the summary says 0 assets, collection did not authenticate. The Collection Coverage table at the end shows 0% for the region, and the log lines above it carry the reason. A profile that does not exist ("could not be found") fails the whole region: the run ends with a "Collection failed for every target" panel and exit status 3. When boto3 finds no credentials at all ("Unable to locate credentials"), each service fails on its own, the table lists them, and the run ends the same way, with the panel and exit status 3.
 
 To re-render the report later without touching the cloud:
 
@@ -104,7 +103,7 @@ cloudg ingest \
   -o ./reports
 ```
 
-Prowler's input is its ASFF JSON (`prowler aws -M json-asff`), Checkov's is `checkov -o json`, Trivy's is `trivy image -f json` or `trivy fs -f json`. ScoutSuite is read from its `scoutsuite_results_*.js` file or report directory with `--scoutsuite`.
+Prowler's input is its OCSF JSON (`*.ocsf.json`, Prowler 4's default) or ASFF JSON (`prowler aws -M json-asff`), Checkov's is `checkov -o json`, Trivy's is `trivy image -f json` or `trivy fs -f json`. ScoutSuite is read from its `scoutsuite_results_*.js` file or report directory with `--scoutsuite`.
 
 ### Read the result
 

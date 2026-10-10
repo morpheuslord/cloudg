@@ -218,7 +218,7 @@ Every edge has a coarse `edge_type` and, when known, a finer `relationship` plus
 
 Every collection unit (one account and region on AWS, one subscription on Azure, one scope on GCP) produces a coverage record with one entry per task: `SUCCESS` with an asset count, `FAILED` with the error, `PARTIAL` or `SKIPPED`. One failing task never stops the others. The discovery steps get records too: `organizations`, `controltower`, `management_groups`, `organization_hierarchy`. A member account whose role can't be assumed shows as `sts_assume_role: FAILED` and nothing else is collected there.
 
-After a run the CLI prints one warning line listing the failed entries, for example `3 collectors failed (see inventory coverage / -v): ...`, with the first eight named. Coverage is not written to any of the output files, so read it from Python when you need the details:
+After a run the CLI prints one warning line listing the failed entries, for example `3 collectors failed (see inventory coverage / -v): ...`, with the first eight named. The full records are saved in `inventory-map.json` under `coverage`, and `InventoryResult.load()` reads them back, so you can list the failures from a fresh run or from a saved map:
 
 ```python title="coverage_report.py"
 from cloudg import CloudGConfig
@@ -248,7 +248,7 @@ Everything goes to `-o/--output`, `./reports` by default.
 
 | File | Written when | Contents |
 |---|---|---|
-| `inventory-map.json` | always | assets, edges, unresolved references, and a summary: totals, per-service, type, region and account counts, relationship counts, cross-account edges, external accounts, security service gaps, internet exposure, unlinked assets |
+| `inventory-map.json` | always | assets, edges, unresolved references, coverage records, and a summary: totals, per-service, type, region and account counts, relationship counts, cross-account edges, external accounts, security service gaps, internet exposure, unlinked assets |
 | `inventory-map.graphml` | always | the same graph for Gephi, yEd, Neo4j import or `networkx.read_graphml` |
 | `inventory-graph.json` | always | D3 force-layout nodes and links with account and relationship attributes |
 | `inventory-dependencies.json` | always | most shared dependencies, largest blast radius, cross-account edges, security coverage (including workloads no vulnerability scanner covers and internet-facing endpoints without a WAF), unresolved references |
@@ -292,7 +292,7 @@ for entry in asset_map["assets"][:10]:
         print(entry["name"], entry["type"], entry["severity_breakdown"])
 ```
 
-A finding is matched to an asset when its `resource_arn` or `resource_id` equals the asset's internal ID, ARN or name. Names are not checked for uniqueness. A finding whose `resource_id` is `orders` lands on every asset named `orders`, a queue and a DynamoDB table alike, even when its `resource_arn` points at only one of them. Read `severity_breakdown` with that in mind when your names repeat across services.
+A finding is matched to one asset with `AssetIndex.resolve_finding()`, the same matcher the ontology and RAG exports use: the asset's internal ID, then an ARN taken from `resource_id` or `resource_arn`, then a name or ARN tail that only one asset has. A finding whose `resource_id` is `orders` therefore lands on no asset when a queue and a DynamoDB table are both named `orders`, unless its ARN picks one of them. `compliance-map.json` matches findings the same way.
 
 ## Use it as a library
 

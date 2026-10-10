@@ -9,7 +9,7 @@ source: cloudg/api_scanners.py
 since: "0.6.0"
 ---
 
-There are two ways to run the scanners. `cloudg scan` runs them on their own, with no collection, and writes the raw findings to disk. `cloudg run` runs them as phase 3 of the full pipeline, after collection and graph analysis, and passes the findings through the normaliser into the reports. The two commands share the scanner wrappers in `cloudg/scanners/` but differ in defaults and in which config keys they read; [the table near the end](#scan-and-run-compared) lists every difference.
+There are two ways to run the scanners. `cloudg scan` runs them on their own, with no collection, and writes the raw findings to disk. `cloudg run` runs them as phase 3 of the full pipeline, after collection and graph analysis, and passes the findings through the normaliser into the reports. The two commands, and `CloudGEngine.scan()`, plan the scanner jobs with the same code, so they pick scanners, credentials, regions, IaC directories and timeouts the same way. What differs is what they have to work with: `cloudg scan` collects nothing. [The table near the end](#scan-and-run-compared) lists every difference.
 
 If the scans already ran somewhere else (a CI job, another host, a nightly cron) you don't need either command. Hand the output files to [`cloudg ingest`](/guides/ingesting/) instead.
 
@@ -40,26 +40,30 @@ which prowler checkov trivy scout
 cloudg runs one Prowler process per provider and asks for ASFF output:
 
 ```text
-prowler <provider> -M json-asff -o <output>/prowler/<provider> [-p <profile>] <prowler_extra_args>
+prowler <provider> -M json-asff -o <output>/prowler/<provider> [-p <profile>] [-f <regions>] <prowler_extra_args>
 ```
 
-`-p` is only added for AWS. Under `cloudg run`, the subprocess environment also gets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` when `aws.access_key_id` and `aws.secret_access_key` are set (from config or `--aws-key` / `--aws-secret`), and `AWS_DEFAULT_REGION` set to the first entry of `aws.regions`. Nothing else is forwarded: a session token, `--aws-role-arn` or an OIDC token file that you gave cloudg for collection does not reach Prowler. Give Prowler its own credentials through a profile, the environment, or its own flags in `scanners.prowler_extra_args`.
+For AWS, Prowler gets the credentials cloudg collects with, resolved once per run in the same order:
 
-Prowler's stdout is streamed into the cloudg log, with a progress line every 25 checks. A non-zero exit code is logged as a warning and the output is parsed anyway, since Prowler exits non-zero whenever a check fails. Findings with `Compliance.Status` of `PASSED` are dropped during parsing.
+- with `aws.role_arn` (`--aws-role-arn`), also through a web identity token file, cloudg assumes the role itself and hands Prowler the temporary keys and session token;
+- with `aws.access_key_id` and `aws.secret_access_key` (`--aws-key` / `--aws-secret`), the keys and `aws.session_token` go into the environment;
+- otherwise `aws.profile` (or `--profile`) becomes `-p`, and with no profile at all Prowler uses the default chain.
 
-:::warning Regions set to all
-With `--regions all`, `aws.regions` holds the literal value `ALL`, and that is what cloudg puts in `AWS_DEFAULT_REGION` for Prowler. If Prowler fails with endpoint errors under `--regions all`, run it with an explicit region list instead. Prowler scans every enabled region by default anyway.
-:::
+An explicit region list in `aws.regions` is passed as `-f <regions>`, unless `scanners.prowler_extra_args` sets `-f`, `--region` or `--filter-region` itself; with `--regions all` nothing is passed and Prowler scans every enabled region. `AWS_DEFAULT_REGION` is set to the first listed region and is never `ALL`. If the role cannot be assumed, Prowler and ScoutSuite are skipped for AWS and the failure is reported as `scanner_auth`.
+
+Prowler and ScoutSuite audit the account those credentials belong to: the caller's, or `role_arn`'s. They do not run once per member account of `aws.accounts` or `--org`; only collection fans out over those.
+
+Prowler's stdout is streamed into the cloudg log, with a progress line every 25 checks. A non-zero exit code is logged as a warning and the output is parsed anyway, since Prowler exits non-zero whenever a check fails. Records with `Compliance.Status` of `PASSED` give no finding; their check names are kept so the compliance controls they cover can be marked `PASS` (see [Compliance frameworks](/guides/compliance/)).
 
 ### ScoutSuite
 
 Also one process per provider:
 
 ```text
-scout <provider> --report-dir <output>/scoutsuite/<provider> --no-browser [--profile <profile>] <scoutsuite_extra_args>
+scout <provider> --report-dir <output>/scoutsuite/<provider> --no-browser [--profile <profile>] [--regions <regions>] <scoutsuite_extra_args>
 ```
 
-`--profile` is only passed for AWS. For Azure and GCP, ScoutSuite needs an authentication mode flag (for example `--cli` for Azure CLI credentials), which you supply through `scanners.scoutsuite_extra_args`. cloudg then searches the report directory for `scoutsuite_results*.js` and parses the JSON inside it.
+`--profile` and `--regions` are only passed for AWS, and get the same credentials and regions as Prowler: temporary or static keys go into the environment, and a `--regions` in `scanners.scoutsuite_extra_args` wins. For Azure and GCP, ScoutSuite needs an authentication mode flag (for example `--cli` for Azure CLI credentials), which you supply through `scanners.scoutsuite_extra_args`. cloudg then searches the report directory for `scoutsuite_results*.js` and parses the JSON inside it.
 
 ### Checkov
 
@@ -79,7 +83,7 @@ With images configured, Trivy runs once per image, one after another, inside a s
 trivy image --format json --quiet <trivy_extra_args> <image>
 ```
 
-With no images, the CLI commands fall back to a filesystem scan of the IaC directories:
+With no images, `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` fall back to a filesystem scan of the IaC directories:
 
 ```text
 trivy fs --format json --quiet --scanners vuln,misconfig,secret <trivy_extra_args> <dir>
@@ -91,7 +95,7 @@ Like Checkov, the JSON is read from stdout and not written to disk. Trivy pulls 
 
 The linter looks at every collected asset of type `IAM_ROLE` or `IAM_POLICY`. It reads `metadata["assume_role_policy"]` (preferred when present, so for roles it is the trust policy) or `metadata["policy_document"]`, and runs two passes over it. The first is Parliament, which reports wildcard abuse and logical errors as `source_tool="parliament"`. The second is cloudg's own check for `Allow` statements with `Action: *`, or with `Resource: *` combined with a wildcard action or an action under `iam:`, `sts:`, `kms:`, `s3:`, `ec2:` or `lambda:`. Those are reported as HIGH with `source_tool="cloudg-iam"`.
 
-Because it reads collected assets, the linter has nothing to do in `cloudg scan`, which collects nothing.
+Because it reads collected assets, the linter needs some. `cloudg run` and `CloudGEngine.scan()` hand it the collected inventory. `cloudg scan` collects nothing, so give it a file of assets with `--assets`: `inventory-<provider>.json` from `cloudg collect`, `inventory-map.json` from `cloudg map`, or a `findings.json`. Without `--assets`, `iam` is skipped with a warning.
 
 ### Reachability findings
 
@@ -108,7 +112,7 @@ custodian run --output-dir ./custodian-output cloudg/policies/custodian-aws-secu
 
 ## Choosing scanners
 
-`--scanners` takes a comma-separated list of the names above. Spaces are trimmed and names are lowercased. An unknown name is ignored without a warning.
+`--scanners` takes a comma-separated list of the names above, or the name of an installed [scanner plugin](/api/entry-points/). Spaces are trimmed and names are lowercased. A name that matches nothing is skipped with a warning listing the available scanners.
 
 ```bash tab="CLI"
 cloudg run -p aws --regions us-east-1,eu-west-1 --scanners prowler,trivy --images 123456789012.dkr.ecr.us-east-1.amazonaws.com/api:1.4.2
@@ -152,13 +156,11 @@ docker run --rm \
   ghcr.io/morpheuslord/cloudg:latest scan -p aws --scanners prowler -o /app/reports
 ```
 
-`cloudg run` without `--scanners` uses `scanners.enabled`, which defaults to all five names. `cloudg scan` without `--scanners` runs `prowler,checkov` and ignores the config list.
-
-The IAM linter is the odd one out. In `cloudg run` it runs whenever collection returned any assets, even if `iam` isn't in the list, so leaving it out of `--scanners` does not switch it off. `CloudGEngine.scan()` behaves the same way.
+Without `--scanners`, both commands use `scanners.enabled` from the config passed with `-c`, which defaults to all five names. The IAM linter runs only when `iam` is in the list, like every other scanner.
 
 ## IaC targets: --iac-dir and the Terraform fallback
 
-Checkov, and Trivy when it has no images, need a directory. `cloudg run` and `CloudGEngine.scan()` resolve it in a fixed order and stop at the first hit.
+Checkov, and Trivy when it has no images, need a directory. `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` resolve it in a fixed order and stop at the first hit.
 
 ```mermaid caption="How cloudg run picks the directories for Checkov and Trivy fs"
 flowchart TD
@@ -176,17 +178,15 @@ The last step is the interesting one. With `--terraform` (or `terraform.enabled:
 cloudg run -p aws --regions us-east-1 --terraform --scanners checkov,trivy
 ```
 
-`cloudg scan` is older and simpler. Its `--iac-dir` defaults to `.`, so Checkov (and the Trivy filesystem fallback) scan the working directory unless you say otherwise.
+`cloudg scan` follows the first two steps: `--iac-dir`, then `scanners.iac_directories`. It writes no Terraform recreation, so with neither set Checkov and the Trivy filesystem scan are skipped with a warning.
 
 ## Container images: --images
 
-`--images` takes a comma-separated list of full image references. Without it, `cloudg run` falls back to `scanners.trivy_images`. If neither is set, the CLI commands run `trivy fs` on the IaC directories instead, and `cloudg run` skips Trivy with a warning when there are no directories either.
-
-`CloudGEngine.scan()` has no filesystem fallback. From Python, Trivy only runs when there are images, either from the `images` argument or from `config.scanners.trivy_images`.
+`--images` takes a comma-separated list of full image references. Without it, `cloudg run` and `cloudg scan` fall back to `scanners.trivy_images`. If neither is set, they run `trivy fs` on the IaC directories instead, and skip Trivy with a warning when there are no directories either. `CloudGEngine.scan()` does the same with its `images` argument and `config.scanners.trivy_images`.
 
 ## Configuration
 
-Every key below lives under `scanners:` in `config.yaml`. They apply to `cloudg run` and `CloudGEngine.scan()`; `cloudg scan` ignores all of them. The full reference is on the [scanners config page](/reference/config/scanners/).
+Every key below lives under `scanners:` in `config.yaml`. They apply to `cloudg run`, `cloudg scan` (pass the file with `cloudg -c config.yaml scan ...`) and `CloudGEngine.scan()`. The full reference is on the [scanners config page](/reference/config/scanners/).
 
 ```yaml title="config.yaml"
 scanners:
@@ -211,55 +211,65 @@ cloudg -c config.yaml run -p aws --regions us-east-1
 
 ## Parallelism and timeouts
 
-Every scanner target becomes one job in a thread pool: one Prowler job per provider, one ScoutSuite job per provider, one Checkov job per IaC directory, one Trivy job for all images (or all directories), and one IAM linter job. The pool has `len(scanners) + len(providers) + 1` workers, with a floor of two, so for `cloudg run -p all` with all five scanners that is nine workers. Jobs beyond that wait their turn. Since each job is mostly a subprocess, the threads spend their time waiting and the real CPU load comes from the scanners themselves.
+Every scanner target becomes one job in a thread pool: one Prowler job per provider, one ScoutSuite job per provider, one Checkov job per IaC directory, one Trivy job for all images (or all directories), one IAM linter job and one job per plugin. The pool has one worker per job, so every job starts at once. Since each job is mostly a subprocess, the threads spend their time waiting and the real CPU load comes from the scanners themselves.
 
-The time limits that actually stop a scanner are the subprocess timeouts inside each wrapper:
+`scanners.timeout_seconds` (default 3600, minimum 60) is the subprocess timeout of each scanner process:
 
-| Scanner | Subprocess timeout | What happens when it fires |
+| Scanner | Timeout applies to | What happens when it fires |
 |---|---|---|
-| Prowler | 3600 s | Process killed, no findings from that provider |
-| ScoutSuite | 3600 s | No findings from that provider |
-| Checkov | 1800 s per directory | No findings from that directory |
-| Trivy | 1800 s per image or directory | That image or directory is skipped, the rest continue |
+| Prowler | each provider's run | Process killed, the job fails, no findings from that provider |
+| ScoutSuite | each provider's run | The job fails, no findings from that provider |
+| Checkov | each directory | The job fails, no findings from that directory |
+| Trivy | each image or directory | The job fails; findings from the images or directories already scanned are kept |
 
-`scanners.timeout_seconds` (default 3600, minimum 60) is passed to the wait on each job's result. In 0.6.0 that wait only happens after the job has already finished, so the setting does not cut a slow scanner short. Plan around the per-tool limits above.
+A job that times out or cannot start shows as failed (`...: did not finish`) in the progress display, its reason is printed when the pool has finished, and `CloudGEngine.scan()` reports it through `on_error`. The other jobs carry on.
 
 ## When something goes wrong
 
-A missing binary does not fail the run. The wrapper logs a warning such as `Prowler is not installed. Install with: pip install prowler. Skipping Prowler scan.` and returns no findings. The progress display then shows a tick and `Prowler: 0 findings`, which looks exactly like a clean scan. Read the warnings, or check the binaries before you trust a zero:
+A missing binary does not fail the run on its own. The scanner is left out before the pool starts and listed as skipped, so it is never mistaken for a clean scan. When none of the requested scanners can run, `cloudg scan` says so and exits with status 1:
 
 ```console
 $ cloudg scan -p aws --scanners prowler,checkov --iac-dir ./infra
-[21:50:50] WARNING  Checkov is not installed. Install with: pip install checkov.
-                    Skipping Checkov scan.
-           WARNING  Prowler is not installed. Install with: pip install prowler.
-                    Skipping Prowler scan.
-  ✓ Prowler: 0 findings            0:00:00
-  ✓ Checkov: 0 findings            0:00:00
-
-  ✓ Total: 0 findings
-  ✓ Raw findings: reports/raw-findings.json
+──────────────────────────────── Security Scan ─────────────────────────────────
+╭──────────────── Scan Configuration ─────────────────╮
+│         Provider  aws                               │
+│         Scanners  prowler, checkov                  │
+│  IaC directories  ./infra                           │
+│           Assets  none (IAM linter needs --assets)  │
+│          Timeout  3600s per scanner                 │
+╰─────────────────────────────────────────────────────╯
+  ⊘ ScoutSuite: not enabled
+  ⊘ Trivy: not enabled
+  ⊘ IAM linter: not enabled
+  ⊘ Prowler: not installed (pip install prowler)
+  ⊘ Checkov: not installed (pip install checkov)
+╭─────────────────────────── ✗ No scanner could run ───────────────────────────╮
+│ None of the requested scanners (prowler, checkov) could run; see the notes   │
+│ above.                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Other failures follow the same rule: one scanner's problem never stops the others.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `0 findings` from a scanner straight away | Binary not on `PATH` | Install it, or run inside the Docker image |
+| `<scanner>: not installed` | Binary not on `PATH` | Install it, or run inside the Docker image |
+| `<scanner>: did not finish`, then `timed out after 3600s` | The run took longer than `scanners.timeout_seconds` | Raise `scanners.timeout_seconds`, or narrow the scan (regions, `--severity` in the extra args) |
+| `IAM linter: skipped, no collected assets to lint` | `cloudg scan` without `--assets`, or an empty inventory | Pass `--assets` with an inventory or map file |
 | `[Prowler] Exited with code 3 after ...` | Prowler found failing checks | Normal; findings are still parsed |
 | `Checkov: nothing to scan; pass --iac-dir, ...` | No `--iac-dir`, no `iac_directories`, no Terraform recreation | Pass `--iac-dir` or add `--terraform` |
 | `Trivy: nothing to scan` | No images and no IaC directories | Pass `--images` or set `scanners.trivy_images` |
 | `No ScoutSuite results found in ...` | ScoutSuite failed before writing results, often authentication | Run the printed `scout` command by hand to see its error |
-| `<name> failed: ...` in the progress list | The wrapper raised an exception | Run with `cloudg -v` for the traceback |
+| `<name>: failed` in the progress list | The wrapper raised an exception | Run with `cloudg -v` for the traceback |
 
-From Python, set `engine.on_error` to see failures as they happen. It receives the job name (`prowler-aws`, `checkov-./infra`, `trivy`, `iam`) and the exception. A missing binary is not an error there either; it just yields an empty list.
+From Python, set `engine.on_error` to see failures as they happen. It receives the job name (`prowler-aws`, `checkov-./infra`, `trivy`, `trivy-fs`, `iam`, a plugin's name, or `scanner_auth` for AWS credentials that did not resolve) and the exception. A missing binary is not an error there; it is logged as a warning and the scanner is skipped.
 
 ## Where raw output lands
 
 | Scanner | `cloudg run` and `CloudGEngine.scan()` | `cloudg scan` |
 |---|---|---|
-| Prowler | `<output>/prowler/<provider>/*.json` (ASFF) | `<output>/prowler/*.json` |
-| ScoutSuite | `<output>/scoutsuite/<provider>/` (HTML report and `scoutsuite-results/scoutsuite_results_*.js`) | `<output>/scoutsuite/` |
+| Prowler | `<output>/prowler/<provider>/*.json` (ASFF) | the same |
+| ScoutSuite | `<output>/scoutsuite/<provider>/` (HTML report and `scoutsuite-results/scoutsuite_results_*.js`) | the same |
 | Checkov | Not saved (read from stdout) | Not saved |
 | Trivy | Not saved (read from stdout) | Not saved |
 | All findings | Normalised into `findings.json` and `report.html` | `raw-findings.json`, before normalisation |
@@ -274,20 +284,22 @@ The Prowler and ScoutSuite directories are in the native formats that `cloudg in
 cloudg ingest --prowler ./reports/prowler/aws/ --scoutsuite ./reports/scoutsuite/aws/ -o ./reports-again
 ```
 
-`raw-findings.json` from `cloudg scan` is a JSON list of cloudg `Finding` objects, not a scanner format. `cloudg report` can't read it. To turn it into reports, normalise it in Python as shown in [Reports](/guides/reports/#from-raw-findings), or merge it into an inventory map with [`cloudg map --findings`](/guides/inventory-mapping/).
+`raw-findings.json` from `cloudg scan` is a JSON list of cloudg `Finding` objects, not a scanner format. `cloudg report -i raw-findings.json` normalises it and writes the reports, and [`cloudg map --findings`](/guides/inventory-mapping/) merges it into an inventory map.
 
 ## Scan and run compared {#scan-and-run-compared}
 
 | | `cloudg scan` | `cloudg run` (phase 3) |
 |---|---|---|
 | Collects assets first | No | Yes |
-| Default scanners | `prowler,checkov` | `scanners.enabled` (all five) |
-| Reads `scanners.*` config keys | No | Yes |
-| Providers | One, from `-p` (default `aws`) | Every provider from `-p` |
-| IaC directory when none is given | `.` | Config, then the Terraform recreation, else skipped |
-| Trivy without images | `trivy fs` on the IaC directory | `trivy fs` on the resolved directories, else skipped |
-| IAM linter and reachability | Never | Whenever assets were collected |
-| Writes | `raw-findings.json` | `findings.json`, `report.html`, `topology.svg` and the graph files |
+| Default scanners | `scanners.enabled` (all five) | `scanners.enabled` (all five) |
+| Reads `scanners.*` config keys and AWS credentials from `-c` | Yes | Yes |
+| Providers | One, from `-p` (`aws`, `azure` or `gcp`; default `aws`) | Every provider from `-p` |
+| IaC directory when none is given | `scanners.iac_directories`, else skipped | Config, then the Terraform recreation, else skipped |
+| Trivy without images | `trivy fs` on the resolved directories, else skipped | the same |
+| IAM linter | With `iam` enabled and `--assets` | With `iam` enabled, on the collected assets |
+| Reachability findings | Never | Always |
+| Exit status | 1 when no requested scanner could run, or all of them failed | 0, or 3 when collection failed for every target |
+| Writes | `raw-findings.json` | the reports in `report.formats` and the graph files |
 
 ## Next
 

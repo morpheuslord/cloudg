@@ -9,9 +9,9 @@ source: cloudg/normaliser.py
 since: "0.6.0"
 ---
 
-Compliance mapping is the last step of normalisation, so it runs wherever findings are normalised: phase 4 of `cloudg run`, `cloudg ingest`, `CloudGEngine.normalise_findings()` and `run_from_reports()`. Its output is a list of `ComplianceResult` records in `findings.json` and the Compliance tab of `report.html`.
+Compliance mapping is the last step of normalisation, so it runs wherever findings are normalised: phase 4 of `cloudg run`, `cloudg ingest`, `cloudg report` on raw findings, `CloudGEngine.normalise_findings()`, `scan()` followed by normalisation, `run_pipeline()`, `run_from_reports()` and the MCP server's dataset loaders. Its output is a list of `ComplianceResult` records in `findings.json` and the Compliance tab of `report.html`.
 
-One thing to understand before reading any of that output: a control only appears when at least one finding maps to it. cloudg has no list of the controls you passed, because scanners report failures (Prowler's passing checks are dropped while parsing). Every `ComplianceResult` it writes has status `FAIL`. Read the compliance output as "these controls have open findings", not as a full audit score.
+One thing to understand before reading any of that output: a control only appears when cloudg has evidence about it. A control that a finding maps to is `FAIL`. A control that only a passing Prowler check maps to is `PASS`: Prowler reports the checks it ran and passed (ASFF `Compliance.Status: PASSED`, OCSF `status_code: PASS`), and cloudg keeps their names. Every other control was not assessed and gets no result at all. Checkov, Trivy, ScoutSuite and the IAM linter report failures only, so without Prowler the output is all `FAIL`. Read it as "these controls have open findings, and these passed Prowler's checks", not as a full audit score.
 
 ## The rulesets
 
@@ -73,7 +73,8 @@ flowchart TD
   Q2 -->|yes| G
   Q2 -->|no| T4["Tier 4: built-in fallback patterns"]
   T4 --> G
-  G --> CR["ComplianceResult per control, status FAIL"]
+  G --> CR["ComplianceResult per control: FAIL"]
+  P["Prowler passing checks"] --> PC["PASS for ruleset controls no finding fails"]
 ```
 
 ### Tier 1: what the scanner said
@@ -83,7 +84,7 @@ Each parser sets `compliance_frameworks` while it reads the native output. These
 | Source | Tags |
 |---|---|
 | Prowler | From `Compliance.RelatedRequirements`: `CIS`, `NIST-800-53`, `PCI-DSS`, `GDPR`, `HIPAA`, `SOC2` (substring match) |
-| ScoutSuite | The rule's `references` list, copied as is |
+| ScoutSuite | `CIS` when one of the rule's `compliance` entries names a CIS benchmark; the `references` URLs are not used |
 | Checkov | `CIS` always; `NIST-800-53` or `PCI-DSS` when the check ID contains those strings |
 | Trivy | `CVE` for vulnerabilities, `CIS` for misconfigurations, none for secrets |
 | IAM linter | `CIS`, `NIST-800-53` and, for wildcard actions, `SOC2` |
@@ -91,7 +92,7 @@ Each parser sets `compliance_frameworks` while it reads the native output. These
 
 ### Tier 2: exact check IDs
 
-This tier always runs. cloudg splits the finding's `source_finding_id` on `-`, `/`, `:` and whitespace, then looks every piece up in the `checks` lists of all loaded rulesets. A Prowler ASFF ID such as `prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-abc` yields the piece `s3_bucket_default_encryption`, which appears in 28 controls across eight AWS frameworks. Each hit adds the framework and records the exact control ID and title.
+This tier always runs. cloudg splits the finding's `source_finding_id` on `-`, `/`, `:` and whitespace, then looks every piece up in the `checks` lists of all loaded rulesets. When deduplication merged findings from several scanners into one, the source IDs of all of them are looked up, so a Prowler finding merged with a Checkov one keeps Prowler's exact controls. A Prowler ASFF ID such as `prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-abc` yields the piece `s3_bucket_default_encryption`, which appears in 28 controls across eight AWS frameworks. Each hit adds the framework and records the exact control ID and title.
 
 Prowler check names never contain dashes, so they survive the split intact. A Checkov ID such as `CKV_AWS_19` does too, which means you can list Checkov IDs in your own rulesets. Trivy IDs (`AVD-AWS-0088`, `CVE-2024-0001`) and ScoutSuite rule names (`s3-bucket-no-encryption`) are split into fragments, so they can't be matched by this tier.
 
@@ -99,7 +100,7 @@ Prowler check names never contain dashes, so they survive the split intact. A Ch
 
 Only for findings that still have no framework at all after tiers 1 and 2. cloudg joins the title and description, lowercases them, and runs every `patterns` regex of every ruleset against that text (`re.search`, case-insensitive). A match adds the framework name. It does not record which control matched.
 
-In practice few findings get this far, since Checkov, Trivy vulnerabilities and misconfigurations, and the IAM linter always tag something in tier 1. The usual candidates are ScoutSuite findings with an empty `references` list, Prowler findings whose requirements match none of the six prefixes, Trivy secrets, and reachability findings for unexpected internet exposure.
+In practice few findings get this far, since Checkov, Trivy vulnerabilities and misconfigurations, and the IAM linter always tag something in tier 1. The usual candidates are ScoutSuite findings without a CIS `compliance` entry, Prowler findings whose requirements match none of the six prefixes, Trivy secrets, and reachability findings for unexpected internet exposure.
 
 ### Tier 4: built-in fallback
 
@@ -115,23 +116,25 @@ After tagging, cloudg groups findings by framework and control ID and writes one
 | `framework` | `str` | The framework name, such as `NIST-CSF-AWS` or `CIS` |
 | `control_id` | `str` | See below |
 | `control_title` | `str \| None` | The ruleset's control title for exact matches, otherwise `"<framework> <control_id>"` |
-| `status` | `ComplianceStatus` | Always `FAIL` |
-| `finding_ids` | `list[str]` | IDs of every finding mapped to this control |
+| `status` | `ComplianceStatus` | `FAIL` when a finding maps to the control, `PASS` when only passing checks do |
+| `finding_ids` | `list[str]` | IDs of every finding mapped to this control; empty for `PASS` |
 | `resource_arn` | `str \| None` | Always `None` |
 
-`ComplianceStatus` defines four values: `PASS`, `FAIL`, `NOT_APPLICABLE` and `MANUAL`. The normaliser in 0.6.0 only produces `FAIL`. The other values are there for your own code, or for results you build yourself.
+`ComplianceStatus` defines four values: `PASS`, `FAIL`, `NOT_APPLICABLE` and `MANUAL`. The normaliser produces `FAIL` and `PASS`. The other two are there for your own code, or for results you build yourself.
+
+A `PASS` result needs an exact match: the passing check's name has to appear in a ruleset control's `checks` list (tier 2), and no finding may map to that control. Its `control_id` and `control_title` come from the ruleset. Passing checks travel from the Prowler parser to the normaliser on the parsed list (see [FindingsNormaliser](/api/findingsnormaliser/)); `cloudg run`, `cloudg ingest`, `CloudGEngine.scan()`, `run_pipeline()`, `run_from_reports()`, `ingest_reports()`, `parse_report()` and the MCP loaders all carry them through.
 
 The `control_id` depends on how the framework was attached:
 
 | How the framework was attached | `control_id` | Example |
 |---|---|---|
 | Tier 2 exact match | The ruleset control ID | `ds_1` (NIST-CSF-AWS), `3.5.1.30` (PCI-AWS) |
-| Tier 1, 3 or 4, Prowler finding | `<framework>/` plus the third and fourth tokens of the ASFF ID | `CIS/s3_bucket_default_encryption-123456789012` |
+| Tier 1, 3 or 4, Prowler finding | `<framework>/<check name>`, the check name read from the finding ID | `CIS/s3_bucket_default_encryption` |
 | Tier 1, 3 or 4, Checkov finding | `<framework>/<check_id>` | `CIS/CKV_AWS_19` |
 | Tier 1, 3 or 4, Trivy CVE | `<framework>/<CVE id>` | `CVE/CVE-2024-0001` |
 | Anything else | `<framework>-aggregate` | `GDPR-aggregate` |
 
-Two details follow from that table. For Prowler, the fourth token of the ASFF ID is usually the account ID, so the same check in two accounts gives two control IDs under the coarse `CIS` tag. And the `-aggregate` buckets collect every finding that reached a framework without a specific control: ScoutSuite findings, pattern matches and Trivy misconfigurations.
+Two details follow from that table. For Prowler, the account and region in the finding ID are not part of the control ID, so the same check failing in two accounts is one control with two findings. And the `-aggregate` buckets collect every finding that reached a framework without a specific control: ScoutSuite findings, pattern matches and Trivy misconfigurations. A merged finding takes its control ID from the first of its source IDs that yields one.
 
 ## Reading the output
 
@@ -185,7 +188,7 @@ The coarse tier 1 tags and the ruleset frameworks appear side by side: `CIS` nex
 
 ### report.html {#report-html}
 
-The Compliance tab shows one card per framework with Pass and Fail counts and a percentage bar. Fail is the number of distinct controls with findings. Since every result is `FAIL`, Pass is always 0 and the bar reads 0%; treat the card as a count of affected controls. The Analytics tab charts the same counts, and the detail panel of each finding lists its frameworks. [Reports](/guides/reports/) covers the rest of the page.
+The Compliance tab shows one card per framework with Pass and Fail counts and a percentage bar. Fail is the number of distinct controls with findings, and Pass the number of controls that only passing Prowler checks map to. When the input had no passing-check data (no Prowler output, or only failing records), Pass is 0 and the bar reads 0%; treat such a card as a count of affected controls. The Analytics tab charts the same counts, and the detail panel of each finding lists its frameworks. [Reports](/guides/reports/) covers the rest of the page.
 
 ### compliance-map.json
 
@@ -304,7 +307,7 @@ A few rules of thumb for writing them:
 - Several files may use the same `framework` name; their controls are combined. That is how the hand-written and generated CIS files share `CIS-AWS`.
 - A file that fails to parse is logged as a warning and skipped, and the rest still load. Run with `cloudg -v` to see `Loaded N rules from <file>` for each one.
 
-`rulesets.load_external` is present in the config model but nothing reads it in 0.6.0; rulesets always load.
+`rulesets.load_external: false` skips the YAML rulesets in `rules_dir`. Compliance then comes only from tier 1 (the scanners' own tags) and the tier 4 fallback patterns, so there are no exact control IDs and no `PASS` results. `check_equivalence.yaml` is still loaded, so cross-scanner deduplication works as before.
 
 ### Refreshing the generated rulesets
 

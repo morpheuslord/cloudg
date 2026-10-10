@@ -9,13 +9,13 @@ intro: |
 
 Like `cloudg run`, the command starts from the config loaded by the root command (`cloudg -c config.yaml map ...`), or from built-in defaults when there is no `-c`. It then applies three groups of flags. A flag you leave out never clears a value the config set.
 
-Scope flags come first. `-p/--provider` replaces `providers` (default `aws`; `all` means all three). `--regions` replaces the region list of every provider, and `all` turns into the `ALL` sentinel that triggers discovery. `--profile`, `--subscription-id` and `--project-id` work as they do on `run`. `--accounts` sets `aws.accounts` and `--role-name` sets `aws.role_name`.
+Scope flags come first. `-p/--provider` replaces `providers` (default `aws`; `all` means all three). `--regions` replaces the region list of every provider, and `all` turns into the `ALL` sentinel that triggers discovery. `--profile`, `--subscription-id` and `--project-id` work as they do on `run`. `--accounts` sets `aws.accounts` and `--role-name` sets `aws.role_name`. An account list needs a role name, from the flag or the config: `--accounts` without one stops with exit status 2 before any API call, unless `--org` is on (the member role then defaults to `AWSControlTowerExecution`).
 
 Organization flags fill `aws.organization`. `--org/--no-org` sets `enabled`, `--org-role` sets `role_name`, `--ou` and `--exclude-account` set `include_ous` and `exclude_accounts`, and `--ct-home-region` sets `home_region`.
 
 Inventory flags fill `inventory`. `--services` and `--exclude-services` take comma-separated family or collector names. `--kubernetes/--no-kubernetes` and `--cloud-control/--no-cloud-control` only change the config when you pass them, so the config file decides otherwise (both default to on).
 
-`--sweep/--no-sweep` is different. It defaults to on and is always passed to the mapper, so it overrides `inventory.tagging_sweep` from the config file every time. To turn the tagging sweep off you have to pass `--no-sweep`.
+`--sweep/--no-sweep` works the same way: without the flag, `inventory.tagging_sweep` from the config decides (on by default).
 
 The command prints the result as a "Map Configuration" panel before it calls any API. For `cloudg map -p aws --org --org-role cloudg-readonly --ou Workloads --regions all --services containers,serverless,security` it shows:
 
@@ -181,8 +181,8 @@ Written to `-o/--output` (default `./reports`). The [output files reference](/re
 | Code | When |
 |---|---|
 | 0 | The map was written, even if some collectors failed |
-| 1 | Mapping failed as a whole, for example no usable credentials. cloudg prints an "Inventory mapping failed" panel. |
-| 2 | Click rejected an option, such as `-p aws2` |
+| 1 | Mapping failed as a whole, for example no usable credentials, or an `--ou` that matches no OU in the organization. cloudg prints an "Inventory mapping failed" panel. |
+| 2 | Click rejected an option, such as `-p aws2`, or `--accounts` (or `aws.accounts`) was given without a role name |
 
 ## Related
 

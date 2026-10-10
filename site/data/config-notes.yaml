@@ -41,20 +41,20 @@ inventory.cloud_control_concurrency: Parallel Cloud Control list calls (1 to 32)
 inventory.exclude_services: Service families or collector names to skip.
 inventory.kubernetes_timeout: Seconds to wait on each Kubernetes API call (1 to 120).
 inventory.max_images_per_repository: Image digests sampled per ECR repository (0 to 1000).
-graph.persist_graphml: Write the graph to GraphML next to the reports.
-graph.max_nodes_warn: Log a warning when the graph has more nodes than this.
-graph.compute_attack_paths: Search the graph for attack paths during analysis.
-graph.export_cytoscape: Also export the graph in Cytoscape JSON format.
+graph.persist_graphml: "`cloudg run` writes the graph as `topology.graphml` in the output directory."
+graph.max_nodes_warn: "`cloudg run` and `CloudGEngine` log a memory warning when they build a graph from more assets than this. `0` turns the warning off."
+graph.compute_attack_paths: "`cloudg run` searches the graph for lateral movement paths and prints their count."
+graph.export_cytoscape: "`cloudg run` also writes the graph as `topology-cytoscape.json`, for Cytoscape.js."
 ontology.enabled: Build and export the ontology.
 ontology.export_formats: Serialisations to write.
-ontology.include_raw_metadata: Copy each asset's raw provider metadata into the ontology.
+ontology.include_raw_metadata: "Copy each asset's metadata dict into the ontology as a JSON string (`cmp:hasRawMetadata`)."
 rag.enabled: Write RAG chunks.
-rag.max_chunk_tokens: Upper bound on the size of one chunk, in tokens (minimum 100).
+rag.max_chunk_tokens: "Size budget of one chunk's text, in tokens counted as about 4 characters each (minimum 100). Lists that do not fit end with an `... and N more` line."
 terraform.enabled: Write Terraform files.
-terraform.output_dir: Where the Terraform files go.
-report.formats: Report formats to write.
-report.output_dir: Default output directory for reports.
-rulesets.load_external: Load the YAML rulesets from rules_dir.
+terraform.output_dir: "Where the Terraform files go. Unset, or left at `./reports/terraform`, they go to `terraform/` under the run's output directory (`-o`, or the `output_dir` given to `CloudGEngine`); any other value is used as given."
+report.formats: "Reports that `cloudg run`, `CloudGEngine.run_pipeline()` and `run_from_reports()` write: `html`, `json`, `svg`. `run_from_reports()` never writes `svg`. Unknown names are dropped with a warning. `cloudg report` and `cloudg ingest` use `--format` instead."
+report.output_dir: "Output directory of the `CloudGEngine` methods called without `output_dir`, and the MCP workspace root. The CLI commands use `-o` instead."
+rulesets.load_external: "Load the YAML rulesets from `rules_dir`. `false` maps compliance only from the scanners' own fields and the built-in fallback patterns, with no exact control IDs. `check_equivalence.yaml` is loaded either way."
 ratelimit.enabled: Turn the shared rate limiter on or off for every provider.
 ratelimit.aws.services: Per-service overrides of the built-in limits.
 general.verbose: Log at debug level.

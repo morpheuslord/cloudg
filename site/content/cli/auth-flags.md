@@ -42,7 +42,7 @@ flowchart TD
 3. A named profile, from `--profile`.
 4. The boto3 default chain: environment keys, the shared credentials file, the SSO cache, container credentials and the instance role.
 
-Then the role hop. If `--aws-role-arn` is set and step 2 did not already use it, cloudg calls `sts:AssumeRole` into it with the session name `aws.role_session_name` (default `cloudg-scan`) for one hour, passing `--aws-external-id` as `ExternalId` when given. Without a role ARN, `aws.accounts` plus `aws.role_name` in the config build a role ARN per account instead.
+Then the role hop. If `--aws-role-arn` is set and step 2 did not already use it, cloudg calls `sts:AssumeRole` into it with the session name `aws.role_session_name` (default `cloudg-scan`) for one hour, passing `--aws-external-id` as `ExternalId` when given. When cloudg collects the accounts in `aws.accounts`, it then assumes `aws.role_name` in each of them, from the `--aws-role-arn` session when there is one (role chaining). An `aws.accounts` list without `aws.role_name` is rejected before anything runs.
 
 One interaction catches people on EKS. With IRSA, `AWS_WEB_IDENTITY_TOKEN_FILE` is already set in the pod. If you then pass `--aws-role-arn`, cloudg federates straight into that role with the pod's token, instead of assuming it from the pod's own role. The target role's trust policy must accept the cluster's OIDC provider.
 
@@ -82,18 +82,17 @@ Methods 1 to 3 need the tenant ID and client ID. If either is missing, cloudg sk
 
 ## What the scanners get
 
-The flags above configure cloudg's own collection. The scanner subprocesses that `cloudg run` starts receive much less:
+The flags above configure cloudg's own collection. `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` resolve the same AWS credentials once more, in the same order, and hand them to the scanner subprocesses:
 
 | Scanner | Credentials passed |
 |---|---|
-| Prowler (AWS) | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the direct keys, `AWS_DEFAULT_REGION` set to the first entry of `aws.regions`, and `-p` with the `--profile` flag value. Everything else in cloudg's environment is inherited. |
-| ScoutSuite (AWS) | `--profile` with the `--profile` flag value |
+| Prowler and ScoutSuite (AWS) | With `role_arn` (`--aws-role-arn`, also through `--aws-web-identity-token-file`): cloudg assumes the role and exports its temporary `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. With direct keys: the keys and the session token. Otherwise: `aws.profile` (or `--profile`) as `-p` for Prowler and `--profile` for ScoutSuite. Everything else in cloudg's environment is inherited. |
 | Prowler and ScoutSuite (Azure, GCP) | nothing; they use their own defaults and whatever `*_extra_args` you configure |
 | Checkov, Trivy | nothing; they scan files and images |
 
-In particular, `--aws-session-token`, role assumption and web identity federation are not passed on, and `aws.profile` from the config is not either (only the flag is). If temporary keys came in through flags, Prowler gets the key and secret without the token, and its calls fail. When you authenticate any way other than a profile or plain keys, export the credentials in the environment before `cloudg run`, so the scanners inherit them.
+Explicit regions in `aws.regions` go to Prowler as `-f <regions>` and to ScoutSuite as `--regions <regions>`, unless the `*_extra_args` already set them. With `--regions all` nothing is passed and both scan every enabled region. Prowler's `AWS_DEFAULT_REGION` is the first listed region and is never `ALL`.
 
-With `--regions all`, the first entry of `aws.regions` is the literal `ALL`, and that is what Prowler receives as `AWS_DEFAULT_REGION`. If Prowler then fails on the region, list the regions explicitly instead of using `all`.
+The scanners audit the account those credentials reach: the caller's, or `role_arn`'s. They are not run once per member account of `aws.accounts` or `--org`; only collection fans out over those. When the role cannot be assumed, Prowler and ScoutSuite are skipped for AWS and the error is shown (and reported to `on_error` as `scanner_auth`).
 
 ## Examples
 

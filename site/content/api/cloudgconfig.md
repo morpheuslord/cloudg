@@ -29,7 +29,7 @@ flowchart TD
   E -->|no| W["log a warning"] --> D
   E -->|yes| Y["yaml.safe_load"]
   Y --> V["CloudGConfig.model_validate"]
-  V --> U["warn about unknown ratelimit keys"]
+  V --> U["warn about unknown keys"]
   U --> C["CloudGConfig"]
   V -->|invalid value| X["pydantic ValidationError"]
 ```
@@ -56,13 +56,13 @@ Each section is its own pydantic model in `cloudg.config`. You can import them t
 | `rulesets` | `RulesetConfig` | the YAML rules directory used by the normaliser |
 | `ratelimit` | `RateLimitConfig` | throttling: per-provider `ProviderRateLimitConfig`, per-service `ServiceRateLimitConfig`, live-run guard |
 
-Three plain fields sit at the top level too: `log_file` and `verbose` (read by the CLI only) and `concurrency_limit` (1 to 50, default 5). The field description calls it "max concurrent API calls", but what it bounds is the number of collection units running at once: one AWS account in one region, one Azure subscription or one GCP project. It applies to `collect()` and `map_inventory()` alike.
+Three plain fields sit at the top level too: `log_file` and `verbose` (read by the CLI only) and `concurrency_limit` (1 to 50, default 5). It bounds the number of collection units running at once: one AWS account in one region, one Azure subscription, or one GCP project or organization. All providers share the limit, and it applies to `cloudg run`, `cloudg map`, `collect()` and `map_inventory()` alike. API call rates are set separately, under `ratelimit`.
 
 The old single-provider form still works. `CloudGConfig(provider="azure")` sets `providers` to `["azure"]`, as long as `providers` was left at its default. `provider` itself is excluded from `model_dump()`.
 
 ### Unknown keys
 
-Every section ignores keys it does not define. Only `ratelimit` says so: unknown keys there, under `ratelimit.<provider>` and under `ratelimit.<provider>.services.<name>`, produce a warning such as `Unknown config key ratelimit.aws.max_rsp is ignored`. A misspelt key anywhere else (`aws.regoins`, `scanners.enable`) is dropped without a message, and the field keeps its default. The [strict loader](#reject-unknown-keys) below closes that gap.
+Every section ignores keys it does not define, and says so. An unknown key at the top level or in any section, down to `ratelimit.<provider>.services.<name>`, produces a warning such as `Unknown config key aws.regoins is ignored`, and the field it was meant for keeps its default. The run goes on. If you would rather stop on a typo, use the [strict loader](#reject-unknown-keys) below.
 
 ### Environment variables
 
@@ -203,11 +203,11 @@ Validation runs when the model is built, not when you assign to it. `config.aws.
 
 The patterns are enforced at construction: `aws.retry_mode` must be `legacy`, `standard` or `adaptive`; `gcp.collection_scope` must be `auto`, `organization` or `project`; `rag.chunk_strategy` must be one of `entity`, `community`, `relation_group`, `hybrid`. Bounded integers (`aws.max_retries` 1 to 30, `concurrency_limit` 1 to 50, `scanners.timeout_seconds` at least 60) raise a `ValidationError` when out of range.
 
-`rulesets.rules_dir` must be a string. Writing `rules_dir: null` in YAML fails validation; leave the key out to get the rules shipped inside the package.
+`rulesets.rules_dir: null`, an empty string and a missing key all mean the rules shipped inside the package.
 
 `model_dump()` includes credential fields such as `aws.secret_access_key` and `azure.client_secret` in plain text when they are set. Exclude them before logging a config: `config.model_dump(exclude={"aws": {"secret_access_key", "session_token"}, "azure": {"client_secret"}})`.
 
-Some keys are accepted but not read by the engine in 0.6.0: `graph.persist_graphml`, `graph.max_nodes_warn`, `graph.export_cytoscape`, `ontology.include_raw_metadata`, `rag.chunk_strategy`, `report.inline_js` and `rulesets.load_external`. `graph.compute_attack_paths`, `report.formats` and `report.output_dir` are read by the CLI commands only. `CloudGEngine.analyze()` computes attack paths whatever `graph.compute_attack_paths` says.
+`graph.persist_graphml`, `graph.export_cytoscape` and `graph.compute_attack_paths` are read by `cloudg run` only. `CloudGEngine.analyze()` computes attack paths whatever `graph.compute_attack_paths` says, and writes no GraphML or Cytoscape file. `report.output_dir` is the default output directory of the `CloudGEngine` methods and of the MCP workspace; the CLI commands use `-o` instead. `ontology.include_raw_metadata` is read by `cloudg run` and `CloudGEngine.analyze()`, not by the MCP ontology build.
 
 `InventoryMapper` deep-copies the config before a run, so organization discovery (which rewrites `aws.accounts`, `aws.role_name` and possibly `aws.regions`) never changes the object you passed in.
 

@@ -185,7 +185,7 @@ The generic scan found the ARN of `uploads-legacy` inside `metadata["notes"]` an
 
 ## Notes
 
-A linker instance is built for one asset list and one `link()` call. A second call remembers the edges of the first and returns an empty list, while appending the same unresolved references to `linker.unresolved` again. Build a new `RelationshipLinker` when you need to link again.
+A linker instance is built for one asset list. `link()` starts from scratch on every call, so calling it again returns the same edges and leaves the same `linker.unresolved` list. Only edges registered with `seed_existing()` are left out of every call, and account placeholders are created once and reused.
 
 The linker never modifies the assets you pass in. It only reads `metadata`, `arn`, `name`, `account_id`, `region` and `asset_type`, plus `raw_data` for a few AWS rules (instance profiles, the raw Lambda `Role` field). Assets loaded from an exported map have empty `raw_data`, so those rules do not fire on them.
 

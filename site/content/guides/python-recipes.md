@@ -10,7 +10,7 @@ since: "0.6.0"
 
 The CLI is a thin layer over a public API, so anything `cloudg run` does you can do from Python, in pieces, with your own decisions in between. Each recipe below is one file you can save and run. The ones that only read scanner output work on any machine with `pip install cloudg`; the ones that collect need the provider extra (`pip install "cloudg[aws]"`) and credentials resolved as described in [authentication](/guides/authentication/).
 
-The sample inputs used in the offline recipes are ordinary scanner output: a Prowler `-M json-asff` directory, a `checkov --output json` file and `trivy image` / `trivy fs` JSON. [Ingesting existing output](/guides/ingesting/) lists exactly which fields each parser reads.
+The sample inputs used in the offline recipes are ordinary scanner output: a Prowler output directory (OCSF or `-M json-asff`), a `checkov --output json` file and `trivy image` / `trivy fs` JSON. [Ingesting existing output](/guides/ingesting/) lists exactly which fields each parser reads.
 
 ```mermaid caption="Where each recipe enters the pipeline"
 flowchart LR
@@ -66,7 +66,7 @@ reports: {'json': 'reports/findings.json', 'html': 'reports/report.html'}
  7.5  trivy              [Trivy/IaC] AVD-AWS-0088: S3 bucket encryption not enabled
 ```
 
-A path that does not parse is logged and skipped rather than raised, so an empty result usually means a wrong path. Prowler findings with `Compliance.Status: PASSED` are dropped at parse time. `result.errors` lists phases that failed (normalisation or reporting); with no collection, the graph, ontology and Terraform fields stay empty.
+A path that does not parse is logged and skipped rather than raised, so an empty result usually means a wrong path. Prowler records for passing checks give no finding; their check names only mark the compliance controls they cover as PASS. `result.errors` lists every failure of the run as `"<phase>: <message>"`; with no collection, the graph, ontology and Terraform fields stay empty.
 
 ## 2. Parse first, decide later
 
@@ -126,7 +126,7 @@ trivy image only: ['[Trivy] CVE-2024-0001: openssl (alpine)']
 
 ## 3. Stream findings into a SIEM
 
-`on_finding` is called once per finding after the scan (or ingest) phase. Hooks run inline in the engine and any exception they raise is swallowed, so the shipper below only puts findings on a queue and lets a worker thread batch them to an HTTP collector, keeping a local NDJSON spool either way.
+`on_finding` is called once per finding, as each scanner finishes during `scan()` (or once the reports are parsed, for ingest), with a copy of the finding. Hooks run inline in the engine and any exception they raise is swallowed, so the shipper below only puts findings on a queue and lets a worker thread batch them to an HTTP collector, keeping a local NDJSON spool either way.
 
 ```python title="stream_to_siem.py" hl="35-36,82"
 """Ship every cloudg finding to a SIEM over HTTP while the pipeline runs."""
@@ -421,7 +421,7 @@ cloudg map -p aws --regions all -o ./map-reports
 cloudg map -p aws --regions all -o ./map-reports --findings ./reports/raw-findings.json
 ```
 
-The overlay step needs no credentials. `asset-map.json` lists every asset with `finding_count`, `severity_breakdown` and `finding_ids`, sorted with the worst first; `compliance-map.json` groups affected assets by framework. The asset map matches a finding to an asset by ARN, asset id or exact name (the compliance map by ARN or id only), so scanner output that names resources by ARN (Prowler, ScoutSuite) overlays well, and IaC findings keyed by a Terraform address (Checkov) do not match a live asset at all. The CLI variant re-maps the account before merging; the Python one reuses the saved map.
+The overlay step needs no credentials. `asset-map.json` lists every asset with `finding_count`, `severity_breakdown` and `finding_ids`, sorted with the worst first; `compliance-map.json` groups affected assets by framework. Both maps match a finding to an asset by asset id, then ARN, then a name or ARN tail that only one asset has, so scanner output that names resources by ARN (Prowler, ScoutSuite) overlays well, and IaC findings keyed by a Terraform address (Checkov) do not match a live asset at all. The CLI variant re-maps the account before merging; the Python one reuses the saved map.
 
 ## 7. Link relationships into someone else's inventory
 

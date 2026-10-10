@@ -13,7 +13,7 @@ since: "0.6.0"
 `cloudg run` calls `ReachabilityAnalyzer(graph).generate_findings()` right after it builds the graph, and the results show up in `findings.json` with `source_tool` set to `cloudg-reachability`. The class answers two different questions, and they follow different edges:
 
 - What can the internet reach? `find_internet_exposed()` walks network-flow edges only, with the rules below.
-- What could a compromised resource reach? `compute_blast_radius(node)` follows every edge, identity included.
+- What could a compromised resource reach? `compute_blast_radius(node)` follows every edge, identity included, and stops at the internet placeholders.
 
 The analyzer works on the graph you pass in and changes it: `find_internet_exposed()` sets `is_internet_exposed=True` on every node it reaches. Pass `graph.copy()` if you need the original untouched (the MCP layer does).
 
@@ -195,7 +195,7 @@ CRITICAL Security group allows SSH (port 22) from 0.0.0.0/0  id=17cd5168
 web-1 exposure id: 4ec3a339
 flow edges: 10 of 14
 flow reversed: [('sg-alb', 'web-alb'), ('sg-db', 'orders-db'), ('sg-web', 'web-1')]
-blast radius of web-1: ['0.0.0.0/0', 'app-role', 'orders-api', 'orders-db', 'orders-fn', 'sg-alb', 'sg-db', 'sg-web'] depth 4 risk 6.0
+blast radius of web-1: ['0.0.0.0/0', 'app-role', 'orders-db', 'sg-db', 'sg-web'] depth 3 risk 4.5
 ```
 
 What the output shows:
@@ -206,7 +206,7 @@ What the output shows:
 - The ids are the same on every run. Run the script twice and compare.
 - The only edge leaving `sg-web` in the graph is its egress rule, which the walk skips. Its one flow hop is the attachment from `web-1`, walked backwards.
 
-The blast radius is a different, much wider question. From `web-1` it follows the IAM edges to `orders-db`, and it also follows the egress rule into the `0.0.0.0/0` placeholder and from there to everything the internet reaches. Read it as an upper bound.
+The blast radius is a different, wider question. From `web-1` it follows every edge type, so the IAM edges lead it to `orders-db`. It also follows the egress rule to the `0.0.0.0/0` placeholder but stops there: being able to send traffic to the internet does not put everything the internet reaches in the blast radius. Read it as an upper bound all the same.
 
 ### Flow-aware paths with NetworkX
 
@@ -237,7 +237,7 @@ The first path is the over-approximation at work: `sg-alb` admits 443 from the i
 
 ## Notes
 
-- `compute_blast_radius()` returns `reachable_nodes` (every descendant over every edge type), `depth` (the longest shortest-path distance) and `risk_score`: 0.5 per reachable node, plus 2.0 for each reachable `RDS_INSTANCE`, `AURORA_CLUSTER`, `AZURE_SQL`, `CLOUD_SQL` or `DYNAMODB_TABLE`, capped at 10.0. An unknown node gives `{"reachable_nodes": [], "depth": 0, "risk_score": 0.0}`.
+- `compute_blast_radius()` returns `reachable_nodes` (every node a breadth-first walk over every edge type reaches), `depth` (the longest shortest-path distance) and `risk_score`: 0.5 per reachable node, plus 2.0 for each reachable `RDS_INSTANCE`, `AURORA_CLUSTER`, `AZURE_SQL`, `CLOUD_SQL` or `DYNAMODB_TABLE`, capped at 10.0. The walk reaches the internet placeholders `0.0.0.0/0` and `::/0` but does not continue through them; only a walk that starts at a placeholder follows its edges. An unknown node gives `{"reachable_nodes": [], "depth": 0, "risk_score": 0.0}`.
 - `flow_hops()` can yield the same next node more than once when several edges lead there, and yields nothing for an unknown node. `flow_successors()` is the same walk without the edge data.
 - `network_flow_graph()` copies every node with its attributes and leaves the input graph alone. Each edge carries `edge_type` and `reversed`.
 - Graphs built by hand can carry a `ports` list on an edge, and the open-port check reads it next to `port_range`. `GraphBuilder` never copies `NetworkEdge.ports` onto the graph.

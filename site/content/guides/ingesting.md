@@ -74,7 +74,7 @@ docker run --rm \
 
 | Flag | Accepts |
 |---|---|
-| `--prowler` | An ASFF JSON or JSONL file, or a directory searched recursively for `*.json` |
+| `--prowler` | An OCSF or ASFF JSON or JSONL file, or a directory searched recursively for `*.json` |
 | `--scoutsuite` | A `scoutsuite_results*.js` file, or a report directory searched recursively for one |
 | `--checkov` | A Checkov JSON report, or a directory containing `results_json.json` |
 | `--trivy` | A `trivy image` or `trivy fs` JSON report, or a directory searched recursively for `*.json` |
@@ -195,29 +195,43 @@ Each parser expects one specific output format. Feed it anything else and the re
 
 ### Prowler
 
-Produce ASFF:
+Prowler 4 and later write OCSF JSON (`*.ocsf.json`) by default; `-M json-asff` gives ASFF instead. cloudg reads both:
 
 ```bash
-prowler aws -M json-asff -o ./prowler-output
+prowler aws -o ./prowler-output
 prowler azure --az-cli-auth -M json-asff -o ./prowler-output-azure
 ```
 
-cloudg accepts a single file or a directory. A directory is searched recursively for `*.json`, and every match is parsed as ASFF. Each file may be a JSON array or JSONL (one ASFF object per line). From each finding cloudg reads:
+cloudg accepts a single file or a directory. A directory is searched recursively for `*.json`. Each file may be a JSON array, JSONL (one record per line) or an ASFF `{"Findings": [...]}` batch, and each record is read as OCSF when it has OCSF keys (`finding_info`, `class_uid`, `severity_id` and so on), as ASFF otherwise. A directory holding both formats reports each failing check twice; normalisation merges the pair into one finding.
+
+From each ASFF finding cloudg reads:
 
 | ASFF field | Becomes |
 |---|---|
-| `Id` | `source_finding_id`; the check name inside it (third dash-separated token) is the dedupe key |
+| `Id` | `source_finding_id`; the check name inside it is the dedupe key. Both `prowler-<check>-<account>-...` and `prowler-<provider>-<check>-<account>-...` are understood |
 | `Title`, `Description` | `title`, `description` |
 | `Severity.Label` (or `ProductFields.Severity`) | `severity`; `informational` maps to INFO, unknown labels to MEDIUM |
 | `Resources[0].Id` | `resource_arn` and `resource_id` |
 | `Compliance.RelatedRequirements` | Coarse framework tags (`CIS`, `NIST-800-53`, `PCI-DSS`, `GDPR`, `HIPAA`, `SOC2`) |
-| `Compliance.Status` | `PASSED` findings are dropped |
+| `Compliance.Status` | A `PASSED` record gives no finding; its check name is kept as a passing check |
 | `Remediation.Recommendation.Text` | `remediation` |
 | `ProductFields` | `evidence` (first 1000 characters of the JSON) |
 
-:::warning Only ASFF in the Prowler directory
-Prowler's other JSON format, OCSF (`*.ocsf.json`), also ends in `.json`. If the directory holds OCSF files, cloudg parses them as ASFF and produces one `Unknown Prowler Finding` at MEDIUM severity with no resource for every record, passing checks included. Run Prowler with `-M json-asff` only, or pass the `.asff.json` file itself.
-:::
+From each OCSF record:
+
+| OCSF field | Becomes |
+|---|---|
+| `status_code` | `PASS` gives no finding and is kept as a passing check; `FAIL` and `MANUAL` become findings |
+| `status` | `Suppressed` (a muted finding) sets `is_suppressed` |
+| `finding_info.title`, `finding_info.desc` | `title`, `description` |
+| `finding_info.uid`, `metadata.event_code` | `source_finding_id` and the check name. A `uid` that does not name the check is replaced by a `prowler-<check>-<account>-<region>-<hash>` id, so both formats dedupe the same way |
+| `severity` | `severity`; unknown labels map to MEDIUM |
+| `resources[0].uid` (else `resources[0].name`) | `resource_id`; `uid` is also `resource_arn` |
+| keys of `unmapped.compliance` | Coarse framework tags, as for ASFF |
+| `remediation.desc` | `remediation` |
+| `status_detail` (else `message`) | `evidence` |
+
+The passing checks travel with the parsed findings (`passed_checks` on the list `parse_report` returns) into normalisation, where the compliance controls that only passing checks map to get a PASS result. See [Compliance frameworks](/guides/compliance/).
 
 ### ScoutSuite
 
@@ -239,7 +253,7 @@ Findings come from `services.<service>.findings.<rule>`. A rule with `flagged_it
 | `good` | INFO |
 | anything else | MEDIUM |
 
-The rule's `references` list is copied into `compliance_frameworks` as is. If your ScoutSuite rules put documentation URLs there, those URLs appear as framework names in the compliance output.
+Compliance tags come from the rule's `compliance` entries, such as `{"name": "CIS Amazon Web Services Foundations", "version": "1.2.0", "reference": "1.3"}`: an entry naming CIS tags the finding `CIS`. The rule's `references` are documentation URLs and are not used for compliance.
 
 ### Checkov
 
@@ -376,14 +390,14 @@ HIGH      7.5 trivy      [Trivy/IaC] AVD-AWS-0088: S3 bucket encryption not enab
 
 The functions differ in how they fail. `parse_report` raises `ValueError` for a tool name it doesn't know (only `prowler`, `scoutsuite`, `checkov` and `trivy` are accepted, case-insensitive) and `FileNotFoundError` for a missing path. `ingest_reports` catches both, logs them and moves on. The per-scanner parsers are public too, as class methods: `ProwlerScanner.parse_report(path)`, `ScoutSuiteScanner.parse_report(path)`, `CheckovScanner.parse_report(path)` and `TrivyScanner.parse_report(path)`.
 
-On the engine, `CloudGEngine.ingest_reports()` wraps `ingest_reports` and fires the `on_phase_start("ingest")`, `on_finding` and `on_scan_complete` [event hooks](/api/event-hooks/). `run_from_reports()` and its sync wrapper go further and write `findings.json` and `report.html` (not `raw-findings.json`), returning a `PipelineResult` whose `report_paths` holds both paths and whose `errors` lists any phase that failed.
+On the engine, `CloudGEngine.ingest_reports()` wraps `ingest_reports` and fires the `on_phase_start("ingest")`, `on_finding` and `on_scan_complete` [event hooks](/api/event-hooks/). `run_from_reports()` and its sync wrapper go further and write `findings.json` and `report.html` as `report.formats` allows (not `raw-findings.json`), returning a `PipelineResult` whose `report_paths` holds both paths and whose `errors` lists any phase that failed.
 
 ## What comes out
 
 | File | Contents |
 |---|---|
 | `raw-findings.json` | A JSON list of every parsed `Finding`, before deduplication and compliance mapping (CLI only) |
-| `findings.json` | `metadata`, `summary`, `findings`, `compliance` and an empty `assets` list and `graph` |
+| `findings.json` | `metadata`, `summary`, `findings`, `compliance`, and empty `assets`, `edges` and `graph` |
 | `report.html` | The interactive report: findings table, analytics, compliance cards |
 
 With no assets, the report's Infrastructure Map tab falls back to a force graph of finding nodes linked to compliance framework nodes. The [Reports](/guides/reports/) guide covers both files in detail, and the field-level layout of `findings.json` is on [Output files](/reference/output-files/).

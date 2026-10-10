@@ -13,7 +13,7 @@ flowchart LR
   M["map_inventory()"] --> R["InventoryResult"]
   Y["your own assets and edges"] --> R
   R -->|"export(dir)"| F["inventory-map.json and friends"]
-  F -->|"InventoryResult.load(dir)"| L["InventoryResult without coverage, raw_data, duration"]
+  F -->|"InventoryResult.load(dir)"| L["InventoryResult without raw_data, duration"]
   R -->|"dependency_graph()"| G["DependencyGraph"]
   R -->|"analysis()"| A["dependency and coverage report"]
 ```
@@ -26,13 +26,13 @@ flowchart LR
 
 `analysis(top=25)` runs the dependency graph and the coverage checks and returns a dict with five keys: `shared_dependencies` (assets many others directly depend on), `largest_blast_radius`, `cross_account_edges` (one entry per edge between two accounts, with `external` true when one side is an unmapped account), `security_coverage` (which security services run in which account and region, the gaps, workloads no vulnerability scanner covers, internet-facing entry points without a WAF) and `unresolved_references`. This is what `export()` saves as `inventory-dependencies.json`.
 
-`export(output_dir)` creates the directory and writes `inventory-map.json` (summary, providers, regions, assets, edges, unresolved references and throttling), `inventory-map.graphml`, `inventory-graph.json` (D3 format, for viewers), `inventory-dependencies.json` and, when an organization was mapped, `inventory-organization.json`. It returns the paths keyed `map`, `graphml`, `graph`, `dependencies` and `organization`. JSON is written with `indent=2` and `default=str`, so datetimes come out as strings.
+`export(output_dir)` creates the directory and writes `inventory-map.json` (summary, providers, regions, assets, edges, unresolved references, coverage records and throttling), `inventory-map.graphml`, `inventory-graph.json` (D3 format, for viewers), `inventory-dependencies.json` and, when an organization was mapped, `inventory-organization.json`. It returns the paths keyed `map`, `graphml`, `graph`, `dependencies` and `organization`. JSON is written with `indent=2` and `default=str`, so datetimes come out as strings.
 
 `load(path)` takes `inventory-map.json` or the directory that holds it. It re-validates every asset and edge into models and reads `inventory-organization.json` from the same directory when it exists. Some data does not survive the trip:
 
 | Field | After `load()` |
 |---|---|
-| `coverage` | empty: coverage is never written to a file |
+| `coverage` | restored; a map written before coverage was saved loads with an empty list |
 | `duration_ms` | `0` |
 | `CloudAsset.raw_data` | empty on every asset, because the model excludes it from serialisation |
 | everything else | as exported |

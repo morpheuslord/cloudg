@@ -70,7 +70,7 @@ Everything cloudg writes goes to `/app/reports` unless you pass `-o`. Mount a ho
 
 ```bash
 mkdir -p reports
-docker run --rm -v "$PWD/reports:/app/reports" cloudg:latest report -i /app/reports/findings.json
+docker run --rm -v "$PWD/reports:/app/reports" cloudg:latest report -i /app/reports/findings.json -o /app/reports/rerendered
 ```
 
 Create the directory before the first run. If Docker creates it for you, it belongs to root, and the `cloudg` user inside the container cannot write to it. On Linux the host directory must also be writable by the container's UID. If your own UID is not 1000, either make the directory writable for UID 1000 or run as yourself and point `HOME` somewhere writable:
@@ -211,8 +211,10 @@ Re-render a report from an earlier run:
 
 ```bash
 docker run --rm -v "$PWD/reports:/app/reports" \
-  cloudg:latest report -i /app/reports/findings.json --format all
+  cloudg:latest report -i /app/reports/findings.json --format all -o /app/reports/rerendered
 ```
+
+`cloudg report` refuses to write `findings.json` over its own input, so give it another `-o` (or pass `--overwrite`).
 
 ### Using a config file
 
@@ -226,7 +228,7 @@ docker run --rm \
   cloudg:latest -c /app/config.yaml run -p aws
 ```
 
-Keep relative paths in the config (`terraform.output_dir: ./reports/terraform`, `scanners.iac_directories`) relative to `/app`, the container's working directory.
+Relative paths in the config, such as `scanners.iac_directories` or a `terraform.output_dir` you set, are relative to `/app`, the container's working directory. Without `terraform.output_dir`, the Terraform files go to `terraform/` under the `-o` directory, `/app/reports/terraform` by default.
 
 ## docker compose
 

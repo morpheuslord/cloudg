@@ -25,16 +25,17 @@ Before wiring any of them up, know what cloudg's exit code does and does not tel
 
 cloudg exits non-zero when it cannot do its job, never because of what it found. Nothing in the CLI fails on severity.
 
-| Command | Exits 1 when | Exits 0 even when |
+| Command | Exits non-zero when | Exits 0 even when |
 |---|---|---|
-| `cloudg run` | an unhandled exception escapes | collection failed for every account, a scanner is missing, the ontology or RAG export failed |
-| `cloudg map` | the mapping raised (bad config, no SDK installed) | individual collectors failed or were throttled (recorded in coverage) |
-| `cloudg ingest` | no `--prowler`, `--scoutsuite`, `--checkov` or `--trivy` was given | the given paths parsed to zero findings |
-| `cloudg report` | the `-i` file does not exist | |
-| `cloudg collect` | collection raised | |
-| any | click usage errors (unknown flag, bad choice) exit 2 | |
+| `cloudg run` | 3: collection failed for every target (the reports are still written); 2: `aws.accounts` without `aws.role_name`; 1: an unhandled exception escapes | some accounts or regions failed, a scanner is missing or failed, the ontology or RAG export failed |
+| `cloudg map` | 1: the mapping raised (bad config, no SDK installed, an `--ou` that matches no OU); 2: `--accounts` without a role name | individual collectors failed or were throttled (recorded in coverage) |
+| `cloudg scan` | 1: none of the requested scanners could run, or every one of them failed | some of the requested scanners were missing or failed |
+| `cloudg ingest` | 1: no `--prowler`, `--scoutsuite`, `--checkov` or `--trivy` was given | the given paths parsed to zero findings |
+| `cloudg report` | 1: the `-i` file does not exist or cannot be read, or `findings.json` would overwrite the input without `--overwrite` | |
+| `cloudg collect` | 1: collection raised | |
+| any | 2: click usage errors (unknown flag, bad choice) | |
 
-`cloudg run` is the one to watch. Each phase catches its own errors so the rest of the pipeline still produces something, which is good for a human at a terminal and bad for a CI job: expired credentials give you a green build with `total_assets: 0`. The gate script below checks for that as well as for severity.
+`cloudg run` is still the one to watch. Each phase catches its own errors so the rest of the pipeline still produces something. Exit 3 catches a run where no target could be collected at all, such as a profile that does not exist, a role that cannot be assumed or a runner with no credentials. A partly collected run still exits 0, so the gate script below also checks the asset count, as well as severity.
 
 ## A severity gate
 
@@ -241,11 +242,11 @@ jobs:
 ```
 ::::
 
-Why credentials go through `configure-aws-credentials` and not cloudg's own `--aws-role-arn` with `--aws-web-identity-token-file`: the action exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` for the whole job. cloudg's collectors pick them up through the default chain, and so does Prowler, which runs as a separate process and does not inherit an exchange cloudg did internally. [Authentication](/guides/authentication/#what-the-scanners-receive) has the details. For a `cloudg map` job with no scanners, cloudg's native OIDC path works equally well.
+Credentials go through `configure-aws-credentials` here, which exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` for the whole job; cloudg's collectors and Prowler pick them up through the default chain. cloudg's own `--aws-role-arn` with `--aws-web-identity-token-file` works as well: cloudg then assumes the role itself and hands Prowler and ScoutSuite the temporary keys. The action has the advantage that every other step of the job gets the same credentials. [Authentication](/guides/authentication/#what-the-scanners-receive) has the details.
 
 The action's session lasts one hour by default. A long organization-wide run can outlive it; raise `role-duration-seconds` (and the role's maximum session duration) or split the run per account.
 
-`if: always()` on the upload matters: the gate fails the job, and the reports are exactly what you want to look at when it does.
+`if: always()` on the upload matters: the gate fails the job, and so does `cloudg run` when it exits 3, and the reports are exactly what you want to look at when that happens.
 
 ### Pull requests without cloud access
 

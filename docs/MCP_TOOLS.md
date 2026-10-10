@@ -1081,11 +1081,11 @@ Loads a file or directory as a dataset and makes it active unless `activate` is 
 | JSON object with `Findings` | `prowler` |
 | JSON array whose first item has `check_type` | `checkov` |
 | JSON array whose first item has `ProductArn` or `SchemaVersion` | `prowler` |
-| JSON array or JSON Lines whose first record looks like OCSF | refused (see below) |
+| JSON array whose first record looks like OCSF (Prowler 4's default output) | `prowler` |
 | JSON array whose first item has `severity`, `title` or `resource_id` | `generic` |
-| Other JSON Lines | `prowler` |
+| Other JSON Lines | `prowler` (ASFF or OCSF records) |
 
-An inventory load also reads `findings.json` from the same directory when present (its path lands in the dataset metadata as `findings_source`). Scanner output is parsed with the cloudg ingest parsers and normalised. The Prowler parser reads ASFF only, so Prowler's OCSF output (the default since Prowler 4) is refused with a hint to re-run with `-M json-asff`.
+An inventory load also reads `findings.json` from the same directory when present (its path lands in the dataset metadata as `findings_source`). Scanner output is parsed with the cloudg ingest parsers and normalised. The Prowler parser reads ASFF and OCSF (the default since Prowler 4), record by record, and Prowler's passing checks give `PASS` results for the ruleset controls only they cover. A Prowler output directory is not detected; pass `kind: "prowler"` for it.
 
 Loading the sample inventory directory:
 
@@ -1155,7 +1155,7 @@ Called with the arguments below, `load_dataset` returned this `structuredContent
     "...": "10 more"
   },
   "has_organization": true,
-  "coverage_records": 0,
+  "coverage_records": 1,
   "organization": {
     "id": "o-sample",
     "accounts": 2,
@@ -1303,21 +1303,49 @@ Errors:
 }
 ```
 
+Prowler OCSF output, one failing record for the root account's hardware MFA, as a third, inactive dataset:
+
+Called with the arguments below, `load_dataset` returned this `structuredContent`.
+
+```json
+{"path": "scans/prowler-ocsf.json", "name": "ocsf", "activate": false}
+```
+
 ```json
 {
-  "tool": "load_dataset",
-  "arguments": {
-    "path": "scans/prowler-ocsf.json"
+  "loaded": "ocsf",
+  "active": false,
+  "dataset": "ocsf",
+  "kind": "prowler",
+  "source": "<estate>/scans/prowler-ocsf.json",
+  "loaded_at": "2026-10-10T06:24:43+00:00",
+  "version": 0,
+  "providers": [],
+  "total_assets": 0,
+  "total_edges": 0,
+  "total_findings": 1,
+  "open_findings": 1,
+  "suppressed_findings": 0,
+  "severity_breakdown": {
+    "HIGH": 1
   },
-  "isError": true,
-  "text": "<estate>/scans/prowler-ocsf.json is Prowler OCSF output, which cloudg cannot parse yet (its records would become placeholder findings). Re-run prowler with -M json-asff and load the ASFF file instead.",
-  "_meta": {
-    "cloudg/error_code": -32602,
-    "cloudg/error_data": {
-      "format": "ocsf",
-      "hint": "prowler <provider> -M json-asff"
-    }
-  }
+  "accounts": 0,
+  "regions": 0,
+  "internet_exposed": 0,
+  "cross_account_edges": 0,
+  "unlinked_assets": 0,
+  "unresolved_references": 0,
+  "compliance_frameworks": [
+    "AWS-Foundational-Security-Best-Practices-AWS",
+    "CIS-AWS",
+    "GDPR-AWS",
+    "... 4 more"
+  ],
+  "assets_by_type": {},
+  "assets_by_provider": {},
+  "edges_by_type": {},
+  "has_organization": false,
+  "coverage_records": 0
 }
 ```
 
@@ -1735,7 +1763,7 @@ Called with the arguments below, `dataset_summary` returned this `structuredCont
     "...": "10 more"
   },
   "has_organization": true,
-  "coverage_records": 0,
+  "coverage_records": 1,
   "organization": {
     "id": "o-sample",
     "accounts": 2,
@@ -1777,7 +1805,7 @@ The result also carried these resource links in `content`:
 | `assets_by_type` | Top 15 types. |
 | `assets_by_provider`, `edges_by_type` | Full breakdowns. |
 | `has_organization`, `organization` | Organization summary when discovery data exists. |
-| `coverage_records` | Number of collection coverage records (live collections only). |
+| `coverage_records` | Number of collection coverage records (from live collections, and from inventory maps saved with them). |
 
 ## Inventory
 
@@ -2545,7 +2573,7 @@ Called with the arguments below, `list_tags` returned this `structuredContent`.
 
 Category `inventory` · sensitivity `internal` · capabilities `read_state` · readOnly true, destructive false, idempotent true, openWorld false · outputSchema no · timeout: layer default (300 s)
 
-Which collectors succeeded or failed per provider, account and region during a live collection, so gaps such as `AccessDenied` are visible before the map is trusted. Coverage records are not stored in `inventory-map.json`, so a loaded map has none and the tool says so:
+Which collectors succeeded or failed per provider, account and region during collection, so gaps such as `AccessDenied` are visible before the map is trusted. Live collections carry coverage records, and so do inventory maps: `cloudg map` saves them in `inventory-map.json`. Each record has `provider`, `region`, `account_id`, `total_services`, `successful`, `failed`, `coverage_pct` and `failures[]` with `service` and `error`, and the tool adds totals. The sample inventory holds one record:
 
 | Argument | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -2560,12 +2588,47 @@ Called with the arguments below, `coverage_report` returned this `structuredCont
 ```json
 {
   "dataset": "sample",
-  "records": [],
-  "note": "This dataset has no coverage records (they exist only for live collections via map_inventory / collect_assets)."
+  "records": [
+    {
+      "provider": "aws",
+      "region": "us-east-1",
+      "account_id": "111111111111",
+      "total_services": 3,
+      "successful": 2,
+      "failed": 1,
+      "coverage_pct": 66.7,
+      "failures": [
+        {
+          "service": "rds",
+          "error": "AccessDenied: rds:DescribeDBInstances"
+        }
+      ]
+    }
+  ],
+  "total_services": 3,
+  "successful": 2,
+  "failed": 1,
+  "coverage_pct": 66.7
 }
 ```
 
-On a dataset produced by `map_inventory` (stubbed engine, see [How the examples were produced](#how-the-examples-were-produced)) each record has `provider`, `region`, `account_id`, `total_services`, `successful`, `failed`, `coverage_pct` and `failures[]` with `service` and `error`, and the tool adds totals:
+A dataset without records, such as `report` loaded from a `findings.json`, gets a note instead:
+
+Called with the arguments below, `coverage_report` returned this `structuredContent`.
+
+```json
+{"dataset": "report"}
+```
+
+```json
+{
+  "dataset": "report",
+  "records": [],
+  "note": "This dataset has no coverage records (they come from live collections via map_inventory / collect_assets, and from inventory maps saved with them)."
+}
+```
+
+A dataset produced by `map_inventory` (stubbed engine, see [How the examples were produced](#how-the-examples-were-produced)) has the same shape:
 
 Called with the arguments below, `coverage_report` returned this `structuredContent`.
 
@@ -5867,7 +5930,7 @@ Parses existing scanner output (no scanner runs and nothing is sent to the cloud
 Behaviour in detail:
 
 - `reports` maps a tool name (`prowler`, `scoutsuite`, `checkov`, `trivy`, case-insensitive) to a list of files or directories. An unknown tool fails the whole call before anything is read.
-- Every path must resolve inside an allowed root; one path outside fails the whole call with an access error. A path that cannot be parsed, does not exist, or holds Prowler OCSF output (refused, as in `load_dataset`) is reported in `errors` and the call continues.
+- Every path must resolve inside an allowed root; one path outside fails the whole call with an access error. A path that cannot be parsed or does not exist is reported in `errors` and the call continues. Prowler output is read as ASFF or OCSF, record by record, and its passing checks feed the compliance results.
 - With `new_dataset: true`, an empty dataset named `dataset` (or `ingested`, made unique) is created with `kind: "report"`, `source: "ingest"`. It becomes the active dataset unless `activate` is false. A name that is already loaded is refused before anything is parsed, unless `replace` is true.
 - With `normalise: true` (the default) the normaliser runs over the dataset's existing findings plus the new ones: duplicates across scanners merge, findings get scores and framework tags, and the normaliser's compliance results are merged into the dataset's (`merge_compliance` in `cloudg/mcp/catalog/_findings.py`): a control the normaliser evaluated takes its new result plus any surviving finding ids the old result listed; a control it did not evaluate (scanner-native mappings, PASS results) is kept with its finding ids filtered to findings that still exist, and dropped only when all of them are gone. Suppression flags survive by finding id. With `normalise: false` the findings are appended as parsed.
 
@@ -5965,24 +6028,24 @@ Called with the arguments below, `ingest_reports` returned this `structuredConte
 ```json
 {
   "dataset": "ocsf-test",
-  "parsed": 0,
-  "per_path": [],
-  "errors": [
+  "parsed": 1,
+  "per_path": [
     {
       "tool": "prowler",
       "path": "scans/prowler-ocsf.json",
-      "error": "<estate>/scans/prowler-ocsf.json is Prowler OCSF output, which cloudg cannot parse yet (its records would become placeholder findings). Re-run prowler with -M json-asff and load the ASFF file instead."
+      "findings": 1
     }
   ],
+  "errors": [],
   "findings_before": 0,
-  "findings_after": 0,
+  "findings_after": 1,
   "matched_to_assets": 0,
   "normalised": true,
   "active": "sample"
 }
 ```
 
-After this ingest, `compliance_summary(framework="CIS-AWS")` on the same dataset reported 6 evaluated controls: the fixture's `5.2`, `2.1.4`, `1.16` and `3.1` (the PASS included) were kept, and the normaliser added `CIS-AWS/ec2_sg_open_22-1` and `CIS-AWS-aggregate`.
+After this ingest, `compliance_summary(framework="CIS-AWS")` on the same dataset reported 6 evaluated controls: the fixture's `5.2`, `2.1.4`, `1.16` and `3.1` (the PASS included) were kept, and the normaliser added `CIS-AWS/ec2_sg_open_22` (the check name read from the fixture finding's `prowler-aws-ec2_sg_open_22-1` id) and `CIS-AWS-aggregate`.
 
 Called with the arguments below, `compliance_summary` returned this `structuredContent`.
 
@@ -6619,7 +6682,7 @@ Prefixes predefined for SPARQL:
 | `cmr:` | `https://cloudg.io/resource/` | Individuals. |
 | `rdf:`, `rdfs:`, `owl:`, `xsd:` | The W3C namespaces | |
 
-How the relations are read. `cmp:FINDING_AFFECTS` points at the asset a finding affects, resolved like an asset reference (id, ARN, unique name, unique ARN tail); only a finding whose resource matches nothing points at `cmr:` plus its raw `resource_id`. A `CONTAINS` edge gets a specific relation only when both endpoint types fit it (`VPC_CONTAINS_SUBNET`, `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE`, `ORG_CONTAINS_ACCOUNT`), otherwise the generic `CONTAINS`. A security group rule yields `INGRESS_ALLOWED` or `EGRESS_ALLOWED`, `INTERNET_REACHABLE` for an internet source, and port relations read from the parsed port ranges (`ALL_TRAFFIC`, `ONLY_SSH`, `ONLY_HTTP`, `ONLY_HTTPS`, `ONLY_RDP`, `PORT_RESTRICTED`); `PROTECTED_BY_SG` and `PROTECTED_BY_NACL` come from `ATTACHED_TO` edges into a group (`web-alb PROTECTED_BY_SG sg-web`). `ENCRYPTED_BY_KMS` links an encrypted asset to its key.
+How the relations are read. `cmp:FINDING_AFFECTS` points at the asset a finding affects, resolved like an asset reference (id, ARN, unique name, unique ARN tail); only a finding whose resource matches nothing points at `cmr:` plus its raw `resource_id`. A `CONTAINS` edge gets a specific relation only when both endpoint types fit it (`VPC_CONTAINS_SUBNET`, `SUBNET_CONTAINS_INSTANCE`, `CLUSTER_CONTAINS_SERVICE`, `ORG_CONTAINS_ACCOUNT`), otherwise the generic `CONTAINS`. A security group or NACL rule yields `INGRESS_ALLOWED` or `EGRESS_ALLOWED`, `INTERNET_REACHABLE` for an internet source, and port relations read from the parsed port ranges (`ALL_TRAFFIC`, `ONLY_SSH`, `ONLY_HTTP`, `ONLY_HTTPS`, `ONLY_RDP`, `PORT_RESTRICTED`); `PROTECTED_BY_SG` and `PROTECTED_BY_NACL` come from `ATTACHED_TO` edges into a group (`web-alb PROTECTED_BY_SG sg-web`). `ENCRYPTED_BY_KMS` links an encrypted asset to its key.
 
 ### `ontology_stats`
 

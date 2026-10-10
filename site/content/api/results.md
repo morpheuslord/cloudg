@@ -27,7 +27,7 @@ flowchart LR
   A["AnalysisResult"] -->|"graph_nodes, graph_edges, ontology_triples, rag_chunks_path, terraform_paths, attack_paths"| P
   N["FindingsNormaliser"] -->|"findings, scan_result"| P
   R["report writers"] -->|"report_paths"| P
-  E["normalisation and reporting failures"] -->|errors| P
+  E["on_error calls, failed collection targets"] -->|errors| P
 ```
 
 Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_count` and `reachability_findings` have no counterpart on `PipelineResult` (the reachability findings are merged into `findings` instead), and `duration_ms` on the pipeline result is the whole run, not the collection time. If you need those, drive the phases yourself with `collect()` and `analyze()`.
@@ -46,13 +46,13 @@ Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_cou
 
 `regions_scanned` maps a provider to the regions it actually covered after `ALL` was expanded, for example `{"aws": ["eu-west-1", "eu-central-1"]}`.
 
-`coverage` is a list of `CollectionCoverage` records, one per provider, account and region run, each with a `services` list of `SUCCESS`, `FAILED`, `PARTIAL` or `SKIPPED` entries. This is where a collection failure shows up; `errors` does not record it. `cov.to_summary()` gives the counts and the failed services with their error text.
+`coverage` is a list of `CollectionCoverage` records, one per provider, account and region run, each with a `services` list of `SUCCESS`, `FAILED`, `PARTIAL` or `SKIPPED` entries. This is where the detail of a collection failure shows up; `errors` gets one `collection: ...` line per provider, account or region that failed as a whole. `cov.to_summary()` gives the counts and the failed services with their error text.
 
 `attack_paths` is a `list[list[str]]`. Each inner list is a path of graph node ids, starting at an internet-exposed or external node and ending at the target of an `IAM_TRUST` edge, at most eight hops long. Node ids are asset ids, so map them back with `{a.id: a for a in result.assets}`. The search stops after about a hundred paths.
 
-`errors` holds strings of the form `"<phase>: <message>"`, for the `normalisation` and `reporting` phases only. Collection, scanner and analysis failures go to the `on_error` hook and the log; see [Event hooks](/api/event-hooks/).
+`errors` holds one string of the form `"<phase>: <message>"` per failure of the run: everything reported through the `on_error` hook (scanners, scanner credentials, graph, ontology, RAG, Terraform, normalisation, reporting; see [Event hooks](/api/event-hooks/)), plus, for `run_pipeline()`, one `collection: <provider> <account/region>: <error>` line per target that could not be collected. An empty list means nothing failed.
 
-`AnalysisResult.ontology_path` is the last file the ontology was saved to. With the default `export_formats: [turtle, json-ld]` that is `ontology.jsonld`; `ontology.ttl` is written next to it. `rag_chunk_count` is never filled in 0.6.0 and stays `0`; count the lines of `rag_chunks_path` if you need the number.
+`AnalysisResult.ontology_path` is the last file the ontology was saved to. With the default `export_formats: [turtle, json-ld]` that is `ontology.jsonld`; `ontology.ttl` is written next to it. `rag_chunk_count` is the number of chunks written to `rag_chunks_path`, one per line.
 
 ## Examples
 
@@ -198,6 +198,6 @@ The dataclasses are mutable and hold the same objects the engine worked on. Chan
 :::links
 - [CloudGEngine](/api/cloudgengine/) The methods that return these objects.
 - [Data models](/api/models/) Finding, CloudAsset, ScanResult and the enums.
-- [Event hooks](/api/event-hooks/) Where the failures that `errors` leaves out are reported.
+- [Event hooks](/api/event-hooks/) The `on_error` calls that `errors` records.
 - [Output files](/reference/output-files/) What the report paths point at.
 :::

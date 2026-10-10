@@ -91,9 +91,9 @@ A `cloudg run` writes everything into `./reports` (change it with `-o`):
 
 | File | What it is |
 |---|---|
-| `report.html` | Interactive report in one file: D3 topology, findings table, compliance matrix. The data is embedded; Chart.js and D3 load from a CDN. |
-| `findings.json` | Machine-readable result: metadata, summary, assets, findings, compliance and graph data. `cloudg report -i` reads it back. |
-| `topology.svg`, `topology.graphml`, `topology-cytoscape.json` | The graph as an image, for Gephi or yEd, and for Cytoscape |
+| `report.html` | Interactive report in one file: D3 topology, findings table, compliance matrix. The data, Chart.js and D3 are embedded, so it works offline. |
+| `findings.json` | Machine-readable result: metadata, summary, assets, findings, compliance, edges and graph data. `cloudg report -i` reads it back without losing any of it. |
+| `topology.svg`, `topology.graphml` | The graph as an image, and for Gephi or yEd. `topology-cytoscape.json`, for Cytoscape, is written when `graph.export_cytoscape` is on. |
 | `ontology.ttl`, `ontology.jsonld` | RDF ontology with 64 inferred relation types, queryable with SPARQL |
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | Retrieval-ready chunks of the infrastructure for LLM pipelines |
 | `terraform/*.tf.json` | Terraform recreation of the live infrastructure, with `--terraform` |

@@ -67,15 +67,13 @@ The blast radius search does not walk every asset. It looks at the `4 x --top` a
 
 `--json` prints the same data as JSON: the tree object (`asset`, plus `depends_on` and/or `dependents`, each node with `via`, `relationship` and `children`) when you name an asset, or an object with `shared_dependencies`, `largest_blast_radius` and `cross_account_edges` otherwise. In JSON mode the cross-account list is complete; `--top` only limits the other two.
 
-:::warning The banner is on stdout
-The root `cloudg` command prints its banner to stdout before `deps` runs, so `cloudg deps --json | jq` fails to parse. Strip everything before the first `{` line:
+With `--json` the banner and log lines go to stderr, so stdout holds only the JSON and pipes straight into `jq`:
 
 ```bash
-cloudg deps --map ./reports --json | sed -n '/^{/,$p' | jq '.largest_blast_radius[0]'
+cloudg deps --map ./reports --json | jq '.largest_blast_radius[0]'
 ```
 
-From Python, `InventoryResult.load()` and `dependency_graph()` return the same data with no banner at all (see the Python tab below).
-:::
+From Python, `InventoryResult.load()` and `dependency_graph()` return the same data (see the Python tab below).
 
 ## Examples
 
@@ -106,7 +104,7 @@ cloudg deps jobs-queue --direction down --depth 5
 Feed a function's dependencies into another tool:
 
 ```bash tab="CLI"
-cloudg deps api-handler --direction up --json | sed -n '/^{/,$p' > api-handler-deps.json
+cloudg deps api-handler --direction up --json > api-handler-deps.json
 ```
 
 ```python tab="Python" title="deps_tree.py"

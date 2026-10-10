@@ -7,8 +7,8 @@ lede: "`-p`, `--region`, `--regions`, `--subscription-id`, `--project-id` and `-
 
 | Flag | `run` | `map` | `collect` | `scan` |
 |---|---|---|---|---|
-| `-p/--provider` | required, repeatable, `aws`, `azure`, `gcp` or `all` | repeatable, same choices, default `aws` | required, one of `aws`, `azure`, `gcp` | one free-text value, default `aws` |
-| `--region` | AWS only, ignored when `--regions` is set | none | AWS only, default `us-east-1` | none |
+| `-p/--provider` | required, repeatable, `aws`, `azure`, `gcp` or `all` | repeatable, same choices, default `aws` | required, one of `aws`, `azure`, `gcp` | one of `aws`, `azure`, `gcp`, default `aws` |
+| `--region` | AWS only, ignored when `--regions` is set | none | AWS only, default the first of `aws.regions` | none |
 | `--regions` | yes | yes | none | none |
 | `--subscription-id` | yes | yes | yes | none |
 | `--project-id` | yes | yes | yes | none |
@@ -16,13 +16,13 @@ lede: "`-p`, `--region`, `--regions`, `--subscription-id`, `--project-id` and `-
 
 `deps`, `ingest`, `report` and the `mcp` commands work on files and take none of these. The MCP live tools read providers and regions from the config passed with `-c`, or from their own arguments.
 
-On `run` and `map` every flag here writes into the loaded config, and a flag you leave out keeps the config value. `collect` and `scan` don't read `config.yaml` at all, so for them the flags and the environment are all there is.
+On every command here a flag replaces the matching value from the config passed with `-c`, and a flag you leave out keeps the config value. Below the config come the environment and each SDK's default credential chain.
 
 ## -p, --provider
 
 On `run` and `map`, repeat the flag to cover several clouds in one run (`-p aws -p gcp`), or pass `all` for all three. Matching is case-insensitive. The result replaces `providers` in the config. Collection for the selected providers runs concurrently.
 
-`collect` takes exactly one provider and has no `all`. `scan` passes its value unchecked to Prowler and ScoutSuite as their provider argument, so it accepts anything those tools accept.
+`collect` and `scan` take exactly one provider and have no `all`. `scan` passes it to Prowler and ScoutSuite as their provider argument.
 
 ## --region and --regions
 
@@ -37,7 +37,7 @@ A list replaces the region list of all three providers at once (`aws.regions`, `
 
 `all` (in any case) becomes the sentinel `["ALL"]`, which starts region discovery when collection begins. You can write `regions: [ALL]` in `config.yaml` for the same effect.
 
-`--region` is older and narrower. On `run` it sets `aws.regions` to one region, and only when `--regions` is absent. On `collect` it is the single AWS region to collect, defaulting to `us-east-1`, and since it always has a value, `AWS_DEFAULT_REGION` is never consulted.
+`--region` is older and narrower. On `run` it sets `aws.regions` to one region, and only when `--regions` is absent. On `collect` it is the single AWS region to collect. Without it, `collect` takes the first entry of `aws.regions` from the config, then `AWS_DEFAULT_REGION`, then `us-east-1`; an `aws.regions` of `ALL` counts as unset there.
 
 Without either flag, `run` and `map` use the config: `aws.regions` defaults to `["us-east-1"]`, while `azure.regions` and `gcp.regions` default to `["ALL"]`.
 
@@ -51,20 +51,18 @@ flowchart TD
   D -->|yes| E["Control Tower governed regions"]
   D -->|no| F["ec2 DescribeRegions"]
   F -->|ok| G["Enabled regions, sorted"]
-  F -->|"fails"| H["Built-in list of 29 regions"]
+  F -->|"fails"| H["The 17 regions enabled by default"]
 ```
 
 | Provider | API | Filter | Fallback |
 |---|---|---|---|
-| AWS | `ec2:DescribeRegions`, called in `us-east-1` | `opt-in-status` is `opt-in-not-required` or `opted-in` | 29 built-in regions |
+| AWS | `ec2:DescribeRegions`, with the run's credentials, in the session's region (`AWS_REGION` or `AWS_DEFAULT_REGION`, else `us-east-1`) | `opt-in-status` is `opt-in-not-required` or `opted-in` | the 17 regions enabled by default in every account, no opt-in regions |
 | Azure | `SubscriptionClient.subscriptions.list_locations` for the first subscription | none | 47 built-in locations |
 | GCP | Compute Engine `regions.list` for the first project | `status == "UP"` | 40 built-in regions |
 
 Discovery never stops a run. When the SDK is missing or the call fails, cloudg logs a warning and uses the built-in list for that provider.
 
-:::warning AWS discovery uses the default session
-In `cloudg run` and `cloudg map`, the AWS region lookup builds a plain `boto3.Session()` rather than the session made from your `--profile`, `--aws-*` flags or config credentials. If the default chain has no credentials, or different ones, discovery falls back to the built-in 29 regions. Regions in that list that your account hasn't enabled then show up as failed collectors in the coverage table. Set `AWS_PROFILE` to the same profile, or list the regions explicitly, when you rely on non-default credentials.
-:::
+In `cloudg run` and `cloudg map`, the AWS region lookup uses the same credentials as collection: `--profile`, the `--aws-*` flags and the config's keys, role or web identity. When those cannot authenticate or the call fails, cloudg logs a warning and scans the 17 regions every account has enabled (`AWS_DEFAULT_ENABLED_REGIONS` in `cloudg.region_discovery`); opt-in regions are never guessed. Pass `--regions` to pick them yourself.
 
 On `cloudg map --org`, when Control Tower is found and the region list is `ALL`, the governed regions of the landing zone replace discovery. Turn that off with `aws.organization.use_governed_regions: false`.
 
@@ -81,11 +79,11 @@ azure:
     - 11111111-1111-1111-1111-111111111111
 ```
 
-Without it, `run` and `map` collect every subscription the credential can see in the Enabled state, as long as `azure.all_subscriptions` is true (the default). Set that to false to take only the first one. `collect` needs a subscription: the flag, or `AZURE_SUBSCRIPTION_ID` in the environment.
+Without it, `run` and `map` collect every subscription the credential can see in the Enabled state, as long as `azure.all_subscriptions` is true (the default). Set that to false to take only the first one. `collect` needs a subscription: the flag, else the first of `azure.subscription_ids` in the config, else `AZURE_SUBSCRIPTION_ID` in the environment.
 
 ## --project-id
 
-Sets `gcp.project_ids` to that one project. Without it, cloudg uses the project of the application default credentials. On `collect`, `GOOGLE_CLOUD_PROJECT` is checked before that.
+Sets `gcp.project_ids` to that one project. Without it, cloudg uses the project of the application default credentials. On `collect`, the first of `gcp.project_ids` in the config and then `GOOGLE_CLOUD_PROJECT` are checked before that.
 
 To cover a whole GCP organization in one Cloud Asset Inventory listing, set `gcp.organization_id` in the config; `gcp.project_ids` then filters that listing instead of driving it.
 
@@ -93,7 +91,7 @@ To cover a whole GCP organization in one Cloud Asset Inventory listing, set `gcp
 
 An AWS CLI profile name, SSO profiles included. On `run` and `map` it sets `aws.profile`, which sits third in the AWS credential order: direct keys and OIDC federation win over it. See [Auth flags](/cli/auth-flags/).
 
-`run` and `scan` also hand the profile to the scanners: Prowler gets `-p <profile>` and ScoutSuite gets `--profile <profile>`, for AWS only. On `collect`, `--profile` falls back to `AWS_PROFILE`, and then to the default chain.
+On `run`, `collect` and `scan` it replaces `aws.profile` the same way. `run` and `scan` also hand the profile to the scanners, for AWS only: Prowler gets `-p <profile>` and ScoutSuite gets `--profile <profile>`, unless direct keys or a `role_arn` win, in which case they get the resulting keys instead. On `collect`, with no profile from the flag or the config, `AWS_PROFILE` and then the default chain apply.
 
 ## Examples
 
@@ -106,7 +104,7 @@ cloudg run -p aws -p gcp --regions us-east-1,eu-west-1 --project-id my-project
 Every enabled AWS region, with discovery and collection using the same profile:
 
 ```bash
-AWS_PROFILE=audit cloudg map -p aws --profile audit --regions all
+cloudg map -p aws --profile audit --regions all
 ```
 
 All three clouds with discovery everywhere:

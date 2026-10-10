@@ -30,14 +30,16 @@ flowchart TD
 
 | Tool | A file | A directory | Produce it with |
 |---|---|---|---|
-| `prowler` | an ASFF JSON array or JSONL file | searched recursively for `*.json` | `prowler aws -M json-asff -o ./prowler-output` |
+| `prowler` | an OCSF or ASFF JSON array or JSONL file | searched recursively for `*.json` | `prowler aws -o ./prowler-output` (OCSF) or `prowler aws -M json-asff -o ./prowler-output` |
 | `scoutsuite` | `scoutsuite_results*.js` | searched recursively for `scoutsuite_results*.js` | `scout aws --report-dir ./scoutsuite-report --no-browser` |
 | `checkov` | the JSON report | `results_json.json` anywhere below it, else every `*.json` | `checkov -d ./iac --output json > results_json.json` |
 | `trivy` | an `image` or `fs` JSON report | every `*.json` below it | `trivy image --format json myrepo/app:latest > trivy-image.json` |
 
-A few rules per tool decide what becomes a finding. Prowler checks with `Compliance.Status` of `PASSED` are skipped, and the check name inside the ASFF `Id` becomes the deduplication key. ScoutSuite yields one finding per flagged item, with `danger`, `warning` and `caution` mapped to CRITICAL, HIGH and MEDIUM. Checkov findings come from `results.failed_checks`, whether the report is one object or a list of them (several frameworks). Trivy reports are split by their `ArtifactType`: `container_image` reports give vulnerability and secret findings, anything else also gives misconfigurations. [Input requirements](/guides/ingesting/#input-requirements) lists every field read.
+A few rules per tool decide what becomes a finding. Prowler records are read as OCSF or ASFF, record by record. Passing checks (ASFF `Compliance.Status` of `PASSED`, OCSF `status_code` of `PASS`) give no finding, and the check name inside the finding id (`prowler-<check>-...` or `prowler-<provider>-<check>-...`) becomes the deduplication key. ScoutSuite yields one finding per flagged item, with `danger`, `warning` and `caution` mapped to CRITICAL, HIGH and MEDIUM. Checkov findings come from `results.failed_checks`, whether the report is one object or a list of them (several frameworks). Trivy reports are split by their `ArtifactType`: `container_image` reports give vulnerability and secret findings, anything else also gives misconfigurations. [Input requirements](/guides/ingesting/#input-requirements) lists every field read.
 
 The findings come back raw. Their severities are what the scanner said, duplicates are still there, and only scanner-native compliance tags are set. Pass them through [`FindingsNormaliser`](/api/findingsnormaliser/) (or `CloudGEngine.normalise_findings()`) before you count or report on them.
+
+For Prowler, the list returned is a `FindingList`: a plain `list` subclass with a `passed_checks` set naming the checks that passed. `ingest_reports` returns a `FindingList` too, with the passed checks of every Prowler report in it. Hand the list to `FindingsNormaliser.normalise()` as it is and the compliance controls those checks map to get PASS results. `+=` keeps the left list's attribute (as in the example below), but `a + b` and `list(a)` build a plain list without it; pass `passed_checks=` to `normalise()` yourself in that case.
 
 ## Examples
 
@@ -73,12 +75,14 @@ print(scan_result.summary["severity_breakdown"], len(scan_result.compliance), "c
 
 ```console
 $ python parse_first.py
-INFO cloudg.scanners.prowler: Parsed 1 findings from Prowler
+INFO cloudg.scanners.prowler: Parsed 1 findings from Prowler (1 passed checks)
 INFO cloudg.scanners.checkov: Parsed 1 findings from Checkov
 INFO cloudg.scanners.trivy: Parsed 1 findings from Trivy for myrepo/app:latest
 INFO cloudg.ingest: [trivy] 1 findings ingested from ./trivy.json
 ERROR cloudg.ingest: Skipping trivy report ./missing.json: Report path does not exist: ./missing.json
 ERROR cloudg.ingest: Skipping trivvy report ./trivy.json: Unsupported tool 'trivvy'. Supported: prowler, scoutsuite, checkov, trivy
+INFO cloudg.normaliser: Normalising 3 total findings from 2 sources
+INFO cloudg.normaliser: After deduplication: 3 findings
 ('prowler', 'scoutsuite', 'checkov', 'trivy')
 2 findings from two reports
 1 findings from the batch
