@@ -695,18 +695,22 @@ class CloudGEngine(ScannerRunsMixin):
         findings: list[Finding],
         out: Path,
     ) -> None:
-        """Build the ontology and export it in the configured formats."""
-        try:
-            from cloudg.graph.ontology import CloudOntology
+        """Build the ontology and export it in the configured formats.
 
-            ontology = CloudOntology()
+        Each format is written to ``ontology.<ext>`` with the extension
+        :func:`~cloudg.graph.ontology.ontology_extension` gives it, so
+        N-Triples no longer overwrites the Turtle file.
+        """
+        try:
+            from cloudg.graph.ontology import CloudOntology, ontology_extension
+
+            ontology = CloudOntology(include_raw_metadata=self.config.ontology.include_raw_metadata)
             ontology.build(assets, edges, findings)
             stats = ontology.stats()
             result.ontology_triples = stats["total_triples"]
 
             for fmt in self.config.ontology.export_formats:
-                ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf"}
-                ext = ext_map.get(fmt, "ttl")
+                ext = ontology_extension(fmt)
                 path = ontology.save(out / f"ontology.{ext}", fmt=fmt)
                 result.ontology_path = path
         except Exception as exc:
@@ -732,6 +736,9 @@ class CloudGEngine(ScannerRunsMixin):
             )
             rag_paths = rag.export_all(assets, edges, graph, findings, output_dir=out)
             result.rag_chunks_path = rag_paths["chunks"]
+            # One chunk per non-empty line of rag_chunks.jsonl
+            with open(rag_paths["chunks"]) as f:
+                result.rag_chunk_count = sum(1 for line in f if line.strip())
         except Exception as exc:
             logger.error("RAG export failed: %s", exc)
             self._emit_error("rag_export", exc)

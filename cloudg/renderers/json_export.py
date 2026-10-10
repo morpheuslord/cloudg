@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +13,18 @@ from cloudg.schema.models import ScanResult
 logger = logging.getLogger(__name__)
 
 
+def _iso(value: datetime | None) -> str | None:
+    """ISO 8601 text of a timestamp, or None (JSON null) when it is unset."""
+    return value.isoformat() if value is not None else None
+
+
 class JSONExporter:
     """Exports scan results to a findings.json file.
 
     Contains: full asset inventory, all findings, edges, graph data,
     compliance mappings (enough for `cloudg report -i` to rebuild the run).
+    Timestamps in ``metadata`` are ISO 8601 strings, the format the
+    findings and assets use; an unset value is JSON null.
     """
 
     def __init__(self, output_dir: str = ".") -> None:
@@ -47,8 +55,8 @@ class JSONExporter:
                 "provider": scan_result.provider.value if scan_result.provider else None,
                 "account_id": scan_result.account_id,
                 "region": scan_result.region,
-                "started_at": str(scan_result.started_at),
-                "completed_at": str(scan_result.completed_at),
+                "started_at": _iso(scan_result.started_at),
+                "completed_at": _iso(scan_result.completed_at),
             },
             "summary": scan_result.summary,
             "assets": [

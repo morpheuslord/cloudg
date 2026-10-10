@@ -277,7 +277,16 @@ def _infer_port_relations(edge: NetworkEdge) -> list[RelationType]:
 def _infer_sg_rule_relations(
     edge: NetworkEdge, assets_by_id: dict[str, CloudAsset]
 ) -> list[RelationType]:
-    """Infer network relations for a SECURITY_GROUP_RULE edge."""
+    """Infer network relations for a SECURITY_GROUP_RULE or NACL_RULE edge.
+
+    Both kinds of rule edge point from the traffic source to the filter
+    (or from the filter to the destination for egress), so they describe
+    what traffic is allowed, never what the filter protects:
+    INGRESS_ALLOWED / EGRESS_ALLOWED, INTERNET_REACHABLE for an internet
+    source, the port relations and CIDR_RESTRICTED. The protection
+    relations (PROTECTED_BY_SG / PROTECTED_BY_NACL) come from ATTACHED_TO
+    edges.
+    """
     relations: list[RelationType] = []
     cidr = edge.cidr or ""
     direction = (edge.direction or "ingress").lower()
@@ -436,6 +445,7 @@ _EDGE_RELATION_RULES: dict[
     EdgeType, Callable[[NetworkEdge, dict[str, CloudAsset]], list[RelationType]]
 ] = {
     EdgeType.SECURITY_GROUP_RULE: _infer_sg_rule_relations,
+    EdgeType.NACL_RULE: _infer_sg_rule_relations,
     EdgeType.CONTAINS: _infer_containment_relations,
     EdgeType.IAM_TRUST: _infer_iam_trust_relations,
     EdgeType.IAM_POLICY_ATTACHMENT: _infer_policy_attachment_relations,

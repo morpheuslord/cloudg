@@ -233,9 +233,9 @@ def _ontology_phase(
     """Phase 3b: Semantic Ontology (runs AFTER scanners so findings are included)."""
     ui.phase("Phase 3b · Semantic Ontology", note="includes security findings")
     try:
-        from cloudg.graph.ontology import CloudOntology
+        from cloudg.graph.ontology import CloudOntology, ontology_extension
 
-        cloud_ontology = CloudOntology()
+        cloud_ontology = CloudOntology(include_raw_metadata=cfg.ontology.include_raw_metadata)
         cloud_ontology.build(assets, edges, findings=findings)
         stats = cloud_ontology.stats()
         ui.success(
@@ -246,8 +246,7 @@ def _ontology_phase(
         ui.success(f"Security findings in ontology: [metric]{len(findings)}[/]")
 
         for fmt in cfg.ontology.export_formats:
-            ext_map = {"turtle": "ttl", "json-ld": "jsonld", "xml": "rdf", "nt": "nt"}
-            ext = ext_map.get(fmt, "ttl")
+            ext = ontology_extension(fmt)
             onto_path = cloud_ontology.save(output_dir / f"ontology.{ext}", fmt=fmt)
             ui.artifact(f"Ontology ({fmt})", onto_path)
 

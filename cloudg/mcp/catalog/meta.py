@@ -77,13 +77,14 @@ RULE_RELATIONS: dict[str, str] = {
     "SECURITY_GROUP_RULE": "inferred from ports, protocol, CIDR and direction "
     "(INGRESS_ALLOWED / EGRESS_ALLOWED, ONLY_SSH, ONLY_HTTPS, ALL_TRAFFIC, "
     "INTERNET_REACHABLE...)",
+    "NACL_RULE": "as SECURITY_GROUP_RULE: inferred from ports, protocol, CIDR and "
+    "direction; protection relations come from ATTACHED_TO edges",
     "CONTAINS": "inferred from both endpoint types (VPC_CONTAINS_SUBNET, "
     "SUBNET_CONTAINS_INSTANCE, CLUSTER_CONTAINS_SERVICE, ORG_CONTAINS_ACCOUNT), else the "
     "generic CONTAINS",
     "ATTACHED_TO": "PROTECTED_BY_SG when the target is a security group or NSG, "
     "PROTECTED_BY_NACL for a NACL, else DEPENDS_ON",
     "IAM_TRUST": "ROLE_ASSUMES_ROLE, plus CROSS_ACCOUNT_TRUST when the accounts differ",
-    "NACL_RULE": "none; protection relations come from ATTACHED_TO edges",
     "IAM_POLICY_ATTACHMENT": "inferred from the principal type (USER_HAS_POLICY, "
     "ROLE_HAS_POLICY, GROUP_HAS_POLICY)",
 }
