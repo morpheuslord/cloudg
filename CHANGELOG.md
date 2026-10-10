@@ -2,9 +2,9 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
-## Unreleased
+## 0.6.1 (2026-10-10)
 
-A round of fixes found while documenting every command and API for the new docs site, plus that site. Several commands now behave the way their help text always said, so check the Changed list if you script `cloudg report`, `cloudg scan` or the exit codes.
+A security fix for report.html, a round of fixes found while documenting every command and API, and the new docs site. Upgrade if you open reports built from scanner output you did not produce yourself. Several commands now behave the way their help text always said, so check the Changed list if you script `cloudg report`, `cloudg scan` or the exit codes.
 
 Security:
 
@@ -43,6 +43,8 @@ Changed:
 - RAG chunks are sized by `rag.max_chunk_tokens` (about 4 characters per token) instead of fixed caps of 30 relations, 10 findings and 50 triples. Long lists end with an "... and N more" line, and community chunks are bounded too.
 - report.html is about 485 KB larger with the libraries embedded.
 - `query_asset_neighbourhood()` rows for more than one hop are `{neighbour, neighbourName, hops}`. D3 graph JSON has `"arn": ""` instead of `null` for assets without an ARN. `cloudg.mcp.state.check_prowler_input` was removed.
+- `ProwlerScanner` takes its newer settings (`aws_session_token`, `aws_regions`, `timeout_seconds`, `env`) and the access keys as keyword arguments; calls that pass them by keyword work as before. `aws_region` is now the fifth positional argument.
+- Parts of three large modules moved into their own: the engine result types and collection checks to `cloudg.api_results`, the rate-limit models to `cloudg.config_ratelimit`, and the RAG chunk text builders to `cloudg.graph.rag_text`. Everything public is still importable from `cloudg.api`, `cloudg.config` and `cloudg.graph.rag_export`.
 
 Documentation:
 
