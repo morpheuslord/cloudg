@@ -114,8 +114,10 @@ def test_hostile_values_never_appear_unescaped(tmp_path):
     assert "onerror=alert(1)>" not in page
     # Exactly the two library scripts plus the report's own script: no
     # value closed a script element or opened a new one
-    assert len(re.findall(r"<script\b", page, re.IGNORECASE)) == 3
-    assert len(re.findall(r"</script", page, re.IGNORECASE)) == 3
+    # The vendored libraries, the two map engines and the report's own script
+    expected = len(VENDORED_LIBRARIES) + len(html_report.MAP_ENGINES) + 1
+    assert len(re.findall(r"<script\b", page, re.IGNORECASE)) == expected
+    assert len(re.findall(r"</script", page, re.IGNORECASE)) == expected
 
 
 def test_header_values_are_autoescaped(tmp_path):

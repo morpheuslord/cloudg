@@ -10,6 +10,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
+from cloudg.renderers.iso_scene import build_scene
 from cloudg.schema.models import ScanResult
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,24 @@ VENDORED_LIBRARIES: dict[str, dict[str, str]] = {
         "integrity": "sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i",
     },
 }
+
+
+# The isometric map's drawing engines and the Hairline figures built on them,
+# as paths under the templates directory. They have no CDN build, so they are
+# always inlined; without them the report shows the 2D map only.
+MAP_ENGINES: dict[str, str] = {
+    "isokit": "vendor/iso-kit.js",  # Anatomy iso-kit (MIT): camera, solids, shading
+    "hairline": "vendor/hairline-kernel.js",  # Hairline kernel (MIT): line figures, springs
+    "figures": "figures/empty-tray.js",  # cloudg's empty-state tray, a Hairline figure
+}
+
+# Figures end with hairline({...}); the report collects them instead of mounting them
+_FIGURE_HOST = (
+    "var hairline = function (spec) {"
+    " (window.HAIRLINE_FIGURES = window.HAIRLINE_FIGURES || {})[spec.name] = spec; };\n"
+)
+
+_SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
 
 def script_json(value: Any) -> str:
@@ -84,6 +103,27 @@ def _load_vendored_scripts() -> dict[str, str] | None:
     return sources
 
 
+def _load_map_engines() -> dict[str, str]:
+    """Source of the map's drawing engines; {} when one is missing or unsafe."""
+    sources: dict[str, str] = {}
+    for name, file in MAP_ENGINES.items():
+        try:
+            text = (_VENDOR_DIR.parent / file).read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Map engine %s not found (%s); report.html shows the 2D map", name, exc)
+            return {}
+        lowered = text.lower()
+        if "</script" in lowered or "<!--" in lowered:
+            logger.warning("Map engine %s cannot be inlined safely; showing the 2D map", name)
+            return {}
+        sources[name] = text
+    if "figures" in sources:
+        # Each figure gets its own scope: its top-level names (HL's, destructured)
+        # would otherwise clash with the report's own script
+        sources["figures"] = _FIGURE_HOST + "(function () {\n" + sources["figures"] + "\n})();\n"
+    return sources
+
+
 def _resolve_template_dir() -> Path:
     """Find the first template directory that contains report.html.j2."""
     for candidate in _TEMPLATE_DIR_CANDIDATES:
@@ -97,11 +137,12 @@ class HTMLReportGenerator:
     """Generates a self-contained interactive HTML report.
 
     Features:
-    - D3.js force-directed topology map
-    - Filterable findings table
-    - Chart.js severity and resource charts
-    - Compliance scorecard
-    - Per-finding detail panels
+    - An animated isometric map of the estate (see :mod:`cloudg.renderers.iso_scene`),
+      with a D3 tree and force layout one toggle away
+    - A posture summary, a top-risks list and a filterable findings table
+    - An asset inventory table
+    - Chart.js severity, resource and compliance charts
+    - A compliance scorecard and per-finding detail panels
     """
 
     def __init__(
@@ -177,6 +218,7 @@ class HTMLReportGenerator:
             "inline_js": sources is not None,
             "vendored_js": sources or {},
             "cdn_js": VENDORED_LIBRARIES,
+            "map_js": _load_map_engines(),
         }
 
     def _prepare_data(
@@ -209,7 +251,40 @@ class HTMLReportGenerator:
             scan_result,
         )
 
+        try:
+            scene: dict[str, Any] = build_scene(scan_result, graph_json)
+        except Exception as exc:  # the map must never cost the reader the report
+            logger.warning("Isometric map could not be laid out: %s", exc)
+            scene = {"error": str(exc)}
+
+        assets = scan_result.assets
+        clean = sum(
+            1
+            for a in assets
+            if not findings_per_resource.get(a.id) and not findings_per_resource.get(a.arn or "")
+        )
+        summary = {
+            "providers": sorted({a.provider.value for a in assets}),
+            "accounts": sorted({a.account_id for a in assets if a.account_id}),
+            "regions": sorted({a.region for a in assets if a.region and a.region != "global"}),
+            "exposed": sum(1 for a in assets if a.is_internet_exposed),
+            "clean": clean,
+            "edges": len(scan_result.edges),
+            "version": _version(),
+        }
+        top_risks = sorted(
+            range(len(scan_result.findings)),
+            key=lambda i: (
+                _SEVERITY_RANK.get(scan_result.findings[i].severity.value, 5),
+                -(scan_result.findings[i].risk_score or 0),
+            ),
+        )[:6]
+
         return {
+            "summary": summary,
+            "summary_json": script_json(summary),
+            "top_risks_json": script_json(top_risks),
+            "scene_json": script_json(scene),
             "scan_id": scan_result.scan_id,
             "provider": scan_result.provider.value if scan_result.provider else "Multi-Cloud",
             "account_id": scan_result.account_id or "N/A",
@@ -580,3 +655,12 @@ class HTMLReportGenerator:
 </div>
 </body>
 </html>"""
+
+
+def _version() -> str:
+    try:
+        from cloudg import __version__
+
+        return __version__
+    except ImportError:  # pragma: no cover
+        return ""
