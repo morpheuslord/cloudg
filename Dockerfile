@@ -96,10 +96,10 @@ RUN pip install --no-cache-dir parliament==1.6.4
 COPY --from=deps /usr/local/bin/uv /usr/local/bin/uv
 COPY cloudg/ ./cloudg/
 COPY pyproject.toml README.md ./
-# The package readme rendered on PyPI, and the inventory reference the MCP
-# cloudg://docs resources serve: pyproject force-includes both into the
-# wheel, so hatchling refuses to build without either of them
-COPY docs/DOCUMENTATION.md docs/INVENTORY_REFERENCE.md ./docs/
+# The package readme rendered on PyPI (pyproject's readme), and the two
+# references the MCP cloudg://docs resources serve (force-included into the
+# wheel): hatchling refuses to build without any of them
+COPY docs/PYPI.md docs/DOCUMENTATION.md docs/INVENTORY_REFERENCE.md ./docs/
 
 # Install cloudg package (no-deps since deps are already installed from stage 2)
 RUN uv pip install --system --no-cache --no-deps .
