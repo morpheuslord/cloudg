@@ -84,6 +84,8 @@ ENVT = f"{DEVP}/environmentTypes/prod"
 AUTHS = f"{P}/Microsoft.ApiManagement/service/apim/authorizationServers/oauth"
 DEP = f"{RG}/providers/Microsoft.Resources/deployments/from-spec"
 USER_OID = "eeee0000-0000-0000-0000-000000000001"
+DISK = f"{P}/Microsoft.Compute/disks/data-1"
+SNAP = f"{P}/Microsoft.Compute/snapshots/data-1-snap"
 
 
 def _rows() -> list[dict]:
@@ -433,6 +435,16 @@ def _rows() -> list[dict]:
             },
         ),
         _row(PPG, "microsoft.compute/proximityplacementgroups", {}),
+        _row(DISK, "microsoft.compute/disks", {"networkAccessPolicy": "AllowAll"}),
+        _row(
+            SNAP,
+            "microsoft.compute/snapshots",
+            {
+                "creationData": {"sourceResourceId": DISK},
+                "incremental": True,
+                "networkAccessPolicy": "DenyAll",
+            },
+        ),
         _row(B2C, "microsoft.azureactivedirectory/b2cdirectories", {"tenantId": "b2c-tenant"}),
         # data
         _row(
@@ -767,6 +779,12 @@ class TestGovernance:
         assert g.has(PPG, AVSET, EdgeType.CONTAINS)
         assert g.a(B2C).asset_type == AssetType.USER_POOL
 
+    def test_snapshots_and_disk_export(self, g):
+        assert g.a(SNAP).asset_type == AssetType.SNAPSHOT
+        assert g.has(DISK, SNAP, EdgeType.REFERENCES, "BACKUP_TO")
+        assert g.a(DISK).metadata["export_open"] is True
+        assert g.a(SNAP).metadata["export_open"] is False
+
     def test_dev_center_environment_type(self, g):
         assert g.has(ENVT, SUB_REF, EdgeType.MANAGES, "OWNED_BY")
         assert g.has(
@@ -851,3 +869,57 @@ class TestOperations:
         auth = g.a(AUTHS)
         assert auth.asset_type == AssetType.AUTHORIZER
         assert "clientSecret" not in auth.metadata["properties"]
+
+
+def test_subscription_vending_aliases():
+    from cloudg.inventory.azure_hierarchy import discover_azure_hierarchy
+    from tests.azure_fakes import FakeArm, TypedFakeGraph
+
+    alias = "/providers/Microsoft.Subscription/aliases/team-a-prod"
+    graph = TypedFakeGraph(
+        {
+            "resourcecontainers": [
+                {
+                    "id": SUB_REF,
+                    "name": "team-a-prod",
+                    "type": "microsoft.resources/subscriptions",
+                    "subscriptionId": SUB,
+                    "properties": {},
+                }
+            ]
+        }
+    )
+    arm = FakeArm(
+        {
+            "/providers/Microsoft.Subscription/aliases": [
+                {
+                    "id": alias,
+                    "name": "team-a-prod",
+                    "properties": {"subscriptionId": SUB, "provisioningState": "Succeeded"},
+                }
+            ]
+        }
+    )
+    errors: list[str] = []
+    assets = discover_azure_hierarchy(
+        object(),
+        lambda c: graph,
+        include_policies=False,
+        errors=errors,
+        arm_client_factory=lambda c: arm,
+    )
+    linker = RelationshipLinker(assets)
+    edges = linker.link()
+    g = _Graph(assets + linker.external_assets, edges)
+    assert g.a(alias).asset_type == AssetType.PROVISIONED_PRODUCT
+    assert g.has(alias, SUB_REF, EdgeType.MANAGES, "OWNED_BY")
+    assert errors == []
+    # no vending rights: nothing mapped, nothing reported
+    denied = discover_azure_hierarchy(
+        object(),
+        lambda c: graph,
+        include_policies=False,
+        errors=errors,
+        arm_client_factory=lambda c: FakeArm({}, forbidden={"/aliases"}),
+    )
+    assert not any(a.arn == alias for a in denied) and errors == []

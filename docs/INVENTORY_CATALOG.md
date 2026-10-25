@@ -2902,8 +2902,8 @@ inferred relations are added after it. The inventory uses:
 The Azure inventory reads child resources, more Resource Graph tables, subscription-level ARM
 listings, two data planes, the Kubernetes API of AKS clusters and Entra ID (see
 [INVENTORY_INTERNALS.md 8.4 to 8.10](INVENTORY_INTERNALS.md#84-depth-beyond-the-breadth-query)).
-This block lists what that added: two `AssetType` values, 152 ARM types in
-`catalogs/azure_arm_types.yaml` (277 in total), and the relationship combinations observed
+This block lists what that added: two `AssetType` values, 153 ARM types in
+`catalogs/azure_arm_types.yaml` (278 in total), and the relationship combinations observed
 in the Azure parity tests (`tests/test_azure_parity_*.py`, `test_azure_entra.py`,
 `test_azure_kubernetes.py`), recorded the same way as the rest of this catalog.
 
@@ -2987,7 +2987,7 @@ principal is a separate `SERVICE_PRINCIPAL`.
 | `PEERING_CONNECTION` | `microsoft.network/virtualhubs/bgpconnections`, `microsoft.network/virtualhubs/hubvirtualnetworkconnections` |
 | `PLACEMENT_GROUP` | `microsoft.compute/availabilitysets`, `microsoft.compute/hostgroups`, `microsoft.compute/hostgroups/hosts`, `microsoft.compute/proximityplacementgroups` |
 | `PRODUCT_PORTFOLIO` | `microsoft.apimanagement/service/products`, `microsoft.devcenter/devcenters`, `microsoft.resources/templatespecs`, `microsoft.resources/templatespecs/versions`, `microsoft.solutions/applicationdefinitions` |
-| `PROVISIONED_PRODUCT` | `microsoft.solutions/applications` |
+| `PROVISIONED_PRODUCT` | `microsoft.solutions/applications`, `microsoft.subscription/aliases` |
 | `RESOURCE_SHARE` | `microsoft.managedservices/registrationassignments`, `microsoft.managedservices/registrationdefinitions` |
 | `ROUTE_TABLE` | `microsoft.network/networkmanagers/routingconfigurations`, `microsoft.network/virtualhubs/hubroutetables`, `microsoft.network/virtualhubs/routingintent` |
 | `RUNBOOK` | `microsoft.automation/automationaccounts/runbooks` |
@@ -3003,7 +3003,7 @@ principal is a separate `SERVICE_PRINCIPAL`.
 
 ### Azure parity relationship matrix
 
-306 `(source type, edge type, relationship, target type)` combinations the linker produced
+307 `(source type, edge type, relationship, target type)` combinations the linker produced
 from the Azure parity fixtures, grouped by edge type. `none` means the edge carries no
 fine-grained relationship.
 
@@ -3325,6 +3325,7 @@ fine-grained relationship.
 | `DNS_RESOLVER` | `DEPENDS_ON` | `DNS_RESOLVER` |
 | `DNS_RESOLVER` | `DNS_RESOLVED` | `VNET` |
 | `DYNAMODB_TABLE` | `REPLICATES_TO` | `DYNAMODB_TABLE` |
+| `EBS_VOLUME` | `BACKUP_TO` | `SNAPSHOT` |
 | `ENDPOINT_SERVICE` | `DEPENDS_ON` | `LOG_GROUP` |
 | `ETL_JOB` | `DEPENDS_ON` | `ETL_JOB` |
 | `ETL_JOB` | `READS_FROM` | `DATA_CATALOG` |

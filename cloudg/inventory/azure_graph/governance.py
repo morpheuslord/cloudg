@@ -695,6 +695,35 @@ def _x_gallery_image_version(d: _Draft, b: "AzureAssetBuilder") -> None:
     d.add(rel(source, EdgeType.REFERENCES, "DEPENDS_ON", description="image source"))
 
 
+@extractor("microsoft.compute/snapshots", "microsoft.compute/disks")
+def _x_disk_sharing(d: _Draft, b: "AzureAssetBuilder") -> None:
+    """Snapshot source (the disk BACKUP_TO its snapshot) and disk / snapshot exposure."""
+    p = d.props
+    policy = _get(p, "networkAccessPolicy")
+    d.md["network_access_policy"] = policy
+    d.md["public_network_access"] = _get(p, "publicNetworkAccess")
+    d.md["max_shares"] = _get(p, "maxShares")
+    d.add(
+        rel(_get(p, "diskAccessId"), EdgeType.REFERENCES, "DEPENDS_ON", description="disk access")
+    )
+    # AllowAll: anyone holding a SAS export URL can download the data
+    d.md["export_open"] = (
+        _lower(policy) == "allowall"
+        and _lower(_get(p, "publicNetworkAccess") or "enabled") != "disabled"
+    )
+    if d.type == "microsoft.compute/snapshots":
+        d.md["incremental"] = _get(p, "incremental")
+        d.add(
+            rel(
+                _path(p, "creationData", "sourceResourceId"),
+                EdgeType.REFERENCES,
+                "BACKUP_TO",
+                reverse=True,
+                description="snapshot of",
+            )
+        )
+
+
 __all__ = [
     "add_policy_states",
     "extension_owner",

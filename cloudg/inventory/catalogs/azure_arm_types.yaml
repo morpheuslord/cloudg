@@ -146,6 +146,7 @@ arm_types:
   "microsoft.resources/templatespecs/versions": PRODUCT_PORTFOLIO
   "microsoft.solutions/applications": PROVISIONED_PRODUCT
   "microsoft.solutions/applicationdefinitions": PRODUCT_PORTFOLIO
+  "microsoft.subscription/aliases": PROVISIONED_PRODUCT
   "microsoft.managedservices/registrationassignments": RESOURCE_SHARE
   "microsoft.managedservices/registrationdefinitions": RESOURCE_SHARE
   "microsoft.azureactivedirectory/b2cdirectories": USER_POOL

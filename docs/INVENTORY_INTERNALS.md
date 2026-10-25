@@ -1083,6 +1083,11 @@ Entra objects carry no `discovered_via`, so in `deduplicate()` they win over the
 and the placeholders' grants merge into them. A 403 is recorded as "Graph permission missing";
 no token at all raises `CredentialError` and the `entra` record is `FAILED`.
 
+Subscription vending aliases (`Microsoft.Subscription/aliases`) are read once per run by
+`discover_azure_hierarchy()` through ARM REST: each alias is a `PROVISIONED_PRODUCT` that
+`MANAGES / OWNED_BY` its subscription. A credential without vending rights maps none and
+reports nothing.
+
 Azure RBAC PIM eligibility is a subscription task (`pim_eligibility`): it reads
 `roleEligibilityScheduleInstances` and adds the grants with `eligible: true`.
 
