@@ -102,28 +102,38 @@ class Extracted:
 
 
 Extractor = Callable[[GCPContext, Extracted], None]
-EXTRACTORS: dict[str, Extractor] = {}
+# Asset type -> extractors, run in registration order. Several modules can
+# register for the same type; each one adds to the same Extracted.
+EXTRACTORS: dict[str, list[Extractor]] = {}
 
 
 def _extractor(*asset_types: str) -> Callable[[Extractor], Extractor]:
     def register(fn: Extractor) -> Extractor:
         for t in asset_types:
-            EXTRACTORS[t] = fn
+            fns = EXTRACTORS.setdefault(t, [])
+            if fn not in fns:
+                fns.append(fn)
         return fn
 
     return register
 
 
 def extract(ctx: GCPContext) -> Extracted:
-    """Run the extractor for ``ctx.asset_type`` plus the generic CMEK scan."""
+    """Run every extractor registered for ``ctx.asset_type``, then the generic CMEK scan.
+
+    A failing extractor is recorded in ``extraction_error`` and does not stop
+    the others registered for the same type.
+    """
     out = Extracted()
-    fn = EXTRACTORS.get(ctx.asset_type)
-    if fn is not None:
+    errors: list[str] = []
+    for fn in EXTRACTORS.get(ctx.asset_type, ()):
         try:
             fn(ctx, out)
         except Exception as exc:  # one malformed resource must not stop the sweep
             logger.debug("GCP extractor failed for %s: %s", ctx.name, exc, exc_info=True)
-            out.metadata["extraction_error"] = f"{type(exc).__name__}: {exc}"
+            errors.append(f"{type(exc).__name__}: {exc}")
+    if errors:
+        out.metadata["extraction_error"] = "; ".join(errors)
     if asset_type_service(ctx.asset_type) == "cloudkms":
         return out
     keys = kms_refs(ctx.data)
