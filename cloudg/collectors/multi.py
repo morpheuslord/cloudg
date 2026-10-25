@@ -563,7 +563,10 @@ async def _azure_edges_and_coverage(
     """Collect one Azure subscription's edges and record its coverage.
 
     An edge failure is recorded as ``azure_edges`` and never discards the
-    assets; per-service collector errors become ``azure_<service>`` entries.
+    assets; per-service collector errors become ``azure_<service>`` entries,
+    and the per-task records of collectors that keep a ``coverage``
+    (:class:`~cloudg.inventory.azure_deep.AzureDeepInventoryCollector`) are
+    copied in. ``azure_full`` is PARTIAL when any of them failed.
     """
     edges: list[NetworkEdge] = []
     try:
@@ -573,12 +576,15 @@ async def _azure_edges_and_coverage(
         coverage.record("azure_edges", ServiceStatus.FAILED, error=describe_error(exc))
 
     duration_ms = int((time.time() - start) * 1000)
+    task_records = list(getattr(getattr(collector, "coverage", None), "services", None) or [])
+    coverage.services.extend(task_records)
+    degraded = any(s.status in (ServiceStatus.FAILED, ServiceStatus.PARTIAL) for s in task_records)
     service_errors = dict(getattr(collector, "service_errors", None) or {})
     for service, error in service_errors.items():
         coverage.record(f"azure_{service}", ServiceStatus.FAILED, error=error)
     coverage.record(
         "azure_full",
-        ServiceStatus.PARTIAL if service_errors else ServiceStatus.SUCCESS,
+        ServiceStatus.PARTIAL if service_errors or degraded else ServiceStatus.SUCCESS,
         asset_count=asset_count,
         duration_ms=duration_ms,
     )

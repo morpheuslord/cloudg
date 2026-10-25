@@ -95,6 +95,7 @@ _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
         (
             "IAM_",
             "SERVICE_PRINCIPAL",
+            "APP_REGISTRATION",
             "IDENTITY_",
             "PERMISSION_SET",
             "ACCESS_KEY",
@@ -140,7 +141,17 @@ _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
             "FLEET",
         ),
     ),
-    ("compute", ("EC2", "VIRTUAL_MACHINE", "GCE_INSTANCE", "LAUNCH_TEMPLATE", "MACHINE_IMAGE")),
+    (
+        "compute",
+        (
+            "EC2",
+            "VIRTUAL_MACHINE",
+            "GCE_INSTANCE",
+            "LAUNCH_TEMPLATE",
+            "MACHINE_IMAGE",
+            "PLACEMENT_GROUP",
+        ),
+    ),
     (
         "database",
         (

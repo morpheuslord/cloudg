@@ -248,6 +248,8 @@ class TestEdgeCases:
             ("CONTAINER_IMAGE", "storage"),
             ("FLEET", "cluster"),
             ("TAG", "governance"),
+            ("APP_REGISTRATION", "identity"),
+            ("PLACEMENT_GROUP", "compute"),
             ("OTHER", "other"),
         ],
     )

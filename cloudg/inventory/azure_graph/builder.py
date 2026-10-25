@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+import time
+from typing import Any, Callable, Iterable
 
 from cloudg.inventory.aws_services._base import rel
 from cloudg.inventory.azure_graph.arm_types import asset_type_from_arm
@@ -29,7 +30,7 @@ from cloudg.inventory.azure_graph.query import (
     role_assignments_query,
     run_query,
 )
-from cloudg.inventory.azure_graph.registry import _COMMON, _EXTRACTORS, _Draft
+from cloudg.inventory.azure_graph.registry import _COMMON, _EXTRACTORS, _ROW_HANDLERS, _Draft
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType
 
 logger = logging.getLogger("cloudg.inventory.azure_graph")
@@ -45,19 +46,32 @@ def _role_relation(
     role_name = ra.get("roleName") or BUILTIN_ROLES.get(guid) or guid or "unknown role"
     rl = role_name.lower()
     privileged = rl in PRIVILEGED_ROLES or rl.endswith("administrator") or rl.endswith("data owner")
+    eligible = bool(ra.get("_eligible"))
     relation = rel(
         scope,
         EdgeType.GRANTS_ACCESS,
         "POLICY_ALLOWS_ACTION",
-        description=f"{role_name} on {scope}",
+        description=f"{role_name} on {scope}" + (" (PIM eligible)" if eligible else ""),
         role=role_name,
         role_definition_id=rd,
         privileged=privileged,
         principal_type=ptype,
         assignment_id=ra.get("id"),
         condition=_get(props, "condition"),
+        eligible=eligible or None,
+        inherited_from=ra.get("_inherited_from"),
     )
     return guid, relation
+
+
+def _pricing_resource(pricing_id: Any) -> str | None:
+    """The resource a resource-level Defender pricing belongs to (None at subscription level)."""
+    rid = str(pricing_id or "")
+    cut = rid.lower().find("/providers/microsoft.security/pricings/")
+    if cut <= 0:
+        return None
+    owner = rid[:cut]
+    return owner if "/providers/" in owner.lower() else None
 
 
 def _unique_relations(relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -119,6 +133,11 @@ class AzureAssetBuilder:
         self._extra: list[CloudAsset] = []
         self._subscription_row: dict[str, Any] | None = None
         self._with_subscription = False
+        self._finalizers: list[Callable[["AzureAssetBuilder"], None]] = []
+        self._role_definitions: dict[str, dict[str, Any]] = {}
+        self._pricing_overrides: dict[str, bool] = {}
+        self._pricings_seen = False
+        self.state: dict[str, Any] = {}  # scratch space shared by extractors and handlers
 
     # ── registration hooks used by extractors ──
 
@@ -138,6 +157,32 @@ class AzureAssetBuilder:
         """Attach a relation to another (possibly not yet built) asset."""
         if owner_id and relation:
             self._deferred.append((owner_id.lower(), relation))
+
+    def at_build(self, fn: Callable[["AzureAssetBuilder"], None]) -> None:
+        """Run ``fn(builder)`` once at the start of :meth:`build` (cross-row work)."""
+        if fn not in self._finalizers:
+            self._finalizers.append(fn)
+
+    def add_extra(self, asset: CloudAsset | None) -> None:
+        """Add a fully built asset (Defender, Sentinel, Kubernetes objects, ...)."""
+        if asset is not None:
+            self._extra.append(asset)
+
+    def draft(self, resource_id: str | None) -> _Draft | None:
+        return self._drafts.get(resource_id.lower()) if resource_id else None
+
+    def drafts_of(self, *types: str) -> list[_Draft]:
+        """Drafts of the given lowercase ARM types, in insertion order."""
+        wanted = {t.lower() for t in types}
+        return [d for d in self._drafts.values() if d.type in wanted]
+
+    @property
+    def drafts(self) -> list[_Draft]:
+        return list(self._drafts.values())
+
+    @property
+    def extras(self) -> list[CloudAsset]:
+        return list(self._extra)
 
     # ── input ──
 
@@ -167,6 +212,13 @@ class AzureAssetBuilder:
             return None
         if rtype == "microsoft.resources/subscriptions":
             self._subscription_row = row
+            return None
+        handler = _ROW_HANDLERS.get(rtype)
+        if handler is not None:
+            try:
+                handler(row, self)
+            except Exception:
+                logger.debug("Azure row handler failed for %s", rid, exc_info=True)
             return None
         key = rid.lower()
         existing = self._drafts.get(key)
@@ -253,17 +305,58 @@ class AzureAssetBuilder:
         if row:
             self._subscription_row = row
 
-    def add_role_assignments(self, rows: Iterable[dict[str, Any]]) -> None:
-        self._role_rows.extend(r for r in rows if isinstance(r, dict))
+    def add_role_assignments(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        eligible: bool = False,
+        inherited_from: str | None = None,
+    ) -> None:
+        """RBAC role assignment rows (ARG ``authorizationresources`` or ARM REST).
+
+        Args:
+            eligible: The rows are PIM eligibility schedules, not active grants.
+            inherited_from: Label for assignments made above the subscription
+                (management group or tenant root).
+        """
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if eligible or inherited_from:
+                r = dict(r)
+                r["_eligible"] = eligible
+                r["_inherited_from"] = inherited_from
+            self._role_rows.append(r)
+
+    def add_role_definitions(self, rows: Iterable[dict[str, Any]]) -> None:
+        """Role definition rows; assigned and custom ones become IAM_POLICY assets."""
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if _lower(row.get("type")) != "microsoft.authorization/roledefinitions":
+                continue
+            m = _GUID_TAIL_RE.search(str(row.get("id") or ""))
+            guid = str(row.get("roleGuid") or (m.group(1) if m else "") or "").lower()
+            if guid:
+                self._role_definitions.setdefault(guid, row)
 
     def add_defender_pricings(self, rows: Iterable[dict[str, Any]]) -> None:
         sub_ref = subscription_ref(self.subscription_id)
+        self._pricings_seen = True
         for row in rows:
             if not isinstance(row, dict):
+                continue
+            if _lower(row.get("type")) not in ("", "microsoft.security/pricings"):
                 continue
             props = row.get("properties") or {}
             plan = row.get("name") or str(row.get("id", "")).rsplit("/", 1)[-1]
             if not plan:
+                continue
+            resource = _pricing_resource(row.get("id"))
+            if resource:  # a resource-level override of a subscription plan
+                self._pricing_overrides[f"{resource.lower()}|{plan.lower()}"] = (
+                    _lower(_get(props, "pricingTier")) == "standard"
+                )
                 continue
             tier = _get(props, "pricingTier")
             enabled = _lower(tier) == "standard"
@@ -285,6 +378,12 @@ class AzureAssetBuilder:
                         description=f"Defender for Cloud plan {plan}",
                     )
                 ]
+                extensions = [e for e in _get(props, "extensions") or [] if isinstance(e, dict)]
+                if extensions:
+                    md["extensions"] = [
+                        {"name": _get(e, "name"), "enabled": _get(e, "isEnabled")}
+                        for e in extensions
+                    ]
             else:
                 md["status"] = "not enabled"
             self._extra.append(
@@ -319,6 +418,9 @@ class AzureAssetBuilder:
             # AKS kubelet identity with AcrPull -> the cluster pulls from the registry
             if guid == ACR_PULL_ROLE_ID and pid.lower() in self._kubelets and scope:
                 self._kubelet_acr_pull(pid, scope, registries)
+        # role definition attachments (ROLE/USER/GROUP_HAS_POLICY), when definitions were read
+        for pid, ptype, relation in self.state.get("role_attachments", []):
+            self._attach_principal_relation(pid, ptype, relation, placeholders)
         self._extra.extend(placeholders.values())
         # principals referenced elsewhere (Key Vault policies, SQL admins) without an owner
         for key, ptype in self._principal_types.items():
@@ -415,7 +517,18 @@ class AzureAssetBuilder:
         )
 
     def build(self) -> list[CloudAsset]:
-        """Finalize: role assignments, deferred relations, then CloudAssets."""
+        """Finalize: build hooks, role assignments, deferred relations, then CloudAssets."""
+        from cloudg.inventory.azure_graph.governance import role_definition_assets
+        from cloudg.inventory.azure_graph.security import defender_coverage
+
+        for fn in list(self._finalizers):
+            try:
+                fn(self)
+            except Exception:
+                logger.debug("Azure build hook %s failed", fn, exc_info=True)
+        defender_coverage(self, self._pricing_overrides, self._pricings_seen)
+        if self._role_definitions:
+            role_definition_assets(self, self._role_definitions, self._role_rows)
         self._role_assignments()
         for owner, relation in self._deferred:
             draft = self._drafts.get(owner)
@@ -447,37 +560,79 @@ def collect_subscription_graph(
     role_assignments: bool = True,
     defender: bool = True,
     errors: dict[str, str] | None = None,
+    tasks: Iterable[str] | None = None,
+    recorder: Any = None,
+    keep_row: Callable[[dict[str, Any]], bool] | None = None,
 ) -> AzureAssetBuilder:
     """Query ARG for one subscription and return a populated builder.
 
     The ``resources`` query must succeed (its exception propagates so the
     caller can fall back to the SDK path); the container, role-assignment
     and Defender queries are best-effort and record failures in ``errors``.
+    The other Resource Graph tables (policy, security, backup, Kubernetes
+    configuration, network manager, guest configuration, maintenance,
+    insights) and the management-group role assignments and role
+    definitions are best-effort too: their failures become FAILED coverage
+    records on ``recorder``.
+
+    Args:
+        tasks: Task names to run (:mod:`.families`); None runs every task.
+        recorder: :class:`~.families.TaskRecorder` for per-task coverage.
+        keep_row: Predicate filtering the ``resources`` rows (``--services``).
     """
+    from cloudg.inventory.azure_graph.families import TaskRecorder
+    from cloudg.inventory.azure_graph.tables import collect_tables
+
     errors = errors if errors is not None else {}
+    rec = recorder if recorder is not None else TaskRecorder()
+    selected = set(tasks) if tasks is not None else None
+
+    def on(task: str) -> bool:
+        if selected is None or task in selected:
+            return True
+        rec.skip(task, "not selected (inventory.services)")
+        return False
+
     subs = [subscription_id]
     builder = AzureAssetBuilder(subscription_id, "resource-graph")
+    started = time.time()
     resource_rows = run_query(client, resources_query(subscription_id), subscriptions=subs)
+    if keep_row is not None:
+        resource_rows = [r for r in resource_rows if keep_row(r)]
     builder.add_rows(resource_rows)
+    rec.record("resources", "SUCCESS", len(resource_rows), started=started)
     builder.include_subscription()
+    started = time.time()
+    container_rows: list[dict[str, Any]] = []
     try:
-        builder.add_containers(
-            run_query(client, containers_query(subscription_id), subscriptions=subs)
-        )
+        container_rows = run_query(client, containers_query(subscription_id), subscriptions=subs)
+        builder.add_containers(container_rows)
+        rec.record("resource_containers", "SUCCESS", len(container_rows), started=started)
     except Exception as exc:
         errors["resource_graph_containers"] = str(exc)
-    if role_assignments:
+    if role_assignments and on("role_assignments"):
+        started = time.time()
         try:
-            builder.add_role_assignments(
-                run_query(client, role_assignments_query(subscription_id), subscriptions=subs)
-            )
+            rows = run_query(client, role_assignments_query(subscription_id), subscriptions=subs)
+            builder.add_role_assignments(rows)
+            rec.record("role_assignments", "SUCCESS", len(rows), started=started)
         except Exception as exc:
             errors["resource_graph_role_assignments"] = str(exc)
-    if defender:
+    if defender and on("defender_pricings"):
+        started = time.time()
         try:
-            builder.add_defender_pricings(
-                run_query(client, defender_query(subscription_id), subscriptions=subs)
-            )
+            rows = run_query(client, defender_query(subscription_id), subscriptions=subs)
+            builder.add_defender_pricings(rows)
+            rec.record("defender_pricings", "SUCCESS", len(rows), started=started)
         except Exception as exc:
             errors["resource_graph_defender"] = str(exc)
+    collect_tables(
+        client,
+        builder,
+        subscription_id,
+        on=on,
+        recorder=rec,
+        container_rows=container_rows,
+        role_assignments=role_assignments,
+    )
     return builder

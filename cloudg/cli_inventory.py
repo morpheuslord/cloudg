@@ -292,7 +292,8 @@ def _merge_findings(
 @click.option(
     "--services",
     default=None,
-    help="Service families/collectors to map, comma-separated (e.g. containers,serverless,security)",
+    help="Service families or task names to map, comma-separated, for AWS and Azure "
+    "(e.g. containers,serverless,security)",
 )
 @click.option(
     "--exclude-services", default=None, help="Service families/collectors to skip, comma-separated"
@@ -300,7 +301,7 @@ def _merge_findings(
 @click.option(
     "--kubernetes/--no-kubernetes",
     default=None,
-    help="Map workloads inside EKS clusters through the Kubernetes API",
+    help="Map workloads inside EKS and AKS clusters through the Kubernetes API",
 )
 @click.option(
     "--cloud-control/--no-cloud-control",

@@ -352,12 +352,78 @@ def _policy_assets(rows: list[dict[str, Any]]) -> list[CloudAsset]:
     return assets
 
 
+# Azure parity: subscription vending
+def _subscription_alias_assets(
+    credential: Any, arm_client_factory: Callable[[Any], Any] | None, errors: list[str] | None
+) -> list[CloudAsset]:
+    """Subscription aliases (vending): ``PROVISIONED_PRODUCT`` that ``MANAGES`` its subscription.
+
+    Best-effort. A credential that cannot list aliases (403, or no token)
+    is logged, not reported: most callers have no vending rights at all.
+    """
+    from cloudg.exceptions import CredentialError
+    from cloudg.inventory.azure_graph.rest import AzureRestError, default_arm_client_factory
+
+    try:
+        client = (arm_client_factory or default_arm_client_factory)(credential)
+        rows = client.list("/providers/Microsoft.Subscription/aliases", "2021-10-01")
+    except (CredentialError, AzureRestError) as exc:
+        if isinstance(exc, AzureRestError) and not (exc.forbidden or exc.not_applicable):
+            if errors is not None:
+                errors.append(f"subscription aliases: {exc}")
+        logger.info("Azure subscription aliases not mapped: %s", exc)
+        return []
+    except Exception as exc:
+        if errors is not None:
+            errors.append(f"subscription aliases: {exc}")
+        return []
+    assets = []
+    for row in rows:
+        rid = row.get("id")
+        props = row.get("properties") or {}
+        sub = _get(props, "subscriptionId")
+        if not rid:
+            continue
+        assets.append(
+            _asset(
+                rid,
+                row.get("name") or rid.rsplit("/", 1)[-1],
+                AssetType.PROVISIONED_PRODUCT,
+                {
+                    "resource_type": "microsoft.subscription/aliases",
+                    "subscription_id": sub,
+                    "provisioning_state": _get(props, "provisioningState"),
+                    "workload": _get(props, "workload"),
+                    "billing_scope": _get(props, "billingScope"),
+                },
+                [
+                    rel(
+                        subscription_ref(sub) if sub else None,
+                        EdgeType.MANAGES,
+                        "OWNED_BY",
+                        description="subscription vending alias",
+                    ),
+                    _contained_by_group(
+                        str(_get(props, "managementGroupId") or "").rsplit("/", 1)[-1] or None
+                    ),
+                ],
+                [rid.lower()],
+            )
+        )
+    return assets
+
+
+# end Azure parity
+
+
 def discover_azure_hierarchy(
     credential: Any,
     graph_client_factory: Callable[[Any], Any] | None = None,
     *,
     include_policies: bool = True,
     errors: list[str] | None = None,
+    subscription_aliases: bool = True,
+    arm_client_factory: Callable[[Any], Any] | None = None,
 ) -> list[CloudAsset]:
     """Discover the tenant's management groups, subscriptions and policy.
 
@@ -369,6 +435,9 @@ def discover_azure_hierarchy(
             defaults to ``azure.mgmt.resourcegraph.ResourceGraphClient``.
         include_policies: Also map policy assignments and exemptions.
         errors: Optional list receiving non-fatal failure messages.
+        subscription_aliases: Also map subscription vending aliases
+            (``Microsoft.Subscription/aliases``) through ARM REST.
+        arm_client_factory: ``credential -> ARM REST client`` for the aliases.
 
     Returns:
         ORG_UNIT, CLOUD_ACCOUNT and GUARDRAIL assets with declared relations.
@@ -401,6 +470,8 @@ def discover_azure_hierarchy(
                     if errors is not None:
                         errors.append(f"policyresources (subscriptions): {exc2}")
         assets.extend(_policy_assets(policy_rows))
+    if subscription_aliases:
+        assets.extend(_subscription_alias_assets(credential, arm_client_factory, errors))
     logger.info(
         "Azure hierarchy: %d management groups, %d subscriptions, %d policy objects",
         len(groups),

@@ -303,11 +303,38 @@ class InventoryMapper:
             ) -> None:
                 super().__init__(project_id, credentials, **{**gcp_options, **kwargs})
 
+        azure_options = self._azure_options()
+
+        # Same idea for Azure: the (credential, subscription_id) signature
+        # with the depth options and the inventory.services filter bound.
+        class _ConfiguredAzure(AzureDeepInventoryCollector):
+            def __init__(self, credential: Any, subscription_id: str) -> None:
+                super().__init__(credential, subscription_id, options=azure_options)
+
         return {
             "aws": _ConfiguredAWS,
-            "azure": AzureDeepInventoryCollector,
+            "azure": _ConfiguredAzure,
             "gcp": _ConfiguredGCP,
         }
+
+    def _azure_options(self) -> Any:
+        """AzureDeepOptions from ``inventory`` and ``azure`` configuration."""
+        from cloudg.inventory.azure_deep import AzureDeepOptions
+
+        inv = self._inventory
+        az = getattr(self._config, "azure", None)
+        return AzureDeepOptions(
+            services=list(inv.services) if inv is not None else None,
+            exclude_services=list(inv.exclude_services) if inv is not None else None,
+            kubernetes=inv.kubernetes if inv is not None else True,
+            kubernetes_timeout=inv.kubernetes_timeout if inv is not None else 10,
+            child_resources=getattr(az, "child_resources", True),
+            max_child_parents=getattr(az, "max_child_parents", 500),
+            diagnostic_settings=getattr(az, "diagnostic_settings", True),
+            max_diagnostic_settings=getattr(az, "max_diagnostic_settings", 1000),
+            data_plane=getattr(az, "data_plane", True),
+            rest_concurrency=getattr(az, "rest_concurrency", 8),
+        )
 
     # ------------------------------------------------------------------
     # Organizations / Control Tower
@@ -384,6 +411,52 @@ class InventoryMapper:
             cov.record("management_groups", ServiceStatus.FAILED, error=str(exc))
         return []
 
+    async def _discover_entra(
+        self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
+    ) -> list[CloudAsset]:
+        """Entra ID (Microsoft Graph), once per run; per-listing coverage records."""
+        from cloudg.inventory.azure_graph.families import select_azure_tasks
+
+        inv = self._inventory
+        cov = CollectionCoverage(provider="azure", region="global")
+        coverage.append(cov)
+        if not select_azure_tasks(
+            ["entra"],
+            list(inv.services) if inv is not None else None,
+            list(inv.exclude_services) if inv is not None else None,
+        ):
+            cov.record("entra", ServiceStatus.SKIPPED, error="not selected (inventory.services)")
+            return []
+        t0 = time.time()
+        try:
+            from cloudg.credentials import build_azure_credential
+            from cloudg.inventory.azure_entra import discover_entra
+
+            credential = build_azure_credential(cfg.azure)
+            found = await asyncio.to_thread(
+                discover_entra,
+                credential,
+                None,
+                coverage=cov,
+                max_objects=getattr(cfg.azure, "entra_max_objects", 10000),
+                max_expansions=getattr(cfg.azure, "entra_max_expansions", 1000),
+            )
+            cov.record(
+                "entra",
+                ServiceStatus.PARTIAL
+                if any(s.status == ServiceStatus.FAILED for s in cov.services)
+                else ServiceStatus.SUCCESS,
+                asset_count=len(found),
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+            return found
+        except ImportError as exc:
+            cov.record("entra", ServiceStatus.SKIPPED, error=str(exc))
+        except Exception as exc:
+            logger.error("Entra ID discovery failed: %s", exc)
+            cov.record("entra", ServiceStatus.FAILED, error=str(exc))
+        return []
+
     async def _discover_gcp_hierarchy(
         self, cfg: CloudGConfig, coverage: list[CollectionCoverage]
     ) -> list[CloudAsset]:
@@ -427,6 +500,8 @@ class InventoryMapper:
         out: list[CloudAsset] = []
         if "azure" in cfg.providers and getattr(cfg.azure, "map_management_groups", False):
             out.extend(await self._discover_azure_hierarchy(cfg, coverage))
+        if "azure" in cfg.providers and getattr(cfg.azure, "map_entra", False):
+            out.extend(await self._discover_entra(cfg, coverage))
         gcp = cfg.gcp
         if "gcp" in cfg.providers and gcp.organization_id and getattr(gcp, "map_hierarchy", False):
             out.extend(await self._discover_gcp_hierarchy(cfg, coverage))

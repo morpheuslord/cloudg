@@ -239,6 +239,10 @@ class AssetType(str, Enum):
     TAG = "TAG"  # Resource Manager tag key / tag value
     FLEET = "FLEET"  # GKE fleet, fleet membership, fleet scope
     # end GCP parity
+    # Azure parity
+    PLACEMENT_GROUP = "PLACEMENT_GROUP"  # availability set, proximity placement group, host group
+    APP_REGISTRATION = "APP_REGISTRATION"  # Entra application object (app registration)
+    # end Azure parity
 
     # Generic
     OTHER = "OTHER"

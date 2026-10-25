@@ -166,6 +166,49 @@ class AzureConfig(BaseModel):
         description="Map the management group / subscription / Azure Policy hierarchy (inventory)",
     )
 
+    # Azure parity
+    map_entra: bool = Field(
+        default=True,
+        description="Inventory: map Entra ID (users, groups, apps, service principals, "
+        "directory roles, PIM) through Microsoft Graph; needs Graph read permissions",
+    )
+    entra_max_objects: int = Field(
+        default=10000, ge=0, description="Inventory: most objects read per Microsoft Graph listing"
+    )
+    entra_max_expansions: int = Field(
+        default=1000,
+        ge=0,
+        description="Inventory: most groups / apps / service principals whose members, owners, "
+        "federated credentials or app-role assignments are read one by one",
+    )
+    child_resources: bool = Field(
+        default=True,
+        description="Inventory: read child resources Resource Graph does not return (APIM APIs, "
+        "Service Bus queues, DNS records, functions, ...) through ARM REST",
+    )
+    max_child_parents: int = Field(
+        default=500,
+        ge=0,
+        description="Inventory: most parent resources queried per child-resource kind",
+    )
+    diagnostic_settings: bool = Field(
+        default=True, description="Inventory: read diagnostic settings of logged resource types"
+    )
+    max_diagnostic_settings: int = Field(
+        default=1000,
+        ge=0,
+        description="Inventory: most resources whose diagnostic settings are read",
+    )
+    data_plane: bool = Field(
+        default=True,
+        description="Inventory: read AI Search and Synapse data-plane metadata (data sources, "
+        "indexers, pipelines, linked services); needs data-plane reader roles",
+    )
+    rest_concurrency: int = Field(
+        default=8, ge=1, le=32, description="Inventory: concurrent ARM / Graph REST calls"
+    )
+    # end Azure parity
+
 
 # High-churn Cloud Asset Inventory types the GCP collector skips by default
 # (GCPConfig.skip_asset_types; cloudg.collectors.gcp.DEFAULT_SKIP_ASSET_TYPES)
