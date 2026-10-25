@@ -11,6 +11,7 @@ response to pause before the quota runs out.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -177,11 +178,24 @@ def containers_query(subscription_id: str) -> str:
 
 
 def role_assignments_query(subscription_id: str) -> str:
+    return _role_assignments_query(f"| where subscriptionId =~ '{_kql(subscription_id)}' ")
+
+
+def management_group_role_assignments_query() -> str:
+    """Role assignments made at management group or tenant root scope (run tenant-wide)."""
+    return _role_assignments_query(
+        "| where isempty(subscriptionId) "
+        "| where tostring(properties.scope) startswith '/providers/Microsoft.Management/' "
+        "or tostring(properties.scope) == '/' "
+    )
+
+
+def _role_assignments_query(where: str) -> str:
     guid = r"@'([0-9a-fA-F-]{36})$'"
     return (
         "authorizationresources "
         "| where type =~ 'microsoft.authorization/roleassignments' "
-        f"| where subscriptionId =~ '{_kql(subscription_id)}' "
+        f"{where}"
         "| extend roleDefinitionId = tostring(properties.roleDefinitionId), "
         "principalId = tostring(properties.principalId), "
         "principalType = tostring(properties.principalType), scope = tostring(properties.scope) "
@@ -201,3 +215,138 @@ def defender_query(subscription_id: str) -> str:
         f"| where subscriptionId =~ '{_kql(subscription_id)}' "
         "| project id, name, type, subscriptionId, properties | order by id asc"
     )
+
+
+# ── Azure parity: extra Resource Graph tables ──
+
+_ROW_COLUMNS = (
+    "id, name, type, kind, location, resourceGroup, subscriptionId, tags, identity, properties"
+)
+
+
+def _kql_type(value: str) -> str:
+    """An ARM type literal for KQL: letters, digits, ``.``, ``_``, ``-`` and ``/`` only."""
+    return re.sub(r"[^A-Za-z0-9._/\-]", "", value or "")
+
+
+def _types_clause(types: tuple[str, ...]) -> str:
+    if not types:
+        return ""
+    quoted = ", ".join(f"'{_kql_type(t)}'" for t in types)
+    return f"| where type in~ ({quoted}) "
+
+
+def table_query(table: str, subscription_id: str, types: tuple[str, ...] = ()) -> str:
+    """ARM-shaped rows of one Resource Graph table for one subscription."""
+    return (
+        f"{_kql(table)} | where subscriptionId =~ '{_kql(subscription_id)}' "
+        f"{_types_clause(types)}| project {_ROW_COLUMNS} | order by id asc"
+    )
+
+
+def role_definitions_query() -> str:
+    """Every role definition visible to the caller (built-in and custom)."""
+    guid = r"@'([0-9a-fA-F-]{36})$'"
+    return (
+        "authorizationresources | where type =~ 'microsoft.authorization/roledefinitions' "
+        f"| extend roleGuid = tolower(extract({guid}, 1, id)) "
+        "| project id, name, type, roleGuid, properties | order by id asc"
+    )
+
+
+POLICY_TYPES = (
+    "microsoft.authorization/policyassignments",
+    "microsoft.authorization/policyexemptions",
+)
+POLICY_DEFINITION_TYPES = (
+    "microsoft.authorization/policydefinitions",
+    "microsoft.authorization/policysetdefinitions",
+)
+
+
+def policy_definitions_query(names: list[str]) -> str:
+    """Custom policy definitions / initiatives, plus the built-in ones named in ``names``."""
+    named = ", ".join(f"'{_kql(n)}'" for n in names[:800] if _kql(n))
+    builtin = f" or name in~ ({named})" if named else ""
+    return (
+        f"policyresources {_types_clause(POLICY_DEFINITION_TYPES)}"
+        f"| where tostring(properties.policyType) !~ 'BuiltIn'{builtin} "
+        "| project id, name, type, subscriptionId, properties | order by id asc"
+    )
+
+
+def policy_states_query(subscription_id: str) -> str:
+    """Non-compliant policy states of one subscription (latest evaluation)."""
+    return (
+        "policyresources | where type =~ 'microsoft.policyinsights/policystates' "
+        f"| where subscriptionId =~ '{_kql(subscription_id)}' "
+        "| where tostring(properties.complianceState) =~ 'NonCompliant' "
+        "| project id, type, subscriptionId, resourceId = tostring(properties.resourceId), "
+        "policyAssignmentId = tostring(properties.policyAssignmentId), "
+        "policyDefinitionId = tostring(properties.policyDefinitionId), "
+        "policyDefinitionAction = tostring(properties.policyDefinitionAction), "
+        "complianceState = tostring(properties.complianceState) | order by id asc"
+    )
+
+
+def security_assessments_query(subscription_id: str) -> str:
+    """Defender for Cloud assessments and sub-assessments, one lean row each."""
+    return (
+        "securityresources "
+        "| where type in~ ('microsoft.security/assessments', "
+        "'microsoft.security/assessments/subassessments') "
+        f"| where subscriptionId =~ '{_kql(subscription_id)}' "
+        "| extend resourceId = tostring(coalesce(properties.resourceDetails.Id, "
+        "properties.resourceDetails.id, properties.resourceDetails.ResourceId)), "
+        "code = tostring(properties.status.code), "
+        "severity = tostring(coalesce(properties.metadata.severity, properties.status.severity)), "
+        "title = tostring(properties.displayName) "
+        "| project id, type, subscriptionId, resourceId, code, severity, title, "
+        "additionalData = properties.additionalData | order by id asc"
+    )
+
+
+def secure_score_query(subscription_id: str) -> str:
+    return (
+        "securityresources "
+        "| where type in~ ('microsoft.security/securescores', "
+        "'microsoft.security/securescores/securescorecontrols') "
+        f"| where subscriptionId =~ '{_kql(subscription_id)}' "
+        "| project id, name, type, subscriptionId, properties | order by id asc"
+    )
+
+
+def security_alerts_query(subscription_id: str) -> str:
+    """Active (not dismissed or resolved) Defender for Cloud alerts."""
+    return (
+        "securityresources | where type =~ 'microsoft.security/locations/alerts' "
+        f"| where subscriptionId =~ '{_kql(subscription_id)}' "
+        "| where tostring(properties.Status) !in~ ('Dismissed', 'Resolved') "
+        "| project id, name, type, subscriptionId, properties | order by id asc"
+    )
+
+
+BACKUP_TYPES = (
+    "microsoft.recoveryservices/vaults/backupfabrics/protectioncontainers/protecteditems",
+    "microsoft.recoveryservices/vaults/backuppolicies",
+    "microsoft.recoveryservices/vaults/replicationfabrics/replicationprotectioncontainers/"
+    "replicationprotecteditems",
+    "microsoft.recoveryservices/vaults/replicationpolicies",
+    "microsoft.dataprotection/backupvaults/backupinstances",
+    "microsoft.dataprotection/backupvaults/backuppolicies",
+)
+
+# (task, table, types) of the best-effort ARM-shaped tables
+ARG_TABLE_TASKS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("policy", "policyresources", POLICY_TYPES),
+    ("backup_items", "recoveryservicesresources", BACKUP_TYPES),
+    ("kubernetes_configuration", "kubernetesconfigurationresources", ()),
+    ("network_resources", "networkresources", ()),
+    (
+        "guest_configuration",
+        "guestconfigurationresources",
+        ("microsoft.guestconfiguration/guestconfigurationassignments",),
+    ),
+    ("maintenance", "maintenanceresources", ("microsoft.maintenance/configurationassignments",)),
+    ("insights", "insightsresources", ("microsoft.insights/datacollectionruleassociations",)),
+)

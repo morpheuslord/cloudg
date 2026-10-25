@@ -63,6 +63,16 @@ _PARENT_RELATIONSHIP = {
     "microsoft.containerservice/managedclusters/agentpools": "CLUSTER_CONTAINS_SERVICE",
     "microsoft.web/sites/slots": "CLUSTER_CONTAINS_SERVICE",
     "microsoft.web/sites/functions": "CLUSTER_CONTAINS_SERVICE",
+    # Azure parity
+    "microsoft.kubernetesconfiguration/extensions": "CLUSTER_CONTAINS_SERVICE",
+    "microsoft.kubernetesconfiguration/fluxconfigurations": "CLUSTER_CONTAINS_SERVICE",
+    "microsoft.kubernetesconfiguration/sourcecontrolconfigurations": "CLUSTER_CONTAINS_SERVICE",
+    "microsoft.app/containerapps/revisions": "CLUSTER_CONTAINS_SERVICE",
+    "microsoft.appplatform/spring/apps": "CLUSTER_CONTAINS_SERVICE",
+    "microsoft.machinelearningservices/workspaces/onlineendpoints/deployments": (
+        "CLUSTER_CONTAINS_SERVICE"
+    ),
+    # end Azure parity
 }
 
 
@@ -72,6 +82,23 @@ def extractor(*types: str) -> Callable[[Extractor], Extractor]:
     def deco(fn: Extractor) -> Extractor:
         for t in types:
             _EXTRACTORS.setdefault(t.lower(), []).append(fn)
+        return fn
+
+    return deco
+
+
+# Rows of these types never become assets: their handler only adds relations
+# or metadata to other assets (links, memberships, assignments).
+RowHandler = Callable[[dict[str, Any], "AzureAssetBuilder"], None]
+_ROW_HANDLERS: dict[str, RowHandler] = {}
+
+
+def relation_row(*types: str) -> Callable[[RowHandler], RowHandler]:
+    """Register a handler for rows that only carry relations (no asset)."""
+
+    def deco(fn: RowHandler) -> RowHandler:
+        for t in types:
+            _ROW_HANDLERS[t.lower()] = fn
         return fn
 
     return deco
