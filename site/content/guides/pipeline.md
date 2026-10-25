@@ -1,16 +1,17 @@
 ---
 title: The pipeline
-lede: "`cloudg run` is five phases in a fixed order: collect, graph, scan, normalise, render. This page follows the data through each one, says what it reads and writes, and what happens when part of it fails."
-meta:
-  - [Command, "`cloudg run`"]
-  - [Python, "`CloudGEngine.run_pipeline()`"]
-  - [Output, "`./reports` by default"]
-source: cloudg/cli_run_helpers.py
+description: 'cloudg run is five phases in a fixed order: collect, graph, scan, normalise, render. This page follows the data through each one, says what it reads and writes, and what happens when part of it fails.'
 ---
+
+`cloudg run` is five phases in a fixed order: collect, graph, scan, normalise, render. This page follows the data through each one, says what it reads and writes, and what happens when part of it fails.
+{ .lede }
+
+**Command** `cloudg run` &middot; **Python** `CloudGEngine.run_pipeline()` &middot; **Output** `./reports` by default
+{ .page-meta }
 
 Each phase hands its results to the next in memory. Files are written along the way, but no phase reads back what an earlier one wrote, so you can delete `./reports` between runs without breaking anything. The graph phase and the scan phase both start from the collected inventory; the normaliser is where their findings meet.
 
-```mermaid caption="Phases of cloudg run and what each one writes"
+```mermaid
 flowchart TD
   A["1 Collect: MultiAccountCollector"] --> B["2 Graph: GraphBuilder, reachability"]
   B --> B2["2c RAG chunks / 2d Terraform"]
@@ -24,6 +25,8 @@ flowchart TD
   C2 -. "ontology.ttl, ontology.jsonld" .-> F
   E -. "findings.json, report.html" .-> F
 ```
+Phases of cloudg run and what each one writes
+{ .diagram-caption }
 
 The CLI prints each phase as it starts, with the same numbering:
 
@@ -52,7 +55,7 @@ Collection reads the configuration (providers, regions, accounts, credentials) a
 
 `--regions all` turns into `["ALL"]` for all three providers, and region discovery replaces it with the enabled regions before collection starts. Without `--regions`, AWS uses `us-east-1` (or `--region`), while Azure and GCP default to all.
 
-Two limits keep collection polite. An `asyncio.Semaphore` sized by `concurrency_limit` (default 5) caps how many tasks run at once: AWS account and region pairs, Azure subscriptions and GCP projects or organizations, all providers together. Below that, every API call passes through the shared rate limiter configured under `ratelimit`, which paces calls per service, honours Retry-After, and opens a circuit breaker on an API that stays throttled. [Rate limits](/guides/rate-limits/) explains the knobs.
+Two limits keep collection polite. An `asyncio.Semaphore` sized by `concurrency_limit` (default 5) caps how many tasks run at once: AWS account and region pairs, Azure subscriptions and GCP projects or organizations, all providers together. Below that, every API call passes through the shared rate limiter configured under `ratelimit`, which paces calls per service, honours Retry-After, and opens a circuit breaker on an API that stays throttled. [Rate limits](rate-limits.md) explains the knobs.
 
 ### When collection fails
 
@@ -130,7 +133,7 @@ Three renderers write the final files:
 
 ## The whole run, step by step
 
-```mermaid caption="Who calls whom during cloudg run"
+```mermaid
 sequenceDiagram
   participant CLI as cloudg run
   participant Col as MultiAccountCollector
@@ -149,6 +152,8 @@ sequenceDiagram
   N-->>CLI: ScanResult
   CLI->>R: findings.json, topology.svg, report.html
 ```
+Who calls whom during cloudg run
+{ .diagram-caption }
 
 ## Running it from the CLI
 
@@ -171,48 +176,50 @@ cloudg run -p aws --iac-dir ./infra --images nginx:1.27,myrepo/api:2.3 --no-onto
 cloudg -c config.yaml run -p all --regions all -o ./reports/2026-10-09
 ```
 
-`config.yaml` is only read when you pass `-c`; there is no automatic lookup in the current directory. The [cloudg run reference](/cli/run/) lists every flag.
+`config.yaml` is only read when you pass `-c`; there is no automatic lookup in the current directory. The [cloudg run reference](../cli/run.md) lists every flag.
 
 ## Running it from Python
 
 `CloudGEngine` implements the same phases. `run_pipeline()` is the async version and `run_pipeline_sync()` wraps it in `asyncio.run` for plain scripts. Inside a running event loop (Jupyter runs one) the sync wrapper raises `RuntimeError`; `await engine.run_pipeline()` there instead:
 
-```python tab="Sync" title="run_pipeline.py"
-from cloudg import CloudGConfig, CloudGEngine
+=== "Sync"
 
-config = CloudGConfig(providers=["aws"])
-config.aws.regions = ["us-east-1"]
-config.scanners.enabled = ["prowler", "iam"]
+    ```python title="run_pipeline.py"
+    from cloudg import CloudGConfig, CloudGEngine
 
-engine = CloudGEngine(config)
-engine.on_phase_start = lambda phase: print(f"-> {phase}")
-engine.on_error = lambda phase, exc: print(f"!! {phase}: {exc}")
+    config = CloudGConfig(providers=["aws"])
+    config.aws.regions = ["us-east-1"]
+    config.scanners.enabled = ["prowler", "iam"]
 
-result = engine.run_pipeline_sync(output_dir="./reports")
+    engine = CloudGEngine(config)
+    engine.on_phase_start = lambda phase: print(f"-> {phase}")
+    engine.on_error = lambda phase, exc: print(f"!! {phase}: {exc}")
 
-print(result.to_summary())
-print(result.report_paths)          # {'json': ..., 'html': ...}
-for cov in result.coverage:
-    failed = [s.service for s in cov.services if s.status.value == "FAILED"]
-    if failed:
-        print(cov.provider, cov.region, "failed:", failed)
-```
+    result = engine.run_pipeline_sync(output_dir="./reports")
 
-```python tab="Async" title="run_pipeline_async.py"
-import asyncio
+    print(result.to_summary())
+    print(result.report_paths)          # {'json': ..., 'html': ...}
+    for cov in result.coverage:
+        failed = [s.service for s in cov.services if s.status.value == "FAILED"]
+        if failed:
+            print(cov.provider, cov.region, "failed:", failed)
+    ```
 
-from cloudg import CloudGConfig, CloudGEngine
+=== "Async"
 
+    ```python title="run_pipeline_async.py"
+    import asyncio
 
-async def main() -> None:
-    engine = CloudGEngine(CloudGConfig(providers=["aws", "gcp"]))
-    result = await engine.run_pipeline(output_dir="./reports")
-    print(result.total_assets, "assets,", result.total_findings, "findings")
-    print(result.severity_breakdown)
+    from cloudg import CloudGConfig, CloudGEngine
 
+    async def main() -> None:
+        engine = CloudGEngine(CloudGConfig(providers=["aws", "gcp"]))
+        result = await engine.run_pipeline(output_dir="./reports")
+        print(result.total_assets, "assets,", result.total_findings, "findings")
+        print(result.severity_breakdown)
 
-asyncio.run(main())
-```
+    asyncio.run(main())
+    ```
 
 CLI flags become config fields or method arguments:
 
@@ -258,7 +265,6 @@ import asyncio
 
 from cloudg import CloudGConfig, CloudGEngine
 
-
 async def main() -> None:
     engine = CloudGEngine(CloudGConfig(providers=["aws"]))
 
@@ -274,7 +280,6 @@ async def main() -> None:
 
     print(analysis.graph_nodes, "nodes,", len(analysis.attack_paths), "attack paths")
     print(scan_result.summary)
-
 
 asyncio.run(main())
 ```
@@ -317,7 +322,6 @@ edges = [
     NetworkEdge(source_id=sg.id, target_id=vm.id, edge_type=EdgeType.ATTACHED_TO),
 ]
 
-
 async def main() -> None:
     engine = CloudGEngine(CloudGConfig(providers=["aws"]))
 
@@ -339,7 +343,6 @@ async def main() -> None:
     for finding in scan_result.findings:
         print(finding.severity.value, finding.title)
 
-
 asyncio.run(main())
 ```
 
@@ -353,4 +356,4 @@ findings.json  ontology.jsonld  ontology.ttl  rag_chunks.jsonl  rag_metadata_ind
 
 Three nodes for two assets: the third is the external `0.0.0.0/0` node the security group rule points from.
 
-For scanner output that already exists, `run_from_reports()` replaces collection and scanning with ingest and runs normalisation and reporting on top; [Ingesting existing output](/guides/ingesting/) covers it. [Python recipes](/guides/python-recipes/) has more combinations, and [CloudGEngine](/api/cloudgengine/) documents every method.
+For scanner output that already exists, `run_from_reports()` replaces collection and scanning with ingest and runs normalisation and reporting on top; [Ingesting existing output](ingesting.md) covers it. [Python recipes](python-recipes.md) has more combinations, and [CloudGEngine](../api/cloudgengine.md) documents every method.

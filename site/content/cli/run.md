@@ -1,9 +1,14 @@
 ---
+description: The whole pipeline in one command. It collects assets, builds the graph, runs the scanners, normalises the findings and writes every report.
 command: run
-lede: The whole pipeline in one command. It collects assets, builds the graph, runs the scanners, normalises the findings and writes every report.
-intro: |
-  `cloudg run` is the command most people start with. It is also the only command that takes the full set of credential flags, so it works the same way on a laptop, in CI and on cloud compute. If you only want to know what exists, [cloudg map](/cli/map/) is faster and needs no scanners.
 ---
+
+The whole pipeline in one command. It collects assets, builds the graph, runs the scanners, normalises the findings and writes every report.
+{ .lede }
+
+`cloudg run` is the command most people start with. It is also the only command that takes the full set of credential flags, so it works the same way on a laptop, in CI and on cloud compute. If you only want to know what exists, [cloudg map](map.md) is faster and needs no scanners.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
@@ -14,11 +19,11 @@ On top of that config, the command applies its flags:
 1. `-p/--provider` replaces `providers`. `all` expands to `aws`, `azure` and `gcp`.
 2. `--regions` replaces the region list of all three providers at once. `all` becomes the `ALL` sentinel, which triggers region discovery. When `--regions` is absent, `--region` sets `aws.regions` to that single region and leaves Azure and GCP alone.
 3. `--subscription-id`, `--project-id` and `--profile` set `azure.subscription_ids`, `gcp.project_ids` and `aws.profile`.
-4. Every `--aws-*`, `--azure-*` and `--gcp-*` flag you give overwrites the matching credential field. Flags you leave out keep whatever the config file says. See [Auth flags](/cli/auth-flags/).
+4. Every `--aws-*`, `--azure-*` and `--gcp-*` flag you give overwrites the matching credential field. Flags you leave out keep whatever the config file says. See [Auth flags](auth-flags.md).
 
 Then the phases run:
 
-```mermaid caption="Phases of cloudg run"
+```mermaid
 flowchart TD
   A["Config file + flags"] --> B["1: collect assets"]
   B --> C["2: graph and reachability"]
@@ -30,6 +35,8 @@ flowchart TD
   F --> H["4: normalise"]
   H --> I["5: JSON, SVG, HTML"]
 ```
+Phases of cloudg run
+{ .diagram-caption }
 
 Phase 1 is collection. The multi-provider collector walks every configured account, subscription or project, and every region, concurrently. An `aws.accounts` list in the config needs `aws.role_name` too (unless `aws.organization.enabled` is on); without it the command stops with exit status 2 before collecting anything. If collection throws, cloudg prints a "Collection failed" panel and carries on with an empty inventory, so the scanners still run. Each account, region or provider that could not be collected gets a "Not collected: ..." line at the end of the phase.
 
@@ -39,7 +46,7 @@ Phase 2c, the RAG export, runs when `--rag-export` is on (the default) and `rag.
 
 Phase 2d, the Terraform recreation, runs when you pass `--terraform` or set `terraform.enabled: true`. Either one is enough.
 
-Phase 3 runs the scanners. Every scanner job gets its own thread, so they all start at once. The scanner list comes from `--scanners`, or from `scanners.enabled` in config when the flag is absent. The default config enables all five: `prowler`, `scoutsuite`, `checkov`, `trivy` and `iam`. A [scanner plugin](/api/entry-points/) runs when its name is in the list, and a name that matches nothing is skipped with a warning. Prowler and ScoutSuite run once per provider. Checkov runs once per IaC directory. Trivy scans the images from `--images` (or `scanners.trivy_images`), and falls back to a filesystem scan of the IaC directories when there are no images.
+Phase 3 runs the scanners. Every scanner job gets its own thread, so they all start at once. The scanner list comes from `--scanners`, or from `scanners.enabled` in config when the flag is absent. The default config enables all five: `prowler`, `scoutsuite`, `checkov`, `trivy` and `iam`. A [scanner plugin](../api/entry-points.md) runs when its name is in the list, and a name that matches nothing is skipped with a warning. Prowler and ScoutSuite run once per provider. Checkov runs once per IaC directory. Trivy scans the images from `--images` (or `scanners.trivy_images`), and falls back to a filesystem scan of the IaC directories when there are no images.
 
 The IaC directory is resolved in this order: `--iac-dir`, then `scanners.iac_directories`, then the Terraform recreation from phase 2d if it produced any `*.tf.json` files. There is no fallback to the current directory. A scan of whatever folder you happened to run cloudg from would report zero findings and look like a clean result, so cloudg warns "nothing to scan" instead.
 
@@ -130,24 +137,28 @@ Skip the semantic exports when you only want findings and the HTML report:
 cloudg run -p aws --no-ontology --no-rag-export
 ```
 
-Drive the pipeline from Python when you want result objects as well as files. `CloudGEngine.run_pipeline_sync()` covers the same ground, though it orders the analysis steps a little differently and writes no `topology.graphml` (see [CloudGEngine](/api/cloudgengine/)):
+Drive the pipeline from Python when you want result objects as well as files. `CloudGEngine.run_pipeline_sync()` covers the same ground, though it orders the analysis steps a little differently and writes no `topology.graphml` (see [CloudGEngine](../api/cloudgengine.md)):
 
-```bash tab="CLI"
-cloudg run -p aws --region us-east-1 --scanners prowler,checkov,iam -o ./reports
-```
+=== "CLI"
 
-```python tab="Python" title="run_pipeline.py"
-from cloudg import CloudGConfig, CloudGEngine
+    ```bash
+    cloudg run -p aws --region us-east-1 --scanners prowler,checkov,iam -o ./reports
+    ```
 
-config = CloudGConfig(providers=["aws"])
-config.aws.regions = ["us-east-1"]
-config.scanners.enabled = ["prowler", "checkov", "iam"]
+=== "Python"
 
-engine = CloudGEngine(config)
-result = engine.run_pipeline_sync(output_dir="./reports")
-print(len(result.findings), "findings")
-print(result.report_paths)
-```
+    ```python title="run_pipeline.py"
+    from cloudg import CloudGConfig, CloudGEngine
+
+    config = CloudGConfig(providers=["aws"])
+    config.aws.regions = ["us-east-1"]
+    config.scanners.enabled = ["prowler", "checkov", "iam"]
+
+    engine = CloudGEngine(config)
+    result = engine.run_pipeline_sync(output_dir="./reports")
+    print(len(result.findings), "findings")
+    print(result.report_paths)
+    ```
 
 ## Output files
 
@@ -168,7 +179,7 @@ All paths are relative to `-o/--output` (default `./reports`).
 
 The Terraform files go to `<output>/terraform`, so `cloudg run -o /tmp/scan --terraform` writes them to `/tmp/scan/terraform`. A `terraform.output_dir` in your config replaces that directory, except the old default `./reports/terraform`, which counts as unset.
 
-`cloudg run` does not write `raw-findings.json`. Use [cloudg scan](/cli/scan/) or [cloudg ingest](/cli/ingest/) when you need the pre-normalisation findings.
+`cloudg run` does not write `raw-findings.json`. Use [cloudg scan](scan.md) or [cloudg ingest](ingest.md) when you need the pre-normalisation findings.
 
 ## Exit codes
 
@@ -181,15 +192,34 @@ The Terraform files go to `<output>/terraform`, so `cloudg run -o /tmp/scan --te
 
 Exit 3 means no target could be collected at all: a profile that does not exist, a role that cannot be assumed, or no credentials anywhere in the default chain, where every service of the region fails on its own. A run where some services or regions worked exits 0; the coverage table shows what was missed.
 
-To fail a CI job on findings, read `findings.json` after the run. [CI and automation](/guides/ci-automation/) has a severity gate.
+To fail a CI job on findings, read `findings.json` after the run. [CI and automation](../guides/ci-automation.md) has a severity gate.
 
 ## Related
 
-:::links
-- [The pipeline](/guides/pipeline/) What each phase does and why it runs in that order.
-- [Running scanners](/guides/running-scanners/) Installing Prowler, ScoutSuite, Checkov and Trivy.
-- [Auth flags](/cli/auth-flags/) Every credential flag and which one wins.
-- [Provider and region flags](/cli/provider-flags/) `-p`, `--region`, `--regions` and discovery.
-- [Output flags](/cli/output-flags/) The output directory and what lands in it.
-- [cloudg map](/cli/map/) Inventory only, no scanners.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**The pipeline**](../guides/pipeline.md)
+
+    What each phase does and why it runs in that order.
+
+-   [**Running scanners**](../guides/running-scanners.md)
+
+    Installing Prowler, ScoutSuite, Checkov and Trivy.
+
+-   [**Auth flags**](auth-flags.md)
+
+    Every credential flag and which one wins.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    `-p`, `--region`, `--regions` and discovery.
+
+-   [**Output flags**](output-flags.md)
+
+    The output directory and what lands in it.
+
+-   [**cloudg map**](map.md)
+
+    Inventory only, no scanners.
+
+</div>

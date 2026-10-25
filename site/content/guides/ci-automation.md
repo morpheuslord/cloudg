@@ -1,23 +1,43 @@
 ---
 title: CI and automation
-lede: "Run cloudg on a schedule or on every infrastructure change, with short-lived cloud credentials, a severity gate that fails the job, and the reports kept as build artifacts."
-meta:
-  - [Commands, "`cloudg run`, `cloudg map`, `cloudg ingest`"]
-  - [CI systems, "GitHub Actions, GitLab CI"]
-source: .github/workflows/cloudg.yml
-since: "0.6.0"
+description: Run cloudg on a schedule or on every infrastructure change, with short-lived cloud credentials, a severity gate that fails the job, and the reports kept as build artifacts.
 ---
+
+Run cloudg on a schedule or on every infrastructure change, with short-lived cloud credentials, a severity gate that fails the job, and the reports kept as build artifacts.
+{ .lede }
+
+**Commands** `cloudg run`, `cloudg map`, `cloudg ingest` &middot; **CI systems** GitHub Actions, GitLab CI &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 There are three useful shapes for cloudg in a pipeline, and most teams end up with two of them:
 
-:::cells
+<div class="grid cells" markdown>
+
+<div class="card" markdown>
+
 ### Scheduled posture run
+
 `cloudg run` against the live account on a cron, with OIDC credentials, Prowler and the IAM linter. Slow, thorough, read-only.
+
+</div>
+
+<div class="card" markdown>
+
 ### Pull request gate
+
 Checkov and Trivy over the IaC in the branch, aggregated with `cloudg ingest`. No cloud access at all, so it is safe for forks.
+
+</div>
+
+<div class="card" markdown>
+
 ### Inventory snapshot
+
 `cloudg map` on a cron. No scanners, just the map, kept as an artifact for diffing and for the MCP server.
-:::
+
+</div>
+
+</div>
 
 Before wiring any of them up, know what cloudg's exit code does and does not tell you.
 
@@ -39,7 +59,7 @@ cloudg exits non-zero when it cannot do its job, never because of what it found.
 
 ## A severity gate
 
-Every run writes `findings.json` (see [reports](/guides/reports/)). Its `findings` list holds the normalised, deduplicated findings, each with `severity`, `risk_score`, `source_tool`, `is_suppressed` and the affected resource, and `summary` holds the totals. Save this as `ci/severity_gate.py` in the repository that runs the job:
+Every run writes `findings.json` (see [reports](reports.md)). Its `findings` list holds the normalised, deduplicated findings, each with `severity`, `risk_score`, `source_tool`, `is_suppressed` and the affected resource, and `summary` holds the totals. Save this as `ci/severity_gate.py` in the repository that runs the job:
 
 ```python title="ci/severity_gate.py"
 """Fail a CI job when a cloudg findings.json crosses a severity threshold.
@@ -56,7 +76,6 @@ import sys
 from collections import Counter
 
 ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -96,7 +115,6 @@ def main() -> int:
     print("gate: passed")
     return 0
 
-
 if __name__ == "__main__":
     sys.exit(main())
 ```
@@ -119,13 +137,14 @@ Use `--min-assets 1` (or a realistic floor for your account) on live runs, and l
 jq -e '[.findings[] | select(.severity == "CRITICAL" and (.is_suppressed | not))] | length == 0' reports/findings.json
 ```
 
-When the gate should run inside Python, for example in a job that already uses the engine, see the gate recipe in [Python recipes](/guides/python-recipes/).
+When the gate should run inside Python, for example in a job that already uses the engine, see the gate recipe in [Python recipes](python-recipes.md).
 
 ## GitHub Actions with OIDC to AWS
 
 No access keys in repository secrets. GitHub mints an OIDC token per job, AWS exchanges it for a role session, and the role only trusts this repository.
 
-::::steps
+<div class="steps" markdown>
+
 ### Create the role
 
 In the target account, add GitHub as an identity provider (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`) once, then create a role with `SecurityAudit` and `ViewOnlyAccess` attached and this trust policy. Replace the account ID and repository:
@@ -151,9 +170,10 @@ In the target account, add GitHub as an identity provider (`token.actions.github
 }
 ```
 
-:::warning Scope the subject
-A `sub` of `repo:acme/cloud-posture:*` lets every branch and every pull request from a branch assume the role. Pin it to `main` or to a deployment environment (`repo:acme/cloud-posture:environment:cloud-audit`).
-:::
+!!! warning "Scope the subject"
+
+    A `sub` of `repo:acme/cloud-posture:*` lets every branch and every pull request from a branch assume the role. Pin it to `main` or to a deployment environment (`repo:acme/cloud-posture:environment:cloud-audit`).
+
 ### Add the config and the gate
 
 Commit `ci/severity_gate.py` from above and a config next to it:
@@ -166,6 +186,7 @@ scanners:
   enabled: [prowler, iam]
   timeout_seconds: 3600      # per scanner
 ```
+
 ### Add the workflow
 
 ```yaml title=".github/workflows/cloud-posture.yml"
@@ -240,9 +261,10 @@ jobs:
           path: reports/
           retention-days: 30
 ```
-::::
 
-Credentials go through `configure-aws-credentials` here, which exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` for the whole job; cloudg's collectors and Prowler pick them up through the default chain. cloudg's own `--aws-role-arn` with `--aws-web-identity-token-file` works as well: cloudg then assumes the role itself and hands Prowler and ScoutSuite the temporary keys. The action has the advantage that every other step of the job gets the same credentials. [Authentication](/guides/authentication/#what-the-scanners-receive) has the details.
+</div>
+
+Credentials go through `configure-aws-credentials` here, which exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` for the whole job; cloudg's collectors and Prowler pick them up through the default chain. cloudg's own `--aws-role-arn` with `--aws-web-identity-token-file` works as well: cloudg then assumes the role itself and hands Prowler and ScoutSuite the temporary keys. The action has the advantage that every other step of the job gets the same credentials. [Authentication](authentication.md#what-the-scanners-receive) has the details.
 
 The action's session lasts one hour by default. A long organization-wide run can outlive it; raise `role-duration-seconds` (and the role's maximum session duration) or split the run per account.
 
@@ -341,7 +363,7 @@ Do not also pass `--aws-role-arn` here. With `AWS_WEB_IDENTITY_TOKEN_FILE` set i
 
 ## Scheduled inventory snapshots
 
-A map is cheaper than a full run and changes less often than findings. A nightly `cloudg map` gives you `inventory-map.json`, `inventory-dependencies.json` and, with `--org`, `inventory-organization.json`, ready for `cloudg deps`, for diffing, or for an [MCP server](/cli/mcp-serve/) to load.
+A map is cheaper than a full run and changes less often than findings. A nightly `cloudg map` gives you `inventory-map.json`, `inventory-dependencies.json` and, with `--org`, `inventory-organization.json`, ready for `cloudg deps`, for diffing, or for an [MCP server](../cli/mcp-serve.md) to load.
 
 ```yaml title=".github/workflows/inventory.yml"
 name: Inventory snapshot
@@ -375,7 +397,7 @@ jobs:
           retention-days: 90
 ```
 
-Throttling during a map is recorded in coverage and in the `throttling` block of `inventory-map.json` rather than failing the job, so check that block when a snapshot looks thin. Several pipelines mapping the same account at once share its API quota; stagger their schedules, or lower `ratelimit.aws.max_rps` for the CI config as described in [rate limits](/guides/rate-limits/).
+Throttling during a map is recorded in coverage and in the `throttling` block of `inventory-map.json` rather than failing the job, so check that block when a snapshot looks thin. Several pipelines mapping the same account at once share its API quota; stagger their schedules, or lower `ratelimit.aws.max_rps` for the CI config as described in [rate limits](rate-limits.md).
 
 ## Caching and artifacts
 
@@ -391,11 +413,24 @@ Do not cache `reports/`. Publish it as an artifact instead. A run's useful files
 | `inventory-map.json` | the map from `cloudg map`, loadable with `InventoryResult.load` |
 | `ontology.ttl`, `rag_chunks.jsonl` | feed downstream analysis or a retrieval index |
 
-The reports describe your estate in detail: account IDs, ARNs, open ports, IAM grants. Keep artifact retention short and the repository private, and use the Docker image or a private runner when the reports must not leave your network. See [Docker](/guides/docker/) for the image, which bundles Prowler, Checkov and Trivy.
+The reports describe your estate in detail: account IDs, ARNs, open ports, IAM grants. Keep artifact retention short and the repository private, and use the Docker image or a private runner when the reports must not leave your network. See [Docker](docker.md) for the image, which bundles Prowler, Checkov and Trivy.
 
-:::links
-- [Authentication](/guides/authentication/) Every credential method and its precedence.
-- [Python recipes](/guides/python-recipes/) The gate and the pipeline from Python.
-- [Ingesting existing output](/guides/ingesting/) What `cloudg ingest` accepts.
-- [cloudg run](/cli/run/) Every flag of the full pipeline.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Authentication**](authentication.md)
+
+    Every credential method and its precedence.
+
+-   [**Python recipes**](python-recipes.md)
+
+    The gate and the pipeline from Python.
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    What `cloudg ingest` accepts.
+
+-   [**cloudg run**](../cli/run.md)
+
+    Every flag of the full pipeline.
+
+</div>

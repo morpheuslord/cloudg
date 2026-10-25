@@ -84,6 +84,18 @@ full = [
     "policy-sentry>=0.12",
 ]
 
+# Builds the documentation site (mkdocs.yml): pip install --group docs
+[dependency-groups]
+docs = [
+    "mkdocs>=1.6.1,<2",
+    "mkdocs-material>=9.8.0,<10",
+    "mkdocstrings[python]>=1.0.8,<2",
+    "mkdocstrings-python>=2.0.10,<3",
+    "mkdocs-redirects>=1.2.3,<2",
+    # formats the signatures mkdocstrings renders
+    "ruff>=0.17.2,<1",
+]
+
 [project.scripts]
 cloudg = "cloudg.cli:cli"
 cloudg-mcp = "cloudg.mcp.cli:main"

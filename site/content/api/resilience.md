@@ -1,29 +1,19 @@
 ---
 title: cloudg.resilience
-object:
-  - cloudg.resilience.call_with_resilience
-  - cloudg.resilience.call_with_resilience_sync
-  - cloudg.resilience.resilient
-  - cloudg.resilience.Scope
-  - cloudg.resilience.RetryPolicy
-  - cloudg.resilience.stats_scope
-  - cloudg.resilience.configure
-  - cloudg.resilience.get_governor
-  - cloudg.resilience.Governor
-  - cloudg.resilience.classify
-members:
-  cloudg.resilience.Scope: [service_scope, account_scope]
-  cloudg.resilience.Governor: [summary, budget, try_retry, breaker_scope, provider_enabled, reset]
-lede: Put your own cloud API calls through the same rate limits, circuit breakers and retry budget that cloudg's collectors use.
-source: docs/RESILIENCE.md
-since: "0.6.0"
+description: Put your own cloud API calls through the same rate limits, circuit breakers and retry budget that cloudg's collectors use.
 ---
+
+Put your own cloud API calls through the same rate limits, circuit breakers and retry budget that cloudg's collectors use.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 Every cloud call cloudg makes goes through one process-wide governor: adaptive token buckets per provider, account, region and service, a concurrency cap per account, a circuit breaker per bucket and a retry budget per provider. If your own code calls the same APIs in the same process (extra enumeration next to an `InventoryMapper` run, an MCP tool of your own, a CI job that maps and then queries), wrap those calls with `call_with_resilience` and they queue behind cloudg's instead of competing with them. A throttle your call hits slows cloudg's calls to that scope too, and the other way round.
 
 ## What happens to one call
 
-```mermaid caption="call_with_resilience, step by step"
+```mermaid
 flowchart TD
   A["call_with_resilience(fn, scope)"] --> B{"Breaker open?"}
   B -->|yes| X["CircuitOpenError, nothing sent"]
@@ -38,6 +28,8 @@ flowchart TD
   F -->|yes| G["Back off, never under Retry-After"] --> B
   F -->|no| Z["Re-raise, breaker counts a failure"]
 ```
+call_with_resilience, step by step
+{ .diagram-caption }
 
 A throttling error also halves the scope's rate (at most once per second) and pauses the scope for the server's Retry-After, capped at 300 seconds. After five seconds without a throttle each success gives back 5% of the configured rate. The backoff before a retry is decorrelated jitter, `min(cap, uniform(0.5, 3 x previous))`. Retries stop at the first of `max_retries` (8 by default), the per-call deadline (900 seconds) or an empty retry budget (500 per provider; the first two retries of each call are free, and each success refunds 0.1). When retrying stops, your original exception is re-raised, not a wrapper.
 
@@ -92,7 +84,6 @@ configure(RateLimitConfig.model_validate(
 
 attempts = {"describe": 0}
 
-
 def describe_vpcs() -> dict:
     """Stands in for ec2.describe_vpcs(): throttled twice, then answers."""
     attempts["describe"] += 1
@@ -101,13 +92,11 @@ def describe_vpcs() -> dict:
                            "ResponseMetadata": {"HTTPStatusCode": 503}}, "DescribeVpcs")
     return {"Vpcs": [{"VpcId": "vpc-0a1b2c3d"}]}
 
-
 @resilient(lambda name, **_: Scope("aws", ACCOUNT, "eu-west-1", "secretsmanager", "DescribeSecret"),
            policy=RetryPolicy(max_retries=2, deadline=30.0))
 async def describe_secret(name: str) -> str:
     """Stands in for an async SDK call; the decorator paces every call."""
     return f"arn:aws:secretsmanager:eu-west-1:{ACCOUNT}:secret:{name}"
-
 
 async def main() -> None:
     ec2 = Scope("aws", ACCOUNT, "eu-west-1", "ec2", "DescribeVpcs")
@@ -124,7 +113,6 @@ async def main() -> None:
     summary = get_governor().summary(stats)
     print("totals:", summary["totals"])
     print("slowed:", {k: v["rate_rps"] for k, v in summary["slowed_buckets"].items()})
-
 
 asyncio.run(main())
 ```
@@ -157,14 +145,12 @@ import boto3
 
 from cloudg.resilience import Scope, call_with_resilience, stats_scope
 
-
 async def main() -> None:
     ec2 = boto3.client("ec2", region_name="eu-west-1")
     scope = Scope("aws", "123456789012", "eu-west-1", "ec2", "DescribeVpcs")
     with stats_scope() as stats:
         vpcs = await call_with_resilience(ec2.describe_vpcs, scope=scope, MaxResults=50)
     print(len(vpcs["Vpcs"]), stats.messages())
-
 
 asyncio.run(main())
 ```
@@ -181,12 +167,62 @@ boto3 also retries inside the call, so a throttled request can be retried both b
 - `reset_governor()` replaces the governor with a fresh one and forgets every learned rate. It exists for tests. `get_governor().reset()` clears the same learned state on the current governor and keeps its configuration.
 - `cloudg.retry.with_retry` is the older decorator. It keeps its signature and also retries provider throttling recognised from codes and statuses, but it does not use the shared buckets or breakers.
 
+## Reference
+
+::: cloudg.resilience.call_with_resilience
+
+::: cloudg.resilience.call_with_resilience_sync
+
+::: cloudg.resilience.resilient
+
+::: cloudg.resilience.Scope
+    options:
+      members:
+        - service_scope
+        - account_scope
+
+::: cloudg.resilience.RetryPolicy
+
+::: cloudg.resilience.stats_scope
+
+::: cloudg.resilience.configure
+
+::: cloudg.resilience.get_governor
+
+::: cloudg.resilience.Governor
+    options:
+      members:
+        - summary
+        - budget
+        - try_retry
+        - breaker_scope
+        - provider_enabled
+        - reset
+
+::: cloudg.resilience.classify
+
 ## Related
 
-:::links
-- [Rate limits and throttling](/guides/rate-limits/) What cloudg does under throttling, and how to tune it.
-- [ratelimit settings](/reference/config/ratelimit/) Every `ratelimit` key in `config.yaml`.
-- [How one call is paced](/reference/resilience/how-one-call-is-paced/) Buckets, AIMD, breakers and the retry budget in depth.
-- [Python API](/reference/resilience/python-api/) `LiveOperationGuard`, the bulkhead and other lower-level pieces.
-- [CloudGMCPLayer](/api/mcp-layer/) Live MCP tools run under the same governor.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Rate limits and throttling**](../guides/rate-limits.md)
+
+    What cloudg does under throttling, and how to tune it.
+
+-   [**ratelimit settings**](../reference/config/ratelimit.md)
+
+    Every `ratelimit` key in `config.yaml`.
+
+-   [**How one call is paced**](../reference/resilience/how-one-call-is-paced.md)
+
+    Buckets, AIMD, breakers and the retry budget in depth.
+
+-   [**Python API**](../reference/resilience/python-api.md)
+
+    `LiveOperationGuard`, the bulkhead and other lower-level pieces.
+
+-   [**CloudGMCPLayer**](mcp-layer.md)
+
+    Live MCP tools run under the same governor.
+
+</div>

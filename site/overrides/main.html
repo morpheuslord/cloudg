@@ -1,0 +1,10 @@
+{#- MkDocs Material theme override: the release banner shown on every docs page.
+    site/hooks.py sets config.extra.release to the newest version in CHANGELOG.md,
+    so the banner follows the changelog without being edited by hand. -#}
+{% extends "base.html" %}
+
+{% block announce %}
+  cloudg <strong>{{ config.extra.release }}</strong> is the latest release.
+  <a href="{{ 'changelog/' | url }}#{{ config.extra.release }}">See what changed</a>
+  or open the <a href="{{ 'sample-report.html' | url }}">sample report</a>.
+{% endblock %}

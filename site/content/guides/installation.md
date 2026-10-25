@@ -1,12 +1,13 @@
 ---
 title: Installation
-lede: "cloudg is a Python package with optional extras per cloud provider. The security scanners it drives are separate programs that you install next to it, or get prebuilt in the Docker image."
-meta:
-  - [Python, "3.11 or newer"]
-  - [Package, "`cloudg` on PyPI"]
-  - [Image, "`ghcr.io/morpheuslord/cloudg`"]
-source: pyproject.toml
+description: cloudg is a Python package with optional extras per cloud provider. The security scanners it drives are separate programs that you install next to it, or get prebuilt in the Docker image.
 ---
+
+cloudg is a Python package with optional extras per cloud provider. The security scanners it drives are separate programs that you install next to it, or get prebuilt in the Docker image.
+{ .lede }
+
+**Python** 3.11 or newer &middot; **Package** `cloudg` on PyPI &middot; **Image** `ghcr.io/morpheuslord/cloudg`
+{ .page-meta }
 
 There are two things to install, and it helps to keep them apart. The first is cloudg itself: the CLI, the graph engine, the normaliser, the report renderers and, through extras, the cloud SDKs. The second is the set of scanners (Prowler, ScoutSuite, Checkov, Trivy) that `cloudg run` and `cloudg scan` call as subprocesses. cloudg works with any subset of them, including none.
 
@@ -18,27 +19,33 @@ Credentials are not needed to install, and not needed at all for `cloudg ingest`
 
 ## Install cloudg
 
-```bash tab="pip"
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "cloudg[all]"
-```
+=== "pip"
 
-```bash tab="uv"
-# as a standalone CLI in its own environment
-uv tool install "cloudg[all]"
-# or into the current project's virtualenv
-uv pip install "cloudg[all]"
-```
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install "cloudg[all]"
+    ```
 
-```bash tab="Docker"
-docker pull ghcr.io/morpheuslord/cloudg:latest
-docker run --rm ghcr.io/morpheuslord/cloudg:latest --version
-```
+=== "uv"
+
+    ```bash
+    # as a standalone CLI in its own environment
+    uv tool install "cloudg[all]"
+    # or into the current project's virtualenv
+    uv pip install "cloudg[all]"
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker pull ghcr.io/morpheuslord/cloudg:latest
+    docker run --rm ghcr.io/morpheuslord/cloudg:latest --version
+    ```
 
 Quote the package spec. In zsh, unquoted square brackets are a glob pattern and `pip install cloudg[all]` fails with "no matches found".
 
-The Docker image already contains cloudg, the AWS, Azure and GCP SDKs, Prowler, Checkov, Trivy and Parliament. It is the shortest way to the full pipeline; [Docker](/guides/docker/) covers running it with credentials and volumes.
+The Docker image already contains cloudg, the AWS, Azure and GCP SDKs, Prowler, Checkov, Trivy and Parliament. It is the shortest way to the full pipeline; [Docker](docker.md) covers running it with credentials and volumes.
 
 ### From a source checkout
 
@@ -71,9 +78,9 @@ The cloud SDKs are optional, so a machine that only aggregates scanner output do
 
 Extras combine: `pip install "cloudg[aws,gcp]"` gets exactly two providers.
 
-:::note What the core package can do on its own
-Without any extra you still get the graph builder, the ontology, the RAG exporter, the findings normaliser with every compliance ruleset, all four scanner parsers, the HTML, JSON and SVG renderers, and the MCP layer with its native server. That is enough for `cloudg ingest` on an air-gapped analysis host.
-:::
+!!! note "What the core package can do on its own"
+
+    Without any extra you still get the graph builder, the ontology, the RAG exporter, the findings normaliser with every compliance ruleset, all four scanner parsers, the HTML, JSON and SVG renderers, and the MCP layer with its native server. That is enough for `cloudg ingest` on an air-gapped analysis host.
 
 About `full`: in 0.6.0 the IAM linter only checks whether `policy_sentry` can be imported, and nothing in the package imports `diagrams` or `weasyprint`. Installing `full` does no harm, but it changes no output today.
 
@@ -103,17 +110,23 @@ Both tools put the executables in `~/.local/bin`, which must be on `PATH` for cl
 
 Trivy is a Go binary. Use your package manager or Aqua Security's install script:
 
-```bash tab="macOS"
-brew install trivy
-```
+=== "macOS"
 
-```bash tab="Linux"
-curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
-```
+    ```bash
+    brew install trivy
+    ```
 
-```bash tab="Windows"
-winget install AquaSecurity.Trivy
-```
+=== "Linux"
+
+    ```bash
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+    ```
+
+=== "Windows"
+
+    ```bash
+    winget install AquaSecurity.Trivy
+    ```
 
 The scanners authenticate on their own. cloudg passes Prowler the AWS profile (`-p`) and, when you gave direct keys, the key pair through the environment; ScoutSuite gets the AWS profile. For Azure and GCP they read the same environment and credential files the SDKs do. If a scanner works when you run it by hand, it works under cloudg.
 
@@ -121,17 +134,21 @@ The scanners authenticate on their own. cloudg passes Prowler the AWS profile (`
 
 `install.sh` (Linux and macOS) and `install.bat` (Windows) set up a complete workstation in one go. Run them from the root of a source checkout, because they install cloudg in editable mode from the current directory:
 
-```bash tab="Linux / macOS"
-git clone https://github.com/morpheuslord/cloudg.git
-cd cloudg
-./install.sh
-```
+=== "Linux / macOS"
 
-```bash tab="Windows"
-git clone https://github.com/morpheuslord/cloudg.git
-cd cloudg
-install.bat
-```
+    ```bash
+    git clone https://github.com/morpheuslord/cloudg.git
+    cd cloudg
+    ./install.sh
+    ```
+
+=== "Windows"
+
+    ```bash
+    git clone https://github.com/morpheuslord/cloudg.git
+    cd cloudg
+    install.bat
+    ```
 
 `install.sh` detects the package manager (apt, dnf, yum, pacman, zypper or Homebrew) and then, in order:
 
@@ -216,23 +233,29 @@ You should see "Ingested 1 findings from 1 tool(s), 1 after deduplication" and t
 
 ## Upgrading
 
-```bash tab="pip"
-pip install --upgrade "cloudg[all]"
-```
+=== "pip"
 
-```bash tab="uv"
-uv tool upgrade cloudg
-```
+    ```bash
+    pip install --upgrade "cloudg[all]"
+    ```
 
-```bash tab="Docker"
-docker pull ghcr.io/morpheuslord/cloudg:latest
-```
+=== "uv"
+
+    ```bash
+    uv tool upgrade cloudg
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker pull ghcr.io/morpheuslord/cloudg:latest
+    ```
 
 For a source checkout, `git pull` and then reinstall: `uv pip install -e ".[all,dev]"`. Reinstalling matters when the entry points change. The `cloudg-mcp` console script arrived in 0.6.0, so an editable install made before that does not have it until you reinstall.
 
 Image tags follow the release version (`ghcr.io/morpheuslord/cloudg:0.6.0`), and `latest` moves with each release. Pin the version tag in CI so an upgrade happens when you choose.
 
-Configuration files carry over. A `config.yaml` that still uses the old single `provider:` key is migrated to `providers: [...]` when it loads. Read the [changelog](/changelog/) before upgrading across a minor version; it lists every changed default and output field.
+Configuration files carry over. A `config.yaml` that still uses the old single `provider:` key is migrated to `providers: [...]` when it loads. Read the [changelog](../changelog.md) before upgrading across a minor version; it lists every changed default and output field.
 
 ## Troubleshooting
 
@@ -242,4 +265,4 @@ If pip says no matching distribution was found, or mentions "a different Python"
 
 A scanner that works in your shell but is "not installed" under cloudg is on a different `PATH`. That happens with scanners installed in a second virtualenv that is not active. Use `uv tool` or `pipx`, or symlink the executable somewhere on `PATH`.
 
-Next: run your first scan in the [quickstart](/guides/quickstart/).
+Next: run your first scan in the [quickstart](quickstart.md).

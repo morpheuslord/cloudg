@@ -1,14 +1,13 @@
 ---
 title: ReachabilityAnalyzer
-object:
-  - cloudg.graph.reachability.ReachabilityAnalyzer
-  - cloudg.graph.reachability.finding_id
-  - cloudg.graph.reachability.network_flow_graph
-members:
-  cloudg.graph.reachability.ReachabilityAnalyzer: [internet_entry_points, find_internet_exposed, flow_hops, flow_successors, generate_findings, compute_blast_radius]
-lede: Walks a `GraphBuilder` graph from the internet along the edges traffic can actually take, and reports what it reaches with stable finding ids.
-since: "0.6.0"
+description: Walks a GraphBuilder graph from the internet along the edges traffic can actually take, and reports what it reaches with stable finding ids.
 ---
+
+Walks a `GraphBuilder` graph from the internet along the edges traffic can actually take, and reports what it reaches with stable finding ids.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 `cloudg run` calls `ReachabilityAnalyzer(graph).generate_findings()` right after it builds the graph, and the results show up in `findings.json` with `source_tool` set to `cloudg-reachability`. The class answers two different questions, and they follow different edges:
 
@@ -21,7 +20,7 @@ The analyzer works on the graph you pass in and changes it: `find_internet_expos
 
 Release 0.6.0 changed the walk. Before it, the analysis followed every edge type out of an exposed node, so a database whose only link to the internet was an IAM role granted access to it came out as a CRITICAL "Internet-exposed RDS_INSTANCE". Now an edge is followed only when traffic can travel along it, and in the direction it travels.
 
-```mermaid caption="Edges the exposure walk follows, in the direction traffic moves"
+```mermaid
 flowchart LR
   I["0.0.0.0/0, ::/0, Internet tag"] -->|"SG or NACL rule, ingress"| G["Security group, NSG, NACL"]
   G -->|"ATTACHED_TO, walked backwards"| R["Resource in the group"]
@@ -32,6 +31,8 @@ flowchart LR
   N["VPC, VNet, subnet"] -->|"CONTAINS"| M["Resource placed in it"]
   S["Route or peering source"] -->|"ROUTE, PEERING"| D["Destination"]
 ```
+Edges the exposure walk follows, in the direction traffic moves
+{ .diagram-caption }
 
 | Edge type | Followed | Direction |
 |---|---|---|
@@ -80,107 +81,7 @@ The key is the node's ARN, or the node id when there is no ARN (CIDR placeholder
 Ten assets, fourteen edges, no credentials. The estate has a public load balancer in front of `web-1`, an SSH rule left open on the web tier's group, a database reachable only from a private subnet and through an IAM grant, and a Lambda function behind a public API Gateway.
 
 ```python title="exposure.py"
-"""Internet exposure, flow hops, finding ids and blast radius on a small estate."""
-
-from cloudg.graph.builder import GraphBuilder
-from cloudg.graph.reachability import (
-    RULE_UNEXPECTED_EXPOSURE,
-    ReachabilityAnalyzer,
-    asset_key,
-    finding_id,
-    network_flow_graph,
-)
-from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType, NetworkEdge
-
-ACCOUNT = "123456789012"
-REGION = "eu-west-1"
-
-
-def asset(asset_id: str, asset_type: AssetType, arn: str) -> CloudAsset:
-    return CloudAsset(
-        id=asset_id,
-        name=asset_id,
-        asset_type=asset_type,
-        provider=CloudProvider.AWS,
-        region=REGION,
-        account_id=ACCOUNT,
-        arn=arn,
-    )
-
-
-assets = [
-    asset("sg-alb", AssetType.SECURITY_GROUP, f"arn:aws:ec2:{REGION}:{ACCOUNT}:security-group/sg-alb"),
-    asset("sg-web", AssetType.SECURITY_GROUP, f"arn:aws:ec2:{REGION}:{ACCOUNT}:security-group/sg-web"),
-    asset("sg-db", AssetType.SECURITY_GROUP, f"arn:aws:ec2:{REGION}:{ACCOUNT}:security-group/sg-db"),
-    asset("web-alb", AssetType.LOAD_BALANCER, f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:loadbalancer/app/web-alb/1"),
-    asset("web-tg", AssetType.TARGET_GROUP, f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/web-tg/1"),
-    asset("web-1", AssetType.EC2, f"arn:aws:ec2:{REGION}:{ACCOUNT}:instance/i-0web1"),
-    asset("app-role", AssetType.IAM_ROLE, f"arn:aws:iam::{ACCOUNT}:role/app-role"),
-    asset("orders-db", AssetType.RDS_INSTANCE, f"arn:aws:rds:{REGION}:{ACCOUNT}:db:orders-db"),
-    asset("orders-api", AssetType.API_GATEWAY, f"arn:aws:apigateway:{REGION}::/restapis/a1b2c3"),
-    asset("orders-fn", AssetType.LAMBDA_FUNCTION, f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:orders-fn"),
-]
-
-
-def ingress(source: str, target: str, ports: str, cidr: str | None = None) -> NetworkEdge:
-    return NetworkEdge(
-        source_id=source,
-        target_id=target,
-        edge_type=EdgeType.SECURITY_GROUP_RULE,
-        port_range=ports,
-        protocol="TCP",
-        cidr=cidr,
-        direction="ingress",
-    )
-
-
-def edge(source: str, target: str, edge_type: EdgeType, **extra) -> NetworkEdge:
-    return NetworkEdge(source_id=source, target_id=target, edge_type=edge_type, **extra)
-
-
-edges = [
-    ingress("0.0.0.0/0", "sg-alb", "443", cidr="0.0.0.0/0"),
-    ingress("0.0.0.0/0", "sg-web", "22", cidr="0.0.0.0/0"),  # SSH left open
-    ingress("sg-alb", "sg-web", "8080"),
-    ingress("10.0.1.0/24", "sg-db", "5432", cidr="10.0.1.0/24"),  # private source
-    # The default egress rule points from the group to the internet
-    edge("sg-web", "0.0.0.0/0", EdgeType.SECURITY_GROUP_RULE, port_range="0-65535",
-         protocol="ALL", cidr="0.0.0.0/0", direction="egress"),
-    edge("web-alb", "sg-alb", EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    edge("web-1", "sg-web", EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    edge("orders-db", "sg-db", EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    edge("web-alb", "web-tg", EdgeType.LOAD_BALANCER_TARGET),
-    edge("web-tg", "web-1", EdgeType.LOAD_BALANCER_TARGET),
-    edge("web-1", "app-role", EdgeType.ASSUMES_ROLE),
-    edge("app-role", "orders-db", EdgeType.GRANTS_ACCESS),
-    edge("0.0.0.0/0", "orders-api", EdgeType.INTERNET_EXPOSED, cidr="0.0.0.0/0"),
-    edge("orders-api", "orders-fn", EdgeType.INVOKES),
-]
-
-graph = GraphBuilder().build(assets, edges)
-analyzer = ReachabilityAnalyzer(graph)
-
-print("entry points:", sorted(analyzer.internet_entry_points()))
-print("exposed:", sorted(analyzer.find_internet_exposed()))
-
-print("hops out of sg-web:")
-for nxt, data, walked_back in analyzer.flow_hops("sg-web"):
-    print(f"  -> {nxt} via {data['edge_type']}{' (reversed)' if walked_back else ''}")
-
-for finding in analyzer.generate_findings():
-    print(f"{finding.severity.value:8} {finding.title}  id={finding.id[:8]}")
-
-# The id can be recomputed from the rule name and the asset's ARN
-expected = finding_id(RULE_UNEXPECTED_EXPOSURE, asset_key(graph, "web-1"))
-print("web-1 exposure id:", expected[:8])
-
-flow = network_flow_graph(graph)
-print("flow edges:", flow.number_of_edges(), "of", graph.number_of_edges())
-print("flow reversed:", sorted((u, v) for u, v, d in flow.edges(data=True) if d["reversed"]))
-
-radius = analyzer.compute_blast_radius("web-1")
-print("blast radius of web-1:", sorted(radius["reachable_nodes"]),
-      "depth", radius["depth"], "risk", radius["risk_score"])
+--8<-- "graph/exposure.py"
 ```
 
 ```console
@@ -244,12 +145,44 @@ The first path is the over-approximation at work: `sg-alb` admits 443 from the i
 - The open-port title keeps the historical `0.0.0.0/0` wording for both `0.0.0.0/0` and `::/0`, and names the Azure tag as written (`Internet`, `Any`, `*`) otherwise.
 - Stored findings from 0.5.x carry random ids. They will not match the 0.6.0 ids; re-baseline suppressions after upgrading.
 
+## Reference
+
+::: cloudg.graph.reachability.ReachabilityAnalyzer
+    options:
+      members:
+        - internet_entry_points
+        - find_internet_exposed
+        - flow_hops
+        - flow_successors
+        - generate_findings
+        - compute_blast_radius
+
+::: cloudg.graph.reachability.finding_id
+
+::: cloudg.graph.reachability.network_flow_graph
+
 ## Related
 
-:::links
-- [GraphBuilder](/api/graphbuilder/) Builds the graph this class walks.
-- [Dependencies and blast radius](/guides/dependencies/) The inventory-level blast radius behind `cloudg deps`.
-- [DependencyGraph](/api/dependencygraph/) Dependency walks over a saved map.
-- [Data models](/api/models/) The `Finding` model these results use.
-- [Graph, ontology and RAG](/guides/graph-ontology-rag/) Where reachability sits in the analysis phase.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**GraphBuilder**](graphbuilder.md)
+
+    Builds the graph this class walks.
+
+-   [**Dependencies and blast radius**](../guides/dependencies.md)
+
+    The inventory-level blast radius behind `cloudg deps`.
+
+-   [**DependencyGraph**](dependencygraph.md)
+
+    Dependency walks over a saved map.
+
+-   [**Data models**](models.md)
+
+    The `Finding` model these results use.
+
+-   [**Graph, ontology and RAG**](../guides/graph-ontology-rag.md)
+
+    Where reachability sits in the analysis phase.
+
+</div>

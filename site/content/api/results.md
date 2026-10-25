@@ -1,11 +1,9 @@
 ---
-object: [cloudg.api.PipelineResult, cloudg.api.CollectionResult, cloudg.api.AnalysisResult]
-members:
-  cloudg.api.PipelineResult: [total_assets, total_findings, severity_breakdown, to_summary]
-  cloudg.api.CollectionResult: []
-  cloudg.api.AnalysisResult: []
-lede: "Three plain dataclasses carry what the engine produces. `PipelineResult` is the one most callers keep; the other two come back from single phases."
+description: Three plain dataclasses carry what the engine produces. PipelineResult is the one most callers keep; the other two come back from single phases.
 ---
+
+Three plain dataclasses carry what the engine produces. `PipelineResult` is the one most callers keep; the other two come back from single phases.
+{ .lede }
 
 ## Which method returns which
 
@@ -21,7 +19,7 @@ All three are `@dataclass` classes with defaults for every field, so you can als
 
 `run_pipeline()` gets a `CollectionResult` from `collect()` and an `AnalysisResult` from `analyze()`, normalises the findings, writes the reports, and copies a subset of fields into one `PipelineResult`.
 
-```mermaid caption="Where each PipelineResult field comes from"
+```mermaid
 flowchart LR
   C["CollectionResult"] -->|"assets, edges, coverage, providers_scanned, regions_scanned"| P["PipelineResult"]
   A["AnalysisResult"] -->|"graph_nodes, graph_edges, ontology_triples, rag_chunks_path, terraform_paths, attack_paths"| P
@@ -29,6 +27,8 @@ flowchart LR
   R["report writers"] -->|"report_paths"| P
   E["on_error calls, failed collection targets"] -->|errors| P
 ```
+Where each PipelineResult field comes from
+{ .diagram-caption }
 
 Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_count` and `reachability_findings` have no counterpart on `PipelineResult` (the reachability findings are merged into `findings` instead), and `duration_ms` on the pipeline result is the whole run, not the collection time. If you need those, drive the phases yourself with `collect()` and `analyze()`.
 
@@ -38,7 +38,7 @@ Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_cou
 
 `findings` holds the normalised list when normalisation succeeded: deduplicated, rescored, sorted from CRITICAL to INFO. If normalisation failed, it holds the raw findings instead, `scan_result` is `None`, and `errors` says why.
 
-`scan_result` is the [`ScanResult`](/api/models/) the normaliser produced. It is where the compliance mapping lives (`scan_result.compliance`, one `ComplianceResult` per framework control), and its `summary` adds `total_edges` and `compliance_frameworks` to the counts. In `run_pipeline()` its `edges` are set to the collected edges.
+`scan_result` is the [`ScanResult`](models.md) the normaliser produced. It is where the compliance mapping lives (`scan_result.compliance`, one `ComplianceResult` per framework control), and its `summary` adds `total_edges` and `compliance_frameworks` to the counts. In `run_pipeline()` its `edges` are set to the collected edges.
 
 `severity_breakdown` counts `finding.severity.value` over `findings`, recomputed on every access. Only severities that occur appear as keys, so read it with `.get("CRITICAL", 0)`. `total_assets` and `total_findings` are `len()` of the lists.
 
@@ -50,7 +50,7 @@ Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_cou
 
 `attack_paths` is a `list[list[str]]`. Each inner list is a path of graph node ids, starting at an internet-exposed or external node and ending at the target of an `IAM_TRUST` edge, at most eight hops long. Node ids are asset ids, so map them back with `{a.id: a for a in result.assets}`. The search stops after about a hundred paths.
 
-`errors` holds one string of the form `"<phase>: <message>"` per failure of the run: everything reported through the `on_error` hook (scanners, scanner credentials, graph, ontology, RAG, Terraform, normalisation, reporting; see [Event hooks](/api/event-hooks/)), plus, for `run_pipeline()`, one `collection: <provider> <account/region>: <error>` line per target that could not be collected. An empty list means nothing failed.
+`errors` holds one string of the form `"<phase>: <message>"` per failure of the run: everything reported through the `on_error` hook (scanners, scanner credentials, graph, ontology, RAG, Terraform, normalisation, reporting; see [Event hooks](event-hooks.md)), plus, for `run_pipeline()`, one `collection: <provider> <account/region>: <error>` line per target that could not be collected. An empty list means nothing failed.
 
 `AnalysisResult.ontology_path` is the last file the ontology was saved to. With the default `export_formats: [turtle, json-ld]` that is `ontology.jsonld`; `ontology.ttl` is written next to it. `rag_chunk_count` is the number of chunks written to `rag_chunks_path`, one per line.
 
@@ -61,37 +61,7 @@ Some fields do not make the trip. `AnalysisResult.ontology_path`, `rag_chunk_cou
 Runs offline against existing Checkov and Trivy output.
 
 ```python title="save_result.py"
-import json
-import sys
-from pathlib import Path
-
-from cloudg import CloudGConfig, CloudGEngine
-
-result = CloudGEngine(CloudGConfig()).run_from_reports_sync(
-    {"checkov": ["./results_json.json"], "trivy": ["./trivy.json"]},
-    output_dir="./reports",
-)
-
-# Headline numbers: plain JSON types only, safe to json.dumps
-summary = result.to_summary()
-print(json.dumps(summary, indent=2))
-
-# Everything else: dump the pydantic models and stringify the paths yourself
-payload = {
-    "summary": summary,
-    "findings": [f.model_dump(mode="json") for f in result.findings],
-    "compliance": [c.model_dump(mode="json") for c in result.scan_result.compliance]
-    if result.scan_result
-    else [],
-    "report_paths": {kind: str(path) for kind, path in result.report_paths.items()},
-}
-Path("./reports/run-summary.json").write_text(json.dumps(payload, indent=2))
-
-breakdown = result.severity_breakdown            # only severities that occur
-blocking = breakdown.get("CRITICAL", 0) + breakdown.get("HIGH", 0)
-if blocking:
-    print(f"{blocking} critical/high findings, failing the build", file=sys.stderr)
-    sys.exit(1)
+--8<-- "ingest/save_result.py"
 ```
 
 ```console
@@ -129,11 +99,9 @@ from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType,
 
 ACCOUNT = "123456789012"
 
-
 def aws(name, asset_type, arn, exposed=False):
     return CloudAsset(name=name, asset_type=asset_type, arn=arn, provider=CloudProvider.AWS,
                       region="eu-west-1", account_id=ACCOUNT, is_internet_exposed=exposed)
-
 
 api = aws("orders-api", AssetType.API_GATEWAY, "arn:aws:apigateway:eu-west-1::/restapis/a1b2c3d4e5", exposed=True)
 fn = aws("orders-worker", AssetType.LAMBDA_FUNCTION, f"arn:aws:lambda:eu-west-1:{ACCOUNT}:function:orders-worker")
@@ -148,7 +116,6 @@ edges = [
     NetworkEdge(source_id=role.id, target_id=admin.id, edge_type=EdgeType.IAM_TRUST),
 ]
 
-
 async def main() -> None:
     config = CloudGConfig()
     config.ontology.enabled = False
@@ -159,7 +126,6 @@ async def main() -> None:
     print(analysis.graph_nodes, "nodes,", analysis.graph_edges, "edges")
     for path in analysis.attack_paths:
         print(" -> ".join(names.get(node, node) for node in path))
-
 
 asyncio.run(main())
 ```
@@ -193,11 +159,42 @@ The dataclasses are mutable and hold the same objects the engine worked on. Chan
 
 `total_assets` counts what was collected, not what was scanned: a scanner like Checkov reports findings against IaC resources that may not be in `assets` at all.
 
+## Reference
+
+::: cloudg.api.PipelineResult
+    options:
+      members:
+        - total_assets
+        - total_findings
+        - severity_breakdown
+        - to_summary
+
+::: cloudg.api.CollectionResult
+    options:
+      members: false
+
+::: cloudg.api.AnalysisResult
+    options:
+      members: false
+
 ## Related
 
-:::links
-- [CloudGEngine](/api/cloudgengine/) The methods that return these objects.
-- [Data models](/api/models/) Finding, CloudAsset, ScanResult and the enums.
-- [Event hooks](/api/event-hooks/) The `on_error` calls that `errors` records.
-- [Output files](/reference/output-files/) What the report paths point at.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**CloudGEngine**](cloudgengine.md)
+
+    The methods that return these objects.
+
+-   [**Data models**](models.md)
+
+    Finding, CloudAsset, ScanResult and the enums.
+
+-   [**Event hooks**](event-hooks.md)
+
+    The `on_error` calls that `errors` records.
+
+-   [**Output files**](../reference/output-files.md)
+
+    What the report paths point at.
+
+</div>

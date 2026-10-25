@@ -1,7 +1,9 @@
 ---
-object: [cloudg.ingest.parse_report, cloudg.ingest.ingest_reports]
-lede: "Turn the native output of Prowler, ScoutSuite, Checkov and Trivy into cloudg `Finding` objects. No engine, no credentials, no scanner binaries."
+description: Turn the native output of Prowler, ScoutSuite, Checkov and Trivy into cloudg Finding objects. No engine, no credentials, no scanner binaries.
 ---
+
+Turn the native output of Prowler, ScoutSuite, Checkov and Trivy into cloudg `Finding` objects. No engine, no credentials, no scanner binaries.
+{ .lede }
 
 ## Two functions, one dispatcher
 
@@ -11,7 +13,7 @@ lede: "Turn the native output of Prowler, ScoutSuite, Checkov and Trivy into clo
 
 `ingest_reports(reports)` takes a dict of tool name to a list of paths and calls `parse_report` for each pair, collecting everything into one list. It is what `CloudGEngine.ingest_reports()` and `cloudg ingest` use underneath.
 
-```mermaid caption="How ingest_reports handles each path"
+```mermaid
 flowchart TD
   R["reports dict"] --> L["for each tool, for each path"]
   L --> P["parse_report(tool, path)"]
@@ -23,6 +25,8 @@ flowchart TD
   N --> K
   F --> C["combined list"]
 ```
+How ingest_reports handles each path
+{ .diagram-caption }
 
 `parse_report` raises both errors. `ingest_reports` catches exactly those two, logs them on the `cloudg.ingest` logger at ERROR level, and carries on with the next path. A file that exists but does not parse (truncated JSON, the wrong tool's output) is handled one level down: the scanner wrapper logs a warning and returns what it could read, often an empty list. Neither function raises for bad content.
 
@@ -35,9 +39,9 @@ flowchart TD
 | `checkov` | the JSON report | `results_json.json` anywhere below it, else every `*.json` | `checkov -d ./iac --output json > results_json.json` |
 | `trivy` | an `image` or `fs` JSON report | every `*.json` below it | `trivy image --format json myrepo/app:latest > trivy-image.json` |
 
-A few rules per tool decide what becomes a finding. Prowler records are read as OCSF or ASFF, record by record. Passing checks (ASFF `Compliance.Status` of `PASSED`, OCSF `status_code` of `PASS`) give no finding, and the check name inside the finding id (`prowler-<check>-...` or `prowler-<provider>-<check>-...`) becomes the deduplication key. ScoutSuite yields one finding per flagged item, with `danger`, `warning` and `caution` mapped to CRITICAL, HIGH and MEDIUM. Checkov findings come from `results.failed_checks`, whether the report is one object or a list of them (several frameworks). Trivy reports are split by their `ArtifactType`: `container_image` reports give vulnerability and secret findings, anything else also gives misconfigurations. [Input requirements](/guides/ingesting/#input-requirements) lists every field read.
+A few rules per tool decide what becomes a finding. Prowler records are read as OCSF or ASFF, record by record. Passing checks (ASFF `Compliance.Status` of `PASSED`, OCSF `status_code` of `PASS`) give no finding, and the check name inside the finding id (`prowler-<check>-...` or `prowler-<provider>-<check>-...`) becomes the deduplication key. ScoutSuite yields one finding per flagged item, with `danger`, `warning` and `caution` mapped to CRITICAL, HIGH and MEDIUM. Checkov findings come from `results.failed_checks`, whether the report is one object or a list of them (several frameworks). Trivy reports are split by their `ArtifactType`: `container_image` reports give vulnerability and secret findings, anything else also gives misconfigurations. [Input requirements](../guides/ingesting.md#input-requirements) lists every field read.
 
-The findings come back raw. Their severities are what the scanner said, duplicates are still there, and only scanner-native compliance tags are set. Pass them through [`FindingsNormaliser`](/api/findingsnormaliser/) (or `CloudGEngine.normalise_findings()`) before you count or report on them.
+The findings come back raw. Their severities are what the scanner said, duplicates are still there, and only scanner-native compliance tags are set. Pass them through [`FindingsNormaliser`](findingsnormaliser.md) (or `CloudGEngine.normalise_findings()`) before you count or report on them.
 
 For Prowler, the list returned is a `FindingList`: a plain `list` subclass with a `passed_checks` set naming the checks that passed. `ingest_reports` returns a `FindingList` too, with the passed checks of every Prowler report in it. Hand the list to `FindingsNormaliser.normalise()` as it is and the compliance controls those checks map to get PASS results. `+=` keeps the left list's attribute (as in the example below), but `a + b` and `list(a)` build a plain list without it; pass `passed_checks=` to `normalise()` yourself in that case.
 
@@ -48,29 +52,7 @@ For Prowler, the list returned is a `FindingList`: a plain `list` subclass with 
 Runs offline against one Prowler directory, one Checkov file and one Trivy file. Logging is on so the skipped paths are visible.
 
 ```python title="parse_first.py"
-import logging
-
-from cloudg.ingest import SUPPORTED_TOOLS, ingest_reports, parse_report
-from cloudg.normaliser import FindingsNormaliser
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-print(SUPPORTED_TOOLS)
-findings = parse_report("prowler", "./prowler-output/")
-findings += parse_report("checkov", "./results_json.json")
-print(len(findings), "findings from two reports")
-
-# A typo'd tool name or a missing path is skipped by ingest_reports, not raised
-more = ingest_reports({"trivy": ["./trivy.json", "./missing.json"], "trivvy": ["./trivy.json"]})
-print(len(more), "findings from the batch")
-
-try:
-    parse_report("grype", "./trivy.json")
-except ValueError as exc:
-    print("ValueError:", exc)
-
-scan_result = FindingsNormaliser().normalise(findings, more)
-print(scan_result.summary["severity_breakdown"], len(scan_result.compliance), "control results")
+--8<-- "ingest/parse_first.py"
 ```
 
 ```console
@@ -97,22 +79,7 @@ The log lines appear first because logging writes to stderr and `print` to stdou
 `cloudg map --findings` reads a JSON list of findings. This writes one from scanner output collected in CI, so a later map run on another host can overlay it.
 
 ```python title="export_findings.py"
-import json
-from pathlib import Path
-
-from cloudg.ingest import ingest_reports
-
-findings = ingest_reports(
-    {
-        "prowler": ["./prowler-output/"],
-        "checkov": ["./results_json.json"],
-        "trivy": ["./trivy.json"],
-    }
-)
-out = Path("./reports/raw-findings.json")
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(json.dumps([f.model_dump(mode="json") for f in findings], indent=2))
-print(f"wrote {len(findings)} findings to {out}")
+--8<-- "ingest/export_findings.py"
 ```
 
 ```bash
@@ -136,13 +103,32 @@ Directories are searched recursively, and for Prowler and Trivy every `*.json` f
 
 `parse_report` passes the path to the scanner wrappers as a string. A `pathlib.Path` is fine as input to both functions.
 
-The `resource_id` of a finding is whatever the scanner identified: an ARN for Prowler, a Terraform address such as `aws_s3_bucket.data` for Checkov, an image name for Trivy image scans. Matching those to collected assets is the job of [`AssetIndex`](/api/dependencygraph/) and of the asset map in [`InventoryMapper`](/api/inventorymapper/).
+The `resource_id` of a finding is whatever the scanner identified: an ARN for Prowler, a Terraform address such as `aws_s3_bucket.data` for Checkov, an image name for Trivy image scans. Matching those to collected assets is the job of [`AssetIndex`](dependencygraph.md) and of the asset map in [`InventoryMapper`](inventorymapper.md).
+
+## Reference
+
+::: cloudg.ingest.parse_report
+
+::: cloudg.ingest.ingest_reports
 
 ## Related
 
-:::links
-- [Ingesting existing output](/guides/ingesting/) The guide, with the CLI and the input formats in detail.
-- [cloudg ingest](/cli/ingest/) The command built on these functions.
-- [FindingsNormaliser](/api/findingsnormaliser/) The step that should follow parsing.
-- [CloudGEngine](/api/cloudgengine/) `ingest_reports()` and `run_from_reports()` with hooks.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Ingesting existing output**](../guides/ingesting.md)
+
+    The guide, with the CLI and the input formats in detail.
+
+-   [**cloudg ingest**](../cli/ingest.md)
+
+    The command built on these functions.
+
+-   [**FindingsNormaliser**](findingsnormaliser.md)
+
+    The step that should follow parsing.
+
+-   [**CloudGEngine**](cloudgengine.md)
+
+    `ingest_reports()` and `run_from_reports()` with hooks.
+
+</div>

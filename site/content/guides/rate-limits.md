@@ -1,23 +1,23 @@
 ---
 title: Rate limits and throttling
-lede: "Every cloud API call cloudg makes goes through one process-wide governor that paces it, slows down when a provider pushes back, and records what it lost instead of failing the map."
-meta:
-  - [Package, "`cloudg.resilience`"]
-  - [Config, "[`ratelimit`](/reference/config/ratelimit/)"]
-  - [Since, "0.6.0"]
-source: docs/RESILIENCE.md
-since: "0.6.0"
+description: Every cloud API call cloudg makes goes through one process-wide governor that paces it, slows down when a provider pushes back, and records what it lost instead of failing the map.
 ---
+
+Every cloud API call cloudg makes goes through one process-wide governor that paces it, slows down when a provider pushes back, and records what it lost instead of failing the map.
+{ .lede }
+
+**Package** `cloudg.resilience` &middot; **Config** [`ratelimit`](../reference/config/ratelimit.md) &middot; **Since** 0.6.0 &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 A single `cloudg map -p aws --org --regions all` runs 133 deep collector tasks, a Cloud Control sweep and a tagging sweep in every region of every member account, and some collectors fan out per item (one `DescribeImageAttribute` per AMI). Those APIs have quotas, and the quotas are shared with your CI pipelines, Terraform runs and the console. Up to 0.5.x cloudg trusted each SDK's own retries. Forty EC2 clients in one account then backed off independently and kept the account's bucket empty, a service that stayed throttled looked the same in coverage as an access error, and nothing remembered that an API had just said no.
 
-Since 0.6.0 the `cloudg.resilience` package sits between cloudg and every SDK. You rarely need to touch it. This page explains what it does so you can read its output and tune it when an estate needs it. Every key and default is in the [ratelimit reference](/reference/config/ratelimit/), and the Python side in the [cloudg.resilience API](/api/resilience/).
+Since 0.6.0 the `cloudg.resilience` package sits between cloudg and every SDK. You rarely need to touch it. This page explains what it does so you can read its output and tune it when an estate needs it. Every key and default is in the [ratelimit reference](../reference/config/ratelimit.md), and the Python side in the [cloudg.resilience API](../api/resilience.md).
 
 ## How one call is paced
 
 Every call is attributed to a scope, `Scope(provider, account, region, service, operation)`, which prints as `aws/123456789012/us-east-1/ec2` (with `/DescribeSubnets` appended where the operation matters). Before the call goes out it passes four gates, and after it comes back the outcome feeds the same state.
 
-```mermaid caption="call_with_resilience: the full sequence. The SDK integrations reuse the same parts and let the SDK do the retrying."
+```mermaid
 flowchart TD
   A[Call arrives with a scope] --> B{"Breaker open or deadline spent?"}
   B -->|yes| X["Fail fast, nothing sent"]
@@ -33,6 +33,8 @@ flowchart TD
   J -->|no| Z["Breaker counts a failure, record give-up"]
   G -->|FATAL| R[Re-raise at once]
 ```
+call_with_resilience: the full sequence. The SDK integrations reuse the same parts and let the SDK do the retrying.
+{ .diagram-caption }
 
 Errors are sorted by `classify(exc)` into three kinds. THROTTLED means the provider asked cloudg to slow down: AWS `Throttling`, `RequestLimitExceeded`, `TooManyRequestsException` and the rest of botocore's list, Azure `SubscriptionRequestsThrottled`, GCP `ResourceExhausted`, or any bare HTTP 429 or 503. TRANSIENT covers 408, 500, 502, 504 and connection resets. FATAL is everything else with a provider error code, `AccessDenied` included. The classifier reads error codes, exception classes and HTTP statuses first and only falls back to message text when none of them says anything.
 
@@ -83,7 +85,7 @@ A bulkhead caps requests in flight per provider and account: 128 for AWS, 16 for
 
 Each leaf scope has a breaker with the same granularity as its bucket: per EC2 action, per service elsewhere. A throttled `DescribeSubnets` therefore does not block `DescribeVpcs` in the same account and region.
 
-```mermaid caption="One breaker. Rejected calls never reach the provider and never count as failures."
+```mermaid
 stateDiagram-v2
   [*] --> Closed
   Closed --> Closed: success resets the count
@@ -93,6 +95,8 @@ stateDiagram-v2
   HalfOpen --> Open: probe fails, cooldown doubled up to 600 s
   HalfOpen --> HalfOpen: probe lease expires, next call probes
 ```
+One breaker. Rejected calls never reach the provider and never count as failures.
+{ .diagram-caption }
 
 A failure here means a call that still failed with throttling or a transient error after all its retries. The defaults are 5 consecutive failures (`breaker_threshold`) and a 60-second cooldown (`breaker_cooldown_seconds`). While open, calls fail at once with `circuit open for <scope> after repeated throttling; retry in <n>s`.
 
@@ -186,7 +190,7 @@ People rarely run `cloudg map` twice in a minute. An AI agent might. The MCP liv
 
 Scopes come from the config: `aws/<account>` per configured account, else `aws/profile:<name>`, else `aws`, and the equivalents for Azure subscriptions and GCP projects. A refusal is a tool error with code -31029 and `reason` `cooldown`, `busy` or `quota`, plus `retry_after_seconds` and a `use_dataset` pointer to the newest loaded live dataset covering the same providers. Principals with the `admin` or `operator` role can pass `force=true` to skip the cooldown, though not the concurrency caps.
 
-The tool `rate_limit_status` and the resource `cloudg://ratelimit` show cooldowns, operations in flight and the governor's throttling state without calling any cloud API. Point agents at them before they reach for a live tool. These guard rails are separate from the MCP policy's per-principal rate limits, which decide how often someone may call a tool at all; see the [MCP server](/mcp/) section.
+The tool `rate_limit_status` and the resource `cloudg://ratelimit` show cooldowns, operations in flight and the governor's throttling state without calling any cloud API. Point agents at them before they reach for a live tool. These guard rails are separate from the MCP policy's per-principal rate limits, which decide how often someone may call a tool at all; see the [MCP server](../mcp/index.md) section.
 
 ## Tuning the ratelimit block
 
@@ -208,9 +212,9 @@ ratelimit:
       ec2.DescribeImageAttribute: {max_rps: 5, burst: 10} # AMI-heavy region
 ```
 
-:::warning An override replaces the whole built-in entry
-`ec2: {max_rps: 10}` drops the built-in burst of 100 to 20 (twice the rate). Repeat the burst if you want to keep it: `ec2: {max_rps: 10, burst: 50}`. EC2 stays per action either way.
-:::
+!!! warning "An override replaces the whole built-in entry"
+
+    `ec2: {max_rps: 10}` drops the built-in burst of 100 to 20 (twice the rate). Repeat the burst if you want to keep it: `ec2: {max_rps: 10, burst: 50}`. EC2 stays per action either way.
 
 ### A shared or large estate
 
@@ -292,8 +296,18 @@ print(get_governor().budget("aws").remaining)
 
 Learned rates and breaker state live in memory, so each new `cloudg map` process starts from the configured rates. A few calls are not instrumented yet: the GCP organization-policy and access-context-manager clients outside the asset listing, the urllib fallback that lists Azure subscriptions, and the single region-discovery call. A blocking boto3 or Azure call made on an event-loop thread goes ahead without a bulkhead slot when none is free, so `max_concurrency` is not a hard cap on that path. And per-item fan-out is now held to the documented rates, which makes some maps slower than in 0.5.x: 1,000 `DescribeImageAttribute` calls in one region take about 50 seconds at 20 rps.
 
-:::links
-- [cloudg.resilience](/api/resilience/) `call_with_resilience`, `@resilient`, the governor and the guard from Python.
-- [ratelimit reference](/reference/config/ratelimit/) Every key with its default.
-- [Inventory mapping](/guides/inventory-mapping/) Where coverage records come from.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**cloudg.resilience**](../api/resilience.md)
+
+    `call_with_resilience`, `@resilient`, the governor and the guard from Python.
+
+-   [**ratelimit reference**](../reference/config/ratelimit.md)
+
+    Every key with its default.
+
+-   [**Inventory mapping**](inventory-mapping.md)
+
+    Where coverage records come from.
+
+</div>

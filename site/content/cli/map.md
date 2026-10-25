@@ -1,9 +1,14 @@
 ---
+description: Builds the scanner-independent inventory map. Everything deployed or default is collected, linked into typed relationships and written to disk for cloudg deps, the MCP server or your own code.
 command: map
-lede: Builds the scanner-independent inventory map. Everything deployed or default is collected, linked into typed relationships and written to disk for `cloudg deps`, the MCP server or your own code.
-intro: |
-  `cloudg map` needs read access to the cloud APIs and nothing else. No scanner runs and none has to be installed. The [Inventory mapping](/guides/inventory-mapping/) guide explains what the map contains; this page covers the command itself.
 ---
+
+Builds the scanner-independent inventory map. Everything deployed or default is collected, linked into typed relationships and written to disk for `cloudg deps`, the MCP server or your own code.
+{ .lede }
+
+`cloudg map` needs read access to the cloud APIs and nothing else. No scanner runs and none has to be installed. The [Inventory mapping](../guides/inventory-mapping.md) guide explains what the map contains; this page covers the command itself.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
@@ -36,7 +41,7 @@ $ cloudg map -p aws --org --org-role cloudg-readonly --ou Workloads --regions al
 
 The mapping run itself goes through these steps:
 
-```mermaid caption="What cloudg map does"
+```mermaid
 flowchart TD
   A["Config + flags"] --> B{"--org?"}
   B -->|yes| C["Discover org, OUs, accounts, Control Tower"]
@@ -51,6 +56,8 @@ flowchart TD
   J --> K{"--findings?"}
   K -->|yes| L["asset-map.json, compliance-map.json"]
 ```
+What cloudg map does
+{ .diagram-caption }
 
 With `--org`, cloudg first lists the Organization from the account your credentials belong to (the management account, or a delegated administrator for the Organizations APIs). It picks the member accounts under `--ou`, drops `--exclude-account` entries, and, if you also passed `--accounts`, keeps only the accounts in both lists. The role assumed in each member account is `--org-role`, else `--role-name`, else `AWSControlTowerExecution`. If Control Tower is present and you asked for `--regions all`, only its governed regions are mapped (`aws.organization.use_governed_regions`, on by default).
 
@@ -58,7 +65,7 @@ Without `--org`, `--accounts` plus `--role-name` gives you the same fan-out over
 
 Deep collection runs per account and region. Account-wide services (IAM, S3, CloudFront, Route 53, Shield and others) run once per account, in the primary region, so `--regions all` does not repeat them. After the deep collectors, the breadth sweeps fill gaps: Cloud Control lists every resource type with a list handler, and the Resource Groups Tagging API finds tagged resources. When the same resource turns up twice, the dedicated collector wins, then Cloud Control, then the tagging API.
 
-The linker then resolves every identifier the collectors recorded into typed edges (`INVOKES`, `USES_IMAGE`, `ASSUMES_ROLE`, `PROTECTS`, `GOVERNS` and so on), adds an account node above each account's top-level resources, and computes the dependency analysis. The [Inventory mapping](/guides/inventory-mapping/) guide lists the edge types.
+The linker then resolves every identifier the collectors recorded into typed edges (`INVOKES`, `USES_IMAGE`, `ASSUMES_ROLE`, `PROTECTS`, `GOVERNS` and so on), adds an account node above each account's top-level resources, and computes the dependency analysis. The [Inventory mapping](../guides/inventory-mapping.md) guide lists the edge types.
 
 The command prints an organization table (with `--org`), an inventory summary, the 15 services with the most assets, the 10 most shared dependencies, the 10 largest blast radii and up to 15 security service gaps. Here is the summary part for the synthetic estate in the test suite (`tests/mcp/fixtures/sample_estate.py`), so the numbers are small:
 
@@ -86,11 +93,11 @@ If some collectors failed (an API you lack permission for, a region that is not 
 
 `--findings` takes a cloudg findings file: a `raw-findings.json` from `cloudg scan` or `cloudg ingest`, or a `findings.json` report. Both shapes work, a bare list or an object with a `findings` key. The option is repeatable. Files that cannot be read or validated are skipped with a warning. Findings attach to assets by ARN, resource ID or name.
 
-The merge happens after a fresh mapping run, because `--findings` belongs to `map`. To overlay findings on a map you already saved without calling the cloud again, use `InventoryMapper.export_merged()` from Python (see [InventoryMapper](/api/inventorymapper/)) or load both files into the MCP server.
+The merge happens after a fresh mapping run, because `--findings` belongs to `map`. To overlay findings on a map you already saved without calling the cloud again, use `InventoryMapper.export_merged()` from Python (see [InventoryMapper](../api/inventorymapper.md)) or load both files into the MCP server.
 
 ### Credentials
 
-`map` has no `--aws-key`, `--azure-*` or `--gcp-*` flags. It takes credentials from the config file, the standard environment variables, `--profile`, or the provider's default chain, in the order described under [Auth flags](/cli/auth-flags/). Put role ARNs, service principals and credential files in `config.yaml` when you map with something other than your default identity.
+`map` has no `--aws-key`, `--azure-*` or `--gcp-*` flags. It takes credentials from the config file, the standard environment variables, `--profile`, or the provider's default chain, in the order described under [Auth flags](auth-flags.md). Put role ARNs, service principals and credential files in `config.yaml` when you map with something other than your default identity.
 
 ## Examples
 
@@ -144,25 +151,29 @@ cloudg map -p aws --regions all --findings ./reports/raw-findings.json -o ./repo
 
 The same mapping from Python:
 
-```bash tab="CLI"
-cloudg map -p aws --profile audit --regions all -o ./reports
-```
+=== "CLI"
 
-```python tab="Python" title="map_inventory.py"
-from cloudg import CloudGConfig, CloudGEngine
+    ```bash
+    cloudg map -p aws --profile audit --regions all -o ./reports
+    ```
 
-config = CloudGConfig(providers=["aws"])
-config.aws.profile = "audit"
-config.aws.regions = ["ALL"]
+=== "Python"
 
-engine = CloudGEngine(config)
-result = engine.map_inventory_sync("./reports")
-print(result.summary["total_assets"], "assets")
-```
+    ```python title="map_inventory.py"
+    from cloudg import CloudGConfig, CloudGEngine
+
+    config = CloudGConfig(providers=["aws"])
+    config.aws.profile = "audit"
+    config.aws.regions = ["ALL"]
+
+    engine = CloudGEngine(config)
+    result = engine.map_inventory_sync("./reports")
+    print(result.summary["total_assets"], "assets")
+    ```
 
 ## Output files
 
-Written to `-o/--output` (default `./reports`). The [output files reference](/reference/output-files/) describes each one in more detail.
+Written to `-o/--output` (default `./reports`). The [output files reference](../reference/output-files.md) describes each one in more detail.
 
 | File | Written when | Contents |
 |---|---|---|
@@ -186,11 +197,30 @@ Written to `-o/--output` (default `./reports`). The [output files reference](/re
 
 ## Related
 
-:::links
-- [Inventory mapping](/guides/inventory-mapping/) What the map collects and how relationships are built.
-- [AWS Organizations](/guides/aws-organizations/) Roles and permissions for `--org`.
-- [cloudg deps](/cli/deps/) Query the saved map: what depends on what.
-- [Dependencies and blast radius](/guides/dependencies/) How to read dependency trees.
-- [Provider and region flags](/cli/provider-flags/) `--regions all` and discovery.
-- [InventoryMapper](/api/inventorymapper/) The Python class behind the command.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Inventory mapping**](../guides/inventory-mapping.md)
+
+    What the map collects and how relationships are built.
+
+-   [**AWS Organizations**](../guides/aws-organizations.md)
+
+    Roles and permissions for `--org`.
+
+-   [**cloudg deps**](deps.md)
+
+    Query the saved map: what depends on what.
+
+-   [**Dependencies and blast radius**](../guides/dependencies.md)
+
+    How to read dependency trees.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    `--regions all` and discovery.
+
+-   [**InventoryMapper**](../api/inventorymapper.md)
+
+    The Python class behind the command.
+
+</div>

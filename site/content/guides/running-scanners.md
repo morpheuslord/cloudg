@@ -1,17 +1,17 @@
 ---
 title: Running scanners
-lede: "cloudg doesn't ship its own cloud checks. It drives Prowler, ScoutSuite, Checkov and Trivy as subprocesses, adds a built-in IAM linter, and turns everything they report into one list of findings."
-meta:
-  - [Commands, "`cloudg scan`, `cloudg run`"]
-  - [Python, "`CloudGEngine.scan()`"]
-  - [Needs, "Scanner binaries on `PATH`"]
-source: cloudg/api_scanners.py
-since: "0.6.0"
+description: cloudg doesn't ship its own cloud checks. It drives Prowler, ScoutSuite, Checkov and Trivy as subprocesses, adds a built-in IAM linter, and turns everything they report into one list of findings.
 ---
+
+cloudg doesn't ship its own cloud checks. It drives Prowler, ScoutSuite, Checkov and Trivy as subprocesses, adds a built-in IAM linter, and turns everything they report into one list of findings.
+{ .lede }
+
+**Commands** `cloudg scan`, `cloudg run` &middot; **Python** `CloudGEngine.scan()` &middot; **Needs** Scanner binaries on `PATH` &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 There are two ways to run the scanners. `cloudg scan` runs them on their own, with no collection, and writes the raw findings to disk. `cloudg run` runs them as phase 3 of the full pipeline, after collection and graph analysis, and passes the findings through the normaliser into the reports. The two commands, and `CloudGEngine.scan()`, plan the scanner jobs with the same code, so they pick scanners, credentials, regions, IaC directories and timeouts the same way. What differs is what they have to work with: `cloudg scan` collects nothing. [The table near the end](#scan-and-run-compared) lists every difference.
 
-If the scans already ran somewhere else (a CI job, another host, a nightly cron) you don't need either command. Hand the output files to [`cloudg ingest`](/guides/ingesting/) instead.
+If the scans already ran somewhere else (a CI job, another host, a nightly cron) you don't need either command. Hand the output files to [`cloudg ingest`](ingesting.md) instead.
 
 ## The scanners
 
@@ -25,7 +25,7 @@ Each scanner has a name you use in `--scanners` and in `scanners.enabled`. Four 
 | `trivy` | `trivy` | Binary from [trivy.dev](https://trivy.dev/) | Container images (CVEs, secrets), or a directory (vulnerabilities, misconfigurations, secrets) | Only for private registries |
 | `iam` | none | Parliament ships with cloudg | IAM role trust policies and policy documents from the collected inventory | No (reads collected assets) |
 
-Installing each external tool into its own virtual environment keeps its dependencies away from cloudg's and from the other scanners. The [Docker image](/guides/docker/) does the same: Prowler and Checkov live in separate venvs under `/opt`, with the binaries symlinked onto `PATH`. That image bundles Prowler, Checkov and Trivy. It does not include ScoutSuite.
+Installing each external tool into its own virtual environment keeps its dependencies away from cloudg's and from the other scanners. The [Docker image](docker.md) does the same: Prowler and Checkov live in separate venvs under `/opt`, with the binaries symlinked onto `PATH`. That image bundles Prowler, Checkov and Trivy. It does not include ScoutSuite.
 
 ```bash
 python -m venv ~/.venvs/prowler && ~/.venvs/prowler/bin/pip install prowler
@@ -53,7 +53,7 @@ An explicit region list in `aws.regions` is passed as `-f <regions>`, unless `sc
 
 Prowler and ScoutSuite audit the account those credentials belong to: the caller's, or `role_arn`'s. They do not run once per member account of `aws.accounts` or `--org`; only collection fans out over those.
 
-Prowler's stdout is streamed into the cloudg log, with a progress line every 25 checks. A non-zero exit code is logged as a warning and the output is parsed anyway, since Prowler exits non-zero whenever a check fails. Records with `Compliance.Status` of `PASSED` give no finding; their check names are kept so the compliance controls they cover can be marked `PASS` (see [Compliance frameworks](/guides/compliance/)).
+Prowler's stdout is streamed into the cloudg log, with a progress line every 25 checks. A non-zero exit code is logged as a warning and the output is parsed anyway, since Prowler exits non-zero whenever a check fails. Records with `Compliance.Status` of `PASSED` give no finding; their check names are kept so the compliance controls they cover can be marked `PASS` (see [Compliance frameworks](compliance.md)).
 
 ### ScoutSuite
 
@@ -112,49 +112,55 @@ custodian run --output-dir ./custodian-output cloudg/policies/custodian-aws-secu
 
 ## Choosing scanners
 
-`--scanners` takes a comma-separated list of the names above, or the name of an installed [scanner plugin](/api/entry-points/). Spaces are trimmed and names are lowercased. A name that matches nothing is skipped with a warning listing the available scanners.
+`--scanners` takes a comma-separated list of the names above, or the name of an installed [scanner plugin](../api/entry-points.md). Spaces are trimmed and names are lowercased. A name that matches nothing is skipped with a warning listing the available scanners.
 
-```bash tab="CLI"
-cloudg run -p aws --regions us-east-1,eu-west-1 --scanners prowler,trivy --images 123456789012.dkr.ecr.us-east-1.amazonaws.com/api:1.4.2
-cloudg scan -p aws --profile audit --scanners prowler,scoutsuite -o ./scan-2026-10-09
-```
+=== "CLI"
 
-```python tab="Python" title="scan_only.py"
-import asyncio
+    ```bash
+    cloudg run -p aws --regions us-east-1,eu-west-1 --scanners prowler,trivy --images 123456789012.dkr.ecr.us-east-1.amazonaws.com/api:1.4.2
+    cloudg scan -p aws --profile audit --scanners prowler,scoutsuite -o ./scan-2026-10-09
+    ```
 
-from cloudg import CloudGConfig, CloudGEngine
-from cloudg.scanners.checkov import CheckovScanner
-from cloudg.scanners.prowler import ProwlerScanner
-from cloudg.scanners.trivy import TrivyScanner
+=== "Python"
 
-for tool in (ProwlerScanner, CheckovScanner, TrivyScanner):
-    print(tool.__name__, "installed" if tool.is_available() else "missing")
+    ```python title="scan_only.py"
+    import asyncio
 
-config = CloudGConfig(providers=["aws"])
-config.scanners.enabled = ["checkov", "trivy"]
-config.scanners.checkov_frameworks = ["terraform"]
+    from cloudg import CloudGConfig, CloudGEngine
+    from cloudg.scanners.checkov import CheckovScanner
+    from cloudg.scanners.prowler import ProwlerScanner
+    from cloudg.scanners.trivy import TrivyScanner
 
-engine = CloudGEngine(config)
-engine.on_error = lambda name, exc: print("scanner error:", name, exc)
+    for tool in (ProwlerScanner, CheckovScanner, TrivyScanner):
+        print(tool.__name__, "installed" if tool.is_available() else "missing")
 
-findings = asyncio.run(
-    engine.scan(
-        assets=[],
-        edges=[],
-        iac_dir="./terraform",
-        images=["python:3.12-slim"],
-        output_dir="./reports",
+    config = CloudGConfig(providers=["aws"])
+    config.scanners.enabled = ["checkov", "trivy"]
+    config.scanners.checkov_frameworks = ["terraform"]
+
+    engine = CloudGEngine(config)
+    engine.on_error = lambda name, exc: print("scanner error:", name, exc)
+
+    findings = asyncio.run(
+        engine.scan(
+            assets=[],
+            edges=[],
+            iac_dir="./terraform",
+            images=["python:3.12-slim"],
+            output_dir="./reports",
+        )
     )
-)
-print(len(findings), "findings")
-```
+    print(len(findings), "findings")
+    ```
 
-```bash tab="Docker"
-docker run --rm \
-  -v ~/.aws:/home/cloudg/.aws:ro \
-  -v "$PWD/reports:/app/reports" \
-  ghcr.io/morpheuslord/cloudg:latest scan -p aws --scanners prowler -o /app/reports
-```
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v ~/.aws:/home/cloudg/.aws:ro \
+      -v "$PWD/reports:/app/reports" \
+      ghcr.io/morpheuslord/cloudg:latest scan -p aws --scanners prowler -o /app/reports
+    ```
 
 Without `--scanners`, both commands use `scanners.enabled` from the config passed with `-c`, which defaults to all five names. The IAM linter runs only when `iam` is in the list, like every other scanner.
 
@@ -162,7 +168,7 @@ Without `--scanners`, both commands use `scanners.enabled` from the config passe
 
 Checkov, and Trivy when it has no images, need a directory. `cloudg run`, `cloudg scan` and `CloudGEngine.scan()` resolve it in a fixed order and stop at the first hit.
 
-```mermaid caption="How cloudg run picks the directories for Checkov and Trivy fs"
+```mermaid
 flowchart TD
   A{"--iac-dir given?"} -->|yes| X["Scan that directory"]
   A -->|no| B{"scanners.iac_directories set?"}
@@ -171,6 +177,8 @@ flowchart TD
   C -->|yes| Z["Scan the recreation of the live cloud"]
   C -->|no| S["Skip Checkov, warn"]
 ```
+How cloudg run picks the directories for Checkov and Trivy fs
+{ .diagram-caption }
 
 The last step is the interesting one. With `--terraform` (or `terraform.enabled: true`) and nothing else configured, cloudg writes a Terraform recreation of the collected infrastructure and points Checkov at it, so Checkov audits your real cloud through its Terraform representation. There is no fallback to the current directory: scanning whatever folder cloudg was started from would produce a clean-looking result that says nothing about the cloud.
 
@@ -186,7 +194,7 @@ cloudg run -p aws --regions us-east-1 --terraform --scanners checkov,trivy
 
 ## Configuration
 
-Every key below lives under `scanners:` in `config.yaml`. They apply to `cloudg run`, `cloudg scan` (pass the file with `cloudg -c config.yaml scan ...`) and `CloudGEngine.scan()`. The full reference is on the [scanners config page](/reference/config/scanners/).
+Every key below lives under `scanners:` in `config.yaml`. They apply to `cloudg run`, `cloudg scan` (pass the file with `cloudg -c config.yaml scan ...`) and `CloudGEngine.scan()`. The full reference is on the [scanners config page](../reference/config/scanners.md).
 
 ```yaml title="config.yaml"
 scanners:
@@ -274,9 +282,9 @@ From Python, set `engine.on_error` to see failures as they happen. It receives t
 | Trivy | Not saved (read from stdout) | Not saved |
 | All findings | Normalised into `findings.json` and `report.html` | `raw-findings.json`, before normalisation |
 
-:::warning Reusing an output directory
-Prowler names each output file after the account and a timestamp, and cloudg parses every `*.json` under the Prowler output directory. Point a second run at the same `-o` and the older ASFF files are parsed again. Repeated checks on the same resource are merged during normalisation, but a problem you fixed after the first run still shows up from the old file. Use a fresh output directory per run.
-:::
+!!! warning "Reusing an output directory"
+
+    Prowler names each output file after the account and a timestamp, and cloudg parses every `*.json` under the Prowler output directory. Point a second run at the same `-o` and the older ASFF files are parsed again. Repeated checks on the same resource are merged during normalisation, but a problem you fixed after the first run still shows up from the old file. Use a fresh output directory per run.
 
 The Prowler and ScoutSuite directories are in the native formats that `cloudg ingest` reads, so you can re-aggregate them later without scanning again:
 
@@ -284,7 +292,7 @@ The Prowler and ScoutSuite directories are in the native formats that `cloudg in
 cloudg ingest --prowler ./reports/prowler/aws/ --scoutsuite ./reports/scoutsuite/aws/ -o ./reports-again
 ```
 
-`raw-findings.json` from `cloudg scan` is a JSON list of cloudg `Finding` objects, not a scanner format. `cloudg report -i raw-findings.json` normalises it and writes the reports, and [`cloudg map --findings`](/guides/inventory-mapping/) merges it into an inventory map.
+`raw-findings.json` from `cloudg scan` is a JSON list of cloudg `Finding` objects, not a scanner format. `cloudg report -i raw-findings.json` normalises it and writes the reports, and [`cloudg map --findings`](inventory-mapping.md) merges it into an inventory map.
 
 ## Scan and run compared {#scan-and-run-compared}
 
@@ -303,9 +311,22 @@ cloudg ingest --prowler ./reports/prowler/aws/ --scoutsuite ./reports/scoutsuite
 
 ## Next
 
-:::links
-- [Ingesting existing output](/guides/ingesting/) Aggregate scans that ran elsewhere, with no binaries and no credentials.
-- [Compliance frameworks](/guides/compliance/) How findings are tagged with framework controls after the scan.
-- [Reports](/guides/reports/) What `findings.json` and `report.html` contain.
-- [cloudg scan](/cli/scan/) Every flag of the standalone scan command.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    Aggregate scans that ran elsewhere, with no binaries and no credentials.
+
+-   [**Compliance frameworks**](compliance.md)
+
+    How findings are tagged with framework controls after the scan.
+
+-   [**Reports**](reports.md)
+
+    What `findings.json` and `report.html` contain.
+
+-   [**cloudg scan**](../cli/scan.md)
+
+    Every flag of the standalone scan command.
+
+</div>

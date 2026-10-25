@@ -1,7 +1,10 @@
 ---
 title: Output flags
-lede: "Where cloudg writes its files, which formats each command produces, and the flags that switch outputs on and off: `-o`, `--format`, `--ontology`, `--rag-export`, `--terraform` and `--json`."
+description: 'Where cloudg writes its files, which formats each command produces, and the flags that switch outputs on and off: -o, --format, --ontology, --rag-export, --terraform and --json.'
 ---
+
+Where cloudg writes its files, which formats each command produces, and the flags that switch outputs on and off: `-o`, `--format`, `--ontology`, `--rag-export`, `--terraform` and `--json`.
+{ .lede }
 
 ## -o, --output
 
@@ -55,7 +58,7 @@ reports/
 └── terraform/                   provider.tf.json, variables.tf.json, main.tf.json, import_commands.sh (run, --terraform)
 ```
 
-The [output files reference](/reference/output-files/) describes each file's structure.
+The [output files reference](../reference/output-files.md) describes each file's structure.
 
 The Terraform recreation goes to `<output>/terraform`, so it follows `-o`. A `terraform.output_dir` in your config sends it somewhere else, except the old default value `./reports/terraform`, which counts as unset.
 
@@ -98,7 +101,7 @@ Turn off the ontology and the RAG export when you only need findings:
 cloudg run -p aws --no-ontology --no-rag-export
 ```
 
-`--terraform` has a second effect: when no IaC directory is given by `--iac-dir` or `scanners.iac_directories`, Checkov and the Trivy filesystem scan target the generated Terraform. See [cloudg run](/cli/run/#how-it-works).
+`--terraform` has a second effect: when no IaC directory is given by `--iac-dir` or `scanners.iac_directories`, Checkov and the Trivy filesystem scan target the generated Terraform. See [cloudg run](run.md#how-it-works).
 
 ## --json
 
@@ -131,9 +134,22 @@ cloudg -v --log-file ./cloudg.log run -p aws
 
 ## Related
 
-:::links
-- [Output files](/reference/output-files/) The structure of every file in the output directory.
-- [Reports](/guides/reports/) Reading the HTML report and `findings.json`.
-- [Graph, ontology and RAG](/guides/graph-ontology-rag/) What the ontology and RAG exports are for.
-- [Provider and region flags](/cli/provider-flags/) What gets collected in the first place.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Output files**](../reference/output-files.md)
+
+    The structure of every file in the output directory.
+
+-   [**Reports**](../guides/reports.md)
+
+    Reading the HTML report and `findings.json`.
+
+-   [**Graph, ontology and RAG**](../guides/graph-ontology-rag.md)
+
+    What the ontology and RAG exports are for.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    What gets collected in the first place.
+
+</div>

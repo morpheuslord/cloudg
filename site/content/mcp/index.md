@@ -1,18 +1,17 @@
 ---
 title: MCP server
-lede: "cloudg's inventory, relationship graph, findings, compliance results and RDF ontology, served to AI assistants over the Model Context Protocol, with one access and privacy policy applied to every request."
-meta:
-  - [Command, "`cloudg mcp serve`"]
-  - [Python, "`cloudg.mcp.CloudGMCPLayer`"]
-  - [Catalog, "74 tools, 13 resources, 11 templates, 11 prompts"]
-  - [Default policy, "`standard`"]
-source: docs/MCP.md
-since: "0.6.0"
+description: cloudg's inventory, relationship graph, findings, compliance results and RDF ontology, served to AI assistants over the Model Context Protocol, with one access and privacy policy applied to every request.
 ---
+
+cloudg's inventory, relationship graph, findings, compliance results and RDF ontology, served to AI assistants over the Model Context Protocol, with one access and privacy policy applied to every request.
+{ .lede }
+
+**Command** `cloudg mcp serve` &middot; **Python** `cloudg.mcp.CloudGMCPLayer` &middot; **Catalog** 74 tools, 13 resources, 11 templates, 11 prompts &middot; **Default policy** `standard` &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 The MCP layer lives in `cloudg/mcp/` and ships with the base `pip install cloudg`. It takes the files cloudg already writes (`inventory-map.json`, `findings.json`, native scanner output) and turns them into tools an assistant can call: "which internet-exposed assets have HIGH findings?", "what breaks if this IAM role goes away?", "which CIS controls fail in the shared-services account?". The model asks, cloudg answers from its own graph and data model, and a policy decides what the model may see and do on the way.
 
-It is written for three kinds of reader. People who run Claude Desktop, Claude Code, Cursor or VS Code and want to point it at a cloud estate should read [Connect a client](/mcp/connect/) next. Operators who already run an MCP server or gateway can mount cloudg into it. And Python authors (an agent framework, a test suite, a batch job) can call the same tools in-process, with no MCP traffic at all.
+It is written for three kinds of reader. People who run Claude Desktop, Claude Code, Cursor or VS Code and want to point it at a cloud estate should read [Connect a client](connect.md) next. Operators who already run an MCP server or gateway can mount cloudg into it. And Python authors (an agent framework, a test suite, a batch job) can call the same tools in-process, with no MCP traffic at all.
 
 ## One layer, three ways in
 
@@ -24,7 +23,7 @@ The center of the package is one class, `CloudGMCPLayer`. It holds a registry of
 | Mounted | `layer.register_into(server)` | You already run an MCP server (official `mcp` SDK 1.x or 2.x, or `fastmcp` 2, 3 or 4) and want cloudg's tools inside it |
 | In-process | `await layer.call_tool(...)` | You are in Python and do not need MCP on the wire |
 
-```mermaid caption="How the pieces fit together"
+```mermaid
 flowchart LR
   A["Desktop or IDE client"] -->|"stdio or HTTP"| B["cloudg mcp serve (native, sdk or fastmcp)"]
   C["Your MCP server"] -->|register_into| L[CloudGMCPLayer]
@@ -37,8 +36,10 @@ flowchart LR
   W --> F["inventory-map.json, findings.json, scanner output"]
   W --> X["Cloud APIs (live tools only)"]
 ```
+How the pieces fit together
+{ .diagram-caption }
 
-The [server section](/mcp/server/what-the-layer-is/) covers the layer in depth, [mounting](/mcp/server/mounting-into-an-existing-mcp-server/) covers the second mode and [in-process use](/mcp/server/in-process-use/) the third.
+The [server section](server/what-the-layer-is.md) covers the layer in depth, [mounting](server/mounting-into-an-existing-mcp-server.md) covers the second mode and [in-process use](server/in-process-use.md) the third.
 
 ## What an assistant can do with it
 
@@ -57,9 +58,9 @@ The default catalog has 74 tools in ten categories. The counts below come from r
 | `meta` | 4 | What this caller may use, and cloudg's vocabulary of asset, edge and relation types |
 | `privacy` | 5 | The active policy, a transform preview, the detector list, the decision log, and `reveal_token` |
 
-The default `standard` policy hides `reveal_token`, so `cloudg mcp tools` lists 73. The stricter profiles hide more (see [policies](#policies-and-privacy) below). Every tool is documented with its arguments, return fields and a captured example in the [tool index](/mcp/tools/tool-index/) and the per-category pages such as [graph](/mcp/tools/graph/) and [findings](/mcp/tools/findings/).
+The default `standard` policy hides `reveal_token`, so `cloudg mcp tools` lists 73. The stricter profiles hide more (see [policies](#policies-and-privacy) below). Every tool is documented with its arguments, return fields and a captured example in the [tool index](tools/tool-index.md) and the per-category pages such as [graph](tools/graph/index.md) and [findings](tools/findings.md).
 
-The four collecting tools in `live` are the only ones that touch a cloud provider. They check credentials before the first API call, refuse to re-collect a scope that was collected a couple of minutes ago, and are hidden by every built-in profile except `open` and `standard`. The details are in [live tools and the credential preflight](/mcp/server/live-tools-and-the-credential-preflight/).
+The four collecting tools in `live` are the only ones that touch a cloud provider. They check credentials before the first API call, refuse to re-collect a scope that was collected a couple of minutes ago, and are hidden by every built-in profile except `open` and `standard`. The details are in [live tools and the credential preflight](server/live-tools-and-the-credential-preflight.md).
 
 ### Resources and prompts
 
@@ -76,7 +77,7 @@ The 11 prompts are packaged analysis workflows that a user picks from the client
 | `incident_triage` | `finding_id` |
 | `drift_review` | `base` |
 
-The full list with arguments and rendered output is in [resources and resource templates](/mcp/tools/resources-and-resource-templates/) and [prompts](/mcp/tools/prompts/).
+The full list with arguments and rendered output is in [resources and resource templates](tools/resources-and-resource-templates.md) and [prompts](tools/prompts.md).
 
 ## Workspaces and datasets
 
@@ -86,13 +87,13 @@ Datasets get into the workspace in three ways. The operator can preload them wit
 
 The graph, dependency graph, centrality scores and RDF ontology are built the first time a tool needs them and cached until the dataset changes. On a large estate the first `attack_paths` or `sparql_query` call is the slow one. The workspace holds 16 datasets; loading a 17th evicts the oldest inactive one.
 
-Two safety rules matter in practice. First, the model can only read and write inside the allowed roots: by default the directory the server was started from and the configured report directory, with `/` and your home directory left out. Set `CLOUDG_MCP_ALLOWED_ROOTS` to change them. Second, paths given with `--dataset` skip that check, because the operator typed them. `snapshot_dataset` and `diff_datasets` let a model compare two versions of an estate, which is what the `drift_review` prompt does. More in [the workspace](/mcp/server/the-workspace/).
+Two safety rules matter in practice. First, the model can only read and write inside the allowed roots: by default the directory the server was started from and the configured report directory, with `/` and your home directory left out. Set `CLOUDG_MCP_ALLOWED_ROOTS` to change them. Second, paths given with `--dataset` skip that check, because the operator typed them. `snapshot_dataset` and `diff_datasets` let a model compare two versions of an estate, which is what the `drift_review` prompt does. More in [the workspace](server/the-workspace.md).
 
 ## The request lifecycle
 
 Every tool call takes the same route, whatever transport it arrived on.
 
-```mermaid caption="What happens to one tools/call"
+```mermaid
 flowchart TD
   A[MCP client] --> B["Transport: stdio line or HTTP POST"]
   B --> C["Adapter resolves the principal (token, OAuth or local user)"]
@@ -106,10 +107,12 @@ flowchart TD
   I --> J["Output pipeline: sanitize, redact, project, annotate"]
   J --> L["Result with cloudg/transforms in _meta"]
 ```
+What happens to one tools/call
+{ .diagram-caption }
 
 A few details are easy to miss. A tool the policy hides gives exactly the same "Unknown tool" error as a tool that does not exist, so a model cannot probe for what it is missing. Arguments are validated against a pydantic model built from the handler's signature, and unknown keys are rejected. Synchronous handlers run in a worker thread so a slow graph build does not block other requests, and every call has a timeout (300 seconds by default, longer for the live tools). The result is sent twice, as `structuredContent` and as indented JSON text for clients that ignore structured output; the text copy is capped at 200,000 characters. Errors from the handler pass through the same output pipeline as results, because exception messages tend to quote ARNs.
 
-The step-by-step version, including resources, prompts and completions, is in [the request lifecycle](/mcp/server/the-request-lifecycle/). Error codes are listed in [errors](/mcp/server/errors/) and the middleware hooks in [middleware](/mcp/server/middleware/).
+The step-by-step version, including resources, prompts and completions, is in [the request lifecycle](server/the-request-lifecycle.md). Error codes are listed in [errors](server/errors.md) and the middleware hooks in [middleware](server/middleware.md).
 
 ## Policies and privacy
 
@@ -131,7 +134,7 @@ The output pipeline in `standard` runs four transforms in order. `sanitize` stri
 
 Under `strict` the redactor also pseudonymises identifiers through the token vault. Pseudonyms keep their format, so a 12-digit account id stays 12 digits and an ARN stays a valid ARN, and they are deterministic for the life of the vault key. The model can pass `res-8de954a6d9` back as a `ref` and the input pipeline resolves the real asset before the handler runs. Set `CLOUDG_MCP_VAULT_KEY` if pseudonyms must survive a server restart; without it a random key is generated per process.
 
-One side effect surprises people: under every profile except `open`, tools do not advertise an `outputSchema`, since masking can change a field's type and clients reject structured content that does not match a schema. The data is still sent. The [privacy section](/mcp/privacy/threat-model-and-goals/) covers the threat model, [what the policy touches](/mcp/privacy/what-the-policy-touches/), the [built-in profiles](/mcp/privacy/built-in-profiles/) file by file, and [the token vault](/mcp/privacy/the-token-vault/).
+One side effect surprises people: under every profile except `open`, tools do not advertise an `outputSchema`, since masking can change a field's type and clients reject structured content that does not match a schema. The data is still sent. The [privacy section](privacy/threat-model-and-goals.md) covers the threat model, [what the policy touches](privacy/what-the-policy-touches.md), the [built-in profiles](privacy/built-in-profiles.md) file by file, and [the token vault](privacy/the-token-vault.md).
 
 ## Transports and flavors
 
@@ -148,13 +151,13 @@ The flavor picks which implementation speaks MCP. The layer and results are iden
 | `sdk` | the official SDK's low-level `Server`, uvicorn for HTTP | `pip install "cloudg[mcp]"` |
 | `fastmcp` | `fastmcp.FastMCP` with cloudg components | `pip install fastmcp` |
 
-The native flavor supports every serve option, including `--cors-origin`, `--page-size` and `/healthz`. See [transports and protocol versions](/mcp/server/transports-and-protocol-versions/) and [flavors](/mcp/server/flavors/).
+The native flavor supports every serve option, including `--cors-origin`, `--page-size` and `/healthz`. See [transports and protocol versions](server/transports-and-protocol-versions.md) and [flavors](server/flavors.md).
 
 ## Security model in brief
 
 Every transport binds to 127.0.0.1 by default. On HTTP, `--auth-token TOKEN[:ROLES[:ID]]` maps static bearer tokens to principals with roles, which the policy's `roles:` section uses; tokens are kept only as SHA-256 digests and compared in constant time. Every flavor checks `Origin` and `Host` headers against allow-lists to block DNS rebinding, and the native server warns at start-up when bound to a non-loopback address without tokens. On stdio, tokens are ignored and the caller is the local user.
 
-File access is confined to the allowed roots and writes to the output directory. Error messages never repeat the caller's arguments. The JSONL audit log (`--audit-log`) records every call with hashed argument values, and every pseudonym reversal is logged at WARNING. `--registry` imports and runs Python code, so its value must never come from untrusted input. The longer list is in [security model in brief](/mcp/server/security-model-in-brief/).
+File access is confined to the allowed roots and writes to the output directory. Error messages never repeat the caller's arguments. The JSONL audit log (`--audit-log`) records every call with hashed argument values, and every pseudonym reversal is logged at WARNING. `--registry` imports and runs Python code, so its value must never come from untrusted input. The longer list is in [security model in brief](server/security-model-in-brief.md).
 
 ## Examples
 
@@ -204,7 +207,6 @@ from pathlib import Path
 from cloudg.config import CloudGConfig
 from cloudg.mcp import CloudGMCPLayer, NotFoundError, Principal, Workspace
 
-
 async def main() -> None:
     reports = Path("reports").resolve()
     ws = Workspace(CloudGConfig(), allowed_roots=[reports], output_dir=reports / "mcp-out")
@@ -232,7 +234,6 @@ async def main() -> None:
     except NotFoundError as exc:
         print("refused:", exc)
 
-
 asyncio.run(main())
 ```
 
@@ -250,15 +251,46 @@ The pseudonyms change between runs unless `CLOUDG_MCP_VAULT_KEY` is set. Note th
 
 ## Where to go next
 
-:::links
-- [Connect a client](/mcp/connect/) Claude Desktop, Claude Code, Cursor and VS Code, step by step.
-- [Quick start](/mcp/server/quick-start-with-a-desktop-client/) Check your data in a terminal before wiring a client.
-- [CLI reference](/mcp/server/cli-reference/) Every option of serve, tools, call, read and config.
-- [Tool index](/mcp/tools/tool-index/) All 74 tools with category, sensitivity and a one-line summary.
-- [Conventions](/mcp/tools/conventions-shared-by-every-tool/) Paging, field selection, asset references and the result envelope.
-- [Recipes](/mcp/tools/recipes/) Multi-step investigations as tool-call sequences.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) The seven policies side by side, with the same calls under each.
-- [Policy schema](/mcp/privacy/policy-schema-reference/) Write your own policy, roles and rules.
-- [In-process use](/mcp/server/in-process-use/) CloudGMCPLayer, Principal and ToolContext from Python.
-- [Internals](/mcp/internals/package-map/) How the package is built, for contributors.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Connect a client**](connect.md)
+
+    Claude Desktop, Claude Code, Cursor and VS Code, step by step.
+
+-   [**Quick start**](server/quick-start-with-a-desktop-client.md)
+
+    Check your data in a terminal before wiring a client.
+
+-   [**CLI reference**](server/cli-reference.md)
+
+    Every option of serve, tools, call, read and config.
+
+-   [**Tool index**](tools/tool-index.md)
+
+    All 74 tools with category, sensitivity and a one-line summary.
+
+-   [**Conventions**](tools/conventions-shared-by-every-tool.md)
+
+    Paging, field selection, asset references and the result envelope.
+
+-   [**Recipes**](tools/recipes.md)
+
+    Multi-step investigations as tool-call sequences.
+
+-   [**Built-in profiles**](privacy/built-in-profiles.md)
+
+    The seven policies side by side, with the same calls under each.
+
+-   [**Policy schema**](privacy/policy-schema-reference.md)
+
+    Write your own policy, roles and rules.
+
+-   [**In-process use**](server/in-process-use.md)
+
+    CloudGMCPLayer, Principal and ToolContext from Python.
+
+-   [**Internals**](internals/package-map.md)
+
+    How the package is built, for contributors.
+
+</div>

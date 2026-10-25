@@ -1,8 +1,9 @@
 ---
-object: cloudg.inventory.linker.RelationshipLinker
-members: [link, seed_existing, resolve]
-lede: "Turns a flat list of `CloudAsset` objects into a connected map. It reads only asset metadata, so it works on assets from any source: cloudg's collectors, your own plugin, a CMDB export, a previous run."
+description: 'Turns a flat list of CloudAsset objects into a connected map. It reads only asset metadata, so it works on assets from any source: cloudg''s collectors, your own plugin, a CMDB export, a previous run.'
 ---
+
+Turns a flat list of `CloudAsset` objects into a connected map. It reads only asset metadata, so it works on assets from any source: cloudg's collectors, your own plugin, a CMDB export, a previous run.
+{ .lede }
 
 ## How linking works
 
@@ -10,7 +11,7 @@ lede: "Turns a flat list of `CloudAsset` objects into a connected map. It reads 
 
 `link()` then makes three passes and returns the new edges:
 
-```mermaid caption="The three passes of RelationshipLinker.link()"
+```mermaid
 flowchart TD
   I["identifier index over all assets"] --> P1["pass 1: declared relations in metadata.relations"]
   P1 --> P2["pass 2: provider rules on metadata keys"]
@@ -22,6 +23,8 @@ flowchart TD
   P1 -.->|"target in an unmapped account"| X["external CLOUD_ACCOUNT placeholder"]
   P1 -.->|"target not found"| U["linker.unresolved"]
 ```
+The three passes of RelationshipLinker.link()
+{ .diagram-caption }
 
 Pass 1 reads `metadata["relations"]`, the list each collector fills with what an asset talks to. Pass 2 applies provider-aware rules to well-known metadata keys: `security_groups` and `nsg_id` (attachment), `subnet_id` and `vpc_config` (containment), `role_arn` (execution roles), `kms_key_id` (encryption), `origins` and `web_acl_id` (CloudFront and WAF), route table routes, ENI and volume attachments, VPC peering, Azure NIC wiring and the GCP `parent_full_resource_name`. Pass 3 walks every other string in the metadata, up to six levels deep, and links anything that looks like an ARN, an Azure resource ID, a GCP full resource name or an AWS short ID and resolves to another asset. Pairs already joined in either direction are skipped, so the generic pass only adds links nothing else found.
 
@@ -34,8 +37,8 @@ Each entry in `metadata["relations"]` is a dict:
 | Key | Required | Meaning |
 |---|---|---|
 | `target` | yes | Any identifier of the other asset: ARN, resource ID, name, short ID, alias. |
-| `edge` | no | An [`EdgeType`](/api/models/) value such as `INVOKES` or `ASSUMES_ROLE`. Missing or unknown values become `REFERENCES`. |
-| `relationship` | no | A finer label, copied to the edge's `relationship` (`TRIGGERED_BY`, `ENCRYPTED_BY_KMS`, `RUNS_ON`). The [relationship vocabulary](/reference/catalog/relationship-vocabulary/) lists the names cloudg's collectors use. |
+| `edge` | no | An [`EdgeType`](models.md) value such as `INVOKES` or `ASSUMES_ROLE`. Missing or unknown values become `REFERENCES`. |
+| `relationship` | no | A finer label, copied to the edge's `relationship` (`TRIGGERED_BY`, `ENCRYPTED_BY_KMS`, `RUNS_ON`). The [relationship vocabulary](../reference/catalog/relationship-vocabulary.md) lists the names cloudg's collectors use. |
 | `reverse` | no | When true, the edge runs from the target to the declaring asset. Use it when the declaring side is the passive one: "my queue triggers me", "this account is trusted by me". |
 | `description` | no | Copied to the edge's `description`. |
 | `properties` | no | Copied to the edge's `properties`. |
@@ -71,12 +74,10 @@ QUEUE = f"arn:aws:sqs:{REGION}:{ACCOUNT}:orders-inbound"
 TABLE = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/orders"
 FUNCTION = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:orders-worker"
 
-
 def cmdb_row(arn, name, asset_type, region=REGION, **metadata):
     """One record from a CMDB export, turned into a CloudAsset."""
     return CloudAsset(arn=arn, name=name, asset_type=asset_type, provider=CloudProvider.AWS,
                       region=region, account_id=ACCOUNT, metadata=metadata)
-
 
 assets = [
     cmdb_row(KEY, "orders-key", AssetType.KMS_KEY),
@@ -133,7 +134,7 @@ Reading the output line by line:
 - `role_arn` on the function produced `ASSUMES_ROLE` / `RUNS_ON` through a pass 2 rule, with no declared relation.
 - The log group is not in the export, so that relation is in `unresolved`.
 
-To feed the result into the rest of cloudg, wrap it in an [`InventoryResult`](/api/inventoryresult/) and call `export()`, or hand `assets` and `edges` to [`CloudGEngine.analyze()`](/api/cloudgengine/).
+To feed the result into the rest of cloudg, wrap it in an [`InventoryResult`](inventoryresult.md) and call `export()`, or hand `assets` and `edges` to [`CloudGEngine.analyze()`](cloudgengine.md).
 
 ### Link only what was declared
 
@@ -193,12 +194,37 @@ The linker never modifies the assets you pass in. It only reads `metadata`, `arn
 
 Errors inside a pass are caught per asset and logged at DEBUG on `cloudg.inventory.linker`, so one malformed asset cannot stop the run. If edges you expect are missing, turn on DEBUG for that logger.
 
+## Reference
+
+::: cloudg.inventory.linker.RelationshipLinker
+    options:
+      members:
+        - link
+        - seed_existing
+        - resolve
+
 ## Related
 
-:::links
-- [InventoryMapper](/api/inventorymapper/) Runs the linker as part of every map.
-- [DependencyGraph](/api/dependencygraph/) Dependency questions over the linked edges.
-- [Relationship vocabulary](/reference/catalog/relationship-vocabulary/) The relationship names and what they mean.
-- [Asset types by category](/reference/catalog/asset-types-by-category/) Which types exist and what they carry.
-- [Inventory mapping](/guides/inventory-mapping/) The linker in the context of a full map.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**InventoryMapper**](inventorymapper.md)
+
+    Runs the linker as part of every map.
+
+-   [**DependencyGraph**](dependencygraph.md)
+
+    Dependency questions over the linked edges.
+
+-   [**Relationship vocabulary**](../reference/catalog/relationship-vocabulary.md)
+
+    The relationship names and what they mean.
+
+-   [**Asset types by category**](../reference/catalog/asset-types-by-category.md)
+
+    Which types exist and what they carry.
+
+-   [**Inventory mapping**](../guides/inventory-mapping.md)
+
+    The linker in the context of a full map.
+
+</div>
