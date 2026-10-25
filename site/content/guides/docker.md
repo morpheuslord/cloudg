@@ -1,12 +1,13 @@
 ---
 title: Docker
-lede: "The cloudg image bundles the CLI, the three cloud SDKs, Prowler, Checkov and Trivy. Mount your credentials and a reports directory, and every command runs the same way it does on the host."
-meta:
-  - [Image, "`ghcr.io/morpheuslord/cloudg`"]
-  - [Base, "`python:3.12-slim`"]
-  - [Entrypoint, "`cloudg`"]
-source: Dockerfile
+description: The cloudg image bundles the CLI, the three cloud SDKs, Prowler, Checkov and Trivy. Mount your credentials and a reports directory, and every command runs the same way it does on the host.
 ---
+
+The cloudg image bundles the CLI, the three cloud SDKs, Prowler, Checkov and Trivy. Mount your credentials and a reports directory, and every command runs the same way it does on the host.
+{ .lede }
+
+**Image** `ghcr.io/morpheuslord/cloudg` &middot; **Base** `python:3.12-slim` &middot; **Entrypoint** `cloudg`
+{ .page-meta }
 
 The image is the quickest route to a full `cloudg run`, because the scanners are the hard part of a local install and the image has them preinstalled. It is also a clean way to run the MCP server on a host where you would rather not install Python packages.
 
@@ -42,16 +43,20 @@ At run time the container works like this:
 
 ## Get the image
 
-```bash tab="Pull"
-docker pull ghcr.io/morpheuslord/cloudg:latest
-docker tag ghcr.io/morpheuslord/cloudg:latest cloudg:latest
-```
+=== "Pull"
 
-```bash tab="Build"
-git clone https://github.com/morpheuslord/cloudg.git
-cd cloudg
-docker build -t cloudg:latest .
-```
+    ```bash
+    docker pull ghcr.io/morpheuslord/cloudg:latest
+    docker tag ghcr.io/morpheuslord/cloudg:latest cloudg:latest
+    ```
+
+=== "Build"
+
+    ```bash
+    git clone https://github.com/morpheuslord/cloudg.git
+    cd cloudg
+    docker build -t cloudg:latest .
+    ```
 
 Releases are tagged with their version (`ghcr.io/morpheuslord/cloudg:0.6.0`) as well as `latest`. The examples on this page use the local name `cloudg:latest`, which is what `docker compose` builds too.
 
@@ -89,25 +94,31 @@ The container sees no credentials until you give it some. Each provider has a fe
 
 ### AWS
 
-```bash tab="Profile"
-docker run --rm \
-  -v "$HOME/.aws:/home/cloudg/.aws:ro" \
-  -e AWS_PROFILE=audit \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p aws --regions us-east-1
-```
+=== "Profile"
 
-```bash tab="Environment"
-docker run --rm \
-  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p aws --regions us-east-1
-```
+    ```bash
+    docker run --rm \
+      -v "$HOME/.aws:/home/cloudg/.aws:ro" \
+      -e AWS_PROFILE=audit \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p aws --regions us-east-1
+    ```
 
-```bash tab="Instance role"
-# on EC2 or ECS: credentials come from the instance or task role
-docker run --rm -v "$PWD/reports:/app/reports" cloudg:latest run -p aws --regions all
-```
+=== "Environment"
+
+    ```bash
+    docker run --rm \
+      -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p aws --regions us-east-1
+    ```
+
+=== "Instance role"
+
+    ```bash
+    # on EC2 or ECS: credentials come from the instance or task role
+    docker run --rm -v "$PWD/reports:/app/reports" cloudg:latest run -p aws --regions all
+    ```
 
 Mount `~/.aws` at `/home/cloudg/.aws`, not `/root/.aws`; the container does not run as root. With SSO profiles, run `aws sso login` on the host first. A read-only mount can use the cached token but cannot store a refreshed one, so log in again on the host when it expires.
 
@@ -119,26 +130,32 @@ On EC2 with IMDSv2, a container on Docker's default bridge network is one networ
 
 The usual container setup is a service principal in environment variables. cloudg reads `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` when the matching flags are not given:
 
-```bash tab="Client secret"
-docker run --rm \
-  -e AZURE_TENANT_ID -e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p azure --subscription-id 00000000-0000-0000-0000-000000000000
-```
+=== "Client secret"
 
-```bash tab="Certificate"
-docker run --rm \
-  -e AZURE_TENANT_ID -e AZURE_CLIENT_ID \
-  -v "$PWD/sp-cert.pem:/secrets/sp-cert.pem:ro" \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p azure --azure-cert-path /secrets/sp-cert.pem
-```
+    ```bash
+    docker run --rm \
+      -e AZURE_TENANT_ID -e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p azure --subscription-id 00000000-0000-0000-0000-000000000000
+    ```
 
-```bash tab="Managed identity"
-# on an Azure VM or container host with a managed identity
-docker run --rm -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p azure --azure-managed-identity
-```
+=== "Certificate"
+
+    ```bash
+    docker run --rm \
+      -e AZURE_TENANT_ID -e AZURE_CLIENT_ID \
+      -v "$PWD/sp-cert.pem:/secrets/sp-cert.pem:ro" \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p azure --azure-cert-path /secrets/sp-cert.pem
+    ```
+
+=== "Managed identity"
+
+    ```bash
+    # on an Azure VM or container host with a managed identity
+    docker run --rm -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p azure --azure-managed-identity
+    ```
 
 Without `--subscription-id`, cloudg collects every enabled subscription the identity can see.
 
@@ -146,21 +163,25 @@ Without `--subscription-id`, cloudg collects every enabled subscription the iden
 
 Mount a key file (or a workload identity federation config) and point `GOOGLE_APPLICATION_CREDENTIALS` at the path inside the container:
 
-```bash tab="Key file"
-docker run --rm \
-  -v "$PWD/scanner-sa.json:/secrets/gcp.json:ro" \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p gcp --project-id my-project
-```
+=== "Key file"
 
-```bash tab="gcloud ADC"
-# after `gcloud auth application-default login` on the host
-docker run --rm \
-  -v "$HOME/.config/gcloud/application_default_credentials.json:/home/cloudg/.config/gcloud/application_default_credentials.json:ro" \
-  -v "$PWD/reports:/app/reports" \
-  cloudg:latest run -p gcp --project-id my-project
-```
+    ```bash
+    docker run --rm \
+      -v "$PWD/scanner-sa.json:/secrets/gcp.json:ro" \
+      -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p gcp --project-id my-project
+    ```
+
+=== "gcloud ADC"
+
+    ```bash
+    # after `gcloud auth application-default login` on the host
+    docker run --rm \
+      -v "$HOME/.config/gcloud/application_default_credentials.json:/home/cloudg/.config/gcloud/application_default_credentials.json:ro" \
+      -v "$PWD/reports:/app/reports" \
+      cloudg:latest run -p gcp --project-id my-project
+    ```
 
 google-auth finds the application default credentials file at its standard path under `HOME` without needing gcloud in the container.
 
@@ -294,13 +315,15 @@ docker compose run --rm cloudg run -p aws -p gcp --project-id my-project --iac-d
 
 The MCP server runs from the same image. Over stdio, the AI client starts the container itself; over HTTP, the container runs as a long-lived service.
 
-```mermaid caption="Two ways a client reaches cloudg in a container"
+```mermaid
 flowchart LR
   D["Desktop client"] -->|"docker run -i (stdio)"| S1["cloudg mcp serve"]
   W["HTTP client"] -->|"127.0.0.1:8765/mcp, bearer token"| S2["cloudg mcp serve --transport http"]
   S1 --> V[("/app/reports")]
   S2 --> V
 ```
+Two ways a client reaches cloudg in a container
+{ .diagram-caption }
 
 ### stdio for a desktop client
 
@@ -358,4 +381,4 @@ curl -s http://127.0.0.1:8765/healthz
 
 The MCP live tools (`map_inventory`, `collect_assets`, `run_scanners`, `run_pipeline`) call cloud APIs with the server's credentials, whoever is asking. With no credentials mounted, their credential preflight (at most 25 seconds) fails and nothing is collected. If you do mount credentials, restrict who can use them: the `strict`, `read_only`, `airgapped`, `audit` and `soc-analyst` policies hide those tools, and `--read-only` drops them along with anything that writes files. A server that only answers questions about saved maps should run with `--read-only` and a read-only reports mount, as above.
 
-[Connect a client](/mcp/connect/) has configuration for the other MCP clients, and [cloudg mcp serve](/cli/mcp-serve/) lists every server option.
+[Connect a client](../mcp/connect.md) has configuration for the other MCP clients, and [cloudg mcp serve](../cli/mcp-serve.md) lists every server option.

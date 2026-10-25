@@ -1,15 +1,20 @@
 ---
+description: Runs the external security scanners on their own and saves what they found, without collecting assets or normalising.
 command: scan
-lede: Runs the external security scanners on their own and saves what they found, without collecting assets or normalising.
-intro: |
-  `cloudg scan` is the scanner phase of `cloudg run` cut loose from the rest. It is handy for checking that your scanner binaries work, or for producing a `raw-findings.json` to merge into a map later. For a complete assessment with deduplication and reports, use [cloudg run](/cli/run/).
 ---
+
+Runs the external security scanners on their own and saves what they found, without collecting assets or normalising.
+{ .lede }
+
+`cloudg scan` is the scanner phase of `cloudg run` cut loose from the rest. It is handy for checking that your scanner binaries work, or for producing a `raw-findings.json` to merge into a map later. For a complete assessment with deduplication and reports, use [cloudg run](run.md).
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
 `scan` reads the config loaded with `cloudg -c`, like `run` and `map`, and plans its scanner jobs with the same code as `cloudg run`. From the config it takes `scanners.enabled` (the default for `--scanners`), the `*_extra_args` lists, `checkov_frameworks`, `iac_directories`, `trivy_images` and `timeout_seconds`, plus the AWS credentials and regions (`aws.profile`, keys, `role_arn`, web identity, `aws.regions`). Flags replace the matching config values. Without `-c`, the built-in defaults apply: all five scanners, a 3600-second timeout.
 
-`--scanners` is a comma-separated list of built-in names or [scanner plugin](/api/entry-points/) names; an unknown name is skipped with a warning. Each scanner becomes one or more jobs, and all jobs run in parallel threads with a progress display:
+`--scanners` is a comma-separated list of built-in names or [scanner plugin](../api/entry-points.md) names; an unknown name is skipped with a warning. Each scanner becomes one or more jobs, and all jobs run in parallel threads with a progress display:
 
 | Scanner | What it runs |
 |---|---|
@@ -104,7 +109,7 @@ cloudg map -p aws --profile audit --regions all --findings ./reports/raw-finding
 | `prowler/<provider>/` | Prowler's native ASFF output, when Prowler ran |
 | `scoutsuite/<provider>/` | ScoutSuite's native report, when ScoutSuite ran |
 
-`scan` writes no `findings.json` and no HTML report. To get them, run `cloudg report -i ./reports/raw-findings.json -o ./reports/html`, which normalises the raw findings first, or feed the native files to [cloudg ingest](/cli/ingest/), for example `cloudg ingest --prowler ./reports/prowler/aws/`.
+`scan` writes no `findings.json` and no HTML report. To get them, run `cloudg report -i ./reports/raw-findings.json -o ./reports/html`, which normalises the raw findings first, or feed the native files to [cloudg ingest](ingest.md), for example `cloudg ingest --prowler ./reports/prowler/aws/`.
 
 ## Exit codes
 
@@ -118,9 +123,22 @@ A missing scanner next to one that worked still exits 0, so check the `not insta
 
 ## Related
 
-:::links
-- [Running scanners](/guides/running-scanners/) Install and configure Prowler, ScoutSuite, Checkov and Trivy.
-- [cloudg run](/cli/run/) Scanners plus collection, graph, normalisation and reports.
-- [cloudg ingest](/cli/ingest/) Normalise and report on scanner output.
-- [Provider and region flags](/cli/provider-flags/) How `-p` differs between commands.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Running scanners**](../guides/running-scanners.md)
+
+    Install and configure Prowler, ScoutSuite, Checkov and Trivy.
+
+-   [**cloudg run**](run.md)
+
+    Scanners plus collection, graph, normalisation and reports.
+
+-   [**cloudg ingest**](ingest.md)
+
+    Normalise and report on scanner output.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    How `-p` differs between commands.
+
+</div>

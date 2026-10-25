@@ -1,13 +1,18 @@
 ---
+description: Lists the MCP resources and resource templates a server would expose, with their URIs, sensitivity and MIME types.
 command: mcp resources
-lede: Lists the MCP resources and resource templates a server would expose, with their URIs, sensitivity and MIME types.
-intro: |
-  Resources are the read-only side of the MCP server: summaries, graphs, schemas and single assets that a client can fetch by URI without calling a tool. `cloudg mcp resources` shows which ones the active policy lets a principal see.
 ---
+
+Lists the MCP resources and resource templates a server would expose, with their URIs, sensitivity and MIME types.
+{ .lede }
+
+Resources are the read-only side of the MCP server: summaries, graphs, schemas and single assets that a client can fetch by URI without calling a tool. `cloudg mcp resources` shows which ones the active policy lets a principal see.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
-The command builds the layer from the shared options (see [cloudg mcp serve](/cli/mcp-serve/#building-the-layer)), asks it for the resources and resource templates visible to one principal, and prints them. The principal options work as on [cloudg mcp tools](/cli/mcp-tools/): the local user by default, or `--role` and `--principal-id` to see what a token holder gets.
+The command builds the layer from the shared options (see [cloudg mcp serve](mcp-serve.md#building-the-layer)), asks it for the resources and resource templates visible to one principal, and prints them. The principal options work as on [cloudg mcp tools](mcp-tools.md): the local user by default, or `--role` and `--principal-id` to see what a token holder gets.
 
 There are two kinds of entry. A resource has a fixed URI, such as `cloudg://findings/summary`. A resource template has placeholders in braces that the client fills in, such as `cloudg://assets/{+ref}`. The `{+ref}` form means the value may contain `/` and `:`, so a full ARN fits. The table lists resources first, then templates, under one "URI / template" column:
 
@@ -33,7 +38,7 @@ In 0.6.0, the default policy shows the local user 14 resources and 11 templates:
 | `cloudg://docs` | `cloudg://docs/{topic}` |
 | `cloudg://policy`, `cloudg://privacy/detectors`, `cloudg://ratelimit`, `cloudg://metrics` | |
 
-The list does not depend on loaded datasets. Resources that read data, like `cloudg://findings/summary`, use the active dataset when they are read, so preload one with `--dataset` before you [read](/cli/mcp-read/) them.
+The list does not depend on loaded datasets. Resources that read data, like `cloudg://findings/summary`, use the active dataset when they are read, so preload one with `--dataset` before you [read](mcp-read.md) them.
 
 `--include-category` and `--exclude-category` apply to resources and templates as well as tools. `--include-tool` and `--exclude-tool` do not touch them.
 
@@ -92,9 +97,22 @@ cloudg mcp resources --exclude-category ontology --exclude-category privacy
 
 ## Related
 
-:::links
-- [Resources and resource templates](/mcp/tools/resources-and-resource-templates/) Every resource with an example of its content.
-- [cloudg mcp read](/cli/mcp-read/) Fetch one of these URIs from the shell.
-- [cloudg mcp tools](/cli/mcp-tools/) The same listing for tools.
-- [The workspace](/mcp/server/the-workspace/) Datasets and which one is active.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Resources and resource templates**](../mcp/tools/resources-and-resource-templates.md)
+
+    Every resource with an example of its content.
+
+-   [**cloudg mcp read**](mcp-read.md)
+
+    Fetch one of these URIs from the shell.
+
+-   [**cloudg mcp tools**](mcp-tools.md)
+
+    The same listing for tools.
+
+-   [**The workspace**](../mcp/server/the-workspace.md)
+
+    Datasets and which one is active.
+
+</div>

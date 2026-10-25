@@ -1,15 +1,20 @@
 ---
+description: Collects assets and network edges from one provider and saves them as JSON. No graph analysis, no scanners, no reports.
 command: collect
-lede: Collects assets and network edges from one provider and saves them as JSON. No graph analysis, no scanners, no reports.
-intro: |
-  `cloudg collect` is phase 1 of `cloudg run` on its own, for one provider and, on AWS, one region. It is a quick way to test credentials and permissions before a long run. For a full inventory with relationships and dependency analysis, use [cloudg map](/cli/map/).
 ---
+
+Collects assets and network edges from one provider and saves them as JSON. No graph analysis, no scanners, no reports.
+{ .lede }
+
+`cloudg collect` is phase 1 of `cloudg run` on its own, for one provider and, on AWS, one region. It is a quick way to test credentials and permissions before a long run. For a full inventory with relationships and dependency analysis, use [cloudg map](map.md).
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
 `-p/--provider` is required and takes exactly one of `aws`, `azure` or `gcp` (case-insensitive). There is no `all` here.
 
-Credentials and scope come from the flags on this page, then from the provider's section of the config passed with `cloudg -c` (`aws`, `azure` or `gcp`), then from the environment and each provider's default chain, through `CredentialResolver`. Every method the config supports works here: direct keys, `role_arn` and web identity on AWS, a service principal, workload identity or managed identity on Azure, a credentials file or impersonation on GCP. See [Auth flags](/cli/auth-flags/) for the order within each provider.
+Credentials and scope come from the flags on this page, then from the provider's section of the config passed with `cloudg -c` (`aws`, `azure` or `gcp`), then from the environment and each provider's default chain, through `CredentialResolver`. Every method the config supports works here: direct keys, `role_arn` and web identity on AWS, a service principal, workload identity or managed identity on Azure, a credentials file or impersonation on GCP. See [Auth flags](auth-flags.md) for the order within each provider.
 
 How each provider resolves its identity:
 
@@ -91,9 +96,22 @@ The file is written to `-o/--output` (default `./reports`), and a second run for
 
 ## Related
 
-:::links
-- [cloudg map](/cli/map/) The full inventory map with relationships and dependencies.
-- [cloudg run](/cli/run/) Collection as part of the complete pipeline.
-- [Authentication](/guides/authentication/) Every supported identity per provider.
-- [Provider and region flags](/cli/provider-flags/) How `--region` and `--regions` differ.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**cloudg map**](map.md)
+
+    The full inventory map with relationships and dependencies.
+
+-   [**cloudg run**](run.md)
+
+    Collection as part of the complete pipeline.
+
+-   [**Authentication**](../guides/authentication.md)
+
+    Every supported identity per provider.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    How `--region` and `--regions` differ.
+
+</div>

@@ -1,13 +1,18 @@
 ---
+description: Lists the MCP tools a server would expose, as a table or as the exact tools/list JSON a client receives.
 command: mcp tools
-lede: Lists the MCP tools a server would expose, as a table or as the exact `tools/list` JSON a client receives.
-intro: |
-  Run `cloudg mcp tools` with the same options you plan to give `cloudg mcp serve`. What it prints is what the client will see, after the policy, the filters and `--read-only` have done their work.
 ---
+
+Lists the MCP tools a server would expose, as a table or as the exact `tools/list` JSON a client receives.
+{ .lede }
+
+Run `cloudg mcp tools` with the same options you plan to give `cloudg mcp serve`. What it prints is what the client will see, after the policy, the filters and `--read-only` have done their work.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
-The command builds the same layer `serve` would build from the shared options (`--policy`, `--read-only`, `--include-category` and the rest, listed on [cloudg mcp serve](/cli/mcp-serve/#building-the-layer)), asks it for the tool list of one principal, and prints it. No server starts and no client is involved.
+The command builds the same layer `serve` would build from the shared options (`--policy`, `--read-only`, `--include-category` and the rest, listed on [cloudg mcp serve](mcp-serve.md#building-the-layer)), asks it for the tool list of one principal, and prints it. No server starts and no client is involved.
 
 The principal is the local user unless you pass `--role` or `--principal-id`. The local user has the id `local` and the roles `default` and `local`. With either option, the caller becomes a principal with the id you gave (default `cli`) and the roles you gave (default `default`). This is how you check what a token holder will see before you hand out the token: give the same roles you put in its `--auth-token` spec.
 
@@ -100,9 +105,22 @@ cloudg mcp tools --json --policy open > tools-0.6.0.json
 
 ## Related
 
-:::links
-- [Tool index](/mcp/tools/tool-index/) Every tool with its arguments and an example result.
-- [cloudg mcp call](/cli/mcp-call/) Call one of the listed tools from the shell.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) What each policy hides and transforms.
-- [cloudg mcp serve](/cli/mcp-serve/) The shared layer options in full.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Tool index**](../mcp/tools/tool-index.md)
+
+    Every tool with its arguments and an example result.
+
+-   [**cloudg mcp call**](mcp-call.md)
+
+    Call one of the listed tools from the shell.
+
+-   [**Built-in profiles**](../mcp/privacy/built-in-profiles.md)
+
+    What each policy hides and transforms.
+
+-   [**cloudg mcp serve**](mcp-serve.md)
+
+    The shared layer options in full.
+
+</div>

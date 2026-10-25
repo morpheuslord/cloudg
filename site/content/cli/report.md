@@ -1,9 +1,14 @@
 ---
+description: Re-renders the HTML, JSON and SVG reports from a findings.json you already have. No cloud access and no scanners.
 command: report
-lede: Re-renders the HTML, JSON and SVG reports from a `findings.json` you already have. No cloud access and no scanners.
-intro: |
-  Use `cloudg report` after upgrading cloudg to get the newer HTML template, or to rebuild one format you skipped. It also turns a `raw-findings.json` into reports.
 ---
+
+Re-renders the HTML, JSON and SVG reports from a `findings.json` you already have. No cloud access and no scanners.
+{ .lede }
+
+Use `cloudg report` after upgrading cloudg to get the newer HTML template, or to rebuild one format you skipped. It also turns a `raw-findings.json` into reports.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
@@ -101,9 +106,22 @@ cloudg report -i ./reports/raw-findings.json -o ./reports/scan-report
 
 ## Related
 
-:::links
-- [Reports](/guides/reports/) What is in the HTML report and how to read it.
-- [Output files](/reference/output-files/) The `findings.json` format.
-- [cloudg ingest](/cli/ingest/) Build reports from scanner output.
-- [Output flags](/cli/output-flags/) `-o` and `--format` across commands.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Reports**](../guides/reports.md)
+
+    What is in the HTML report and how to read it.
+
+-   [**Output files**](../reference/output-files.md)
+
+    The `findings.json` format.
+
+-   [**cloudg ingest**](ingest.md)
+
+    Build reports from scanner output.
+
+-   [**Output flags**](output-flags.md)
+
+    `-o` and `--format` across commands.
+
+</div>

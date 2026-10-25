@@ -1,25 +1,25 @@
 ---
 title: Authentication
-lede: "Every provider has several ways in, tried in a fixed order, so one `config.yaml` works on a laptop, in CI and on cloud compute."
-meta:
-  - [Code, "`cloudg/credentials.py`"]
-  - [Providers, "AWS, Azure, GCP"]
-  - [Flags, "[Auth flags](/cli/auth-flags/)"]
-source: cloudg/credentials.py
-since: "0.6.0"
+description: Every provider has several ways in, tried in a fixed order, so one config.yaml works on a laptop, in CI and on cloud compute.
 ---
+
+Every provider has several ways in, tried in a fixed order, so one `config.yaml` works on a laptop, in CI and on cloud compute.
+{ .lede }
+
+**Code** `cloudg/credentials.py` &middot; **Providers** AWS, Azure, GCP &middot; **Flags** [Auth flags](../cli/auth-flags.md) &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 All credential handling lives in three functions in `cloudg/credentials.py`: `build_aws_session`, `build_azure_credential` and `build_gcp_credentials`. `cloudg run`, `cloudg map`, `CloudGEngine`, `InventoryMapper` and the credential preflight of the MCP live tools all call them, so the precedence on this page holds everywhere. Each function walks its list from the top and stops at the first method whose settings are complete. It never tries the next method after a failure, which matters when you debug: if direct keys are set but wrong, cloudg will not fall back to your profile.
 
 You can supply each setting three ways. CLI flags (on `cloudg run`) are copied onto the loaded config before anything resolves, `config.yaml` holds the same keys under `aws`, `azure` and `gcp`, and a handful of environment variables are read directly. The tabs below show all three where they exist.
 
-:::note Which commands take which flags
-`cloudg run` has the full set of credential flags listed under [auth flags](/cli/auth-flags/). `cloudg map` has only `--profile`, `--accounts`, `--role-name` and `--org-role`; put everything else in `config.yaml` and pass it with `cloudg -c config.yaml map ...`. `cloudg collect` is the exception: it builds credentials from `--profile` (or `AWS_PROFILE`) and the environment only, and ignores the auth keys in `config.yaml`.
-:::
+!!! note "Which commands take which flags"
+
+    `cloudg run` has the full set of credential flags listed under [auth flags](../cli/auth-flags.md). `cloudg map` has only `--profile`, `--accounts`, `--role-name` and `--org-role`; put everything else in `config.yaml` and pass it with `cloudg -c config.yaml map ...`. `cloudg collect` is the exception: it builds credentials from `--profile` (or `AWS_PROFILE`) and the environment only, and ignores the auth keys in `config.yaml`.
 
 ## AWS
 
-```mermaid caption="How build_aws_session picks the base credentials, then the optional AssumeRole hop"
+```mermaid
 flowchart TD
   A["access_key_id and secret_access_key set?"] -->|yes| K[Direct keys]
   A -->|no| B["role_arn and a web identity token file?"]
@@ -38,6 +38,8 @@ flowchart TD
   M -->|no| Done[Session ready]
   T --> Done
 ```
+How build_aws_session picks the base credentials, then the optional AssumeRole hop
+{ .diagram-caption }
 
 | Order | Method | Settings that select it |
 |---|---|---|
@@ -47,33 +49,39 @@ flowchart TD
 | 4 | Default provider chain | nothing set: env vars, shared config, container credentials, instance role |
 | then | STS AssumeRole | `role_arn` (when not already used by step 2), then, for each account in `accounts`, `role_name` in that account |
 
-Whatever the base method, the session is instrumented with cloudg's rate limiter before it is used, so STS, Organizations and every collector call are paced. See [rate limits](/guides/rate-limits/).
+Whatever the base method, the session is instrumented with cloudg's rate limiter before it is used, so STS, Organizations and every collector call are paced. See [rate limits](rate-limits.md).
 
 ### Direct keys and session tokens
 
 The third-party auditor case: someone hands you an access key pair, or a temporary key pair with a session token. Keys win over everything else, including a profile set in the same config.
 
-```bash tab="CLI"
-cloudg run -p aws --regions us-east-1 \
-  --aws-key AKIAIOSFODNN7EXAMPLE \
-  --aws-secret "$AUDIT_SECRET" \
-  --aws-session-token "$AUDIT_SESSION_TOKEN"
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-aws:
-  regions: [us-east-1]
-  access_key_id: AKIAIOSFODNN7EXAMPLE
-  secret_access_key: REPLACE_ME   # keep this file out of version control
-  session_token: null             # only for temporary credentials
-```
+    ```bash
+    cloudg run -p aws --regions us-east-1 \
+      --aws-key AKIAIOSFODNN7EXAMPLE \
+      --aws-secret "$AUDIT_SECRET" \
+      --aws-session-token "$AUDIT_SESSION_TOKEN"
+    ```
 
-```bash tab="Environment"
-export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-export AWS_SECRET_ACCESS_KEY="$AUDIT_SECRET"
-export AWS_SESSION_TOKEN="$AUDIT_SESSION_TOKEN"
-cloudg run -p aws --regions us-east-1
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    aws:
+      regions: [us-east-1]
+      access_key_id: AKIAIOSFODNN7EXAMPLE
+      secret_access_key: REPLACE_ME   # keep this file out of version control
+      session_token: null             # only for temporary credentials
+    ```
+
+=== "Environment"
+
+    ```bash
+    export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+    export AWS_SECRET_ACCESS_KEY="$AUDIT_SECRET"
+    export AWS_SESSION_TOKEN="$AUDIT_SESSION_TOKEN"
+    cloudg run -p aws --regions us-east-1
+    ```
 
 The environment tab works through a different door. cloudg does not copy `AWS_ACCESS_KEY_ID` into its config, so resolution falls through to step 4 and boto3's default chain picks the variables up. The effect is the same, and it is the variant to prefer: nothing secret lands in a file or in your shell history.
 
@@ -81,31 +89,37 @@ The environment tab works through a different door. cloudg does not copy `AWS_AC
 
 For GitHub Actions, GitLab CI and EKS service accounts: no long-lived keys, only a short-lived token file exchanged for role credentials with `AssumeRoleWithWebIdentity`. cloudg reads the token file itself and names the session after `role_session_name` (default `cloudg-scan`).
 
-```bash tab="CLI"
-cloudg run -p aws --regions all \
-  --aws-role-arn arn:aws:iam::123456789012:role/cloudg-readonly \
-  --aws-web-identity-token-file /var/run/secrets/oidc/token
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-aws:
-  role_arn: arn:aws:iam::123456789012:role/cloudg-readonly
-  web_identity_token_file: /var/run/secrets/oidc/token
-  role_session_name: cloudg-ci
-```
+    ```bash
+    cloudg run -p aws --regions all \
+      --aws-role-arn arn:aws:iam::123456789012:role/cloudg-readonly \
+      --aws-web-identity-token-file /var/run/secrets/oidc/token
+    ```
 
-```bash tab="Environment"
-# Read by boto3's default chain (step 4), not by cloudg's step 2
-export AWS_ROLE_ARN=arn:aws:iam::123456789012:role/cloudg-readonly
-export AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/oidc/token
-cloudg run -p aws --regions all
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    aws:
+      role_arn: arn:aws:iam::123456789012:role/cloudg-readonly
+      web_identity_token_file: /var/run/secrets/oidc/token
+      role_session_name: cloudg-ci
+    ```
+
+=== "Environment"
+
+    ```bash
+    # Read by boto3's default chain (step 4), not by cloudg's step 2
+    export AWS_ROLE_ARN=arn:aws:iam::123456789012:role/cloudg-readonly
+    export AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/oidc/token
+    cloudg run -p aws --regions all
+    ```
 
 When step 2 succeeds, `role_arn` has been used up as the OIDC target and no second AssumeRole follows. A cross-account hop after federation needs `accounts` plus `role_name` instead.
 
-:::warning The token file variable on EKS
-cloudg also reads `$AWS_WEB_IDENTITY_TOKEN_FILE` from the environment, and EKS (IRSA) sets it in every pod. On such a pod, a `role_arn` meant as a second hop becomes the OIDC target instead, and the exchange fails unless that role trusts the cluster's OIDC provider. Either let the pod's own role do the work (no `role_arn`), or reach other accounts with `accounts` plus `role_name`.
-:::
+!!! warning "The token file variable on EKS"
+
+    cloudg also reads `$AWS_WEB_IDENTITY_TOKEN_FILE` from the environment, and EKS (IRSA) sets it in every pod. On such a pod, a `role_arn` meant as a second hop becomes the OIDC target instead, and the exchange fails unless that role trusts the cluster's OIDC provider. Either let the pod's own role do the work (no `role_arn`), or reach other accounts with `accounts` plus `role_name`.
 
 A failed exchange raises `RuntimeError: AssumeRoleWithWebIdentity failed for <arn>: ...`. The usual causes are a trust policy whose `sub` condition does not match the branch or environment, or a token minted for the wrong audience (AWS expects `sts.amazonaws.com`).
 
@@ -113,26 +127,32 @@ A failed exchange raises `RuntimeError: AssumeRoleWithWebIdentity failed for <ar
 
 A named profile from `~/.aws/config`, plain or SSO. Log in first; cloudg uses the cached SSO token the AWS CLI writes.
 
-```bash tab="CLI"
-aws sso login --profile prod-audit
-cloudg map -p aws --profile prod-audit --regions all
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-aws:
-  profile: prod-audit
-```
+    ```bash
+    aws sso login --profile prod-audit
+    cloudg map -p aws --profile prod-audit --regions all
+    ```
 
-```bash tab="Environment"
-export AWS_PROFILE=prod-audit
-cloudg map -p aws --regions all
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    aws:
+      profile: prod-audit
+    ```
+
+=== "Environment"
+
+    ```bash
+    export AWS_PROFILE=prod-audit
+    cloudg map -p aws --regions all
+    ```
 
 An expired SSO session shows up as a `TokenRetrievalError` or `UnauthorizedSSOTokenError` from botocore on the first call. Run `aws sso login` again.
 
 ### Instance roles and the default chain
 
-With nothing configured, boto3 resolves credentials the usual way: environment variables, the shared credentials and config files, ECS and EKS container credentials, then the EC2 instance metadata service. This is the mode for cloudg running on EC2, ECS or Lambda under its own role, and the mode the CI examples in [CI and automation](/guides/ci-automation/) rely on. Nothing to pass:
+With nothing configured, boto3 resolves credentials the usual way: environment variables, the shared credentials and config files, ECS and EKS container credentials, then the EC2 instance metadata service. This is the mode for cloudg running on EC2, ECS or Lambda under its own role, and the mode the CI examples in [CI and automation](ci-automation.md) rely on. Nothing to pass:
 
 ```bash
 cloudg run -p aws --regions all
@@ -149,20 +169,24 @@ STS `AssumeRole` sits on top of whichever base method won. It runs in two situat
 
 `external_id` is passed as `ExternalId` when set, which is the standard confused-deputy protection for third-party auditors. Sessions last 3600 seconds (fixed in the code) and use `role_session_name`.
 
-```bash tab="CLI"
-cloudg run -p aws --regions eu-west-1 \
-  --profile auditor \
-  --aws-role-arn arn:aws:iam::210987654321:role/ThirdPartyAudit \
-  --aws-external-id 7f2c1a9e-audit-2026
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-aws:
-  profile: auditor
-  role_arn: arn:aws:iam::210987654321:role/ThirdPartyAudit
-  external_id: 7f2c1a9e-audit-2026
-  role_session_name: acme-audit
-```
+    ```bash
+    cloudg run -p aws --regions eu-west-1 \
+      --profile auditor \
+      --aws-role-arn arn:aws:iam::210987654321:role/ThirdPartyAudit \
+      --aws-external-id 7f2c1a9e-audit-2026
+    ```
+
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    aws:
+      profile: auditor
+      role_arn: arn:aws:iam::210987654321:role/ThirdPartyAudit
+      external_id: 7f2c1a9e-audit-2026
+      role_session_name: acme-audit
+    ```
 
 For fan-out across accounts, list them and name the role:
 
@@ -173,7 +197,7 @@ aws:
   role_name: cloudg-readonly
 ```
 
-When `accounts` is set, cloudg first calls `GetCallerIdentity` to learn its own account (with `role_arn` set, that is the role's account). If that account is in the list it is collected with that session, without the member role, because roles such as `AWSControlTowerExecution` do not exist in the management account. For whole organizations, `cloudg map --org` discovers the account list for you; see [AWS Organizations](/guides/aws-organizations/).
+When `accounts` is set, cloudg first calls `GetCallerIdentity` to learn its own account (with `role_arn` set, that is the role's account). If that account is in the list it is collected with that session, without the member role, because roles such as `AWSControlTowerExecution` do not exist in the management account. For whole organizations, `cloudg map --org` discovers the account list for you; see [AWS Organizations](aws-organizations.md).
 
 A failed AssumeRole does not stop the run. The account and region get a coverage record for `sts_assume_role` with status FAILED and the STS error, and the other accounts carry on. Check the coverage table at the end of `cloudg run`, or `coverage` in the result, before trusting a quiet map.
 
@@ -197,60 +221,72 @@ The scanners run once per provider, against the account those credentials reach:
 
 The Azure CLI is not a numbered step. `az login` works through step 5, because `DefaultAzureCredential` tries environment credentials, workload identity, managed identity and then the Azure CLI. On a laptop that is the simplest path:
 
-```bash tab="CLI"
-az login
-cloudg map -p azure
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-providers: [azure]
-azure:
-  subscription_ids: []      # empty: every Enabled subscription you can see
-```
+    ```bash
+    az login
+    cloudg map -p azure
+    ```
 
-```bash tab="Environment"
-az login
-export AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000
-cloudg collect -p azure    # collect reads the subscription from the env var
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    providers: [azure]
+    azure:
+      subscription_ids: []      # empty: every Enabled subscription you can see
+    ```
+
+=== "Environment"
+
+    ```bash
+    az login
+    export AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000
+    cloudg collect -p azure    # collect reads the subscription from the env var
+    ```
 
 Service principals and federation:
 
-```bash tab="CLI"
-# Secret
-cloudg run -p azure \
-  --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
-  --azure-client-secret "$SP_SECRET"
-# Certificate
-cloudg run -p azure \
-  --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
-  --azure-cert-path ./cloudg-sp.pem
-# Federated token (AKS workload identity, GitHub OIDC)
-cloudg run -p azure \
-  --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
-  --azure-federated-token-file /var/run/secrets/azure/tokens/azure-identity-token
-# Managed identity of the VM, App Service or AKS node
-cloudg run -p azure --azure-managed-identity
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-azure:
-  tenant_id: 11111111-2222-3333-4444-555555555555
-  client_id: 66666666-7777-8888-9999-000000000000
-  client_secret: null          # 2. secret
-  certificate_path: null       # 3. PEM or PKCS12
-  federated_token_file: null   # 1. wins over 2 and 3
-  use_managed_identity: false  # 4.
-  managed_identity_client_id: null   # for a user-assigned identity
-```
+    ```bash
+    # Secret
+    cloudg run -p azure \
+      --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
+      --azure-client-secret "$SP_SECRET"
+    # Certificate
+    cloudg run -p azure \
+      --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
+      --azure-cert-path ./cloudg-sp.pem
+    # Federated token (AKS workload identity, GitHub OIDC)
+    cloudg run -p azure \
+      --azure-tenant-id "$TENANT" --azure-client-id "$APP_ID" \
+      --azure-federated-token-file /var/run/secrets/azure/tokens/azure-identity-token
+    # Managed identity of the VM, App Service or AKS node
+    cloudg run -p azure --azure-managed-identity
+    ```
 
-```bash tab="Environment"
-export AZURE_TENANT_ID=11111111-2222-3333-4444-555555555555
-export AZURE_CLIENT_ID=66666666-7777-8888-9999-000000000000
-export AZURE_CLIENT_SECRET="$SP_SECRET"            # or:
-export AZURE_FEDERATED_TOKEN_FILE=/path/to/token   # takes precedence over the secret
-cloudg run -p azure
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    azure:
+      tenant_id: 11111111-2222-3333-4444-555555555555
+      client_id: 66666666-7777-8888-9999-000000000000
+      client_secret: null          # 2. secret
+      certificate_path: null       # 3. PEM or PKCS12
+      federated_token_file: null   # 1. wins over 2 and 3
+      use_managed_identity: false  # 4.
+      managed_identity_client_id: null   # for a user-assigned identity
+    ```
+
+=== "Environment"
+
+    ```bash
+    export AZURE_TENANT_ID=11111111-2222-3333-4444-555555555555
+    export AZURE_CLIENT_ID=66666666-7777-8888-9999-000000000000
+    export AZURE_CLIENT_SECRET="$SP_SECRET"            # or:
+    export AZURE_FEDERATED_TOKEN_FILE=/path/to/token   # takes precedence over the secret
+    cloudg run -p azure
+    ```
 
 Two interactions catch people out. AKS workload identity injects `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_FEDERATED_TOKEN_FILE` into the pod, so step 1 fires even when you set `use_managed_identity: true`. And a stale `AZURE_CLIENT_SECRET` in a shell silently beats your `az login` session. When the identity is not what you expect, run with `-v`: cloudg logs the method it chose, for example `Azure auth: service principal (client 6666...)`.
 
@@ -266,29 +302,35 @@ Subscriptions come from `subscription_ids` (or `--subscription-id` on `run` and 
 
 All three request the `cloud-platform` scope. `GOOGLE_APPLICATION_CREDENTIALS` is handled by step 2 rather than step 1, which makes no practical difference: ADC loads the same file.
 
-```bash tab="CLI"
-gcloud auth application-default login
-cloudg map -p gcp --project-id prod-app-123
-# or a key / federation file, with impersonation on top
-cloudg run -p gcp --project-id prod-app-123 \
-  --gcp-credentials-file ./wif-config.json \
-  --gcp-impersonate-sa cloudg-reader@sec-tools.iam.gserviceaccount.com
-```
+=== "CLI"
 
-```yaml tab="config.yaml" title="config.yaml"
-providers: [gcp]
-gcp:
-  project_ids: [prod-app-123, prod-data-456]
-  organization_id: null        # set it for one org-wide listing
-  credentials_file: null
-  impersonate_service_account: cloudg-reader@sec-tools.iam.gserviceaccount.com
-```
+    ```bash
+    gcloud auth application-default login
+    cloudg map -p gcp --project-id prod-app-123
+    # or a key / federation file, with impersonation on top
+    cloudg run -p gcp --project-id prod-app-123 \
+      --gcp-credentials-file ./wif-config.json \
+      --gcp-impersonate-sa cloudg-reader@sec-tools.iam.gserviceaccount.com
+    ```
 
-```bash tab="Environment"
-export GOOGLE_APPLICATION_CREDENTIALS=$HOME/keys/cloudg-reader.json
-export GOOGLE_CLOUD_PROJECT=prod-app-123
-cloudg map -p gcp
-```
+=== "config.yaml"
+
+    ```yaml title="config.yaml"
+    providers: [gcp]
+    gcp:
+      project_ids: [prod-app-123, prod-data-456]
+      organization_id: null        # set it for one org-wide listing
+      credentials_file: null
+      impersonate_service_account: cloudg-reader@sec-tools.iam.gserviceaccount.com
+    ```
+
+=== "Environment"
+
+    ```bash
+    export GOOGLE_APPLICATION_CREDENTIALS=$HOME/keys/cloudg-reader.json
+    export GOOGLE_CLOUD_PROJECT=prod-app-123
+    cloudg map -p gcp
+    ```
 
 Impersonation is the clean way to keep keys off disk: your own ADC identity (or the CI's federated identity) needs only `roles/iam.serviceAccountTokenCreator` on one reader service account, and every API call runs as that account.
 
@@ -309,9 +351,9 @@ cloudg only reads. Grant read-only roles at the widest scope you want mapped, an
 
 Scanners have their own requirements. Prowler documents extra permissions on top of `SecurityAudit` and `ViewOnlyAccess`, and Prowler and ScoutSuite on Azure also read Microsoft Graph. Check each scanner's documentation before you blame cloudg for an `AccessDenied` in their output.
 
-:::danger Never point cloudg at admin credentials for convenience
-Nothing in cloudg writes to your cloud, but its reports and the RAG and ontology exports describe your estate in detail, and the MCP live tools run with whatever identity the server has. A read-only role keeps a leaked report or a misconfigured agent from becoming a write path.
-:::
+!!! danger "Never point cloudg at admin credentials for convenience"
+
+    Nothing in cloudg writes to your cloud, but its reports and the RAG and ontology exports describe your estate in detail, and the MCP live tools run with whatever identity the server has. A read-only role keeps a leaked report or a misconfigured agent from becoming a write path.
 
 ## Checking which identity cloudg used
 
@@ -324,9 +366,22 @@ INFO  AWS auth: profile 'prod-audit' (region us-east-1)
 
 Other messages you may see are `AWS auth: direct access keys`, `AWS auth: web identity federation into <arn>`, `AWS auth: default provider chain`, `AWS auth: assuming role <arn>`, `Azure auth: workload identity federation (client ...)`, `Azure auth: DefaultAzureCredential chain`, `GCP auth: file-based identity (...)`, `GCP auth: application default credentials` and `GCP auth: impersonating <email>`.
 
-:::links
-- [Auth flags](/cli/auth-flags/) Every credential flag of `cloudg run`.
-- [AWS Organizations](/guides/aws-organizations/) Mapping every account from the management account.
-- [CI and automation](/guides/ci-automation/) OIDC from GitHub Actions and GitLab CI.
-- [Docker](/guides/docker/) Mounting credentials into the container.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Auth flags**](../cli/auth-flags.md)
+
+    Every credential flag of `cloudg run`.
+
+-   [**AWS Organizations**](aws-organizations.md)
+
+    Mapping every account from the management account.
+
+-   [**CI and automation**](ci-automation.md)
+
+    OIDC from GitHub Actions and GitLab CI.
+
+-   [**Docker**](docker.md)
+
+    Mounting credentials into the container.
+
+</div>

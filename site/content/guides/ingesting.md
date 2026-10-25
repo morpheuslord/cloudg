@@ -1,19 +1,19 @@
 ---
 title: Ingesting existing output
-lede: "`cloudg ingest` is the second half of the pipeline on its own. Give it files that Prowler, ScoutSuite, Checkov or Trivy already wrote, and it parses, deduplicates, maps compliance and writes the reports."
-meta:
-  - [Command, "`cloudg ingest`"]
-  - [Python, "`parse_report`, `ingest_reports`, `CloudGEngine.run_from_reports()`"]
-  - [Needs, "No credentials, no scanner binaries"]
-source: cloudg/ingest.py
-since: "0.6.0"
+description: cloudg ingest is the second half of the pipeline on its own. Give it files that Prowler, ScoutSuite, Checkov or Trivy already wrote, and it parses, deduplicates, maps compliance and writes the reports.
 ---
+
+`cloudg ingest` is the second half of the pipeline on its own. Give it files that Prowler, ScoutSuite, Checkov or Trivy already wrote, and it parses, deduplicates, maps compliance and writes the reports.
+{ .lede }
+
+**Command** `cloudg ingest` &middot; **Python** `parse_report`, `ingest_reports`, `CloudGEngine.run_from_reports()` &middot; **Needs** No credentials, no scanner binaries &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 Ingest exists for the common case where the scanners already run somewhere you don't control from cloudg: a CI job that runs Checkov on every pull request, a nightly Prowler container in the security account, a Trivy step in the image build. Those jobs produce files. `cloudg ingest` reads the files and does the rest. Nothing is executed and no cloud API is called, so it runs on a laptop with no AWS profile, in an air-gapped review environment, or in a CI step after the scan step.
 
 ## What ingest does
 
-```mermaid caption="cloudg ingest, from native files to reports"
+```mermaid
 flowchart LR
   P["--prowler files"] --> PR["parse_report"]
   S["--scoutsuite files"] --> PR
@@ -24,6 +24,8 @@ flowchart LR
   N --> J["findings.json"]
   N --> H["report.html"]
 ```
+cloudg ingest, from native files to reports
+{ .diagram-caption }
 
 Each path goes through `cloudg.ingest.parse_report(tool, path)`, which hands it to that scanner's own parser (the same code `cloudg run` uses on fresh output). Every parsed `Finding` is collected into one list and written, unchanged, to `raw-findings.json`. The list then goes through the same `FindingsNormaliser` that `cloudg run` uses: two-pass deduplication, CVSS-based rescoring and compliance mapping. The result is written as `findings.json` and `report.html`.
 
@@ -33,44 +35,50 @@ What ingest doesn't do is anything that needs live assets. There is no collectio
 
 Every input flag is repeatable, and any combination of tools works.
 
-```bash tab="CLI"
-cloudg ingest \
-  --prowler ./prowler-output/ \
-  --scoutsuite ./scoutsuite-report/ \
-  --checkov ./results_json.json \
-  --trivy ./trivy-image.json \
-  --trivy ./trivy-fs.json \
-  -o ./reports
-```
+=== "CLI"
 
-```python tab="Python" title="ingest_reports_demo.py"
-from cloudg import CloudGConfig, CloudGEngine
+    ```bash
+    cloudg ingest \
+      --prowler ./prowler-output/ \
+      --scoutsuite ./scoutsuite-report/ \
+      --checkov ./results_json.json \
+      --trivy ./trivy-image.json \
+      --trivy ./trivy-fs.json \
+      -o ./reports
+    ```
 
-engine = CloudGEngine(CloudGConfig())
-result = engine.run_from_reports_sync(
-    {
-        "prowler": ["./prowler-output/"],
-        "scoutsuite": ["./scoutsuite-report/"],
-        "checkov": ["./results_json.json"],
-        "trivy": ["./trivy-image.json", "./trivy-fs.json"],
-    },
-    output_dir="./reports",
-)
+=== "Python"
 
-print(result.total_findings, result.severity_breakdown)
-print(result.report_paths)
-print(result.errors)
-```
+    ```python title="ingest_reports_demo.py"
+    from cloudg import CloudGConfig, CloudGEngine
 
-```bash tab="Docker"
-docker run --rm \
-  -v "$PWD:/data" \
-  ghcr.io/morpheuslord/cloudg:latest ingest \
-  --prowler /data/prowler-output/ \
-  --checkov /data/results_json.json \
-  --trivy /data/trivy-image.json \
-  -o /data/reports
-```
+    engine = CloudGEngine(CloudGConfig())
+    result = engine.run_from_reports_sync(
+        {
+            "prowler": ["./prowler-output/"],
+            "scoutsuite": ["./scoutsuite-report/"],
+            "checkov": ["./results_json.json"],
+            "trivy": ["./trivy-image.json", "./trivy-fs.json"],
+        },
+        output_dir="./reports",
+    )
+
+    print(result.total_findings, result.severity_breakdown)
+    print(result.report_paths)
+    print(result.errors)
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v "$PWD:/data" \
+      ghcr.io/morpheuslord/cloudg:latest ingest \
+      --prowler /data/prowler-output/ \
+      --checkov /data/results_json.json \
+      --trivy /data/trivy-image.json \
+      -o /data/reports
+    ```
 
 | Flag | Accepts |
 |---|---|
@@ -81,7 +89,7 @@ docker run --rm \
 | `--format` | `html`, `json` or `all` (default). `raw-findings.json` is written in every case. |
 | `-o, --output` | Output directory, `./reports` by default |
 
-The global `-c` option matters here for one reason: `rulesets.rules_dir` decides which compliance rulesets the normaliser loads. See [Compliance frameworks](/guides/compliance/#adding-a-custom-ruleset).
+The global `-c` option matters here for one reason: `rulesets.rules_dir` decides which compliance rulesets the normaliser loads. See [Compliance frameworks](compliance.md#adding-a-custom-ruleset).
 
 ```bash
 cloudg -c config.yaml ingest --prowler ./prowler-output/ -o ./reports
@@ -92,86 +100,7 @@ cloudg -c config.yaml ingest --prowler ./prowler-output/ -o ./reports
 The script below writes one small file per tool in each tool's native shape, the same shapes the test suite uses. Run it in an empty directory, then run the `cloudg ingest` command above.
 
 ```python title="make_sample_reports.py"
-"""Write one small native report per scanner, shaped like the real tools' output."""
-import json
-from pathlib import Path
-
-Path("prowler-output").mkdir(exist_ok=True)
-Path("prowler-output/prowler-output-123456789012.asff.json").write_text(json.dumps([
-    {
-        "Id": "prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-abc",
-        "Title": "S3 bucket default encryption",
-        "Description": "Bucket has no default encryption",
-        "Severity": {"Label": "HIGH"},
-        "Resources": [{"Id": "arn:aws:s3:::my-bucket"}],
-        "Compliance": {"Status": "FAILED", "RelatedRequirements": ["CIS 2.1.1"]},
-        "Remediation": {"Recommendation": {"Text": "Enable default encryption"}},
-    }
-]))
-
-results = Path("scoutsuite-report/scoutsuite-results")
-results.mkdir(parents=True, exist_ok=True)
-(results / "scoutsuite_results_aws-123456789012.js").write_text(
-    "scoutsuite_results =\n" + json.dumps({
-        "services": {"s3": {"findings": {"s3-bucket-no-encryption": {
-            "description": "Bucket without encryption",
-            "rationale": "Data at rest should be encrypted",
-            "remediation": "Enable encryption",
-            "level": "danger",
-            "flagged_items": 1,
-            "items": ["s3.buckets.my-bucket"],
-            "references": [],
-        }}}}
-    })
-)
-
-Path("results_json.json").write_text(json.dumps({
-    "check_type": "terraform",
-    "results": {"failed_checks": [{
-        "check_id": "CKV_AWS_19",
-        "check_name": "Ensure S3 bucket has server-side encryption enabled",
-        "severity": "HIGH",
-        "resource": "aws_s3_bucket.data",
-        "file_path": "/main.tf",
-        "file_line_range": [1, 10],
-        "guideline": "https://docs.example/ckv-aws-19",
-    }]},
-}))
-
-Path("trivy-image.json").write_text(json.dumps({
-    "ArtifactName": "myrepo/app:latest",
-    "ArtifactType": "container_image",
-    "Results": [{
-        "Target": "myrepo/app:latest (alpine 3.19)",
-        "Type": "alpine",
-        "Vulnerabilities": [{
-            "VulnerabilityID": "CVE-2024-0001",
-            "PkgName": "openssl",
-            "InstalledVersion": "3.1.0",
-            "FixedVersion": "3.1.1",
-            "Severity": "CRITICAL",
-            "Description": "Example vulnerability",
-            "CVSS": {"nvd": {"V3Score": 9.8}},
-        }],
-    }],
-}))
-
-Path("trivy-fs.json").write_text(json.dumps({
-    "ArtifactName": "./iac",
-    "ArtifactType": "filesystem",
-    "Results": [{
-        "Target": "main.tf",
-        "Type": "terraform",
-        "Misconfigurations": [{
-            "ID": "AVD-AWS-0088",
-            "Title": "S3 bucket encryption not enabled",
-            "Description": "Bucket does not have encryption enabled",
-            "Severity": "HIGH",
-            "Resolution": "Enable encryption",
-        }],
-    }],
-}))
-print("sample reports written")
+--8<-- "make_sample_reports.py"
 ```
 
 ```console
@@ -231,7 +160,7 @@ From each OCSF record:
 | `remediation.desc` | `remediation` |
 | `status_detail` (else `message`) | `evidence` |
 
-The passing checks travel with the parsed findings (`passed_checks` on the list `parse_report` returns) into normalisation, where the compliance controls that only passing checks map to get a PASS result. See [Compliance frameworks](/guides/compliance/).
+The passing checks travel with the parsed findings (`passed_checks` on the list `parse_report` returns) into normalisation, where the compliance controls that only passing checks map to get a PASS result. See [Compliance frameworks](compliance.md).
 
 ### ScoutSuite
 
@@ -306,7 +235,7 @@ If you feed the same report twice, or two overlapping directories, the duplicate
 
 ## Normalisation and deduplication {#normalisation-and-deduplication}
 
-The normaliser runs two deduplication passes, then rescoring, then compliance mapping. Compliance mapping has [its own page](/guides/compliance/); this is what happens to the findings themselves.
+The normaliser runs two deduplication passes, then rescoring, then compliance mapping. Compliance mapping has [its own page](compliance.md); this is what happens to the findings themselves.
 
 Pass 1 works inside each scanner. The key is the tool, the check ID (or the normalised title when there is no check ID) and the resource. Two different checks that happen to share a title on the same bucket stay separate.
 
@@ -390,7 +319,7 @@ HIGH      7.5 trivy      [Trivy/IaC] AVD-AWS-0088: S3 bucket encryption not enab
 
 The functions differ in how they fail. `parse_report` raises `ValueError` for a tool name it doesn't know (only `prowler`, `scoutsuite`, `checkov` and `trivy` are accepted, case-insensitive) and `FileNotFoundError` for a missing path. `ingest_reports` catches both, logs them and moves on. The per-scanner parsers are public too, as class methods: `ProwlerScanner.parse_report(path)`, `ScoutSuiteScanner.parse_report(path)`, `CheckovScanner.parse_report(path)` and `TrivyScanner.parse_report(path)`.
 
-On the engine, `CloudGEngine.ingest_reports()` wraps `ingest_reports` and fires the `on_phase_start("ingest")`, `on_finding` and `on_scan_complete` [event hooks](/api/event-hooks/). `run_from_reports()` and its sync wrapper go further and write `findings.json` and `report.html` as `report.formats` allows (not `raw-findings.json`), returning a `PipelineResult` whose `report_paths` holds both paths and whose `errors` lists any phase that failed.
+On the engine, `CloudGEngine.ingest_reports()` wraps `ingest_reports` and fires the `on_phase_start("ingest")`, `on_finding` and `on_scan_complete` [event hooks](../api/event-hooks.md). `run_from_reports()` and its sync wrapper go further and write `findings.json` and `report.html` as `report.formats` allows (not `raw-findings.json`), returning a `PipelineResult` whose `report_paths` holds both paths and whose `errors` lists any phase that failed.
 
 ## What comes out
 
@@ -400,11 +329,11 @@ On the engine, `CloudGEngine.ingest_reports()` wraps `ingest_reports` and fires 
 | `findings.json` | `metadata`, `summary`, `findings`, `compliance`, and empty `assets`, `edges` and `graph` |
 | `report.html` | The interactive report: findings table, analytics, compliance cards |
 
-With no assets, the report's Infrastructure Map tab falls back to a force graph of finding nodes linked to compliance framework nodes. The [Reports](/guides/reports/) guide covers both files in detail, and the field-level layout of `findings.json` is on [Output files](/reference/output-files/).
+With no assets, the report's Infrastructure Map tab falls back to a force graph of finding nodes linked to compliance framework nodes. The [Reports](reports.md) guide covers both files in detail, and the field-level layout of `findings.json` is on [Output files](../reference/output-files.md).
 
 ## Combining with a live inventory {#combining-with-a-live-inventory}
 
-Ingest needs no credentials; mapping needs read-only ones. Run them separately, at different times if you like, and merge at the end. [`cloudg map`](/guides/inventory-mapping/) accepts a cloudg findings file and writes `asset-map.json` (each asset with its findings) and `compliance-map.json` (each framework with its affected assets):
+Ingest needs no credentials; mapping needs read-only ones. Run them separately, at different times if you like, and merge at the end. [`cloudg map`](inventory-mapping.md) accepts a cloudg findings file and writes `asset-map.json` (each asset with its findings) and `compliance-map.json` (each framework with its affected assets):
 
 ```bash
 cloudg ingest --prowler ./ci/prowler-output/ --checkov ./ci/results_json.json -o ./reports
@@ -418,7 +347,6 @@ import asyncio
 
 from cloudg import CloudGConfig, CloudGEngine
 
-
 async def main() -> None:
     engine = CloudGEngine(CloudGConfig(providers=["aws"]))
 
@@ -427,15 +355,27 @@ async def main() -> None:
     scan_result = engine.normalise_findings(ingested, assets=collection.assets)
     print(len(scan_result.assets), "assets,", len(scan_result.findings), "findings")
 
-
 asyncio.run(main())
 ```
 
 ## Next
 
-:::links
-- [Compliance frameworks](/guides/compliance/) How findings are tagged with controls, and how to add your own.
-- [Reports](/guides/reports/) Reading `findings.json` and `report.html`, and re-rendering them.
-- [cloudg ingest](/cli/ingest/) The command reference.
-- [parse_report](/api/parse-report/) The Python parser entry point.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Compliance frameworks**](compliance.md)
+
+    How findings are tagged with controls, and how to add your own.
+
+-   [**Reports**](reports.md)
+
+    Reading `findings.json` and `report.html`, and re-rendering them.
+
+-   [**cloudg ingest**](../cli/ingest.md)
+
+    The command reference.
+
+-   [**parse_report**](../api/parse-report.md)
+
+    The Python parser entry point.
+
+</div>

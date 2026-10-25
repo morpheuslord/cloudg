@@ -1,20 +1,25 @@
 ---
+description: Reads one MCP resource in-process and prints its contents, with the policy applied as it would be for a client.
 command: mcp read
-lede: Reads one MCP resource in-process and prints its contents, with the policy applied as it would be for a client.
-intro: |
-  Resources are fetched by URI, such as `cloudg://findings/summary` or `cloudg://assets/<ref>`. `cloudg mcp read` lets you look at one from the shell, which helps when you are writing a policy or checking what an assistant will be shown.
 ---
+
+Reads one MCP resource in-process and prints its contents, with the policy applied as it would be for a client.
+{ .lede }
+
+Resources are fetched by URI, such as `cloudg://findings/summary` or `cloudg://assets/<ref>`. `cloudg mcp read` lets you look at one from the shell, which helps when you are writing a policy or checking what an assistant will be shown.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
-Like [cloudg mcp call](/cli/mcp-call/), each invocation builds a fresh layer from the shared options (see [cloudg mcp serve](/cli/mcp-serve/#building-the-layer)), reads `URI` once as the chosen principal, prints the contents and exits. Most resources read the active dataset, so load one with `--dataset` on the same command line. Without a dataset, those resources fail:
+Like [cloudg mcp call](mcp-call.md), each invocation builds a fresh layer from the shared options (see [cloudg mcp serve](mcp-serve.md#building-the-layer)), reads `URI` once as the chosen principal, prints the contents and exits. Most resources read the active dataset, so load one with `--dataset` on the same command line. Without a dataset, those resources fail:
 
 ```console
 $ cloudg mcp read cloudg://findings/summary
 Error: No dataset is loaded. Call load_dataset(path=...) with an inventory-map.json / findings.json / scanner report, or map_inventory to collect live data.
 ```
 
-The URI can be a fixed resource or a filled-in template. [cloudg mcp resources](/cli/mcp-resources/) lists both. For the asset templates, the reference can be the internal ID, a unique name, or a full ARN, and the ARN can be written as is or URL-encoded. Quote the URI in the shell, since ARNs contain `:` and `/` and some templates contain characters the shell treats specially.
+The URI can be a fixed resource or a filled-in template. [cloudg mcp resources](mcp-resources.md) lists both. For the asset templates, the reference can be the internal ID, a unique name, or a full ARN, and the ARN can be written as is or URL-encoded. Quote the URI in the shell, since ARNs contain `:` and `/` and some templates contain characters the shell treats specially.
 
 Text contents are printed as they are, which for most resources is indented JSON and for some is another format: `cloudg://ontology/turtle` prints Turtle, `cloudg://graph/graphml` prints GraphML XML, and `cloudg://docs/{topic}` prints Markdown. Binary contents, if a resource returns any, are printed as their wire JSON with the base64 blob.
 
@@ -25,7 +30,7 @@ $ cloudg mcp read cloudg://ontology/turtle --policy strict --dataset prod=invent
 Error: Unknown resource: cloudg://ontology/turtle
 ```
 
-The principal options (`--role`, `--principal-id`) work as on [cloudg mcp tools](/cli/mcp-tools/). stdout carries only the contents, so the output can be piped or redirected.
+The principal options (`--role`, `--principal-id`) work as on [cloudg mcp tools](mcp-tools.md). stdout carries only the contents, so the output can be piped or redirected.
 
 ## Examples
 
@@ -101,9 +106,22 @@ cloudg mcp read cloudg://policy --policy ./mcp-policy.yaml --role analyst
 
 ## Related
 
-:::links
-- [Resources and resource templates](/mcp/tools/resources-and-resource-templates/) Every resource with example contents.
-- [cloudg mcp resources](/cli/mcp-resources/) List the URIs and templates.
-- [cloudg mcp call](/cli/mcp-call/) Call a tool instead of reading a resource.
-- [The workspace](/mcp/server/the-workspace/) How datasets are loaded and named.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Resources and resource templates**](../mcp/tools/resources-and-resource-templates.md)
+
+    Every resource with example contents.
+
+-   [**cloudg mcp resources**](mcp-resources.md)
+
+    List the URIs and templates.
+
+-   [**cloudg mcp call**](mcp-call.md)
+
+    Call a tool instead of reading a resource.
+
+-   [**The workspace**](../mcp/server/the-workspace.md)
+
+    How datasets are loaded and named.
+
+</div>

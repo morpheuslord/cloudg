@@ -1,13 +1,18 @@
 ---
+description: Calls one MCP tool in-process and prints its result. The policy, privacy transforms and middleware apply exactly as they would for a client.
 command: mcp call
-lede: Calls one MCP tool in-process and prints its result. The policy, privacy transforms and middleware apply exactly as they would for a client.
-intro: |
-  `cloudg mcp call` is the quickest way to try a tool, debug a policy, or use a tool from a shell script. No server runs and no client is needed.
 ---
+
+Calls one MCP tool in-process and prints its result. The policy, privacy transforms and middleware apply exactly as they would for a client.
+{ .lede }
+
+`cloudg mcp call` is the quickest way to try a tool, debug a policy, or use a tool from a shell script. No server runs and no client is needed.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
-Each invocation builds a fresh layer from the shared options (see [cloudg mcp serve](/cli/mcp-serve/#building-the-layer)), calls `TOOL` once as the chosen principal, prints the result and exits. Nothing carries over between invocations. A `load_dataset` call in one command is gone by the next, so pass the data you need with `--dataset` every time.
+Each invocation builds a fresh layer from the shared options (see [cloudg mcp serve](mcp-serve.md#building-the-layer)), calls `TOOL` once as the chosen principal, prints the result and exits. Nothing carries over between invocations. A `load_dataset` call in one command is gone by the next, so pass the data you need with `--dataset` every time.
 
 Arguments go in `--args` as a JSON object. You have three ways to supply it:
 
@@ -19,7 +24,7 @@ Arguments go in `--args` as a JSON object. You have three ways to supply it:
 
 Anything that is not a JSON object is refused before the tool runs, with `Invalid value for --args: not valid JSON: ...` or `must be a JSON object` and exit code 2. Without `--args`, the tool is called with no arguments.
 
-The principal is the local user unless you pass `--role` or `--principal-id`, as on [cloudg mcp tools](/cli/mcp-tools/). A tool the policy hides from that principal behaves as if it did not exist.
+The principal is the local user unless you pass `--role` or `--principal-id`, as on [cloudg mcp tools](mcp-tools.md). A tool the policy hides from that principal behaves as if it did not exist.
 
 What gets printed depends on the result and on `--raw`:
 
@@ -140,10 +145,26 @@ fi
 
 ## Related
 
-:::links
-- [Tool index](/mcp/tools/tool-index/) Every tool's arguments and results.
-- [Conventions shared by every tool](/mcp/tools/conventions-shared-by-every-tool/) References, pagination, fields and errors.
-- [Errors](/mcp/server/errors/) Error codes and what the error data holds.
-- [cloudg mcp read](/cli/mcp-read/) The same thing for resources.
-- [Live tools and the credential preflight](/mcp/server/live-tools-and-the-credential-preflight/) What happens before a live tool calls the cloud.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Tool index**](../mcp/tools/tool-index.md)
+
+    Every tool's arguments and results.
+
+-   [**Conventions shared by every tool**](../mcp/tools/conventions-shared-by-every-tool.md)
+
+    References, pagination, fields and errors.
+
+-   [**Errors**](../mcp/server/errors.md)
+
+    Error codes and what the error data holds.
+
+-   [**cloudg mcp read**](mcp-read.md)
+
+    The same thing for resources.
+
+-   [**Live tools and the credential preflight**](../mcp/server/live-tools-and-the-credential-preflight.md)
+
+    What happens before a live tool calls the cloud.
+
+</div>

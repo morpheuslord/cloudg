@@ -1,17 +1,20 @@
 ---
 title: Quickstart
-lede: "Scan one AWS region and open the report. Then, if you have no credentials to hand, get the same report from scanner files you already have, or map an account without any scanners."
-meta:
-  - [Time, "about 10 minutes, plus scanner run time"]
-  - [Needs, "Python 3.11+, read-only AWS credentials"]
-source: site/content/guides/quickstart.md
+description: Scan one AWS region and open the report. Then, if you have no credentials to hand, get the same report from scanner files you already have, or map an account without any scanners.
 ---
+
+Scan one AWS region and open the report. Then, if you have no credentials to hand, get the same report from scanner files you already have, or map an account without any scanners.
+{ .lede }
+
+**Time** about 10 minutes, plus scanner run time &middot; **Needs** Python 3.11+, read-only AWS credentials
+{ .page-meta }
 
 This page takes the shortest path to each of cloudg's three entry points. It sticks to AWS and one region so the first run is quick; every command takes `-p azure`, `-p gcp` or `-p all` the same way.
 
 ## Scan an AWS account
 
-::::steps
+<div class="steps" markdown>
+
 ### Install cloudg and a scanner
 
 ```bash
@@ -19,7 +22,7 @@ pip install "cloudg[aws]"
 pip install prowler
 ```
 
-Prowler is enough for a first run. cloudg skips scanners it cannot find on `PATH`, so you will see warnings for ScoutSuite, Checkov and Trivy; that is expected. [Installation](/guides/installation/) covers the rest, and the [Docker image](/guides/docker/) has Prowler, Checkov and Trivy built in.
+Prowler is enough for a first run. cloudg skips scanners it cannot find on `PATH`, so you will see warnings for ScoutSuite, Checkov and Trivy; that is expected. [Installation](installation.md) covers the rest, and the [Docker image](docker.md) has Prowler, Checkov and Trivy built in.
 
 ### Authenticate
 
@@ -31,9 +34,9 @@ export AWS_PROFILE=audit
 aws sts get-caller-identity
 ```
 
-:::tip Use read-only credentials
-cloudg only reads. The AWS managed policies `SecurityAudit` and `ViewOnlyAccess` are the usual starting point for the role or user you scan with.
-:::
+!!! tip "Use read-only credentials"
+
+    cloudg only reads. The AWS managed policies `SecurityAudit` and `ViewOnlyAccess` are the usual starting point for the role or user you scan with.
 
 ### Run the pipeline
 
@@ -53,7 +56,8 @@ xdg-open reports/report.html    # Linux
 ```
 
 `report.html` is a single file with the findings, assets and graph data embedded in it: the topology graph, the findings table and the compliance matrix. Chart.js and D3 are embedded too, so it opens without network access.
-::::
+
+</div>
 
 ### What lands in ./reports
 
@@ -84,7 +88,8 @@ cloudg report -i reports/findings.json --format html
 
 If someone else runs the scanners (in CI, on a schedule, on another network), you only need their output files. `cloudg ingest` needs no cloud access and no scanner binaries, and the core package without extras is enough.
 
-::::steps
+<div class="steps" markdown>
+
 ### Install the core package
 
 ```bash
@@ -113,15 +118,17 @@ findings.json  raw-findings.json  report.html
 ```
 
 `raw-findings.json` holds every parsed finding before deduplication. `findings.json` and `report.html` hold the merged, compliance-mapped set. The last line of the output tells you how many duplicates were merged, for example "Ingested 3 findings from 3 tool(s), 3 after deduplication".
-::::
 
-There is no topology in an ingest report, because nothing was collected. [Ingesting existing output](/guides/ingesting/) covers the exact input formats and how to combine ingested findings with a live collection.
+</div>
+
+There is no topology in an ingest report, because nothing was collected. [Ingesting existing output](ingesting.md) covers the exact input formats and how to combine ingested findings with a live collection.
 
 ## No scanners: map the inventory
 
 `cloudg map` answers "what is deployed, and what depends on what". It needs read-only credentials and the provider extra, but no scanners.
 
-::::steps
+<div class="steps" markdown>
+
 ### Map one region
 
 ```bash
@@ -146,15 +153,29 @@ cloudg deps arn:aws:iam::123456789012:role/app-role
 ```
 
 `cloudg deps` reads the saved map from `./reports` and prints what that asset depends on and what would break without it. `-d down` shows only the blast radius.
-::::
 
-When you do run scanners later, merge their findings into the map with `cloudg map --findings ./reports/findings.json` (or the `raw-findings.json` that `cloudg ingest` and `cloudg scan` write), which adds `asset-map.json` and `compliance-map.json`. [Inventory mapping](/guides/inventory-mapping/) goes through the map in depth.
+</div>
+
+When you do run scanners later, merge their findings into the map with `cloudg map --findings ./reports/findings.json` (or the `raw-findings.json` that `cloudg ingest` and `cloudg scan` write), which adds `asset-map.json` and `compliance-map.json`. [Inventory mapping](inventory-mapping.md) goes through the map in depth.
 
 ## Next steps
 
-:::links
-- [The pipeline](/guides/pipeline/) What each phase of cloudg run does, and how to drive it from Python.
-- [Authentication](/guides/authentication/) Profiles, role assumption, OIDC in CI, Azure and GCP.
-- [Running scanners](/guides/running-scanners/) IaC directories, container images and scanner arguments.
-- [Reports](/guides/reports/) Reading report.html and findings.json.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**The pipeline**](pipeline.md)
+
+    What each phase of cloudg run does, and how to drive it from Python.
+
+-   [**Authentication**](authentication.md)
+
+    Profiles, role assumption, OIDC in CI, Azure and GCP.
+
+-   [**Running scanners**](running-scanners.md)
+
+    IaC directories, container images and scanner arguments.
+
+-   [**Reports**](reports.md)
+
+    Reading report.html and findings.json.
+
+</div>

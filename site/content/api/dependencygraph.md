@@ -1,10 +1,9 @@
 ---
-object: [cloudg.inventory.dependencies.DependencyGraph, cloudg.inventory.dependencies.AssetIndex]
-members:
-  cloudg.inventory.dependencies.DependencyGraph: [find, depends_on, dependents, direct_counts, tree, shared_dependencies, blast_radius]
-  cloudg.inventory.dependencies.AssetIndex: [add, find, resolve, resolve_finding]
-lede: "What does this asset need, and what breaks if it goes away? `DependencyGraph` answers both over any set of assets and edges; `AssetIndex` is the matcher that finds the asset a reference or a finding is about."
+description: What does this asset need, and what breaks if it goes away? DependencyGraph answers both over any set of assets and edges; AssetIndex is the matcher that finds the asset a reference or a finding is about.
 ---
+
+What does this asset need, and what breaks if it goes away? `DependencyGraph` answers both over any set of assets and edges; `AssetIndex` is the matcher that finds the asset a reference or a finding is about.
+{ .lede }
 
 ## From edges to dependencies
 
@@ -18,7 +17,7 @@ Edges in an inventory map point in their natural direction: a function `ASSUMES_
 | reverse: the target depends on the source | `CONTAINS`, `INVOKES`, `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS` | a function depends on the queue that triggers it, an API on the WAF in front of it, a resource on the stack that manages it |
 | ignored | `SECURITY_GROUP_RULE`, `NACL_RULE`, `INTERNET_EXPOSED` | network rules are not dependencies |
 
-```mermaid caption="Natural edges on the left, dependency arrows on the right"
+```mermaid
 flowchart LR
   subgraph natural ["inventory edges"]
     Q1["queue"] -->|INVOKES| F1["function"]
@@ -29,12 +28,14 @@ flowchart LR
     F2 -->|needs| R2["role"]
   end
 ```
+Natural edges on the left, dependency arrows on the right
+{ .diagram-caption }
 
 On that view, `depends_on(x)` walks upstream (everything `x` needs) and `dependents(x)` walks downstream (everything that needs `x`, its blast radius). Both are breadth-first, visit each asset once, stop at `max_depth` (default 10) and return `DependencyLink` records with `asset_id`, `via_edge`, `relationship`, `depth` and `parent_id`, the asset one hop closer to the start.
 
 Edges whose source or target is not in `assets` are skipped. With `include_hierarchy=False`, `CONTAINS` edges into `ORGANIZATION`, `ORG_UNIT` and `CLOUD_ACCOUNT` nodes are skipped too, because otherwise every account would top every blast radius list. `InventoryResult.dependency_graph()` builds the graph with this default.
 
-This is an availability and change-impact view: what stops working when something is deleted, disabled or misconfigured. Compromise spreads differently. A stolen function credential exposes the role it assumes, which is the forward direction of `ASSUMES_ROLE` in the map itself, not a dependent of the role. For attack paths use the graph analysis in [`CloudGEngine.analyze()`](/api/cloudgengine/) or walk the identity edges directly.
+This is an availability and change-impact view: what stops working when something is deleted, disabled or misconfigured. Compromise spreads differently. A stolen function credential exposes the role it assumes, which is the forward direction of `ASSUMES_ROLE` in the map itself, not a dependent of the role. For attack paths use the graph analysis in [`CloudGEngine.analyze()`](cloudgengine.md) or walk the identity edges directly.
 
 ### The reports
 
@@ -66,58 +67,7 @@ Ambiguous names and tails never match at their own tier. Tiers 5 and 6 are also 
 Runs offline on six linked assets.
 
 ```python title="blast_radius.py"
-from cloudg.inventory import RelationshipLinker
-from cloudg.inventory.dependencies import DependencyGraph
-from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
-
-ACCOUNT = "123456789012"
-REGION = "eu-west-1"
-KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/1111aaaa-22bb-33cc-44dd-555555eeeeee"
-ROLE = f"arn:aws:iam::{ACCOUNT}:role/orders-worker-role"
-QUEUE = f"arn:aws:sqs:{REGION}:{ACCOUNT}:orders-inbound"
-TABLE = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/orders"
-FUNCTION = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:orders-worker"
-API = f"arn:aws:apigateway:{REGION}::/restapis/a1b2c3d4e5"
-
-
-def aws(arn, name, asset_type, *relations, region=REGION, exposed=False):
-    return CloudAsset(arn=arn, name=name, asset_type=asset_type, provider=CloudProvider.AWS,
-                      region=region, account_id=ACCOUNT, is_internet_exposed=exposed,
-                      metadata={"relations": list(relations)})
-
-
-def rel(target, edge, relationship=None, reverse=False):
-    return {"target": target, "edge": edge, "relationship": relationship, "reverse": reverse}
-
-
-assets = [
-    aws(KEY, "orders-key", AssetType.KMS_KEY),
-    aws(ROLE, "orders-worker-role", AssetType.IAM_ROLE, region="global"),
-    aws(QUEUE, "orders-inbound", AssetType.MESSAGE_QUEUE, rel(KEY, "REFERENCES", "ENCRYPTED_BY_KMS")),
-    aws(TABLE, "orders", AssetType.DYNAMODB_TABLE, rel(KEY, "REFERENCES", "ENCRYPTED_BY_KMS")),
-    aws(FUNCTION, "orders-worker", AssetType.LAMBDA_FUNCTION,
-        rel(ROLE, "ASSUMES_ROLE", "RUNS_ON"),
-        rel(TABLE, "REFERENCES", "WRITES_TO"),
-        rel(QUEUE, "INVOKES", "TRIGGERED_BY", reverse=True)),
-    aws(API, "orders-api", AssetType.API_GATEWAY, rel(FUNCTION, "INVOKES"), exposed=True),
-]
-edges = RelationshipLinker(assets).link()
-graph = DependencyGraph(assets, edges)
-
-key = graph.find("orders-key")         # ID, ARN, unique name or unique ARN tail
-print("If", key.name, "is disabled:")
-for link in graph.dependents(key.id):
-    asset = graph.assets[link.asset_id]
-    parent = graph.assets[link.parent_id].name
-    print(f"  depth {link.depth}: {asset.name} ({asset.asset_type.value}) needs {parent} via {link.via_edge}")
-
-worker = graph.find(FUNCTION)
-print("orders-worker needs:", [graph.assets[l.asset_id].name for l in graph.depends_on(worker.id)])
-print("direct (needs, needed by):", graph.direct_counts(worker.id))
-
-for row in graph.blast_radius(top=3):
-    print(f"{row['name']:20} {row['transitive_dependents']} dependents, "
-          f"{row['internet_exposed_dependents']} internet-exposed")
+--8<-- "map/blast_radius.py"
 ```
 
 ```console
@@ -141,11 +91,9 @@ Two results are worth a second look. The function appears at depth 2 under the k
 from cloudg.inventory.dependencies import AssetIndex
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, Finding, Severity
 
-
 def asset(arn, name, asset_type):
     return CloudAsset(arn=arn, name=name, asset_type=asset_type,
                       provider=CloudProvider.AWS, region="eu-west-1", account_id="123456789012")
-
 
 assets = [
     asset("arn:aws:rds:eu-west-1:123456789012:db:orders", "orders", AssetType.RDS_INSTANCE),
@@ -156,11 +104,9 @@ assets = [
 index = AssetIndex(assets)
 names = {a.id: f"{a.asset_type.value}:{a.name}" for a in assets}
 
-
 def finding(resource_id, resource_arn=None):
     return Finding(resource_id=resource_id, resource_arn=resource_arn, severity=Severity.MEDIUM,
                    title="example", description="example", source_tool="custom")
-
 
 cases = [
     finding("x", "arn:aws:rds:eu-west-1:123456789012:db:orders"),   # exact ARN
@@ -194,11 +140,45 @@ The second line shows the limit of tier 3. `orders` is the name of two assets, s
 
 The module also has two functions that work on plain asset and edge lists: `cross_account_edges(assets, edges)` (every edge between two different accounts, hierarchy containment excluded) and `security_coverage(assets, edges)` (security services by account and region, the gaps, workloads without vulnerability scanning, internet-facing entry points without a WAF). `InventoryResult.analysis()` calls both.
 
+## Reference
+
+::: cloudg.inventory.dependencies.DependencyGraph
+    options:
+      members:
+        - find
+        - depends_on
+        - dependents
+        - direct_counts
+        - tree
+        - shared_dependencies
+        - blast_radius
+
+::: cloudg.inventory.dependencies.AssetIndex
+    options:
+      members:
+        - add
+        - find
+        - resolve
+        - resolve_finding
+
 ## Related
 
-:::links
-- [Dependencies and blast radius](/guides/dependencies/) The guide, with `cloudg deps`.
-- [cloudg deps](/cli/deps/) The CLI front end to `tree()`.
-- [InventoryResult](/api/inventoryresult/) `dependency_graph()` and `analysis()`.
-- [RelationshipLinker](/api/relationshiplinker/) Where the edges come from.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Dependencies and blast radius**](../guides/dependencies.md)
+
+    The guide, with `cloudg deps`.
+
+-   [**cloudg deps**](../cli/deps.md)
+
+    The CLI front end to `tree()`.
+
+-   [**InventoryResult**](inventoryresult.md)
+
+    `dependency_graph()` and `analysis()`.
+
+-   [**RelationshipLinker**](relationshiplinker.md)
+
+    Where the edges come from.
+
+</div>

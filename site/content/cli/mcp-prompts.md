@@ -1,13 +1,18 @@
 ---
+description: Lists the MCP prompts a server would expose, with the arguments each one takes.
 command: mcp prompts
-lede: Lists the MCP prompts a server would expose, with the arguments each one takes.
-intro: |
-  cloudg's prompts are ready-made workflows, such as a security posture review or an incident triage, that a client can offer its user as one-click tasks. `cloudg mcp prompts` shows which of them a principal can see and what arguments they expect.
 ---
+
+Lists the MCP prompts a server would expose, with the arguments each one takes.
+{ .lede }
+
+cloudg's prompts are ready-made workflows, such as a security posture review or an incident triage, that a client can offer its user as one-click tasks. `cloudg mcp prompts` shows which of them a principal can see and what arguments they expect.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
-The command builds the layer from the shared options (see [cloudg mcp serve](/cli/mcp-serve/#building-the-layer)) and prints the prompts visible to one principal: the local user by default, or the one described by `--role` and `--principal-id` (see [cloudg mcp tools](/cli/mcp-tools/) for how those work). `--prefix` is applied to prompt names as well as tool names.
+The command builds the layer from the shared options (see [cloudg mcp serve](mcp-serve.md#building-the-layer)) and prints the prompts visible to one principal: the local user by default, or the one described by `--role` and `--principal-id` (see [cloudg mcp tools](mcp-tools.md) for how those work). `--prefix` is applied to prompt names as well as tool names.
 
 The table has four columns. Arguments are listed in order, and a `*` marks the required ones. In 0.6.0 there are 11 prompts, all in the `prompts` category, and every built-in policy lists all of them for the local user:
 
@@ -110,9 +115,22 @@ A missing required argument raises `Missing required prompt arguments: ref`, and
 
 ## Related
 
-:::links
-- [Prompts](/mcp/tools/prompts/) Each prompt with its arguments and rendered output.
-- [cloudg mcp tools](/cli/mcp-tools/) The tools the prompts tell the assistant to call.
-- [In-process use](/mcp/server/in-process-use/) Driving the layer from Python.
-- [cloudg mcp serve](/cli/mcp-serve/) The shared layer options in full.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Prompts**](../mcp/tools/prompts.md)
+
+    Each prompt with its arguments and rendered output.
+
+-   [**cloudg mcp tools**](mcp-tools.md)
+
+    The tools the prompts tell the assistant to call.
+
+-   [**In-process use**](../mcp/server/in-process-use.md)
+
+    Driving the layer from Python.
+
+-   [**cloudg mcp serve**](mcp-serve.md)
+
+    The shared layer options in full.
+
+</div>

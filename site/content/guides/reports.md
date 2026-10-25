@@ -1,19 +1,19 @@
 ---
 title: Reports
-lede: "Every path through cloudg ends in the same two files: `findings.json` for machines and `report.html` for people. `cloudg report` rebuilds them from an earlier run without touching the cloud."
-meta:
-  - [Command, "`cloudg report`"]
-  - [Formats, "HTML, JSON, SVG"]
-  - [Python, "`JSONExporter`, `HTMLReportGenerator`, `SVGRenderer`"]
-source: cloudg/renderers/html_report.py
-since: "0.6.0"
+description: 'Every path through cloudg ends in the same two files: findings.json for machines and report.html for people. cloudg report rebuilds them from an earlier run without touching the cloud.'
 ---
+
+Every path through cloudg ends in the same two files: `findings.json` for machines and `report.html` for people. `cloudg report` rebuilds them from an earlier run without touching the cloud.
+{ .lede }
+
+**Command** `cloudg report` &middot; **Formats** HTML, JSON, SVG &middot; **Python** `JSONExporter`, `HTMLReportGenerator`, `SVGRenderer` &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 The renderers in `cloudg/renderers/` take a normalised `ScanResult` (assets, findings, compliance results) plus, when there is one, the D3 graph of the collected assets. They don't call any cloud API or scanner, which is why `cloudg report` can re-render an old run anywhere.
 
 ## Which command writes what
 
-```mermaid caption="Report inputs and outputs"
+```mermaid
 flowchart LR
   RUN["cloudg run"] --> SR["ScanResult and graph"]
   ING["cloudg ingest"] --> SR
@@ -23,6 +23,8 @@ flowchart LR
   SR --> SVG["topology.svg"]
   SCAN["cloudg scan, cloudg ingest"] --> RAW["raw-findings.json"]
 ```
+Report inputs and outputs
+{ .diagram-caption }
 
 | Command | `findings.json` | `report.html` | `topology.svg` | `raw-findings.json` |
 |---|---|---|---|---|
@@ -35,7 +37,7 @@ flowchart LR
 
 `cloudg run`, `run_pipeline()` and `run_from_reports()` write the formats listed in `report.formats`, all three by default. `run_from_reports()` never writes `topology.svg`, because it has no collected assets to draw. `cloudg ingest` and `cloudg report` go by `--format` instead.
 
-`cloudg run` writes more than these (GraphML, Cytoscape JSON when `graph.export_cytoscape` is on, the ontology, RAG chunks, Terraform); those come from the graph and analysis phases and are listed on [Output files](/reference/output-files/).
+`cloudg run` writes more than these (GraphML, Cytoscape JSON when `graph.export_cytoscape` is on, the ontology, RAG chunks, Terraform); those come from the graph and analysis phases and are listed on [Output files](../reference/output-files.md).
 
 Those three are the only report formats. There is no CSV, SARIF or PDF writer in 0.6.0. `findings.json` is easy to convert, though; there's a [CSV recipe](#exporting-to-csv) further down.
 
@@ -68,7 +70,7 @@ Those three are the only report formats. There is no CSV, SARIF or PDF writer in
 }
 ```
 
-`assets`, `findings`, `compliance` and `edges` are the Pydantic models from `cloudg.schema.models`, serialised in JSON mode. Assets leave out `raw_data`. Findings include the computed `risk_score`. `edges` holds the collected `NetworkEdge` objects, so `cloudg report` can draw the topology again. `graph` holds D3 nodes and links for `cloudg run`, and is empty for ingest. In the `metadata` block, the normaliser doesn't fill in `provider`, `account_id` or `region` in 0.6.0, so expect `null` there. Both timestamps are ISO 8601 strings set at normalisation time, and a `completed_at` that was never set is `null`. The field-by-field reference is on [Output files](/reference/output-files/), and the models are on [Data models](/api/models/).
+`assets`, `findings`, `compliance` and `edges` are the Pydantic models from `cloudg.schema.models`, serialised in JSON mode. Assets leave out `raw_data`. Findings include the computed `risk_score`. `edges` holds the collected `NetworkEdge` objects, so `cloudg report` can draw the topology again. `graph` holds D3 nodes and links for `cloudg run`, and is empty for ingest. In the `metadata` block, the normaliser doesn't fill in `provider`, `account_id` or `region` in 0.6.0, so expect `null` there. Both timestamps are ISO 8601 strings set at normalisation time, and a `completed_at` that was never set is `null`. The field-by-field reference is on [Output files](../reference/output-files.md), and the models are on [Data models](../api/models.md).
 
 `raw-findings.json` is different: a bare JSON list of `Finding` objects as the parsers produced them, before deduplication, rescoring or compliance mapping. It has no `summary`, `compliance` or `graph`.
 
@@ -84,7 +86,7 @@ The Findings tab lists every finding, sorted by severity, with dropdown filters 
 
 Analytics has four Chart.js charts: severity distribution, asset types, findings by source tool, and compliance per framework.
 
-Compliance shows one card per framework with Pass and Fail counts. As explained in [Compliance frameworks](/guides/compliance/#report-html), Fail counts the controls that have findings, and Pass counts the controls that only Prowler's passing checks map to. Without passing-check data in the input (no Prowler, or scanners that only report failures), Pass is 0 and the percentage bar reads 0%.
+Compliance shows one card per framework with Pass and Fail counts. As explained in [Compliance frameworks](compliance.md#report-html), Fail counts the controls that have findings, and Pass counts the controls that only Prowler's passing checks map to. Without passing-check data in the input (no Prowler, or scanners that only report failures), Pass is 0 and the percentage bar reads 0%.
 
 The download button saves a file named `findings.json` that holds only `findings`, `graph` and the tree data. It isn't the same file cloudg writes, but `cloudg report -i` and the viewer both accept it.
 
@@ -102,17 +104,21 @@ If the template can't be found or fails to render, cloudg logs a warning and wri
 
 `cloudg report` reads a `findings.json` and renders it again. Use it to regenerate the HTML after upgrading cloudg, to produce just the SVG, or to rebuild a report on a machine that never had cloud access.
 
-```bash tab="CLI"
-cloudg report -i ./reports/findings.json -o ./reports-rerendered
-cloudg report -i ./reports/findings.json -o ./reports-rerendered --format html
-cloudg report -i ./archive/2026-09-30/findings.json -o ./archive/2026-09-30/svg --format svg
-```
+=== "CLI"
 
-```bash tab="Docker"
-docker run --rm \
-  -v "$PWD/reports:/data" \
-  ghcr.io/morpheuslord/cloudg:latest report -i /data/findings.json -o /data/rerendered
-```
+    ```bash
+    cloudg report -i ./reports/findings.json -o ./reports-rerendered
+    cloudg report -i ./reports/findings.json -o ./reports-rerendered --format html
+    cloudg report -i ./archive/2026-09-30/findings.json -o ./archive/2026-09-30/svg --format svg
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v "$PWD/reports:/data" \
+      ghcr.io/morpheuslord/cloudg:latest report -i /data/findings.json -o /data/rerendered
+    ```
 
 | Flag | Meaning |
 |---|---|
@@ -229,13 +235,26 @@ report:
   output_dir: ./reports
 ```
 
-`formats` lists the reports that `cloudg run`, `run_pipeline()` and `run_from_reports()` write; unknown names are dropped with a warning. `cloudg ingest` and `cloudg report` use `--format` instead. `inline_js` embeds Chart.js and D3 in `report.html` (`true`, the default) or loads them from the CDN (`false`); every command that writes the HTML report reads it. `output_dir` is where the `CloudGEngine` methods write when they get no `output_dir`, and the MCP server's default workspace directory. The CLI commands use `-o` (default `./reports`) and ignore it. The keys are listed on the [report config page](/reference/config/report/).
+`formats` lists the reports that `cloudg run`, `run_pipeline()` and `run_from_reports()` write; unknown names are dropped with a warning. `cloudg ingest` and `cloudg report` use `--format` instead. `inline_js` embeds Chart.js and D3 in `report.html` (`true`, the default) or loads them from the CDN (`false`); every command that writes the HTML report reads it. `output_dir` is where the `CloudGEngine` methods write when they get no `output_dir`, and the MCP server's default workspace directory. The CLI commands use `-o` (default `./reports`) and ignore it. The keys are listed on the [report config page](../reference/config/report.md).
 
 ## Next
 
-:::links
-- [cloudg report](/cli/report/) The command reference.
-- [Output files](/reference/output-files/) Every file cloudg writes, field by field.
-- [Compliance frameworks](/guides/compliance/) What the compliance output means.
-- [Ingesting existing output](/guides/ingesting/) Reports from scans that ran elsewhere.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**cloudg report**](../cli/report.md)
+
+    The command reference.
+
+-   [**Output files**](../reference/output-files.md)
+
+    Every file cloudg writes, field by field.
+
+-   [**Compliance frameworks**](compliance.md)
+
+    What the compliance output means.
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    Reports from scans that ran elsewhere.
+
+</div>

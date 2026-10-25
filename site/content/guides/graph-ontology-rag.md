@@ -1,17 +1,17 @@
 ---
 title: Graph, ontology and RAG
-lede: "Collected assets and edges become a NetworkX graph for reachability and blast radius, an RDF ontology you can query with SPARQL, and retrieval-ready chunks for an LLM."
-meta:
-  - [Modules, "`cloudg.graph`"]
-  - [Config, "`graph`, `ontology`, `rag`, `terraform`"]
-  - [Changed in, "0.6.0"]
-source: cloudg/graph/reachability.py
-since: "0.6.0"
+description: Collected assets and edges become a NetworkX graph for reachability and blast radius, an RDF ontology you can query with SPARQL, and retrieval-ready chunks for an LLM.
 ---
+
+Collected assets and edges become a NetworkX graph for reachability and blast radius, an RDF ontology you can query with SPARQL, and retrieval-ready chunks for an LLM.
+{ .lede }
+
+**Modules** `cloudg.graph` &middot; **Config** `graph`, `ontology`, `rag`, `terraform` &middot; **Changed in** 0.6.0 &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 Every collection ends with two lists: `CloudAsset` objects and directed `NetworkEdge` objects between their ids. Everything on this page is derived from those two lists, plus findings when you have them. Nothing here calls a cloud API, so you can rebuild any of it offline from a saved map or a `findings.json`.
 
-```mermaid caption="From collected data to the four analysis outputs"
+```mermaid
 flowchart LR
   A["Assets and edges"] --> G["GraphBuilder: nx.DiGraph"]
   F[Findings] --> O
@@ -26,6 +26,8 @@ flowchart LR
   C --> J["rag_chunks.jsonl"]
   A --> TF["TerraformExporter: .tf.json"]
 ```
+From collected data to the four analysis outputs
+{ .diagram-caption }
 
 `cloudg run` does all of it in order: graph and reachability in phase 2, RAG export in 2c, Terraform in 2d, then after the scanners the ontology and a second RAG pass so both include the scanner findings. `CloudGEngine.analyze()` does the graph, ontology, RAG and Terraform steps for assets you collected yourself. The sections below use a small hand-built estate so every output is reproducible; the full script is at the end.
 
@@ -103,7 +105,7 @@ Only `sg-web` admits the internet, yet the database is flagged. That is because 
 blast radius of web-1: {'reachable_nodes': ['sg-web', 'role-app', 'sg-db', 'db-1'], 'depth': 2, 'risk_score': 4.0}
 ```
 
-The score is `0.5` per reachable node plus `2.0` per sensitive data store, capped at 10. It is a quick ranking signal. For dependency questions on a full inventory (what breaks if this KMS key goes, which shared resources have the most dependents) use `DependencyGraph` and `cloudg deps`, described in [dependencies and blast radius](/guides/dependencies/).
+The score is `0.5` per reachable node plus `2.0` per sensitive data store, capped at 10. It is a quick ranking signal. For dependency questions on a full inventory (what breaks if this KMS key goes, which shared resources have the most dependents) use `DependencyGraph` and `cloudg deps`, described in [dependencies and blast radius](dependencies.md).
 
 ## The ontology
 
@@ -345,7 +347,6 @@ from cloudg.schema.models import (
 ACCOUNT, REGION = "123456789012", "eu-west-1"
 OUT = Path("./graph-out")
 
-
 def aws(asset_id: str, name: str, kind: AssetType, arn_tail: str, **metadata) -> CloudAsset:
     service = arn_tail.split(":", 1)[0]
     return CloudAsset(
@@ -359,10 +360,8 @@ def aws(asset_id: str, name: str, kind: AssetType, arn_tail: str, **metadata) ->
         metadata=metadata,
     )
 
-
 def edge(src: str, dst: str, kind: EdgeType, **attrs) -> NetworkEdge:
     return NetworkEdge(source_id=src, target_id=dst, edge_type=kind, **attrs)
-
 
 assets = [
     aws("vpc-1", "prod-vpc", AssetType.VPC, "ec2:vpc/vpc-1", vpc_id="vpc-1"),
@@ -444,9 +443,22 @@ print("terraform preview:", terraform.preview(assets)["resource_types"])
 print({name: path.name for name, path in terraform.export(assets, edges).items()})
 ```
 
-:::links
-- [Dependencies and blast radius](/guides/dependencies/) `DependencyGraph` and `cloudg deps` on a full inventory.
-- [GraphBuilder](/api/graphbuilder/) Every method of the builder.
-- [ReachabilityAnalyzer](/api/reachabilityanalyzer/) The walk and its helpers.
-- [CloudOntology](/api/cloudontology/) and [RAGExporter](/api/ragexporter/) The exporters' APIs.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Dependencies and blast radius**](dependencies.md)
+
+    `DependencyGraph` and `cloudg deps` on a full inventory.
+
+-   [**GraphBuilder**](../api/graphbuilder.md)
+
+    Every method of the builder.
+
+-   [**ReachabilityAnalyzer**](../api/reachabilityanalyzer.md)
+
+    The walk and its helpers.
+
+-   [**CloudOntology**](../api/cloudontology.md)
+
+    and [RAGExporter](../api/ragexporter.md) The exporters' APIs.
+
+</div>

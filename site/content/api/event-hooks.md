@@ -1,7 +1,10 @@
 ---
 title: Event hooks
-lede: "Six optional callbacks on `CloudGEngine` report phase changes, findings, results and failures while a run is in progress. They are plain attributes: assign a function, and the engine calls it."
+description: 'Six optional callbacks on CloudGEngine report phase changes, findings, results and failures while a run is in progress. They are plain attributes: assign a function, and the engine calls it.'
 ---
+
+Six optional callbacks on `CloudGEngine` report phase changes, findings, results and failures while a run is in progress. They are plain attributes: assign a function, and the engine calls it.
+{ .lede }
 
 ## The six hooks
 
@@ -30,7 +33,7 @@ on_error: OnError = alert
 
 The diagram follows `run_pipeline()`, the one method that can call all six.
 
-```mermaid caption="Hook calls during run_pipeline()"
+```mermaid
 sequenceDiagram
   participant App as Your code
   participant E as CloudGEngine
@@ -49,6 +52,8 @@ sequenceDiagram
   E->>App: on_phase_start("reporting")
   E-->>App: PipelineResult
 ```
+Hook calls during run_pipeline()
+{ .diagram-caption }
 
 Other entry points use a subset:
 
@@ -79,7 +84,7 @@ Other entry points use a subset:
 | `prowler-<provider>`, `scoutsuite-<provider>` | one scanner run per provider, such as `prowler-aws`, including a run killed at `scanners.timeout_seconds` |
 | `checkov-<directory>` | one Checkov run per IaC directory |
 | `trivy`, `trivy-fs`, `iam` | the Trivy image scan, the Trivy filesystem scan, the IAM policy linter |
-| a plugin's name | a [scanner plugin](/api/entry-points/) run |
+| a plugin's name | a [scanner plugin](entry-points.md) run |
 | `graph_build`, `ontology`, `rag_export` | the steps of `analyze()` |
 | `normalisation`, `reporting` | the last two pipeline phases |
 
@@ -162,13 +167,11 @@ SPOOL = "./cloudg-findings.jsonl"   # tailed by the SIEM agent (Fluent Bit, Splu
 STOP = object()
 outbox: queue.Queue = queue.Queue()
 
-
 def writer() -> None:
     with open(SPOOL, "a", encoding="utf-8") as spool:
         while (item := outbox.get()) is not STOP:
             spool.write(json.dumps(item) + "\n")
             spool.flush()
-
 
 thread = threading.Thread(target=writer, daemon=True)
 thread.start()
@@ -189,57 +192,14 @@ thread.join(timeout=30)
 print(f"forwarded {result.total_findings} findings to {SPOOL}")
 ```
 
-Each line is one finding as `Finding.model_dump(mode="json")` produces it (see [Data models](/api/models/) for the fields), plus `"kind": "finding"`.
+Each line is one finding as `Finding.model_dump(mode="json")` produces it (see [Data models](models.md) for the fields), plus `"kind": "finding"`.
 
 ### Fail fast
 
 Raising inside `on_error` does nothing, because the engine swallows it. Record the failure instead, and check between phases you drive yourself. `run_pipeline()` has no such checkpoints, so this uses the individual phase methods.
 
 ```python title="fail_fast.py"
-import asyncio
-import sys
-
-from cloudg import CloudGConfig, CloudGEngine
-
-
-class PhaseFailed(RuntimeError):
-    pass
-
-
-async def main() -> int:
-    engine = CloudGEngine(CloudGConfig(providers=["aws"]))
-    failures: list[tuple[str, Exception]] = []
-    engine.on_error = lambda phase, exc: failures.append((phase, exc))
-
-    def checkpoint(step: str) -> None:
-        if failures:
-            phase, exc = failures[0]
-            raise PhaseFailed(f"{phase} failed during {step}: {exc}")
-
-    collection = await engine.collect()
-    checkpoint("collection")
-    broken = [c.to_summary() for c in collection.coverage if c.failed_services]
-    if broken or not collection.assets:
-        raise PhaseFailed(f"collection incomplete: {broken or 'no assets'}")
-
-    findings = await engine.scan(collection.assets, collection.edges, output_dir="./reports")
-    checkpoint("scanning")
-
-    analysis = await engine.analyze(collection.assets, collection.edges, findings, "./reports")
-    checkpoint("analysis")
-
-    scan_result = engine.normalise_findings(
-        findings + analysis.reachability_findings, assets=collection.assets
-    )
-    print(scan_result.summary)
-    return 0
-
-
-try:
-    sys.exit(asyncio.run(main()))
-except PhaseFailed as exc:
-    print(f"cloudg: {exc}", file=sys.stderr)
-    sys.exit(2)
+--8<-- "errors/fail_fast.py"
 ```
 
 A failed provider never reaches `on_error`; it is a `FAILED` entry in `collection.coverage`. That is why the script checks coverage as well as the failure list after collecting. On a failure the script prints one line in the form `cloudg: <phase> failed during <step>: <error>` to stderr and exits with status 2, so a CI job or a scheduler sees the run as failed.
@@ -254,9 +214,22 @@ Nothing fires for findings produced by `analyze()`. Its reachability findings re
 
 ## Related
 
-:::links
-- [CloudGEngine](/api/cloudgengine/) The methods that call the hooks.
-- [Result objects](/api/results/) What `on_collection_complete` and `on_analysis_complete` receive.
-- [Data models](/api/models/) The `Finding` that `on_finding` receives.
-- [CI and automation](/guides/ci-automation/) Running cloudg unattended.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**CloudGEngine**](cloudgengine.md)
+
+    The methods that call the hooks.
+
+-   [**Result objects**](results.md)
+
+    What `on_collection_complete` and `on_analysis_complete` receive.
+
+-   [**Data models**](models.md)
+
+    The `Finding` that `on_finding` receives.
+
+-   [**CI and automation**](../guides/ci-automation.md)
+
+    Running cloudg unattended.
+
+</div>

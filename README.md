@@ -24,6 +24,8 @@ Want an AI agent to work with all of it? `cloudg mcp serve` turns cloudg into an
 
 **Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md). The inventory mapper has its own deep-dive documents: the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md) (every return structure and output file, field by field), the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md) (all 156 asset types, their metadata and relationships) and the [inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md) (how it works and how to extend it). The MCP server is covered by the [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md), the [tool reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md) and the [privacy reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md), and throttling by [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
 
+**Sample report:** to see what cloudg produces before running anything, [open the sample report](https://morpheuslord.github.io/cloudg/sample-report.html). It is the `report.html` of a synthetic AWS, Azure and GCP estate, so every ID in it is made up, and `scripts/build_sample_report.py` rebuilds it from the test fixtures.
+
 ---
 
 ## Quick start
@@ -375,7 +377,7 @@ Python 3.11 or newer. The moto/aiobotocore incompatibility around async response
 
 ## Credits
 
-cloudg builds on other people's work, and some of it ships inside the package.
+cloudg builds on other people's work, and some of it ships inside the package. The documentation site has the same list on its [credits page](https://morpheuslord.github.io/cloudg/credits/).
 
 [Prowler](https://github.com/prowler-cloud/prowler) (Apache-2.0). The 22 framework files in `cloudg/rules/frameworks/` are generated from Prowler's compliance JSON by `scripts/import_prowler_compliance.py`. That covers the control IDs, the control titles and descriptions, and the mapping from each control to Prowler check names. Every generated file says so in its header and in its `source` field. Prowler check names also appear in `cloudg/rules/check_equivalence.yaml`, and cloudg runs Prowler and parses its ASFF and OCSF output.
 

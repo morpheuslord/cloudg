@@ -1,15 +1,20 @@
 ---
+description: Turns scanner output you already have into cloudg findings and reports. No scanner runs and no cloud credentials are needed.
 command: ingest
-lede: Turns scanner output you already have into cloudg findings and reports. No scanner runs and no cloud credentials are needed.
-intro: |
-  Use `cloudg ingest` when Prowler, ScoutSuite, Checkov or Trivy already ran somewhere else: in a CI job, on another host, on a schedule. cloudg does the second half of the pipeline on their files: cross-scanner deduplication, scoring, compliance mapping and report rendering.
 ---
+
+Turns scanner output you already have into cloudg findings and reports. No scanner runs and no cloud credentials are needed.
+{ .lede }
+
+Use `cloudg ingest` when Prowler, ScoutSuite, Checkov or Trivy already ran somewhere else: in a CI job, on another host, on a schedule. cloudg does the second half of the pipeline on their files: cross-scanner deduplication, scoring, compliance mapping and report rendering.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
 You pass each tool's native output with its own flag. Every flag is repeatable, and any mix of tools works, from one Trivy file to all four scanners at once. A path can be a single file or the directory the tool wrote.
 
-```mermaid caption="From scanner files to reports"
+```mermaid
 flowchart LR
   A["--prowler / --scoutsuite / --checkov / --trivy"] --> B["Parse each path"]
   B -->|"missing or unreadable"| W["Warn and skip"]
@@ -18,6 +23,8 @@ flowchart LR
   D --> E["findings.json"]
   D --> F["report.html"]
 ```
+From scanner files to reports
+{ .diagram-caption }
 
 1. cloudg groups the paths by tool and prints them in an "Ingest Configuration" panel. With no input flag at all it stops with "No inputs" and exit code 1.
 2. Each path goes through that tool's parser. A path that does not exist, or that the parser rejects, is skipped with a warning; the other paths still count. The per-tool totals are printed as they come in.
@@ -33,7 +40,7 @@ What each flag accepts:
 | `--checkov` | A `checkov --output json` file, or a directory holding `results_json.json` | `checkov -d ./iac --output json > results_json.json` |
 | `--trivy` | A `trivy image` or `trivy fs` JSON file, or a directory of them | `trivy image --format json myrepo/app:latest > trivy-image.json` |
 
-[Ingesting existing output](/guides/ingesting/) lists the exact fields cloudg reads from each format.
+[Ingesting existing output](../guides/ingesting.md) lists the exact fields cloudg reads from each format.
 
 Prowler's two JSON formats both work. Each record is read as OCSF when it has OCSF keys (`finding_info`, `class_uid` and so on) and as ASFF otherwise, so one directory can hold both. When it does, Prowler reports the same check twice, and normalisation merges the pair into one finding. A muted OCSF finding comes in with `is_suppressed` set. The MCP server's `load_dataset` and `ingest_reports` tools read OCSF the same way.
 
@@ -101,21 +108,25 @@ cloudg map -p aws --regions all --findings ./reports/raw-findings.json -o ./repo
 
 The same aggregation in Python, with no files written:
 
-```bash tab="CLI"
-cloudg ingest --prowler ./prowler-output/ --trivy ./trivy-image.json --format json
-```
+=== "CLI"
 
-```python tab="Python" title="ingest_reports.py"
-from cloudg.ingest import ingest_reports
-from cloudg.normaliser import FindingsNormaliser
+    ```bash
+    cloudg ingest --prowler ./prowler-output/ --trivy ./trivy-image.json --format json
+    ```
 
-findings = ingest_reports({
-    "prowler": ["./prowler-output/"],
-    "trivy": ["./trivy-image.json"],
-})
-result = FindingsNormaliser().normalise(findings)
-print(len(findings), "parsed,", len(result.findings), "after deduplication")
-```
+=== "Python"
+
+    ```python title="ingest_reports.py"
+    from cloudg.ingest import ingest_reports
+    from cloudg.normaliser import FindingsNormaliser
+
+    findings = ingest_reports({
+        "prowler": ["./prowler-output/"],
+        "trivy": ["./trivy-image.json"],
+    })
+    result = FindingsNormaliser().normalise(findings)
+    print(len(findings), "parsed,", len(result.findings), "after deduplication")
+    ```
 
 ## Output files
 
@@ -139,10 +150,26 @@ There is no SVG format here, because ingest has no inventory to draw. `raw-findi
 
 ## Related
 
-:::links
-- [Ingesting existing output](/guides/ingesting/) Input formats in detail and how deduplication works.
-- [cloudg scan](/cli/scan/) Run the scanners from cloudg instead.
-- [cloudg report](/cli/report/) Re-render reports from a `findings.json`.
-- [parse_report](/api/parse-report/) The parser behind each flag.
-- [FindingsNormaliser](/api/findingsnormaliser/) Deduplication, scoring and compliance mapping.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Ingesting existing output**](../guides/ingesting.md)
+
+    Input formats in detail and how deduplication works.
+
+-   [**cloudg scan**](scan.md)
+
+    Run the scanners from cloudg instead.
+
+-   [**cloudg report**](report.md)
+
+    Re-render reports from a `findings.json`.
+
+-   [**parse_report**](../api/parse-report.md)
+
+    The parser behind each flag.
+
+-   [**FindingsNormaliser**](../api/findingsnormaliser.md)
+
+    Deduplication, scoring and compliance mapping.
+
+</div>

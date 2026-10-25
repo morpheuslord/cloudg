@@ -1,22 +1,15 @@
 ---
-object: [cloudg.schema.models.Finding, cloudg.schema.models.CloudAsset, cloudg.schema.models.NetworkEdge, cloudg.schema.models.ComplianceResult, cloudg.schema.models.ScanResult, cloudg.schema.models.Severity, cloudg.schema.models.CloudProvider, cloudg.schema.models.ComplianceStatus]
-members:
-  cloudg.schema.models.Finding: [risk_score]
-  cloudg.schema.models.CloudAsset: [display_id]
-  cloudg.schema.models.NetworkEdge: []
-  cloudg.schema.models.ComplianceResult: []
-  cloudg.schema.models.ScanResult: [summary]
-  cloudg.schema.models.Severity: []
-  cloudg.schema.models.CloudProvider: []
-  cloudg.schema.models.ComplianceStatus: []
-lede: "The pydantic v2 models every part of cloudg exchanges: assets, the edges between them, findings, compliance results, and the `ScanResult` that holds them together."
+description: 'The pydantic v2 models every part of cloudg exchanges: assets, the edges between them, findings, compliance results, and the ScanResult that holds them together.'
 ---
+
+The pydantic v2 models every part of cloudg exchanges: assets, the edges between them, findings, compliance results, and the `ScanResult` that holds them together.
+{ .lede }
 
 ## How the models fit together
 
 Every collector produces `CloudAsset` and `NetworkEdge` objects, every scanner parser produces `Finding` objects, and the normaliser bundles findings and their `ComplianceResult` entries into a `ScanResult`. The links between them are plain string ids, not object references:
 
-```mermaid caption="The id fields that connect the models"
+```mermaid
 flowchart LR
   SR["ScanResult"] -->|assets| CA["CloudAsset"]
   SR -->|edges| NE["NetworkEdge"]
@@ -26,8 +19,10 @@ flowchart LR
   F -->|"resource_id, resource_arn"| CA
   CR -->|finding_ids| F
 ```
+The id fields that connect the models
+{ .diagram-caption }
 
-Those references are not checked. An edge may point at an id no asset has (cloudg's own security group rules use the CIDR `0.0.0.0/0` as `source_id`, and the graph builder turns it into a node of its own), and a finding's `resource_id` is often an ARN or a Terraform address instead of an asset id. [`AssetIndex`](/api/dependencygraph/) is the matcher cloudg uses to resolve such references.
+Those references are not checked. An edge may point at an id no asset has (cloudg's own security group rules use the CIDR `0.0.0.0/0` as `source_id`, and the graph builder turns it into a node of its own), and a finding's `resource_id` is often an ARN or a Terraform address instead of an asset id. [`AssetIndex`](dependencygraph.md) is the matcher cloudg uses to resolve such references.
 
 All five models are configured with `extra="allow"`: a field the model does not define is kept on the instance and written back out by `model_dump()`. That makes it easy to carry your own data (`CloudAsset(..., owner="team-orders")`) through cloudg's pipeline, and it also means a typo in a keyword argument is not an error.
 
@@ -37,9 +32,9 @@ All five models are configured with `extra="allow"`: a field the model does not 
 
 All of them are `str` enums, so `Severity.HIGH == "HIGH"` is true, and pydantic accepts the plain string wherever the enum is expected. Values outside the enum raise a `ValidationError`.
 
-`AssetType` has 156 values, from `EC2` and `S3_BUCKET` to `K8S_WORKLOAD`, `LANDING_ZONE` and `AI_GUARDRAIL`, plus `OTHER` for anything without a better fit. The [asset types by category](/reference/catalog/asset-types-by-category/) page lists them all, grouped, with the metadata each type carries.
+`AssetType` has 156 values, from `EC2` and `S3_BUCKET` to `K8S_WORKLOAD`, `LANDING_ZONE` and `AI_GUARDRAIL`, plus `OTHER` for anything without a better fit. The [asset types by category](../reference/catalog/asset-types-by-category.md) page lists them all, grouped, with the metadata each type carries.
 
-`EdgeType` has 20 values. Eleven describe network and identity structure (`SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `CONTAINS`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED`, `ATTACHED_TO`, `REFERENCES`) and nine are the typed inventory relationships (`INVOKES`, `USES_IMAGE`, `ASSUMES_ROLE`, `GRANTS_ACCESS`, `LOGS_TO`, `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS`), always read "source verb target". The finer `relationship` label on an edge comes from a separate vocabulary, documented under [relationship vocabulary](/reference/catalog/relationship-vocabulary/).
+`EdgeType` has 20 values. Eleven describe network and identity structure (`SECURITY_GROUP_RULE`, `NACL_RULE`, `ROUTE`, `IAM_TRUST`, `IAM_POLICY_ATTACHMENT`, `CONTAINS`, `PEERING`, `LOAD_BALANCER_TARGET`, `INTERNET_EXPOSED`, `ATTACHED_TO`, `REFERENCES`) and nine are the typed inventory relationships (`INVOKES`, `USES_IMAGE`, `ASSUMES_ROLE`, `GRANTS_ACCESS`, `LOGS_TO`, `PROTECTS`, `MONITORS`, `MANAGES`, `GOVERNS`), always read "source verb target". The finer `relationship` label on an edge comes from a separate vocabulary, documented under [relationship vocabulary](../reference/catalog/relationship-vocabulary.md).
 
 ## Serialised forms
 
@@ -196,7 +191,7 @@ for f in sorted(urgent, key=lambda f: f.risk_score, reverse=True):
     print(f"{f.risk_score:4} {f.severity.value:8} {f.resource_arn or f.resource_id}  {f.title}")
 ```
 
-[parse_report](/api/parse-report/) shows how to write such a file from scanner output.
+[parse_report](parse-report.md) shows how to write such a file from scanner output.
 
 ## Notes
 
@@ -212,12 +207,65 @@ Assignment is not validated. `finding.severity = "SEVERE"` succeeds, and the pla
 
 `NetworkEdge.direction` defaults to `"ingress"` and `ports` to an empty list; most collectors fill `port_range` (`"80-443"`, `"22"`) instead of `ports`. Parallel security group rules between the same two nodes are separate edges in the data and are merged into one edge only inside the graph builder.
 
+## Reference
+
+::: cloudg.schema.models.Finding
+    options:
+      members:
+        - risk_score
+
+::: cloudg.schema.models.CloudAsset
+    options:
+      members:
+        - display_id
+
+::: cloudg.schema.models.NetworkEdge
+    options:
+      members: false
+
+::: cloudg.schema.models.ComplianceResult
+    options:
+      members: false
+
+::: cloudg.schema.models.ScanResult
+    options:
+      members:
+        - summary
+
+::: cloudg.schema.models.Severity
+    options:
+      members: false
+
+::: cloudg.schema.models.CloudProvider
+    options:
+      members: false
+
+::: cloudg.schema.models.ComplianceStatus
+    options:
+      members: false
+
 ## Related
 
-:::links
-- [Asset types by category](/reference/catalog/asset-types-by-category/) All 156 `AssetType` values, grouped.
-- [Relationship vocabulary](/reference/catalog/relationship-vocabulary/) The `relationship` labels on edges.
-- [Result objects](/api/results/) The dataclasses that carry these models out of the engine.
-- [FindingsNormaliser](/api/findingsnormaliser/) Where findings get merged, rescored and mapped.
-- [Output files](/reference/output-files/) The JSON files these models are written to.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Asset types by category**](../reference/catalog/asset-types-by-category.md)
+
+    All 156 `AssetType` values, grouped.
+
+-   [**Relationship vocabulary**](../reference/catalog/relationship-vocabulary.md)
+
+    The `relationship` labels on edges.
+
+-   [**Result objects**](results.md)
+
+    The dataclasses that carry these models out of the engine.
+
+-   [**FindingsNormaliser**](findingsnormaliser.md)
+
+    Where findings get merged, rescored and mapped.
+
+-   [**Output files**](../reference/output-files.md)
+
+    The JSON files these models are written to.
+
+</div>

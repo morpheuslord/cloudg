@@ -1,16 +1,19 @@
 ---
 title: CloudOntology
-object: cloudg.graph.ontology.CloudOntology
-members: [build, graph, triple_count, query, query_internet_exposed, query_by_relation_group, query_asset_neighbourhood, query_compliance_gaps, save, to_turtle, to_jsonld, to_rdfxml, to_ntriples, stats]
-lede: Writes assets, edges and findings into an rdflib graph with 64 typed relations, so you can export it as RDF and query it with SPARQL.
-since: "0.6.0"
+description: Writes assets, edges and findings into an rdflib graph with 64 typed relations, so you can export it as RDF and query it with SPARQL.
 ---
 
-The ontology is the semantic view of an inventory. Where [GraphBuilder](/api/graphbuilder/) keeps the collector's edge types (`SECURITY_GROUP_RULE`, `ATTACHED_TO`), `CloudOntology` reads each edge together with its endpoint types, ports and CIDR and turns it into relations that say what the edge means: `INTERNET_REACHABLE`, `ONLY_SSH`, `PROTECTED_BY_SG`, `VPC_CONTAINS_SUBNET`. `cloudg run` builds it after the scanners finish, so findings are part of the graph, and writes `ontology.ttl` and `ontology.jsonld` by default.
+Writes assets, edges and findings into an rdflib graph with 64 typed relations, so you can export it as RDF and query it with SPARQL.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
+
+The ontology is the semantic view of an inventory. Where [GraphBuilder](graphbuilder.md) keeps the collector's edge types (`SECURITY_GROUP_RULE`, `ATTACHED_TO`), `CloudOntology` reads each edge together with its endpoint types, ports and CIDR and turns it into relations that say what the edge means: `INTERNET_REACHABLE`, `ONLY_SSH`, `PROTECTED_BY_SG`, `VPC_CONTAINS_SUBNET`. `cloudg run` builds it after the scanners finish, so findings are part of the graph, and writes `ontology.ttl` and `ontology.jsonld` by default.
 
 ## What build() writes
 
-```mermaid caption="Where the triples come from"
+```mermaid
 flowchart LR
   S["Schema: classes and properties"] --> G["rdflib Graph"]
   A["Assets"] --> I["Individuals with data properties"] --> G
@@ -19,6 +22,8 @@ flowchart LR
   A --> AR["Asset-level relations"] --> G
   F["Findings"] --> X["AssetIndex resolves the asset"] --> G
 ```
+Where the triples come from
+{ .diagram-caption }
 
 Three namespaces are bound on the graph, so they appear as prefixes in every serialisation and in your SPARQL:
 
@@ -87,103 +92,7 @@ Names are matched without regard to case. `save()` writes Turtle, with a warning
 Four assets, two edges and one scanner finding that names the database by ARN. The query lists every relation in the graph with readable names on both ends, skipping the data properties.
 
 ```python title="ontology_demo.py"
-"""Build the RDF ontology for a small estate, save it and query it with SPARQL."""
-
-from pathlib import Path
-
-from rdflib import Graph
-
-from cloudg.graph.ontology import CloudOntology, RelationGroup
-from cloudg.schema.models import (
-    AssetType,
-    CloudAsset,
-    CloudProvider,
-    EdgeType,
-    Finding,
-    NetworkEdge,
-    Severity,
-)
-
-ACCOUNT = "123456789012"
-REGION = "eu-west-1"
-KEY_ARN = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/1111aaaa-22bb-33cc-44dd-555555eeeeee"
-
-
-def asset(asset_id: str, asset_type: AssetType, arn: str, **extra) -> CloudAsset:
-    return CloudAsset(
-        id=asset_id,
-        name=asset_id,
-        asset_type=asset_type,
-        provider=CloudProvider.AWS,
-        region=REGION,
-        account_id=ACCOUNT,
-        arn=arn,
-        **extra,
-    )
-
-
-assets = [
-    asset("sg-web", AssetType.SECURITY_GROUP, f"arn:aws:ec2:{REGION}:{ACCOUNT}:security-group/sg-web"),
-    asset("web-1", AssetType.EC2, f"arn:aws:ec2:{REGION}:{ACCOUNT}:instance/i-0web1",
-          tags={"owner": "payments"}),
-    asset("orders-key", AssetType.KMS_KEY, KEY_ARN),
-    asset("orders-db", AssetType.RDS_INSTANCE, f"arn:aws:rds:{REGION}:{ACCOUNT}:db:orders-db",
-          metadata={"storage_encrypted": True, "kms_key_id": KEY_ARN}),
-]
-
-edges = [
-    NetworkEdge(source_id="0.0.0.0/0", target_id="sg-web", edge_type=EdgeType.SECURITY_GROUP_RULE,
-                port_range="22", protocol="TCP", cidr="0.0.0.0/0", direction="ingress"),
-    NetworkEdge(source_id="web-1", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO),
-]
-
-# A scanner finding that names the database by ARN, not by asset id
-findings = [
-    Finding(
-        resource_id=f"arn:aws:rds:{REGION}:{ACCOUNT}:db:orders-db",
-        severity=Severity.HIGH,
-        title="RDS instance has no deletion protection",
-        description="Deletion protection is disabled.",
-        source_tool="prowler",
-        compliance_frameworks=["CIS"],
-    )
-]
-
-onto = CloudOntology()
-onto.build(assets, edges, findings)
-stats = onto.stats()
-print(stats["total_triples"], "triples,", stats["classes_used"], "classes,",
-      stats["individuals"], "individuals")
-print("groups:", dict(sorted(stats["relation_group_counts"].items())))
-
-# The graph binds the cm:, cmr: and cmp: prefixes, so queries can use them
-rows = onto.query("""
-    SELECT ?subject ?relation ?object WHERE {
-        ?s ?p ?o .
-        FILTER(STRSTARTS(STR(?p), STR(cmp:)))
-        FILTER(!STRSTARTS(STR(?p), STR(cmp:has)))
-        FILTER(?p != cmp:isInternetExposed)
-        ?s cmp:hasName ?subject .
-        OPTIONAL { ?o cmp:hasName ?oname }
-        BIND(STRAFTER(STR(?p), STR(cmp:)) AS ?relation)
-        BIND(COALESCE(?oname, STR(?o)) AS ?object)
-    } ORDER BY ?subject ?relation
-""")
-for row in rows:
-    print(f"  {row['subject']} {row['relation']} {row['object']}")
-
-print("internet reachable:", [r["name"] for r in onto.query_internet_exposed()])
-print("security group:", len(onto.query_by_relation_group(RelationGroup.SECURITY)), "triples")
-print("compliance gaps:", [(r["severity"], r["resourceName"]) for r in onto.query_compliance_gaps()])
-
-out = Path("ontology-out")
-for fmt, name in [("turtle", "ontology.ttl"), ("json-ld", "ontology.jsonld"),
-                  ("xml", "ontology.rdf"), ("nt", "ontology.nt")]:
-    onto.save(out / name, fmt=fmt)
-
-# Any RDF tool can read the files back; here rdflib itself
-reloaded = Graph().parse(out / "ontology.ttl", format="turtle")
-print("reloaded", len(reloaded), "triples from", sorted(p.name for p in out.iterdir()))
+--8<-- "graph/ontology_demo.py"
 ```
 
 ```console
@@ -209,7 +118,7 @@ Things to notice:
 - 636 of the 689 triples are schema. The `stats()` counts cover classes and individuals actually used.
 - `ENCRYPTED_BY_KMS` points at `orders-key` because the database's `kms_key_id` matched the key asset's ARN. With no collected key, the object would be the raw key reference.
 - The finding attached to `orders-db` although its `resource_id` was an ARN.
-- `query_internet_exposed()` lists the objects of `INTERNET_REACHABLE` triples, which here is the security group. It reads the rule edges, not the reachability walk; for "which workloads can the internet reach" use [ReachabilityAnalyzer](/api/reachabilityanalyzer/).
+- `query_internet_exposed()` lists the objects of `INTERNET_REACHABLE` triples, which here is the security group. It reads the rule edges, not the reachability walk; for "which workloads can the internet reach" use [ReachabilityAnalyzer](reachabilityanalyzer.md).
 - The `OWNED_BY` object is a tag node (`tag_payments`) with no `cmp:hasName`, so the query printed its IRI.
 
 Saving N-Triples prints a harmless `UserWarning: NTSerializer always uses UTF-8 encoding` from rdflib.
@@ -255,12 +164,48 @@ The same query works against `ontology.jsonld` with `Graph().parse("ontology.jso
 - Each `build()` call adds to the same graph. Create a new `CloudOntology` per inventory.
 - The JSON-LD output uses rdflib's serialiser without a framing context, so it is a flat list of nodes.
 
+## Reference
+
+::: cloudg.graph.ontology.CloudOntology
+    options:
+      members:
+        - build
+        - graph
+        - triple_count
+        - query
+        - query_internet_exposed
+        - query_by_relation_group
+        - query_asset_neighbourhood
+        - query_compliance_gaps
+        - save
+        - to_turtle
+        - to_jsonld
+        - to_rdfxml
+        - to_ntriples
+        - stats
+
 ## Related
 
-:::links
-- [Graph, ontology and RAG](/guides/graph-ontology-rag/) When to use which view of the inventory.
-- [RAGExporter](/api/ragexporter/) Relation-group chunks built from the same inference rules.
-- [GraphBuilder](/api/graphbuilder/) The NetworkX view of the same edges.
-- [cloudg run](/cli/run/) The `--ontology/--no-ontology` switch and the files it writes.
-- [Output files](/reference/output-files/) Every file the pipeline writes, ontology included.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Graph, ontology and RAG**](../guides/graph-ontology-rag.md)
+
+    When to use which view of the inventory.
+
+-   [**RAGExporter**](ragexporter.md)
+
+    Relation-group chunks built from the same inference rules.
+
+-   [**GraphBuilder**](graphbuilder.md)
+
+    The NetworkX view of the same edges.
+
+-   [**cloudg run**](../cli/run.md)
+
+    The `--ontology/--no-ontology` switch and the files it writes.
+
+-   [**Output files**](../reference/output-files.md)
+
+    Every file the pipeline writes, ontology included.
+
+</div>
