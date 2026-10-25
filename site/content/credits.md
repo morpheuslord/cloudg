@@ -18,7 +18,9 @@ cloudg builds on other people's work, and some of it ships inside the package. T
 | [parliament](https://github.com/duo-labs/parliament) | BSD-3-Clause | IAM policy linting |
 | [MITRE ATT&CK®](https://attack.mitre.org/) | Used with permission | Technique IDs and descriptions |
 | [Chart.js](https://www.chartjs.org) 4.4.0 | MIT | Charts in report.html |
-| [D3](https://d3js.org) 7.9.0 | ISC | The graph view in report.html |
+| [D3](https://d3js.org) 7.9.0 | ISC | The 2D graph view in report.html |
+| [Anatomy](https://github.com/wheresryan22/anatomy) iso-kit | MIT | The camera, solids and shading of the isometric map in report.html |
+| [Hairline](https://hairline.lucasmarkes.com) 0.5.1 kernel | MIT | The line figures in report.html's empty states |
 
 ## Prowler
 
@@ -36,6 +38,10 @@ cloudg builds on other people's work, and some of it ships inside the package. T
 
 [parliament](https://github.com/duo-labs/parliament) (BSD-3-Clause) from Duo Labs does the IAM policy linting.
 
+## Drawing engines
+
+The estate map in report.html is drawn with the iso-kit from [Anatomy](https://github.com/wheresryan22/anatomy) (MIT, Copyright (c) 2026 Ryan): its camera, its solids and their four-tone shading. The empty states use the kernel of [Hairline](https://hairline.lucasmarkes.com) 0.5.1 (MIT, Copyright (c) 2026 Lucas Marques), with a figure of an empty tray written for cloudg in Hairline's own format. Both files sit in `cloudg/templates/vendor/` and are embedded in every report, so the map works offline. The Hairline kernel is unmodified. The iso-kit is wrapped so it can sit inside a script element; [`NOTICE`](https://github.com/morpheuslord/cloudg/blob/main/cloudg/templates/vendor/NOTICE) lists exactly what changed.
+
 ## MITRE ATT&CK
 
 [MITRE ATT&CK®](https://attack.mitre.org/). The `mitre_attack_*.yaml` files contain ATT&CK technique IDs and descriptions. © The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. ATT&CK is a registered trademark of The MITRE Corporation.
@@ -50,4 +56,4 @@ The Python libraries cloudg depends on (NetworkX, rdflib, pydantic, Click, Rich 
 
 ## License
 
-cloudg itself is released under the [MIT License](https://github.com/morpheuslord/cloudg/blob/main/LICENSE). report.html embeds unmodified builds of Chart.js and D3 when `report.inline_js` is true (the default), so the report works offline. Their notices are in [`cloudg/templates/vendor/NOTICE`](https://github.com/morpheuslord/cloudg/blob/main/cloudg/templates/vendor/NOTICE).
+cloudg itself is released under the [MIT License](https://github.com/morpheuslord/cloudg/blob/main/LICENSE). report.html embeds unmodified builds of Chart.js and D3 when `report.inline_js` is true (the default), and always embeds the Anatomy iso-kit and the Hairline kernel, so the report works offline. Their notices are in [`cloudg/templates/vendor/NOTICE`](https://github.com/morpheuslord/cloudg/blob/main/cloudg/templates/vendor/NOTICE).

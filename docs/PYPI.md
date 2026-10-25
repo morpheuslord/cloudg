@@ -106,6 +106,8 @@ Scanners. [Checkov](https://github.com/bridgecrewio/checkov) (Apache-2.0), [Triv
 
 [parliament](https://github.com/duo-labs/parliament) (BSD-3-Clause) from Duo Labs does the IAM policy linting.
 
+Drawing engines. The estate map in report.html is drawn with the iso-kit from [Anatomy](https://github.com/wheresryan22/anatomy) (MIT, by Ryan), and its empty states use the kernel of [Hairline](https://hairline.lucasmarkes.com) 0.5.1 (MIT, by Lucas Marques). Both are copied into `cloudg/templates/vendor/` and embedded in every report, so the map works offline. The iso-kit is wrapped so it can sit inside a script element, and `cloudg/templates/vendor/NOTICE` lists exactly what changed.
+
 [MITRE ATT&CK®](https://attack.mitre.org/). The `mitre_attack_*.yaml` files contain ATT&CK technique IDs and descriptions. © The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. ATT&CK is a registered trademark of The MITRE Corporation.
 
 Standards. The hand-written rulesets in `cloudg/rules/` reference public control numbering from the CIS Benchmarks for AWS, Azure and GCP, NIST SP 800-53, NIST CSF, PCI DSS, the AICPA SOC 2 Trust Services Criteria, the HIPAA Security Rule, GDPR, ISO/IEC 27001:2022 and the AWS Foundational Security Best Practices. The standards belong to their publishers. CIS Benchmarks is a trademark of the Center for Internet Security, and cloudg is not affiliated with or endorsed by CIS or any other publisher named here.

@@ -1565,7 +1565,7 @@
         const blob = new Blob([JSON.stringify({ findings: findingsData, assets: assetsData, graph: graphData, hierarchy: hierarchyData, scene: isoScene }, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'cloudg-report.json';
+        a.download = 'findings.json';
         a.click();
     }
     function exportCSV() {
