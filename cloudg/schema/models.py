@@ -233,6 +233,13 @@ class AssetType(str, Enum):
     KNOWLEDGE_BASE = "KNOWLEDGE_BASE"
     AI_GUARDRAIL = "AI_GUARDRAIL"
 
+    # GCP parity: types the GCP depth mapping needs and no existing member fits
+    CONTAINER_IMAGE = "CONTAINER_IMAGE"  # Artifact Registry Docker image
+    DATA_TABLE = "DATA_TABLE"  # BigQuery table / view, Bigtable table
+    TAG = "TAG"  # Resource Manager tag key / tag value
+    FLEET = "FLEET"  # GKE fleet, fleet membership, fleet scope
+    # end GCP parity
+
     # Generic
     OTHER = "OTHER"
 

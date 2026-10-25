@@ -41,6 +41,24 @@ from cloudg.inventory.gcp_relations import (  # noqa: F401
     resource_manager,
     serverless,
 )
+
+# Added for AWS depth parity; several register second extractors for types
+# the modules above already handle (the registry runs both).
+from cloudg.inventory.gcp_relations import (  # noqa: F401, E402
+    apis,
+    cicd,
+    containers_ext,
+    data_ext,
+    edge,
+    governance,
+    hybrid,
+    identity_ext,
+    integration,
+    ml,
+    netsec,
+    ops,
+    security_ext,
+)
 from cloudg.inventory.gcp_relations.context import (
     EXTRACTORS,
     Extracted,

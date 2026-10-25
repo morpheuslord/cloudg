@@ -739,7 +739,8 @@ class TestEnumeration:
         ] == ServiceStatus.PARTIAL
 
     def test_type_map(self):
-        assert "cloudscheduler.googleapis.com/Job" not in _DEEP_GCP_TYPE_MAP
+        assert "widgets.googleapis.com/Widget" not in _DEEP_GCP_TYPE_MAP
+        assert _DEEP_GCP_TYPE_MAP["cloudscheduler.googleapis.com/Job"] == AssetType.SCHEDULE
         assert _DEEP_GCP_TYPE_MAP["cloudkms.googleapis.com/KeyRing"] != AssetType.KMS_KEY
         assert _DEEP_GCP_TYPE_MAP["compute.googleapis.com/Router"] == AssetType.ROUTER
         assert _DEEP_GCP_TYPE_MAP["run.googleapis.com/Service"] == AssetType.CONTAINER_SERVICE

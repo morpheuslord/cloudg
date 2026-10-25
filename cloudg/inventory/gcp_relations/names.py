@@ -332,6 +332,10 @@ _REDACT_KEYS = {
     "password",
     "clientKey",
     "clientSecret",
+    # Eventarc channel activation, Monitoring channel labels (Slack, PagerDuty)
+    "activationToken",
+    "auth_token",
+    "service_key",
 }
 REDACTED = "<redacted>"
 
