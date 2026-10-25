@@ -808,3 +808,21 @@ def test_multi_records_task_coverage_and_partial():
     assert services["policy"] == ServiceStatus.SUCCESS
     assert services["apim"] == ServiceStatus.FAILED
     assert services["azure_full"] == ServiceStatus.PARTIAL
+
+
+def test_mapper_binds_azure_options():
+    from cloudg.config import CloudGConfig
+    from cloudg.inventory.azure_deep import AzureDeepInventoryCollector
+    from cloudg.inventory.mapper import InventoryMapper
+
+    cfg = CloudGConfig(providers=["azure"])
+    cfg.inventory.services = ["network", "dns"]
+    cfg.inventory.exclude_services = ["front_door"]
+    cfg.azure.max_child_parents = 7
+    cls = InventoryMapper(cfg)._collector_overrides()["azure"]
+    collector = cls(credential=object(), subscription_id=SUB)
+    assert isinstance(collector, AzureDeepInventoryCollector)
+    assert collector.options.services == ["network", "dns"]
+    assert collector.options.max_child_parents == 7
+    assert "dns_records" in collector._tasks and "front_door" not in collector._tasks
+    assert "apim" not in collector._tasks

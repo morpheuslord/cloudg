@@ -330,3 +330,35 @@ def test_entra_objects_merge_with_rbac_placeholders():
         EdgeType.GRANTS_ACCESS,
         "POLICY_ALLOWS_ACTION",
     )
+
+
+def test_mapper_entra_step_respects_opt_out(monkeypatch):
+    from cloudg.config import CloudGConfig
+    from cloudg.inventory.mapper import InventoryMapper
+
+    cfg = CloudGConfig(providers=["azure"])
+    cfg.azure.map_management_groups = False
+    cfg.azure.map_entra = False
+    coverage: list = []
+    assert asyncio.run(InventoryMapper(cfg)._discover_hierarchies(cfg, coverage)) == []
+    assert coverage == []
+
+    cfg.azure.map_entra = True
+    cfg.inventory.exclude_services = ["identity"]
+    out = asyncio.run(InventoryMapper(cfg)._discover_hierarchies(cfg, coverage))
+    assert out == [] and coverage[0].services[0].status == ServiceStatus.SKIPPED
+
+    import cloudg.credentials as creds
+    import cloudg.inventory.azure_entra as entra_mod
+
+    cfg.inventory.exclude_services = []
+    monkeypatch.setattr(creds, "build_azure_credential", lambda az: object())
+    monkeypatch.setattr(
+        entra_mod, "default_msgraph_client_factory", lambda cred: FakeArm(_routes())
+    )
+    coverage = []
+    found = asyncio.run(InventoryMapper(cfg)._discover_hierarchies(cfg, coverage))
+    assert any(a.arn == f"entra:principal/{ALICE}" for a in found)
+    services = {s.service: s.status for s in coverage[0].services}
+    assert services["entra"] == ServiceStatus.SUCCESS
+    assert services["entra_users"] == ServiceStatus.SUCCESS
