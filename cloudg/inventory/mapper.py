@@ -292,10 +292,21 @@ class InventoryMapper:
                     session, region, account_id, is_primary_region=is_primary_region, **options
                 )
 
+        # GCP parity: bind service filtering and the API-source options
+        from cloudg.inventory.gcp_deep import deep_options_from_config
+
+        gcp_options = deep_options_from_config(inv, getattr(self._config, "gcp", None))
+
+        class _ConfiguredGCP(GCPDeepInventoryCollector):
+            def __init__(
+                self, project_id: str | None, credentials: Any = None, **kwargs: Any
+            ) -> None:
+                super().__init__(project_id, credentials, **{**gcp_options, **kwargs})
+
         return {
             "aws": _ConfiguredAWS,
             "azure": AzureDeepInventoryCollector,
-            "gcp": GCPDeepInventoryCollector,
+            "gcp": _ConfiguredGCP,
         }
 
     # ------------------------------------------------------------------
