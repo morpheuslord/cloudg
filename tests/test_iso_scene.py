@@ -244,6 +244,10 @@ class TestEdgeCases:
             ("MESSAGE_QUEUE", "messaging"),
             ("LOG_GROUP", "observability"),
             ("ML_ENDPOINT", "ml"),
+            ("DATA_TABLE", "database"),
+            ("CONTAINER_IMAGE", "storage"),
+            ("FLEET", "cluster"),
+            ("TAG", "governance"),
             ("OTHER", "other"),
         ],
     )
