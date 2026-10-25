@@ -34,6 +34,7 @@ _GLOBAL_PREFIXES = (
     "cloudg:",
     "aws-security:",
     "azure-security:",
+    "gcp-security:",  # GCP parity
     "entra:",
     "loganalytics:",
     "gcp-principal:",

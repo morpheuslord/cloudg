@@ -231,6 +231,33 @@ class GCPConfig(BaseModel):
     vpc_service_controls: bool = Field(
         default=True, description="Map VPC Service Controls perimeters"
     )
+    # GCP parity: API-backed sources of the deep inventory collector
+    deep_sources: bool = Field(
+        default=True,
+        description="Inventory mapping: also read what Cloud Asset Inventory does not return "
+        "(Cloud DNS records, Security Command Center, Cloud Identity groups, deny and access "
+        "boundary policies, PAM, audit-log configs, Monitoring, OS Config, Artifact Analysis, "
+        "Backup and DR, Cloud Scheduler, Apigee, Infrastructure / Deployment Manager)",
+    )
+    rest_timeout_seconds: float = Field(default=60.0, ge=5.0)
+    cloud_identity_customer_id: str | None = Field(
+        default=None,
+        description="Cloud Identity customer ID (Cxxxxxxx) for group membership; "
+        "found from the organization when unset",
+    )
+    max_dns_records_per_zone: int = Field(default=5000, ge=0)
+    max_vulnerability_occurrences: int = Field(
+        default=5000, ge=0, description="Artifact Analysis occurrences read per project"
+    )
+    max_groups: int = Field(default=2000, ge=0)
+    max_group_members: int = Field(default=5000, ge=0)
+    expand_predefined_roles: bool = Field(
+        default=True, description="Read the permissions of bound predefined roles (IAM Roles API)"
+    )
+    max_role_expansions: int = Field(default=500, ge=0)
+    max_scheduler_locations: int = Field(default=25, ge=0)
+    source_concurrency: int = Field(default=4, ge=1, le=32)
+    # end GCP parity
 
 
 class ScannerConfig(BaseModel):

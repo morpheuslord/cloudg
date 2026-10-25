@@ -217,6 +217,33 @@ def principal_asset(member: str, discovered_via: str = "iam_policy") -> CloudAss
     )
 
 
+_HAS_POLICY = {
+    "user": "USER_HAS_POLICY",
+    "group": "GROUP_HAS_POLICY",
+    "domain": "GROUP_HAS_POLICY",
+}
+
+
+def has_policy_relationship(principal_type: Any) -> str:
+    """USER_HAS_POLICY / GROUP_HAS_POLICY / ROLE_HAS_POLICY for a principal type.
+
+    Service accounts, federated principals and Kubernetes service accounts
+    are workload identities, the GCP counterpart of an AWS role.
+    """
+    return _HAS_POLICY.get(str(principal_type or ""), "ROLE_HAS_POLICY")
+
+
+def role_ref(role: Any) -> str | None:
+    """A role name (``roles/x``, ``projects/p/roles/x``) as its IAM full name."""
+    if not isinstance(role, str) or not role:
+        return None
+    if role.startswith("//"):
+        return role
+    if role.startswith(("roles/", "projects/", "organizations/")) and "roles/" in role:
+        return f"//iam.googleapis.com/{role}"
+    return None
+
+
 def _index(assets: Iterable[CloudAsset]) -> dict[str, CloudAsset]:
     idx: dict[str, CloudAsset] = {}
     for a in assets:
@@ -349,6 +376,21 @@ class _PolicyBinder:
                     condition=", ".join(info["conditions"]) or None,
                 ),
             )
+            relationship = has_policy_relationship(principal.metadata.get("principal_type"))
+            for role in info["roles"]:
+                _append_relation(
+                    principal,
+                    rel(
+                        role_ref(role),
+                        EdgeType.IAM_POLICY_ATTACHMENT,
+                        relationship,
+                        description=f"bound to {role}",
+                    ),
+                )
+
+    def roles(self) -> list[str]:
+        """Every role bound by the policies seen so far."""
+        return list(dict.fromkeys(r for info in self.grants.values() for r in info["roles"]))
 
 
 def apply_iam_policies(

@@ -90,6 +90,14 @@ Keys that mean the same thing on every asset type that carries them.
 | Platforms and data processing | [`MESSAGE_BROKER`](#message_broker), [`BATCH_ENVIRONMENT`](#batch_environment), [`JOB_QUEUE`](#job_queue), [`JOB_DEFINITION`](#job_definition), [`DATABASE_PROXY`](#database_proxy), [`DATA_CATALOG`](#data_catalog), [`ETL_JOB`](#etl_job), [`BIG_DATA_CLUSTER`](#big_data_cluster), [`QUERY_WORKGROUP`](#query_workgroup), [`DATA_TRANSFER`](#data_transfer), [`ML_WORKSPACE`](#ml_workspace), [`ML_ENDPOINT`](#ml_endpoint), [`ML_MODEL`](#ml_model), [`AI_AGENT`](#ai_agent), [`KNOWLEDGE_BASE`](#knowledge_base), [`AI_GUARDRAIL`](#ai_guardrail) |
 | Generic | [`OTHER`](#other) |
 
+<!-- GCP parity -->
+The GCP depth mapping adds four values in a separate block of `models.py`: [`CONTAINER_IMAGE`](#container_image),
+[`DATA_TABLE`](#data_table), [`TAG`](#tag) and [`FLEET`](#fleet), described under
+[GCP parity types](#gcp-parity-types). It also produces many existing types on GCP for the first
+time; `cloudg/inventory/catalogs/gcp_asset_types.yaml` maps 346 Cloud Asset Inventory and API
+types.
+<!-- end GCP parity -->
+
 ## Per-type reference
 
 For each type: what it represents, the providers that produced it in the observations, the
@@ -2299,6 +2307,52 @@ Catalog entries that classify native resources as this type:
 - **Declared relations:** `MANAGES`
 - **Edges out:**<br>`MANAGES` → `EC2`, `VIRTUAL_MACHINE`<br>`REFERENCES` → `MESSAGE_QUEUE`
 
+<!-- GCP parity -->
+### GCP parity types
+
+Four `AssetType` values were added for the GCP depth mapping, where no existing value fit. The
+GCP mapping also fills many existing types for the first time on GCP; the full type table is
+`cloudg/inventory/catalogs/gcp_asset_types.yaml`.
+
+#### CONTAINER_IMAGE
+
+- An Artifact Registry Docker image (one digest).
+- GCP Cloud Asset Inventory: `artifactregistry.googleapis.com/DockerImage`
+- **Providers:** GCP
+- **Metadata keys:** `create_time`, `description`, `folders`, `gcp_asset_type`, `location`, `network_tags`, `organization`, `parent_asset_type`, `parent_full_resource_name`, `project`, `project_id`, `project_number`, `state`, `tags` (list), `upload_time` (str), `uri` (str), `vulnerabilities` (object: severity -> count, from Artifact Analysis)
+- **Declared relations:** `CONTAINS` ← `CONTAINER_REGISTRY`
+- **Edges in:** `CONTAINS` ← `CONTAINER_REGISTRY`; `MONITORS / MONITORED_BY` ← `VULNERABILITY_SCANNER`
+- Aliases: the image URI (`us-docker.pkg.dev/p/repo/img@sha256:...`) with and without `https://`, which is how Artifact Analysis names it. At most `inventory.max_images_per_repository` newest images per repository are kept.
+
+#### DATA_TABLE
+
+- A table or view: BigQuery table / view / materialized view, Bigtable table and authorized view.
+- GCP Cloud Asset Inventory: `bigquery.googleapis.com/Table` (was `OTHER`), `bigtableadmin.googleapis.com/Table`, `bigtableadmin.googleapis.com/AuthorizedView`, `bigtableadmin.googleapis.com/LogicalView`, `bigtableadmin.googleapis.com/MaterializedView`
+- **Providers:** GCP
+- **Metadata keys:** `change_stream` (bool), `deletion_protection` (bool), `partitioned` (bool), `table_type` (str), `num_rows`, `num_bytes`, `require_partition_filter`, `expiration_time`, plus the common GCP keys
+- **Declared relations:** `CONTAINS` ← `DATA_WAREHOUSE` / `DYNAMODB_TABLE`; `REFERENCES / READS_FROM` → `DATA_TABLE` (view query sources), `GCS_BUCKET` (external tables); `REFERENCES / DEPENDS_ON` → `SOURCE_CONNECTION`; `REFERENCES / BACKUP_TO` ← (snapshot base table)
+- **Edges in:** `GOVERNS / COMPLIANCE_GOVERNS` ← `GUARDRAIL` (row access policy); `MONITORS / MONITORED_BY` ← `ETL_JOB` (Dataplex scan); `REFERENCES / READS_FROM` ← `DATA_CATALOG`, `JOB_DEFINITION`, `ML_ENDPOINT`
+
+#### TAG
+
+- A Resource Manager tag key or tag value.
+- GCP Cloud Asset Inventory: `cloudresourcemanager.googleapis.com/TagKey`, `cloudresourcemanager.googleapis.com/TagValue` (tag bindings are folded into relations, see INVENTORY_INTERNALS.md 9.7)
+- **Providers:** GCP
+- **Metadata keys:** `namespaced_name` (str), `short_name` (str), `purpose` (str), plus the common GCP keys
+- **Declared relations:** `CONTAINS` ← `ORGANIZATION` / `CLOUD_ACCOUNT` (key), ← `TAG` (value); `ATTACHED_TO` → `VPC` (firewall-purpose keys)
+- **Edges in:** `REFERENCES / TAGGED_WITH` ← any tagged resource
+- Aliases: `tagKeys/<id>` / `tagValues/<id>` and the namespaced name (`999/env/prod`).
+
+#### FLEET
+
+- A GKE fleet, fleet membership, membership binding or fleet scope.
+- GCP Cloud Asset Inventory: `gkehub.googleapis.com/Fleet`, `gkehub.googleapis.com/Membership`, `gkehub.googleapis.com/MembershipBinding`, `gkehub.googleapis.com/Scope`
+- **Providers:** GCP
+- **Metadata keys:** `workload_identity_pool`, `issuer`, `unique_id` (memberships), `display_name`, plus the common GCP keys
+- **Declared relations:** `MANAGES / OWNED_BY` → `GKE_CLUSTER` (membership); `CONTAINS` → `FLEET` (membership binding); `REFERENCES / DEPENDS_ON` → `FLEET` (binding to scope)
+- **Edges in:** `MANAGES / OWNED_BY` ← `CLUSTER_ADDON` (fleet feature)
+<!-- end GCP parity -->
+
 ## Relationship matrix
 
 Every `(source type, edge type, relationship, target type)` combination the linker produced in
@@ -2843,6 +2897,409 @@ edges, and the account `CONTAINS` hierarchy) are described in INVENTORY_REFERENC
 | `ML_MODEL` | `RUNS_ON` | `CONTAINER_REGISTRY` |
 | `TASK_DEFINITION` | none | `CONTAINER_REGISTRY` |
 | `TASK_DEFINITION` | `RUNS_ON` | `CONTAINER_REGISTRY` |
+
+<!-- GCP parity -->
+### GCP parity relationship matrix
+
+Combinations the linker produced from the GCP parity fixtures (`tests/test_gcp_parity_extractors.py`
+and `tests/test_gcp_sources.py`): every new extractor and API-backed source, plus the older GCP
+relations those fixtures also trigger. Recorded the same way as the matrix above, so it lists
+observed shapes, not every possible one.
+
+
+#### GCP parity: ASSUMES_ROLE
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `K8S_SERVICE_ACCOUNT` | `RUNS_ON` | `SERVICE_PRINCIPAL` |
+| `LOG_SINK` | `CROSS_ACCOUNT_TRUST` | `CLOUD_ACCOUNT` |
+| `SERVICE_PRINCIPAL` | `CROSS_ACCOUNT_TRUST` | `RESOURCE_SHARE` |
+
+#### GCP parity: ATTACHED_TO
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `ELASTIC_IP` | `none` | `LOAD_BALANCER` |
+| `VPN_CONNECTION` | `TRANSIT_ROUTED` | `CUSTOMER_GATEWAY` |
+| `VPN_CONNECTION` | `TRANSIT_ROUTED` | `VPN_GATEWAY` |
+
+#### GCP parity: CONTAINS
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `AKS_CLUSTER` | `CLUSTER_CONTAINS_SERVICE` | `CLUSTER_ADDON` |
+| `AKS_CLUSTER` | `CLUSTER_CONTAINS_SERVICE` | `DEPLOYMENT_GROUP` |
+| `AKS_CLUSTER` | `CLUSTER_CONTAINS_SERVICE` | `K8S_NAMESPACE` |
+| `API_GATEWAY` | `none` | `API_GATEWAY` |
+| `API_GATEWAY` | `none` | `AUTHORIZER` |
+| `API_GATEWAY` | `none` | `PARAMETER` |
+| `API_GATEWAY` | `none` | `PRODUCT_PORTFOLIO` |
+| `API_GATEWAY` | `none` | `TARGET_GROUP` |
+| `AZURE_SQL` | `none` | `AZURE_SQL` |
+| `BACKUP_VAULT` | `none` | `BACKUP_PLAN` |
+| `BATCH_ENVIRONMENT` | `none` | `BATCH_ENVIRONMENT` |
+| `BLOB_STORAGE` | `none` | `EVENT_RULE` |
+| `BLOB_STORAGE` | `none` | `IDENTITY_USER` |
+| `CDN` | `none` | `CDN` |
+| `CDN` | `none` | `CERTIFICATE` |
+| `CDN` | `none` | `LB_LISTENER` |
+| `CDN` | `none` | `TARGET_GROUP` |
+| `CLOUD_ACCOUNT` | `ACCOUNT_CONTAINS_REGION` | `RESOURCE_GROUP` |
+| `CLOUD_ACCOUNT` | `none` | `GUARDRAIL` |
+| `CLOUD_ACCOUNT` | `none` | `LOG_SINK` |
+| `CLOUD_ACCOUNT` | `none` | `ORG_POLICY` |
+| `CLOUD_ACCOUNT` | `none` | `RESOURCE_SHARE` |
+| `CLOUD_FUNCTION` | `CLUSTER_CONTAINS_SERVICE` | `CLOUD_FUNCTION` |
+| `CLOUD_FUNCTION` | `none` | `SCHEDULE` |
+| `CONTAINER_REGISTRY` | `none` | `ACCESS_KEY` |
+| `CONTAINER_REGISTRY` | `none` | `BUILD_PROJECT` |
+| `CONTAINER_REGISTRY` | `none` | `CONTAINER_REGISTRY` |
+| `CONTAINER_REGISTRY` | `none` | `EVENT_RULE` |
+| `CONTAINER_REGISTRY` | `none` | `IAM_POLICY` |
+| `DATA_STREAM` | `none` | `DATA_STREAM` |
+| `DATA_WAREHOUSE` | `none` | `DATA_CATALOG` |
+| `DATA_WAREHOUSE` | `none` | `DATA_WAREHOUSE` |
+| `DATA_WAREHOUSE` | `none` | `ETL_JOB` |
+| `DATA_WAREHOUSE` | `none` | `SOURCE_CONNECTION` |
+| `DEPLOYMENT_GROUP` | `none` | `DEPLOYMENT_GROUP` |
+| `DNS_RESOLVER` | `none` | `DNS_RESOLVER` |
+| `DNS_ZONE` | `none` | `DNS_RECORD` |
+| `DYNAMODB_TABLE` | `none` | `DYNAMODB_TABLE` |
+| `ECS_CLUSTER` | `CLUSTER_CONTAINS_SERVICE` | `CONTAINER_SERVICE` |
+| `ETL_JOB` | `none` | `BATCH_ENVIRONMENT` |
+| `ETL_JOB` | `none` | `DATA_CATALOG` |
+| `ETL_JOB` | `none` | `ETL_JOB` |
+| `ETL_JOB` | `none` | `SCHEDULE` |
+| `ETL_JOB` | `none` | `SOURCE_CONNECTION` |
+| `IDENTITY_GROUP` | `none` | `IDENTITY_USER` |
+| `IDENTITY_GROUP` | `none` | `SERVICE_PRINCIPAL` |
+| `K8S_NAMESPACE` | `CLUSTER_CONTAINS_SERVICE` | `K8S_SERVICE` |
+| `K8S_NAMESPACE` | `CLUSTER_CONTAINS_SERVICE` | `K8S_SERVICE_ACCOUNT` |
+| `K8S_NAMESPACE` | `CLUSTER_CONTAINS_SERVICE` | `K8S_WORKLOAD` |
+| `KEY_VAULT` | `none` | `GUARDRAIL` |
+| `KEY_VAULT` | `none` | `KMS_KEY` |
+| `KEY_VAULT` | `none` | `LOG_SINK` |
+| `KEY_VAULT` | `none` | `SECRET` |
+| `LOAD_BALANCER` | `none` | `LB_LISTENER` |
+| `LOG_GROUP` | `none` | `ALARM` |
+| `LOG_GROUP` | `none` | `EVENT_RULE` |
+| `LOG_GROUP` | `none` | `LOG_SINK` |
+| `LOG_GROUP` | `none` | `THREAT_DETECTOR` |
+| `MESSAGE_QUEUE` | `none` | `MESSAGE_QUEUE` |
+| `MESSAGE_QUEUE` | `none` | `NOTIFICATION_TOPIC` |
+| `ML_ENDPOINT` | `CLUSTER_CONTAINS_SERVICE` | `ML_MODEL` |
+| `ML_ENDPOINT` | `none` | `AI_GUARDRAIL` |
+| `ML_ENDPOINT` | `none` | `LOG_SINK` |
+| `ML_ENDPOINT` | `none` | `ML_MODEL` |
+| `ML_WORKSPACE` | `none` | `BATCH_ENVIRONMENT` |
+| `ML_WORKSPACE` | `none` | `ML_ENDPOINT` |
+| `ML_WORKSPACE` | `none` | `ML_WORKSPACE` |
+| `ML_WORKSPACE` | `none` | `SOURCE_CONNECTION` |
+| `NACL` | `none` | `NACL` |
+| `NODE_GROUP` | `CLUSTER_CONTAINS_SERVICE` | `VIRTUAL_MACHINE` |
+| `NOTIFICATION_TOPIC` | `none` | `EVENT_RULE` |
+| `NOTIFICATION_TOPIC` | `none` | `MESSAGE_QUEUE` |
+| `PARAMETER` | `none` | `PARAMETER` |
+| `PLACEMENT_GROUP` | `none` | `PLACEMENT_GROUP` |
+| `PLACEMENT_GROUP` | `none` | `VIRTUAL_MACHINE` |
+| `PREFIX_LIST` | `none` | `ELASTIC_IP` |
+| `PRODUCT_PORTFOLIO` | `none` | `DEPLOYMENT_GROUP` |
+| `PRODUCT_PORTFOLIO` | `none` | `PRODUCT_PORTFOLIO` |
+| `PRODUCT_PORTFOLIO` | `none` | `SOURCE_CONNECTION` |
+| `RESOURCE_GROUP` | `none` | `AKS_CLUSTER` |
+| `RESOURCE_GROUP` | `none` | `BACKUP_VAULT` |
+| `RESOURCE_GROUP` | `none` | `BLOB_STORAGE` |
+| `RESOURCE_GROUP` | `none` | `CONTAINER_REGISTRY` |
+| `RESOURCE_GROUP` | `none` | `GUARDRAIL` |
+| `RESOURCE_GROUP` | `none` | `KEY_VAULT` |
+| `RESOURCE_GROUP` | `none` | `LOG_GROUP` |
+| `RESOURCE_GROUP` | `none` | `LOG_SINK` |
+| `RESOURCE_GROUP` | `none` | `SCHEDULE` |
+| `RESOURCE_GROUP` | `none` | `SERVICE_NETWORK` |
+| `RESOURCE_GROUP` | `none` | `VIRTUAL_MACHINE` |
+| `RESOURCE_GROUP` | `none` | `VNET` |
+| `SCHEDULE` | `none` | `NODE_GROUP` |
+| `SCHEDULE` | `none` | `RUNBOOK` |
+| `SCHEDULE` | `none` | `SCHEDULE` |
+| `SEARCH_DOMAIN` | `none` | `ETL_JOB` |
+| `SEARCH_DOMAIN` | `none` | `KNOWLEDGE_BASE` |
+| `SEARCH_DOMAIN` | `none` | `SOURCE_CONNECTION` |
+| `SERVICE_NETWORK` | `none` | `CUSTOMER_GATEWAY` |
+| `SERVICE_NETWORK` | `none` | `NACL` |
+| `SERVICE_NETWORK` | `none` | `SERVICE_NETWORK` |
+| `SERVICE_NETWORK` | `none` | `TRANSIT_GATEWAY` |
+| `SERVICE_NETWORK` | `none` | `VNET` |
+| `SERVICE_PRINCIPAL` | `none` | `IDENTITY_PROVIDER` |
+| `STATE_MACHINE` | `none` | `SCHEDULE` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `AZURE_SQL` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `BATCH_ENVIRONMENT` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `BIG_DATA_CLUSTER` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `DATA_WAREHOUSE` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `DNS_RESOLVER` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `FILE_SYSTEM` |
+| `SUBNET` | `SUBNET_CONTAINS_INSTANCE` | `NETWORK_INTERFACE` |
+| `TARGET_GROUP` | `none` | `TARGET_GROUP` |
+| `TRANSIT_GATEWAY` | `none` | `DIRECT_CONNECT` |
+| `TRANSIT_GATEWAY` | `none` | `NETWORK_FIREWALL` |
+| `TRANSIT_GATEWAY` | `none` | `NETWORK_INTERFACE` |
+| `TRANSIT_GATEWAY` | `none` | `PEERING_CONNECTION` |
+| `TRANSIT_GATEWAY` | `none` | `ROUTE_TABLE` |
+| `TRANSIT_GATEWAY` | `none` | `VPN_GATEWAY` |
+| `VIRTUAL_MACHINE` | `none` | `GUARDRAIL` |
+| `VIRTUAL_MACHINE` | `none` | `OTHER` |
+| `VNET` | `VPC_CONTAINS_SUBNET` | `SUBNET` |
+
+#### GCP parity: GOVERNS
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `GUARDRAIL` | `COMPLIANCE_GOVERNS` | `CLOUD_ACCOUNT` |
+| `GUARDRAIL` | `COMPLIANCE_GOVERNS` | `RESOURCE_GROUP` |
+| `GUARDRAIL` | `FINDING_AFFECTS` | `VIRTUAL_MACHINE` |
+| `GUARDRAIL` | `POLICY_DENIES_ACTION` | `KEY_VAULT` |
+| `ORG_POLICY` | `SCP_RESTRICTS` | `CLOUD_ACCOUNT` |
+| `SERVICE_NETWORK` | `COMPLIANCE_GOVERNS` | `CLOUD_ACCOUNT` |
+
+#### GCP parity: GRANTS_ACCESS
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `ACCESS_KEY` | `POLICY_ALLOWS_ACTION` | `CONTAINER_REGISTRY` |
+| `BACKUP_VAULT` | `POLICY_ALLOWS_ACTION` | `AKS_CLUSTER` |
+| `CLOUD_ACCOUNT` | `CROSS_ACCOUNT_TRUST` | `MACHINE_IMAGE` |
+| `CLOUD_ACCOUNT` | `POLICY_ALLOWS_ACTION` | `ENDPOINT_SERVICE` |
+| `IDENTITY_GROUP` | `POLICY_ALLOWS_ACTION` | `AKS_CLUSTER` |
+| `IDENTITY_GROUP` | `POLICY_ALLOWS_ACTION` | `DATA_WAREHOUSE` |
+| `IDENTITY_GROUP` | `POLICY_ALLOWS_ACTION` | `ORGANIZATION` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `AZURE_SQL` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `BLOB_STORAGE` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `CLOUD_ACCOUNT` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `DEPLOYMENT_GROUP` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `DYNAMODB_TABLE` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `KEY_VAULT` |
+| `IDENTITY_USER` | `POLICY_ALLOWS_ACTION` | `ORGANIZATION` |
+| `RESOURCE_SHARE` | `CROSS_ACCOUNT_TRUST` | `CLOUD_ACCOUNT` |
+| `SERVICE_PRINCIPAL` | `CROSS_ACCOUNT_TRUST` | `PRODUCT_PORTFOLIO` |
+| `SERVICE_PRINCIPAL` | `CROSS_ACCOUNT_TRUST` | `PROVISIONED_PRODUCT` |
+| `SERVICE_PRINCIPAL` | `POLICY_ALLOWS_ACTION` | `BLOB_STORAGE` |
+| `SERVICE_PRINCIPAL` | `POLICY_ALLOWS_ACTION` | `SERVICE_PRINCIPAL` |
+| `SUBNET` | `POLICY_ALLOWS_ACTION` | `APP_SERVICE` |
+
+#### GCP parity: IAM_POLICY_ATTACHMENT
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `IDENTITY_GROUP` | `GROUP_HAS_POLICY` | `IAM_POLICY` |
+| `IDENTITY_USER` | `USER_HAS_POLICY` | `IAM_POLICY` |
+| `SERVICE_PRINCIPAL` | `ROLE_HAS_POLICY` | `IAM_POLICY` |
+
+#### GCP parity: IAM_TRUST
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `AKS_CLUSTER` | `ROLE_ASSUMES_ROLE` | `SERVICE_PRINCIPAL` |
+| `IDENTITY_PROVIDER` | `CROSS_ACCOUNT_TRUST` | `SERVICE_PRINCIPAL` |
+| `IDENTITY_PROVIDER` | `ROLE_ASSUMES_ROLE` | `SERVICE_PRINCIPAL` |
+
+#### GCP parity: INVOKES
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `ALARM` | `INVOKES` | `NOTIFICATION_TOPIC` |
+| `BLOB_STORAGE` | `INVOKES` | `CLOUD_FUNCTION` |
+| `ETL_JOB` | `INVOKES` | `CLOUD_FUNCTION` |
+| `EVENT_RULE` | `INVOKES` | `CLOUD_FUNCTION` |
+| `EVENT_RULE` | `INVOKES` | `STATE_MACHINE` |
+| `KEY_VAULT` | `ROTATES_SECRET` | `CLOUD_FUNCTION` |
+| `KEY_VAULT` | `TRIGGERED_BY` | `NOTIFICATION_TOPIC` |
+| `KNOWLEDGE_BASE` | `INVOKES` | `ML_ENDPOINT` |
+| `MESSAGE_QUEUE` | `TRIGGERED_BY` | `CLOUD_FUNCTION` |
+| `NOTIFICATION_TOPIC` | `INVOKES` | `CLOUD_FUNCTION` |
+| `NOTIFICATION_TOPIC` | `STREAMS_TO` | `DATA_STREAM` |
+| `STATE_MACHINE` | `INVOKES` | `CLOUD_FUNCTION` |
+| `STATE_MACHINE` | `INVOKES` | `SOURCE_CONNECTION` |
+
+#### GCP parity: LOAD_BALANCER_TARGET
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `API_GATEWAY` | `SERVES_TRAFFIC_TO` | `CLOUD_FUNCTION` |
+| `API_GATEWAY` | `SERVES_TRAFFIC_TO` | `TARGET_GROUP` |
+| `APP_SERVICE` | `SERVES_TRAFFIC_TO` | `CLOUD_FUNCTION` |
+| `CDN` | `SERVES_TRAFFIC_TO` | `TARGET_GROUP` |
+| `EDGE_FUNCTION` | `SERVES_TRAFFIC_TO` | `TARGET_GROUP` |
+| `K8S_SERVICE` | `SERVES_TRAFFIC_TO` | `K8S_WORKLOAD` |
+| `LB_LISTENER` | `SERVES_TRAFFIC_TO` | `APP_SERVICE` |
+| `LB_LISTENER` | `SERVES_TRAFFIC_TO` | `TARGET_GROUP` |
+| `LOAD_BALANCER` | `SERVES_TRAFFIC_TO` | `APP_SERVICE` |
+| `TARGET_GROUP` | `SERVES_TRAFFIC_TO` | `APP_SERVICE` |
+| `TARGET_GROUP` | `SERVES_TRAFFIC_TO` | `CLOUD_FUNCTION` |
+
+#### GCP parity: LOGS_TO
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `AZURE_SQL` | `LOGS_TO` | `BLOB_STORAGE` |
+| `DATA_STREAM` | `STREAMS_TO` | `BLOB_STORAGE` |
+| `EVENT_RULE` | `STREAMS_TO` | `DATA_STREAM` |
+| `KEY_VAULT` | `LOGS_TO` | `LOG_GROUP` |
+| `KEY_VAULT` | `STREAMS_TO` | `DATA_STREAM` |
+| `LOG_SINK` | `LOGS_TO` | `BLOB_STORAGE` |
+| `LOG_SINK` | `LOGS_TO` | `LOG_GROUP` |
+| `LOG_SINK` | `STREAMS_TO` | `DATA_STREAM` |
+| `ML_ENDPOINT` | `LOGS_TO` | `BLOB_STORAGE` |
+| `OTHER` | `LOGS_TO` | `LOG_GROUP` |
+| `VIRTUAL_MACHINE` | `LOGS_TO` | `LOG_SINK` |
+
+#### GCP parity: MANAGES
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `APP_REGISTRATION` | `OWNED_BY` | `SERVICE_PRINCIPAL` |
+| `BACKUP_PLAN` | `BACKUP_TO` | `VIRTUAL_MACHINE` |
+| `BACKUP_PLAN` | `SCHEDULED_BY` | `FILE_SYSTEM` |
+| `BACKUP_VAULT` | `REPLICATES_TO` | `VIRTUAL_MACHINE` |
+| `DATA_CATALOG` | `OWNED_BY` | `BLOB_STORAGE` |
+| `DEPLOYMENT_GROUP` | `OWNED_BY` | `AKS_CLUSTER` |
+| `DEPLOYMENT_GROUP` | `OWNED_BY` | `CLOUD_ACCOUNT` |
+| `IAC_STACK` | `OWNED_BY` | `VIRTUAL_MACHINE` |
+| `IDENTITY_USER` | `OWNED_BY` | `APP_REGISTRATION` |
+| `IDENTITY_USER` | `OWNED_BY` | `SERVICE_PRINCIPAL` |
+| `SCHEDULE` | `SCHEDULED_BY` | `CLOUD_FUNCTION` |
+| `SCHEDULE` | `SCHEDULED_BY` | `ETL_JOB` |
+| `SCHEDULE` | `SCHEDULED_BY` | `RUNBOOK` |
+| `SCHEDULE` | `SCHEDULED_BY` | `STATE_MACHINE` |
+| `SCHEDULE` | `SCHEDULED_BY` | `VIRTUAL_MACHINE` |
+
+#### GCP parity: MONITORS
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `ALARM` | `MONITORED_BY` | `CLOUD_ACCOUNT` |
+| `ALARM` | `MONITORED_BY` | `CLOUD_FUNCTION` |
+| `ALARM` | `MONITORED_BY` | `LOG_GROUP` |
+| `ALARM` | `MONITORED_BY` | `VIRTUAL_MACHINE` |
+| `LOG_SINK` | `MONITORED_BY` | `CLOUD_ACCOUNT` |
+| `LOG_SINK` | `MONITORED_BY` | `VIRTUAL_MACHINE` |
+| `SECURITY_HUB` | `FINDING_AFFECTS` | `CONTAINER_REGISTRY` |
+| `SECURITY_HUB` | `FINDING_AFFECTS` | `VIRTUAL_MACHINE` |
+| `SECURITY_HUB` | `MONITORED_BY` | `BLOB_STORAGE` |
+| `SECURITY_HUB` | `MONITORED_BY` | `CLOUD_ACCOUNT` |
+| `THREAT_DETECTOR` | `FINDING_AFFECTS` | `VIRTUAL_MACHINE` |
+| `THREAT_DETECTOR` | `MONITORED_BY` | `BLOB_STORAGE` |
+| `THREAT_DETECTOR` | `MONITORED_BY` | `CLOUD_ACCOUNT` |
+| `THREAT_DETECTOR` | `MONITORED_BY` | `VIRTUAL_MACHINE` |
+
+#### GCP parity: PROTECTS
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `AI_GUARDRAIL` | `none` | `ML_MODEL` |
+| `NACL` | `PROTECTED_BY_NACL` | `SERVICE_NETWORK` |
+| `WAF_WEB_ACL` | `PROTECTED_BY_WAF` | `CDN` |
+| `WAF_WEB_ACL` | `PROTECTED_BY_WAF` | `LB_LISTENER` |
+| `WAF_WEB_ACL` | `PROTECTED_BY_WAF` | `LOAD_BALANCER` |
+
+#### GCP parity: REFERENCES
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `ACCESS_KEY` | `DEPENDS_ON` | `IAM_POLICY` |
+| `API_GATEWAY` | `DEPENDS_ON` | `AUTHORIZER` |
+| `APP_SERVICE` | `READS_FROM` | `SOURCE_CONNECTION` |
+| `AZURE_SQL` | `REPLICATES_TO` | `AZURE_SQL` |
+| `BACKUP_PLAN` | `BACKUP_TO` | `BACKUP_VAULT` |
+| `BIG_DATA_CLUSTER` | `READS_FROM` | `BLOB_STORAGE` |
+| `BLOB_STORAGE` | `BACKUP_TO` | `BACKUP_VAULT` |
+| `BLOB_STORAGE` | `REPLICATES_TO` | `BLOB_STORAGE` |
+| `BUILD_PROJECT` | `READS_FROM` | `SOURCE_CONNECTION` |
+| `BUILD_PROJECT` | `WRITES_TO` | `CONTAINER_REGISTRY` |
+| `CERTIFICATE` | `CERTIFICATE_SECURES` | `CUSTOM_DOMAIN` |
+| `CERTIFICATE` | `CERTIFICATE_SECURES` | `KEY_VAULT` |
+| `CLOUD_FUNCTION` | `WRITES_TO` | `DATA_STREAM` |
+| `CONTAINER_REGISTRY` | `REPLICATES_TO` | `CONTAINER_REGISTRY` |
+| `DATA_CATALOG` | `DEPENDS_ON` | `SOURCE_CONNECTION` |
+| `DATA_WAREHOUSE` | `READS_FROM` | `BLOB_STORAGE` |
+| `DATA_WAREHOUSE` | `READS_FROM` | `DATA_STREAM` |
+| `DEPLOYMENT_GROUP` | `READS_FROM` | `SOURCE_CONNECTION` |
+| `DNS_RESOLVER` | `DEPENDS_ON` | `DNS_RESOLVER` |
+| `DNS_RESOLVER` | `DNS_RESOLVED` | `VNET` |
+| `DYNAMODB_TABLE` | `REPLICATES_TO` | `DYNAMODB_TABLE` |
+| `ENDPOINT_SERVICE` | `DEPENDS_ON` | `LOG_GROUP` |
+| `ETL_JOB` | `DEPENDS_ON` | `ETL_JOB` |
+| `ETL_JOB` | `READS_FROM` | `DATA_CATALOG` |
+| `ETL_JOB` | `READS_FROM` | `DATA_STREAM` |
+| `ETL_JOB` | `READS_FROM` | `SOURCE_CONNECTION` |
+| `ETL_JOB` | `WRITES_TO` | `AZURE_SQL` |
+| `ETL_JOB` | `WRITES_TO` | `DATA_CATALOG` |
+| `ETL_JOB` | `WRITES_TO` | `KNOWLEDGE_BASE` |
+| `FILE_SYSTEM` | `BACKUP_TO` | `BACKUP_VAULT` |
+| `FILE_SYSTEM` | `REPLICATES_TO` | `FILE_SYSTEM` |
+| `GUARDRAIL` | `DEPENDS_ON` | `GUARDRAIL` |
+| `GUARDRAIL` | `DEPENDS_ON` | `ORG_POLICY` |
+| `IAC_STACK` | `DEPENDS_ON` | `PRODUCT_PORTFOLIO` |
+| `IAM_POLICY` | `none` | `CLOUD_ACCOUNT` |
+| `IDENTITY_USER` | `PERMISSION_BOUNDARY_LIMITS` | `GUARDRAIL` |
+| `K8S_WORKLOAD` | `RUNS_ON` | `K8S_SERVICE_ACCOUNT` |
+| `LB_LISTENER` | `CERTIFICATE_SECURES` | `KEY_VAULT` |
+| `LOAD_BALANCER` | `CERTIFICATE_SECURES` | `KEY_VAULT` |
+| `MACHINE_IMAGE` | `DEPENDS_ON` | `VIRTUAL_MACHINE` |
+| `MESSAGE_QUEUE` | `WRITES_TO` | `MESSAGE_QUEUE` |
+| `ML_WORKSPACE` | `READS_FROM` | `BLOB_STORAGE` |
+| `NETWORK_FIREWALL` | `DEPENDS_ON` | `PREFIX_LIST` |
+| `ORG_POLICY` | `DEPENDS_ON` | `ORG_POLICY` |
+| `OTHER` | `DEPENDS_ON` | `LOG_GROUP` |
+| `PARAMETER` | `READS_FROM` | `KEY_VAULT` |
+| `PARAMETER` | `REPLICATES_TO` | `PARAMETER` |
+| `PRODUCT_PORTFOLIO` | `DEPENDS_ON` | `API_GATEWAY` |
+| `PROVISIONED_PRODUCT` | `DEPENDS_ON` | `PRODUCT_PORTFOLIO` |
+| `RUNBOOK` | `RUNS_ON` | `NODE_GROUP` |
+| `SEARCH_DOMAIN` | `DEPENDS_ON` | `BLOB_STORAGE` |
+| `SOURCE_CONNECTION` | `DEPENDS_ON` | `AZURE_SQL` |
+| `SOURCE_CONNECTION` | `DEPENDS_ON` | `BLOB_STORAGE` |
+| `SOURCE_CONNECTION` | `DEPENDS_ON` | `MESSAGE_QUEUE` |
+| `SOURCE_CONNECTION` | `READS_FROM` | `BLOB_STORAGE` |
+| `SOURCE_CONNECTION` | `READS_FROM` | `SOURCE_CONNECTION` |
+| `SOURCE_CONNECTION` | `RUNS_ON` | `BATCH_ENVIRONMENT` |
+| `STATE_MACHINE` | `DEPENDS_ON` | `SOURCE_CONNECTION` |
+| `THREAT_DETECTOR` | `DEPENDS_ON` | `LOG_GROUP` |
+| `VIRTUAL_MACHINE` | `BACKUP_TO` | `BACKUP_VAULT` |
+| `VIRTUAL_MACHINE` | `REPLICATES_TO` | `VIRTUAL_MACHINE` |
+| `VPC_ENDPOINT` | `DEPENDS_ON` | `BLOB_STORAGE` |
+
+#### GCP parity: ROUTE
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `DIRECT_CONNECT` | `TRANSIT_ROUTED` | `DIRECT_CONNECT` |
+| `DNS_RECORD` | `DNS_RESOLVED` | `API_GATEWAY` |
+| `DNS_RECORD` | `DNS_RESOLVED` | `ELASTIC_IP` |
+| `DNS_RECORD` | `DNS_RESOLVED` | `VPC_ENDPOINT` |
+| `DNS_RESOLVER` | `DNS_RESOLVED` | `DNS_RESOLVER` |
+| `ELASTIC_IP` | `LOAD_BALANCED_BY` | `K8S_SERVICE` |
+| `PEERING_CONNECTION` | `TRANSIT_ROUTED` | `NETWORK_INTERFACE` |
+| `PEERING_CONNECTION` | `TRANSIT_ROUTED` | `VNET` |
+| `ROUTE_TABLE` | `TRANSIT_ROUTED` | `NETWORK_FIREWALL` |
+| `SERVICE_NETWORK` | `TRANSIT_ROUTED` | `SERVICE_NETWORK` |
+| `SERVICE_NETWORK` | `TRANSIT_ROUTED` | `VNET` |
+| `TRANSIT_GATEWAY` | `TRANSIT_ROUTED` | `NETWORK_FIREWALL` |
+| `TRANSIT_GATEWAY` | `TRANSIT_ROUTED` | `VNET` |
+| `VPN_GATEWAY` | `TRANSIT_ROUTED` | `CUSTOMER_GATEWAY` |
+
+#### GCP parity: USES_IMAGE
+
+| Source type | Relationship | Target type |
+|---|---|---|
+| `APP_SERVICE` | `RUNS_ON` | `CONTAINER_REGISTRY` |
+| `K8S_WORKLOAD` | `RUNS_ON` | `CONTAINER_REGISTRY` |
+
+New data sources behind these edges (API-backed, see INVENTORY_INTERNALS.md 9.6): Cloud DNS
+record sets, Security Command Center, Cloud Identity groups, IAM deny and Principal Access
+Boundary policies, PAM entitlements, predefined role permissions, Data Access audit configs,
+Cloud Monitoring, OS Config, Artifact Analysis, Backup and DR, Firestore backups, Cloud
+Scheduler, Apigee, Infrastructure Manager, Deployment Manager and the IAM recommender. Their
+`gcp.*` configuration keys are listed in INVENTORY_INTERNALS.md 9.9.
+<!-- end GCP parity -->
 
 ## Relationship vocabulary
 
