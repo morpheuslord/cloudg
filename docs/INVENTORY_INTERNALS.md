@@ -888,6 +888,248 @@ resources; others become `entra:principal/<id>` placeholders. An AKS kubelet ide
 Defender for Cloud: one `THREAT_DETECTOR` per plan, `security_service: "defender-<plan>"`,
 `enabled` when the tier is Standard, `MONITORS` the subscription when enabled.
 
+<!-- Azure parity -->
+### 8.4 Depth beyond the breadth query
+
+The `resources` query gives breadth. Depth comes from four more sources, each split into named
+tasks the way the AWS deep collector splits its work. Every task writes one `ServiceCoverage`
+record to `AzureDeepInventoryCollector.coverage`, and a failing task never stops the others.
+
+```mermaid
+flowchart LR
+    ARG[Resource Graph: resources] --> B[AzureAssetBuilder]
+    T[Resource Graph tables: policy, security, backup, ...] --> B
+    R[ARM REST: child resources and subscription listings] --> B
+    D[Data planes: AI Search, Synapse] --> B
+    K[Kubernetes API of AKS clusters] --> B
+    B --> A[CloudAssets with declared relations]
+    G[Microsoft Graph: Entra ID, once per tenant] --> M[InventoryMapper]
+    A --> M
+    M --> L[RelationshipLinker]
+```
+
+| Source | Module | Tasks |
+|---|---|---|
+| More Resource Graph tables | `azure_graph/tables.py` | `management_group_role_assignments`, `role_definitions`, `policy`, `policy_states`, `backup_items`, `kubernetes_configuration`, `network_resources`, `guest_configuration`, `maintenance`, `insights`, `security_assessments`, `secure_score`, `security_alerts` |
+| ARM REST | `azure_graph/children.py` | `deny_assignments`, `pim_eligibility`, `lighthouse`, `locks`, `deployments`, `deployment_stacks`, `activity_log`, `managed_identity_credentials`, `key_vault_items`, `apim`, `functions`, `web_apps`, `static_sites`, `service_bus`, `event_hubs`, `stream_analytics`, `data_factory`, `synapse`, `kusto`, `sql`, `cosmos`, `storage`, `dns_records`, `dns_resolver`, `virtual_wan`, `network_manager`, `front_door`, `acr`, `aks`, `cognitive_services`, `machine_learning`, `search`, `automation`, `app_configuration`, `monitor_private_link`, `batch`, `spring_apps`, `data_protection`, `dev_center`, `diagnostic_settings`, `sentinel` |
+| Data planes | `azure_graph/dataplane.py` | `search_data_plane`, `synapse_data_plane` |
+| Kubernetes API | `inventory/azure_kubernetes.py` | `aks_kubernetes`, recorded per cluster as `kubernetes:<cluster name>` |
+| Microsoft Graph | `inventory/azure_entra.py` | `entra`, recorded per listing as `entra_users`, `entra_groups`, ... (see 8.8) |
+
+The Resource Graph tasks run only on the Resource Graph path. On the SDK fallback they are
+recorded `SKIPPED` with "Resource Graph unavailable", and the REST, data-plane and Kubernetes
+tasks still run.
+
+Coverage status of a task:
+
+- `SUCCESS`: every call answered. A 404, 400, 405 or 409 counts as "this parent has none of
+  these" (for example gateways on a Consumption APIM), not as a failure.
+- `PARTIAL`: some calls were refused (403) or failed, the others returned data.
+- `FAILED`: every call failed, or the Resource Graph query raised.
+- `SKIPPED`: not selected by `inventory.services`, turned off in configuration, or the credential
+  could not issue a token for the audience the task needs.
+
+`azure_full` becomes `PARTIAL` when any task record is `FAILED` or `PARTIAL`, the same rule
+`aws_full` follows.
+
+#### Service filtering
+
+`inventory.services` and `inventory.exclude_services` (and `--services` / `--exclude-services`)
+apply to Azure as well. `families.select_azure_tasks()` mirrors `aws_deep_tasks.select_tasks()`:
+a name matches a task or its family, `exclude` wins, and `kubernetes` is a pseudo-family that only
+toggles in-cluster AKS mapping (selected with `containers` too). The families are the AWS names:
+`compute`, `network`, `storage`, `data`, `analytics`, `ml`, `identity`, `containers`, `serverless`,
+`integration`, `security`, `logging`, `operations`, `dns`, `hybrid`, `iac`, `governance`, `backup`,
+`cicd`, `kubernetes`, `sweep`.
+
+`resources` and `resource_containers` always run. With a filter set, the breadth rows are kept
+only for the selected families (`family_of_type()` maps ARM namespaces and a few full types),
+while resource groups and the subscription always stay. `--services network` therefore maps the
+VNets, gateways and load balancers of a subscription and nothing else.
+
+#### Options and configuration keys
+
+```python
+import asyncio
+
+from cloudg.credentials import build_azure_credential
+from cloudg.config import AzureConfig
+from cloudg.inventory.azure_deep import AzureDeepInventoryCollector
+
+credential = build_azure_credential(AzureConfig())
+collector = AzureDeepInventoryCollector(
+    credential,
+    "00000000-0000-0000-0000-000000000000",
+    services=["network", "dns"],
+    exclude_services=["front_door"],
+    max_child_parents=200,
+)
+assets = asyncio.run(collector.collect())
+for record in collector.coverage.services:
+    print(record.service, record.status.value, record.asset_count, record.error or "")
+```
+
+The keyword options are the fields of `AzureDeepOptions`; an unknown one raises `TypeError`.
+`InventoryMapper` builds them from these keys:
+
+| Key | Default | Effect |
+|---|---|---|
+| `inventory.services` / `inventory.exclude_services` | `["all"]` / `[]` | Task and family filter (above). |
+| `inventory.kubernetes`, `inventory.kubernetes_timeout` | `true`, `10` | In-cluster AKS mapping and its API timeout. |
+| `azure.child_resources` | `true` | ARM REST child resources and subscription listings. |
+| `azure.max_child_parents` | `500` | Most parents queried per child kind (APIs per APIM service, ...). |
+| `azure.diagnostic_settings` | `true` | Read diagnostic settings of the logged resource types (`children.DIAGNOSTIC_TYPES`). |
+| `azure.max_diagnostic_settings` | `1000` | Most resources whose diagnostic settings are read. |
+| `azure.data_plane` | `true` | AI Search and Synapse data-plane reads. |
+| `azure.rest_concurrency` | `8` | Concurrent ARM REST calls per subscription. |
+| `azure.map_entra` | `true` | Map Entra ID through Microsoft Graph (the opt-out). |
+| `azure.entra_max_objects` | `10000` | Most objects per Graph listing. |
+| `azure.entra_max_expansions` | `1000` | Most groups / apps / service principals expanded one by one. |
+
+### 8.5 More Resource Graph tables
+
+`tables.collect_tables()` runs after the four original queries. ARM-shaped rows go through
+`add_rows()`, so they meet the extractors registered for their type; the aggregate tables have
+handlers instead, because one asset per row would flood the map.
+
+| Task | Table and types | What it adds |
+|---|---|---|
+| `management_group_role_assignments` | `authorizationresources`, scope a management group or `/`, run tenant-wide | Assignments on the subscription's ancestor groups (from `managementGroupAncestorsChain`) as `GRANTS_ACCESS` grants with `inherited_from: "management group"`. Assignments on other groups are dropped, and so are all group assignments when the chain is unknown. |
+| `role_definitions` | `authorizationresources` role definitions, tenant-wide | `IAM_POLICY` per assigned role and per custom role assignable here, with `actions`, `data_actions`, `privileged`; each principal holding it gets `IAM_POLICY_ATTACHMENT` with `USER_HAS_POLICY`, `GROUP_HAS_POLICY` or `ROLE_HAS_POLICY`. |
+| `policy` | `policyresources` assignments and exemptions, then the definitions they use | `GUARDRAIL` assignments and exemptions (same shape and ID as the tenant hierarchy builds), `ORG_POLICY` definitions and initiatives. A definition whose effective effect is `deny` or `denyAction`, assigned with enforcement on, `GOVERNS / SCP_RESTRICTS` the assignment scope. The effect is resolved through the assignment parameters, then the definition defaults; an initiative restricts when any member does. |
+| `policy_states` | `policyresources` non-compliant `policystates` | Assignment `GOVERNS / FINDING_AFFECTS` each non-compliant resource (500 per assignment), and `non_compliant_resources` on the assignment. |
+| `security_assessments` | `securityresources` assessments and sub-assessments | One `SECURITY_HUB` asset, `cloudg:azure:defender-cspm:<sub>`, `MONITORS` each assessed resource: `FINDING_AFFECTS` with `unhealthy`, `high`, `titles`, `vulnerabilities` and image names when something is unhealthy, `MONITORED_BY` otherwise. |
+| `secure_score` | `securityresources` secure score and controls | `secure_score` and the 30 worst `secure_score_controls` on the same asset. |
+| `security_alerts` | `securityresources` active alerts | `THREAT_DETECTOR` `cloudg:azure:defender-alerts:<sub>` `MONITORS / FINDING_AFFECTS` each resource an alert names. |
+| `backup_items` | `recoveryservicesresources` | Protected items and backup instances: resource `BACKUP_TO` vault, policy (or vault) `MANAGES / BACKUP_TO` resource. Site Recovery items: source `REPLICATES_TO` recovery VM, network or resource group. Backup policies as `BACKUP_PLAN`. |
+| `kubernetes_configuration` | `kubernetesconfigurationresources` | Cluster extensions (`CLUSTER_ADDON`) and Flux configurations (`DEPLOYMENT_GROUP`) contained by their cluster; Flux `READS_FROM` its Git repository and `MANAGES` the cluster. |
+| `network_resources` | `networkresources` | Virtual Network Manager rows (see the REST task `network_manager`). |
+| `guest_configuration` | `guestconfigurationresources` | `GUARDRAIL` per assignment, `GOVERNS` the machine (`FINDING_AFFECTS` when non-compliant). |
+| `maintenance` | `maintenanceresources` assignments | Maintenance configuration `MANAGES / SCHEDULED_BY` the resource. |
+| `insights` | `insightsresources` data collection rule associations | Resource `LOGS_TO` the rule, rule `MONITORS` the resource. |
+
+Defender plans gained two things in the builder. An enabled plan now also `MONITORS / MONITORED_BY`
+every resource of the types it covers (`security.PLAN_RESOURCE_TYPES`), except resources whose own
+resource-level pricing is Free. When the pricing query answered, every plan in
+`security.STANDARD_PLANS` that the subscription does not list gets a "not enabled" placeholder,
+`cloudg:azure:defender-<plan>:<sub>:not-enabled`, built like the AWS `_disabled_asset`.
+
+### 8.6 ARM REST child resources
+
+ARM answers child listings with the same ARM-shaped JSON Resource Graph returns, so the rows feed
+`add_row()` unchanged. `children.CHILD_SPECS` is the plan, one `ChildSpec` per kind:
+
+```python
+ChildSpec(
+    "service_bus",                       # task
+    ("microsoft.servicebus/namespaces",),  # parent types, or SUBSCRIPTION
+    "topics",                            # path under the parent ID
+    "2021-11-01",                        # api-version
+    nested=(ChildSpec("service_bus", (), "subscriptions", "2021-11-01"),),
+)
+```
+
+`fetch_children()` picks the parent drafts (filtered by the spec's `when`, capped at
+`max_child_parents`), issues the GETs in a thread pool and applies the rows on the calling thread,
+then runs nested specs against the children it just created. Rows that only link other assets
+(static members of a network group, Service Bus product APIs, VNet links of a forwarding
+ruleset, job schedules, Stream Analytics inputs and outputs, function site config, ...) are
+registered with `@relation_row(type)`: `add_row()` hands them to the handler and creates no asset.
+
+The REST client (`rest.AzureRestClient`) uses the azure-identity credential cloudg already holds,
+issues only GET (and POST for the read-only `listClusterUserCredential`), follows `nextLink` and
+`@odata.nextLink` only on its own host, retries 429 and 503 after `Retry-After`, and paces every
+call through the shared rate limiter under the `arm`, `msgraph` and `dataplane` buckets. It is
+injected through `arm_client_factory`, so tests never touch the network.
+
+Secrets stay out of the map. Key Vault secret values, APIM backend credentials and named-value
+values, API connection parameters, Data Factory `typeProperties`, AML datastore credentials, AI
+Search data source credentials, storage local-user keys and action group e-mail addresses and
+phone numbers are scanned for endpoints where useful and then dropped from `properties`.
+
+### 8.7 Data planes
+
+`dataplane.fetch_data_planes()` reads AI Search data sources, indexers, indexes and skillsets
+(`https://<service>.search.windows.net`, token audience `https://search.azure.com/.default`) and
+Synapse linked services, datasets, pipelines and triggers (the workspace `dev` endpoint, audience
+`https://dev.azuresynapse.net/.default`). Rows get synthetic ARM-style IDs under their service and
+go through the same extractors as Data Factory. The calls need a data-plane reader role; without
+one the task is `PARTIAL` or `FAILED` and the ARM view of the service is unchanged.
+
+### 8.8 Entra ID
+
+`azure_entra.discover_entra(credential, client_factory=None, *, coverage, max_objects,
+max_expansions)` runs once per mapping run from `InventoryMapper._discover_hierarchies()` when
+`azure.map_entra` is on and the `entra` task is selected. Every listing is its own coverage record:
+
+| Record | Graph call | Mapped as |
+|---|---|---|
+| `entra_tenant` | `/organization` | `ORGANIZATION` `entra:tenant/<id>` |
+| `entra_users` | `/users` | `IDENTITY_USER` `entra:principal/<oid>` (`guest`, `user_principal_name`, ...) |
+| `entra_groups` | `/groups` | `IDENTITY_GROUP`; `role_assignable`, `dynamic` |
+| `entra_group_members` | `/groups/{id}/members` | group `CONTAINS` member |
+| `entra_applications` | `/applications` | `APP_REGISTRATION` `entra:application/<oid>`; secret and certificate counts and latest expiry, requested permissions, `multi_tenant` |
+| `entra_application_owners` | `/applications/{id}/owners` | owner `MANAGES / OWNED_BY` app |
+| `entra_federated_credentials` | `/applications/{id}/federatedIdentityCredentials` | issuer `IAM_TRUST` app: `ROLE_ASSUMES_ROLE` for AKS issuers, `CROSS_ACCOUNT_TRUST` for the rest |
+| `entra_service_principals` | `/servicePrincipals` | `SERVICE_PRINCIPAL` `entra:principal/<oid>`, `external_application` when another tenant owns the app; app `MANAGES / OWNED_BY` its service principal. Managed identities are skipped: the resource or user-assigned identity owning them already carries that principal. |
+| `entra_service_principal_owners` | `/servicePrincipals/{id}/owners` | owner `MANAGES / OWNED_BY` service principal |
+| `entra_app_role_assignments` | `/servicePrincipals/{id}/appRoleAssignedTo`, Microsoft Graph first | principal `GRANTS_ACCESS / POLICY_ALLOWS_ACTION` resource service principal with `role` (for example `RoleManagement.ReadWrite.Directory`) and `privileged` |
+| `entra_oauth2_grants` | `/oauth2PermissionGrants` | client `GRANTS_ACCESS` resource with `delegated`, `scopes`, `consent_type`; `privileged` for admin consent to high scopes |
+| `entra_directory_roles` | `/roleManagement/directory/roleDefinitions`, `roleAssignments` | `IAM_POLICY` `entra:directoryRole/<id>`; principal `IAM_POLICY_ATTACHMENT` role and `GRANTS_ACCESS` tenant |
+| `entra_pim_eligibility` | `/roleManagement/directory/roleEligibilitySchedules` | the same relations with `eligible: true` |
+
+Entra objects carry no `discovered_via`, so in `deduplicate()` they win over the
+`entra:principal/<oid>` placeholders the subscription collectors create for role assignments,
+and the placeholders' grants merge into them. A 403 is recorded as "Graph permission missing";
+no token at all raises `CredentialError` and the `entra` record is `FAILED`.
+
+Azure RBAC PIM eligibility is a subscription task (`pim_eligibility`): it reads
+`roleEligibilityScheduleInstances` and adds the grants with `eligible: true`.
+
+### 8.9 In-cluster AKS
+
+`azure_kubernetes.collect_aks_workloads()` maps an AKS cluster through the same
+`kubernetes.map_cluster_objects()` EKS uses, with `provider=CloudProvider.AZURE`. The API server
+and CA come from the kubeconfig of `listClusterUserCredential` (only the `clusters` section is
+parsed), and the bearer token is an Entra token for the AKS server application
+(`6dae42f8-4368-4678-94ff-3960e28e3630/.default`), as `kubelogin` gets it. Service accounts with
+the `azure.workload.identity/client-id` annotation `ASSUMES_ROLE / RUNS_ON` the user-assigned
+identity with that client ID (alias `azure-client-id:<id>`), and `LoadBalancer` services resolve
+their ingress IP to the public IP asset.
+
+Clusters without Microsoft Entra integration are `SKIPPED`: their user credentials are secrets.
+Private clusters are tried and come out `FAILED` when cloudg cannot reach the API server. The
+AKS run-command (`az aks command invoke`) is not used, because it starts a pod in the cluster.
+
+Everything AKS exposes through ARM is mapped as well: OIDC issuer (an alias, so federated
+credentials resolve to the cluster), workload identity, Entra admin groups (`GRANTS_ACCESS` with
+`role: "cluster-admin"`), trusted access role bindings, extensions and Flux.
+
+### 8.10 Relations, AWS to Azure
+
+The Azure extractors reuse the relationship names AWS uses for the same idea. No new
+`RelationType` members were needed.
+
+| Concept | AWS source | Azure source | Relation |
+|---|---|---|---|
+| Backup protection | Backup plan, selection | Recovery Services / Backup vault protected items, NetApp backup | `BACKUP_TO` |
+| Replication | RDS global DB, DynamoDB replicas, S3 replication | SQL geo-replicas and failover groups, Cosmos regions, storage object replication, ACR geo-replication, App Configuration replicas, NetApp, Site Recovery | `REPLICATES_TO` |
+| Streaming export | Firehose, log subscription filters | Event Hubs Capture, diagnostic settings to Event Hubs, data collection rules, Defender continuous export | `STREAMS_TO` |
+| Data movement | CodePipeline, Glue | Data Factory and Synapse pipelines, Stream Analytics, function bindings, AML datastores, AI Search indexers | `READS_FROM` / `WRITES_TO` |
+| Secret rotation | Secrets Manager rotation Lambda | Event Grid near-expiry subscription on a vault | `ROTATES_SECRET` |
+| Schedules | SSM associations, maintenance windows | Function timers, Logic Apps recurrence, Automation schedules and update deployments, ADF triggers, maintenance assignments, NetApp snapshot policies | `MANAGES / SCHEDULED_BY` |
+| Org guardrails | SCP | Deny-effect policy definition | `GOVERNS / SCP_RESTRICTS` |
+| Permission limits | Permissions boundary | Deny assignment | `PERMISSION_BOUNDARY_LIMITS` |
+| Policy attachments | IAM managed policies | RBAC role definitions, Entra directory roles | `ROLE_HAS_POLICY`, `USER_HAS_POLICY`, `GROUP_HAS_POLICY` |
+| Cross-tenant trust | Role trust of another account, RAM | Lighthouse, managed application publishers, gallery sharing, external federated credentials, Sentinel AWS connectors | `CROSS_ACCOUNT_TRUST` |
+| Monitoring | CloudWatch alarms | Metric, log and activity log alerts, Defender plans and assessments, Sentinel connectors | `MONITORS / MONITORED_BY` |
+| Findings | (none) | Defender recommendations and alerts, non-compliant policy states, guest configuration | `FINDING_AFFECTS` |
+| Invocation | EventBridge targets, alarm actions | Action groups, alert actions, Logic Apps actions, APIM `send-request`, skillsets | `INVOKES` |
+| Fronting traffic | ALB, CloudFront, API Gateway | APIM APIs and backends, Front Door routes and rules, Application Gateway listeners, Traffic Manager, Static Web App backends | `SERVES_TRAFFIC_TO` |
+| Name resolution | Route 53 records, resolver rules | DNS record sets, Private Resolver forwarding rules and VNet links | `DNS_RESOLVED` |
+| Transit | Transit Gateway, VPN, Direct Connect | Virtual WAN hubs, routing intent, ExpressRoute, VPN sites, Route Server BGP peers, Virtual Network Manager | `TRANSIT_ROUTED` |
+<!-- end Azure parity -->
+
 ## 9. GCP
 
 ### 9.1 Collection
@@ -1179,6 +1421,34 @@ Put it in the module for its area (the module must be imported by `azure_graph/_
 add the ARM type to `azure_arm_types.yaml`, and test it with a recorded Resource Graph row passed
 through `build_assets(rows, subscription_id)`.
 
+<!-- Azure parity -->
+#### Add an Azure child resource kind
+
+When the type is not in Resource Graph (a proxy resource under another one), add a `ChildSpec`
+to `azure_graph/children.py` and give it a task name in `families.AZURE_TASK_FAMILIES`:
+
+```python
+ChildSpec("widgets", ("microsoft.widgets/factories",), "widgets", "2024-01-01")
+```
+
+The rows come back ARM-shaped, so the `@extractor("microsoft.widgets/factories/widgets")` above
+applies to them unchanged. If the rows only link other assets and should not become assets
+themselves, register a handler instead:
+
+```python
+from cloudg.inventory.azure_graph.registry import relation_row
+
+
+@relation_row("microsoft.widgets/factories/links")
+def _widget_link(row, b) -> None:
+    b.defer(parent_resource_id(row["id"]), rel(_get(row["properties"], "targetId"), EdgeType.REFERENCES, "DEPENDS_ON"))
+```
+
+Test it with `tests/azure_fakes.py`: `collect_linked(tables, arm_routes)` runs the collector
+against a `TypedFakeGraph` and a `FakeArm` keyed by request path, and returns the linked graph and
+the coverage records.
+<!-- end Azure parity -->
+
 ### 15.4 Add a GCP extractor
 
 ```python
@@ -1339,6 +1609,23 @@ No live cloud is needed: Azure tests feed Resource Graph rows (dicts shaped like
 into `build_assets()` or inject a `graph_client_factory`; GCP tests inject a fake
 `AssetServiceClient` through the `client` option returning recorded `list_assets` /
 `search_all_iam_policies` pages.
+
+<!-- Azure parity -->
+The Azure depth tests share `tests/azure_fakes.py`:
+
+- `TypedFakeGraph(tables)` answers Resource Graph queries by table and applies the `type =~`,
+  `type in~` and `subscriptionId =~` clauses, as ARG does, so one table can hold rows for several
+  queries. `fail={...}` makes tables raise.
+- `FakeArm(routes, forbidden=...)` answers ARM REST, Microsoft Graph and data-plane calls by path,
+  with 404 for unknown paths and 403 for paths ending in a `forbidden` suffix.
+- `collect_linked(tables, arm_routes, dataplane=..., **options)` runs `AzureDeepInventoryCollector`
+  against both and returns the linked `_Graph` and the coverage records.
+
+`test_azure_parity_graph.py` covers the Resource Graph tables, coverage and filtering,
+`test_azure_parity_rest.py` the REST children, `test_azure_parity_extractors.py` the row
+extractors through `AzureAssetBuilder`, `test_azure_entra.py` Microsoft Graph,
+`test_azure_kubernetes.py` in-cluster AKS and `test_azure_rest.py` the REST client.
+<!-- end Azure parity -->
 
 ### 18.4 Capturing real shapes
 

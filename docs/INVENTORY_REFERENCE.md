@@ -184,6 +184,17 @@ Some assets stand for something that was referenced rather than collected:
 | Entra principal | `entra:principal/<objectId>` | `IDENTITY_USER`, `IDENTITY_GROUP` or `SERVICE_PRINCIPAL` | `placeholder: true`, `principal_type`, `discovered_via: "entra-principal-reference"` |
 | GCP principal | `gcp-principal:<member>` or `k8s-gke://…` | `IDENTITY_USER`, `IDENTITY_GROUP`, `SERVICE_PRINCIPAL`, `K8S_SERVICE_ACCOUNT`, ... | `discovered_via: "iam_policy"` or `"workload_reference"` |
 
+<!-- Azure parity -->
+Azure placeholders added with the parity work:
+
+| Kind | `arn` | `asset_type` | Distinguishing metadata |
+|---|---|---|---|
+| Defender plan not listed (Azure) | `cloudg:azure:defender-<plan>:<subscription>:not-enabled` | `THREAT_DETECTOR` | `security_service: "defender-<plan>"`, `enabled: false`, `status: "not enabled"`, alias `azure-security:defender-<plan>:<subscription>`. Created for every plan of `STANDARD_PLANS` the pricings query did not return. |
+| Sentinel not enabled (Azure) | `cloudg:azure:sentinel:<subscription>:not-enabled` | `THREAT_DETECTOR` | as above with `security_service: "sentinel"`; created when no Log Analytics workspace of the subscription is onboarded. |
+| External source repository | `repo:<url>` (lower case, no `.git`, no credentials) | `SOURCE_CONNECTION` | `external: true`, `repository_url`, `host`, `discovered_via: "repository-reference"`. The target of `READS_FROM` from web app source control, Flux, ACR tasks, Static Web Apps, Data Factory Git and dev center catalogs. |
+| Entra principal from a directory role | `entra:principal/<objectId>` | `SERVICE_PRINCIPAL` | `placeholder: true`, `discovered_via: "entra-principal-reference"`; a role holder Microsoft Graph did not list. |
+<!-- end Azure parity -->
+
 Example, Inspector not enabled:
 
 ```json
@@ -258,6 +269,25 @@ What can appear in `arn`, in `metadata.aliases` and as a relation `target`. The 
 | GKE Kubernetes SA | `k8s-gke://<pool project>/<namespace>/<ksa>` | Workload Identity Kubernetes service accounts |
 | Short IDs and names | `vpc-0897edd53e9ac20d7`, `orders-worker`, `sg-…` | indexed for every asset (name, last ARN segment, known `*_id` metadata keys); resolved with account/region scoping |
 | Endpoints | `https://sqs.us-east-1.amazonaws.com/1234…/orders`, `web-alb-1.us-east-1.elb.amazonaws.com`, `orders-uploads.s3.amazonaws.com`, `<repo URI>` | queue URLs, load balancer and CloudFront DNS names, bucket domains, ECR repository URIs |
+
+<!-- Azure parity -->
+Identifiers added with the Azure parity work:
+
+| Format | Example | Used for |
+|---|---|---|
+| Entra tenant | `entra:tenant/<tenantId>` | the tenant `ORGANIZATION` from Microsoft Graph; target of directory-role grants and gallery sharing with a tenant |
+| Entra application | `entra:application/<objectId>`, alias `entra:app/<appId>` | app registrations (`APP_REGISTRATION`) |
+| Entra directory role | `entra:directoryRole/<roleDefinitionId>` | directory role definitions (`IAM_POLICY`) |
+| Entra user principal name | `entra:upn/<upn>` | alias of an Entra user |
+| Client ID | `azure-client-id:<clientId>` | alias of a user-assigned identity and of a service principal; what the AKS Workload ID annotation names |
+| Azure role definition | `azure-role:<guid>`, plus `/subscriptions/<sub>/providers/Microsoft.Authorization/roleDefinitions/<guid>` | RBAC role definitions (`IAM_POLICY`); built-in roles use `/providers/Microsoft.Authorization/roleDefinitions/<guid>` as `arn` |
+| Policy definition | `azure-policy-definition:<guid>` | alias of a policy definition with a GUID name |
+| Messaging entity | `<namespace>.servicebus.windows.net/<entity>`, `servicebus:<namespace>/<entity>`, `servicebus-queue:<name>`, `servicebus-topic:<name>`, `eventhub:<name>` | Service Bus queues and topics and Event Hubs; the host form is what Stream Analytics and action groups name, the bare forms what function bindings name |
+| Defender aggregates | `cloudg:azure:defender-cspm:<sub>`, `cloudg:azure:defender-alerts:<sub>` | the recommendations (`SECURITY_HUB`) and alerts (`THREAT_DETECTOR`) assets |
+| Synthetic children | `<listener ID>` under `.../applicationGateways/<gw>/httpListeners/<name>`, `<function ID>/timers/<binding>`, `<workflow ID>/triggers/<name>`, `<api ID>/authorizers/jwt`, `<account ID>/regions/<region>` | assets built from embedded properties: Application Gateway listeners, function timers, Logic Apps recurrence triggers, APIM JWT validation, Cosmos DB replica regions |
+| AKS Kubernetes object | `k8s://<cluster resource ID>/<namespace>/<Kind>/<name>` | in-cluster AKS objects, same scheme as EKS |
+| OIDC issuer | the AKS `oidcIssuerProfile.issuerURL`, with and without the trailing slash | alias of the AKS cluster, so federated credentials resolve to it |
+<!-- end Azure parity -->
 
 ---
 
@@ -669,6 +699,22 @@ Properties: `total_services`, `successful_services`, `failed_services` (`int`) a
 | `management_groups` | Azure discovery | Management group / policy hierarchy. `SKIPPED` when the SDK is not installed. |
 | `gcp_full`, `gcp_iam_policies` | GCP scope | Overall result, and the `searchAllIamPolicies` call (`PARTIAL` when it failed after returning some policies). |
 | `organization_hierarchy` | GCP discovery | Organization / folder / policy hierarchy. |
+
+<!-- Azure parity -->
+Azure records added with the parity work. They sit in the subscription's coverage record next
+to `azure_full` (and the Entra ones in a discovery record):
+
+| `service` | Record | Meaning |
+|---|---|---|
+| any Azure task name (`resources`, `policy`, `security_assessments`, `apim`, `dns_records`, `virtual_wan`, ...) | Azure subscription | One entry per task of [INVENTORY_INTERNALS.md 8.4](INVENTORY_INTERNALS.md#84-depth-beyond-the-breadth-query). `SUCCESS` with the rows or assets it produced, `PARTIAL` when some calls were refused, `FAILED` when all failed, `SKIPPED` with the reason (not selected by `inventory.services`, turned off in `azure.*`, no token for the audience, Resource Graph unavailable on the SDK path). |
+| `kubernetes:<cluster name>` | Azure subscription | In-cluster mapping of one AKS cluster, like EKS. `SKIPPED` for clusters without Entra integration. |
+| `depth` | Azure subscription | `FAILED` only if the depth stage itself raised; the breadth inventory is kept. |
+| `entra` | Azure discovery | Microsoft Graph run: `PARTIAL` when a listing failed, `SKIPPED` when not selected, `FAILED` when no Graph token could be obtained. |
+| `entra_tenant`, `entra_users`, `entra_groups`, `entra_group_members`, `entra_applications`, `entra_application_owners`, `entra_federated_credentials`, `entra_service_principals`, `entra_service_principal_owners`, `entra_app_role_assignments`, `entra_oauth2_grants`, `entra_directory_roles`, `entra_pim_eligibility` | Azure discovery | One per Graph listing. `FAILED` with "Graph permission missing" on a 403. |
+
+`azure_full` is now `PARTIAL` when any of these task records is `FAILED` or `PARTIAL`, as for
+`aws_full`.
+<!-- end Azure parity -->
 
 The CLI prints the failed entries after a map run ("N collectors failed").
 
@@ -1456,6 +1502,23 @@ its output has at most one asset per resource.
 
 `AzureDeepInventoryCollector.collection_mode` is `"resource-graph"` or `"sdk"` after `collect()`.
 
+<!-- Azure parity -->
+`AzureDeepInventoryCollector(credential, subscription_id, graph_client_factory=None,
+use_resource_graph=True, *, arm_client_factory=None, dataplane_client_factory=None,
+options=None, **options)` takes the `AzureDeepOptions` fields as keyword options (`services`,
+`exclude_services`, `child_resources`, `max_child_parents`, `diagnostic_settings`,
+`max_diagnostic_settings`, `data_plane`, `kubernetes`, `kubernetes_timeout`,
+`rest_concurrency`); an unknown option raises `TypeError`. Its `coverage` attribute is a
+`CollectionCoverage` with one record per task. The factories are `credential -> client` (ARM
+REST: `list(path, api_version, **params)`, `get(...)`, `post(...)`) and `(credential, base_url,
+scope) -> client` (data planes); tests inject fakes there.
+
+`discover_entra(credential, client_factory=None, *, coverage=None, max_objects=10000,
+max_expansions=1000)` returns the Entra assets (`ORGANIZATION`, `IDENTITY_USER`,
+`IDENTITY_GROUP`, `APP_REGISTRATION`, `SERVICE_PRINCIPAL`, `IAM_POLICY`) and records one
+coverage entry per Graph listing on `coverage`.
+<!-- end Azure parity -->
+
 ### 21.3 Kubernetes
 
 | Function | Returns |
@@ -1478,6 +1541,23 @@ Kubernetes object assets carry `cluster_arn`, `namespace`, `kind` and, per kind:
 
 Pod Identity associations are collected by the EKS collector itself, not through the
 Kubernetes API.
+
+<!-- Azure parity -->
+AKS goes through the same mapper:
+
+| Function | Returns |
+|---|---|
+| `map_cluster_objects(reader, cluster_arn, region, account_id, provider=CloudProvider.AWS)` | as above; with `provider=CloudProvider.AZURE` the assets are Azure assets and the AKS rules below apply |
+| `azure_kubernetes.cluster_endpoint(arm, cluster_id)` | `(server, ca_b64)` from the `clusters` section of the `listClusterUserCredential` kubeconfig |
+| `azure_kubernetes.aks_mappable(cluster_row)` | `None`, or why the cluster is skipped (no Entra integration, stopped) |
+| `azure_kubernetes.collect_aks_workloads(credential, arm, cluster_row, *, timeout=10, reader_factory=None)` | `list[CloudAsset]` for one AKS cluster, read with an Entra token for `6dae42f8-4368-4678-94ff-3960e28e3630/.default` |
+
+On AKS, a ServiceAccount carries `workload_identity_client_id` and `workload_identity_tenant_id`
+instead of `irsa_role_arn`, and `ASSUMES_ROLE / RUNS_ON` → `azure-client-id:<client id>`, the
+user-assigned identity. Service and Ingress `load_balancer_hostnames` also hold load balancer IPs,
+which resolve to public IP assets, and `service.beta.kubernetes.io/azure-load-balancer-internal:
+"true"` sets `internal`. EKS output is unchanged.
+<!-- end Azure parity -->
 
 ### 21.4 Catalogs
 
