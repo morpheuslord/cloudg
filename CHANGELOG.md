@@ -2,7 +2,7 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
-## Unreleased
+## 0.7.0 (2026-10-25)
 
 Azure and GCP are mapped as deeply as AWS, scanner and collector failures raise exceptions you can import and catch, report.html opens on an animated isometric map of the estate, and the docs site moves to MkDocs Material.
 

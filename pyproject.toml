@@ -1,6 +1,6 @@
 [project]
 name = "cloudg"
-version = "0.6.0"
+version = "0.7.0"
 description = "cloudg (cloud graphing) - multi-cloud infrastructure mapping, knowledge graphs and security intelligence for AWS, Azure and GCP"
 # The PyPI project page: a short overview that links into the docs site.
 # docs/DOCUMENTATION.md stays the full reference (the MCP layer serves it).
