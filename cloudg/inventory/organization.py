@@ -25,19 +25,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # account_ref is re-exported: it is part of this module's public API.
+from cloudg.exceptions import OrganizationScopeError
 from cloudg.inventory.organization_assets import account_ref, topology_assets
 from cloudg.schema.models import CloudAsset
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MEMBER_ROLE = "AWSControlTowerExecution"
-
-
-class OrganizationScopeError(ValueError):
-    """The requested organization scope (an OU filter) names nothing in the org.
-
-    Raised instead of quietly mapping only the caller's account.
-    """
 
 
 _POLICY_TYPES = [

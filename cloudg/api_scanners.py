@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from cloudg.exceptions import ScannerFailed
 from cloudg.schema.models import CloudAsset, Finding, NetworkEdge
 
 __all__ = [
@@ -64,24 +65,12 @@ def resolve_iac_dirs(
 # ---------------------------------------------------------------------------
 
 
-class ScannerFailed(RuntimeError):
-    """A scanner started but did not finish (timeout, launch failure).
-
-    ``findings`` holds whatever it produced before that (for example the
-    images Trivy did scan), so callers can keep partial results.
-    """
-
-    def __init__(self, scanner: str, errors: list[str], findings: list[Finding]) -> None:
-        super().__init__(f"{scanner} " + "; ".join(errors))
-        self.errors = list(errors)
-        self.findings = findings
-
-
 def _finish(label: str, scanner: Any, findings: list[Finding]) -> list[Finding]:
     """Return ``findings``, or raise ScannerFailed when the wrapper recorded errors."""
     errors = list(getattr(scanner, "errors", None) or [])
     if errors:
-        raise ScannerFailed(label, errors, findings)
+        failures = [f for f in getattr(scanner, "failures", None) or [] if f.detail in errors]
+        raise ScannerFailed(label, errors, findings, failures=failures)
     return findings
 
 

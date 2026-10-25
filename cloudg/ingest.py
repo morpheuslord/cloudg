@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from cloudg.exceptions import ConfigurationError
 from cloudg.normaliser import FindingList
 from cloudg.schema.models import Finding
 
@@ -70,7 +71,7 @@ def parse_report(tool: str, path: str | Path) -> list[Finding]:
 
         return TrivyScanner.parse_report(str(p))
 
-    raise ValueError(f"Unsupported tool '{tool}'. Supported: {', '.join(SUPPORTED_TOOLS)}")
+    raise ConfigurationError(f"Unsupported tool '{tool}'. Supported: {', '.join(SUPPORTED_TOOLS)}")
 
 
 def ingest_reports(reports: dict[str, list[str | Path]]) -> list[Finding]:

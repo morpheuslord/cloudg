@@ -5,19 +5,27 @@ from __future__ import annotations
 import json
 import logging
 
+from cloudg.exceptions import ScannerExecutionError
+from cloudg.scanners._errors import ScannerErrorLog
 from cloudg.schema.models import CloudAsset, AssetType, Finding, Severity
 
 logger = logging.getLogger(__name__)
 
 
-class IAMLinter:
+class IAMLinter(ScannerErrorLog):
     """Analyses IAM policies using Parliament for linting and policy-sentry for least-privilege scoring.
 
     Parliament: Detects wildcard abuse, logical errors, unused conditions.
     Policy-sentry: Scores how over-permissioned policies are.
+
+    A policy Parliament cannot analyse is recorded in ``failures`` (or
+    raised, with ``strict=True``); the wildcard checks still run on it.
     """
 
-    def __init__(self) -> None:
+    scanner_name = "parliament"
+
+    def __init__(self, strict: bool = False) -> None:
+        self._init_errors(strict)
         self._parliament_available = False
         self._policy_sentry_available = False
         self._check_availability()
@@ -105,6 +113,12 @@ class IAMLinter:
                 )
         except Exception as exc:
             logger.debug("Parliament analysis failed for %s: %s", asset.name, exc)
+            self._fail(
+                ScannerExecutionError(
+                    "parliament", f"could not analyse {asset.name}: {exc}", target=asset.name
+                ),
+                stops_run=False,
+            )
 
         return findings
 

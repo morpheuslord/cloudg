@@ -8,6 +8,8 @@ import shutil
 import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 from typing import Any
 
+from cloudg.exceptions import ReportParseError, ScannerExecutionError
+from cloudg.scanners._errors import ScannerErrorLog
 from cloudg.schema.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -22,11 +24,17 @@ _SEVERITY_MAP = {
 }
 
 
-class CheckovScanner:
+class CheckovScanner(ScannerErrorLog):
     """Wraps Checkov CLI to scan IaC directories for misconfigurations.
 
     Supports Terraform, CloudFormation, ARM templates, Kubernetes manifests.
+    With ``strict=True`` a failure raises a :mod:`cloudg.exceptions`
+    ``ScannerError`` instead of being recorded in ``errors``.
     """
+
+    scanner_name = "checkov"
+    executable = "checkov"
+    install_hint = "pip install checkov"
 
     def __init__(
         self,
@@ -34,13 +42,13 @@ class CheckovScanner:
         frameworks: list[str] | None = None,
         extra_args: list[str] | None = None,
         timeout_seconds: int = 1800,
+        strict: bool = False,
     ) -> None:
         self._target_dir = target_dir
         self._frameworks = frameworks or []
         self._extra_args = extra_args or []
         self._timeout_seconds = timeout_seconds
-        #: Why the last run did not finish (timeout, launch failure); empty on success
-        self.errors: list[str] = []
+        self._init_errors(strict)
 
     @staticmethod
     def is_available() -> bool:
@@ -56,10 +64,7 @@ class CheckovScanner:
         infrastructure scanning.
         """
         if not self.is_available():
-            logger.warning(
-                "Checkov is not installed. Install with: pip install checkov. "
-                "Skipping Checkov scan."
-            )
+            self._missing()
             return []
 
         cmd = [
@@ -91,24 +96,26 @@ class CheckovScanner:
             )
         except subprocess.TimeoutExpired:
             logger.error("Checkov scan timed out after %ds", self._timeout_seconds)
-            self.errors.append(
-                f"timed out after {self._timeout_seconds}s scanning {self._target_dir}"
-            )
+            self._timed_out(self._timeout_seconds, self._target_dir)
             return []
         except Exception as exc:
             logger.error("Failed to run Checkov: %s", exc)
-            self.errors.append(f"could not run: {exc}")
+            self._fail(
+                ScannerExecutionError("checkov", f"could not run: {exc}", target=self._target_dir)
+            )
             return []
 
         return self._parse_output(result.stdout)
 
     @classmethod
-    def parse_report(cls, path: str) -> list[Finding]:
+    def parse_report(cls, path: str, *, strict: bool = False) -> list[Finding]:
         """Parse existing Checkov JSON output without running Checkov.
 
         Accepts the JSON report file (``checkov --output json``, saved to a
         file, or ``--output-file-path``'s ``results_json.json``) or a
-        directory containing it.
+        directory containing it. With ``strict=True`` an unreadable or
+        malformed file raises :class:`~cloudg.exceptions.ReportParseError`
+        instead of being skipped with a warning.
         """
         from pathlib import Path
 
@@ -116,22 +123,30 @@ class CheckovScanner:
         if p.is_dir():
             candidates = list(p.rglob("results_json.json")) or list(p.rglob("*.json"))
             if not candidates:
+                if strict:
+                    raise ReportParseError("checkov", "no JSON results found", path=str(path))
                 logger.warning("No Checkov JSON results found in %s", path)
                 return []
         else:
             candidates = [p]
 
-        scanner = cls()
+        scanner = cls._report_reader(strict)
         findings: list[Finding] = []
         for file_path in candidates:
             try:
-                findings.extend(scanner._parse_output(file_path.read_text()))
+                text = file_path.read_text()
             except OSError as exc:
+                if strict:
+                    raise ReportParseError(
+                        "checkov", f"could not read: {exc}", path=str(file_path)
+                    ) from exc
                 logger.warning("Failed to read Checkov output %s: %s", file_path, exc)
+                continue
+            findings.extend(scanner._parse_output(text, source=str(file_path)))
         return findings
 
-    def _parse_output(self, stdout: str) -> list[Finding]:
-        """Parse Checkov JSON output from stdout."""
+    def _parse_output(self, stdout: str, source: str | None = None) -> list[Finding]:
+        """Parse Checkov JSON output from stdout (or from the file ``source``)."""
         findings: list[Finding] = []
 
         if not stdout.strip():
@@ -142,6 +157,7 @@ class CheckovScanner:
             data = json.loads(stdout)
         except json.JSONDecodeError as exc:
             logger.warning("Failed to parse Checkov JSON output: %s", exc)
+            self._bad_output(f"output is not JSON: {exc}", path=source)
             return []
 
         # Checkov output can be a list (multiple frameworks) or single dict

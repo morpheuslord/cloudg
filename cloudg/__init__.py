@@ -9,6 +9,20 @@ from cloudg.api import (
     PipelineResult,
 )
 from cloudg.config import CloudGConfig, load_config
+from cloudg.exceptions import (
+    CloudGError,
+    CollectionError,
+    ConfigurationError,
+    CredentialError,
+    ProviderSDKMissingError,
+    ReportParseError,
+    ScannerError,
+    ScannerExecutionError,
+    ScannerFailed,
+    ScannerNotInstalledError,
+    ScannerOutputError,
+    ScannerTimeoutError,
+)
 from cloudg.inventory import InventoryMapper, InventoryResult
 
 __all__ = [
@@ -16,6 +30,18 @@ __all__ = [
     "AnalysisResult",
     "CloudGEngine",
     "CloudGConfig",
+    "CloudGError",
+    "CollectionError",
+    "ConfigurationError",
+    "CredentialError",
+    "ProviderSDKMissingError",
+    "ReportParseError",
+    "ScannerError",
+    "ScannerExecutionError",
+    "ScannerFailed",
+    "ScannerNotInstalledError",
+    "ScannerOutputError",
+    "ScannerTimeoutError",
     "CollectionResult",
     "InventoryMapper",
     "InventoryResult",

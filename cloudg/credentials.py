@@ -39,6 +39,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from cloudg.exceptions import CredentialError, ProviderSDKMissingError
+
 logger = logging.getLogger(__name__)
 
 _GCP_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -94,7 +96,9 @@ def _aws_session_from_web_identity(
             WebIdentityToken=token,
         )
     except Exception as exc:
-        raise RuntimeError(f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}") from exc
+        raise CredentialError(
+            "aws", f"AssumeRoleWithWebIdentity failed for {role_arn}: {exc}"
+        ) from exc
     creds = resp["Credentials"]
     return boto3.Session(
         aws_access_key_id=creds["AccessKeyId"],
@@ -162,7 +166,7 @@ def _aws_assume_role(
     try:
         assumed = session.client("sts").assume_role(**assume_kwargs)
     except Exception as exc:
-        raise RuntimeError(f"AssumeRole failed for {target_role}: {exc}") from exc
+        raise CredentialError("aws", f"AssumeRole failed for {target_role}: {exc}") from exc
     creds = assumed["Credentials"]
     return boto3.Session(
         aws_access_key_id=creds["AccessKeyId"],
@@ -191,16 +195,14 @@ def build_aws_session(
         boto3.Session ready for API calls.
 
     Raises:
-        ImportError: If boto3 is not installed.
-        RuntimeError: If a requested role assumption fails, or account_id
+        ProviderSDKMissingError: If boto3 is not installed (an ImportError).
+        CredentialError: If a requested role assumption fails, or account_id
             is given without cfg.role_name (there is no role to reach it).
     """
     try:
         import boto3
     except ImportError as exc:
-        raise ImportError(
-            "boto3 is required for AWS. Install with: pip install cloudg[aws]"
-        ) from exc
+        raise ProviderSDKMissingError("aws", missing="boto3") from exc
 
     session_name = getattr(cfg, "role_session_name", None) or "cloudg-scan"
     role_arn = getattr(cfg, "role_arn", None)
@@ -237,9 +239,10 @@ def _aws_target_roles(
     if account_id:
         role_name = getattr(cfg, "role_name", None)
         if not role_name:
-            raise RuntimeError(
+            raise CredentialError(
+                "aws",
                 f"Cannot reach account {account_id}: no role to assume there. "
-                "Set aws.role_name (--role-name) to the role that exists in each account."
+                "Set aws.role_name (--role-name) to the role that exists in each account.",
             )
         member_role = f"arn:aws:iam::{account_id}:role/{role_name}"
         if member_role not in roles:
@@ -295,7 +298,7 @@ def aws_scanner_auth(cfg: Any, region: str | None = None) -> tuple[str | None, d
         them for (one hour).
 
     Raises:
-        RuntimeError: assuming role_arn failed.
+        CredentialError: assuming role_arn failed (a RuntimeError).
     """
     if not region or region.upper() == "ALL":
         region = "us-east-1"
@@ -307,7 +310,7 @@ def aws_scanner_auth(cfg: Any, region: str | None = None) -> tuple[str | None, d
         session = build_aws_session(cfg, region)
         credentials = session.get_credentials()
         if credentials is None:
-            raise RuntimeError(f"No credentials resolved for role {role_arn}")
+            raise CredentialError("aws", f"No credentials resolved for role {role_arn}")
         frozen = credentials.get_frozen_credentials()
         return None, _aws_key_env(frozen.access_key, frozen.secret_key, frozen.token)
     if access_key and secret_key:
@@ -353,14 +356,12 @@ def build_azure_credential(cfg: Any) -> Any:
         A TokenCredential usable with all Azure mgmt SDK clients.
 
     Raises:
-        ImportError: If azure-identity is not installed.
+        ProviderSDKMissingError: If azure-identity is not installed (an ImportError).
     """
     try:
         from azure import identity
     except ImportError as exc:
-        raise ImportError(
-            "azure-identity is required for Azure. Install with: pip install cloudg[azure]"
-        ) from exc
+        raise ProviderSDKMissingError("azure", missing="azure-identity") from exc
 
     explicit = _azure_service_principal(identity, cfg)
     if explicit is not None:
@@ -443,14 +444,12 @@ def build_gcp_credentials(cfg: Any) -> tuple[Any, str | None]:
         auth method carries no project (e.g. impersonation).
 
     Raises:
-        ImportError: If google-auth is not installed.
+        ProviderSDKMissingError: If google-auth is not installed (an ImportError).
     """
     try:
         import google.auth
     except ImportError as exc:
-        raise ImportError(
-            "google-auth is required for GCP. Install with: pip install cloudg[gcp]"
-        ) from exc
+        raise ProviderSDKMissingError("gcp", missing="google-auth") from exc
 
     credentials_file = getattr(cfg, "credentials_file", None) or os.environ.get(
         "GOOGLE_APPLICATION_CREDENTIALS"

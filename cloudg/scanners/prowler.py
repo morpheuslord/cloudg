@@ -17,6 +17,8 @@ from cloudg.scanners.prowler_ocsf import (
     ocsf_status,
     parse_ocsf_record,
 )
+from cloudg.exceptions import ScannerExecutionError
+from cloudg.scanners._errors import ScannerErrorLog
 from cloudg.schema.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -59,17 +61,25 @@ _PROWLER_SETTINGS = frozenset(
         "aws_regions",
         "timeout_seconds",
         "env",
+        "strict",
     }
 )
 
 
-class ProwlerScanner:
+class ProwlerScanner(ScannerErrorLog):
     """Wraps Prowler CLI to run cloud security checks and parse ASFF JSON output.
+
+    With ``strict=True`` a failure raises a :mod:`cloudg.exceptions`
+    ``ScannerError`` instead of being recorded in ``errors``.
 
     Usage:
         scanner = ProwlerScanner(provider="aws", profile="default")
         findings = scanner.run()
     """
+
+    scanner_name = "prowler"
+    executable = "prowler"
+    install_hint = "pip install prowler"
 
     def __init__(
         self,
@@ -97,6 +107,8 @@ class ProwlerScanner:
         timeout_seconds: How long Prowler may run before it is killed
             (default 3600).
         env: Extra environment variables for the process.
+        strict: Raise a :class:`~cloudg.exceptions.ScannerError` on the
+            first failure instead of recording it (default False).
 
         Raises:
             TypeError: an unknown setting is passed.
@@ -119,8 +131,7 @@ class ProwlerScanner:
             for r in (settings.get("aws_regions") or [])
             if r and r.strip() and r.strip().upper() != "ALL"
         ]
-        #: Why the last run did not finish (timeout, launch failure); empty on success
-        self.errors: list[str] = []
+        self._init_errors(bool(settings.get("strict", False)))
 
     @staticmethod
     def is_available() -> bool:
@@ -138,10 +149,7 @@ class ProwlerScanner:
         import time
 
         if not self.is_available():
-            logger.warning(
-                "Prowler is not installed. Install with: pip install prowler. "
-                "Skipping Prowler scan."
-            )
+            self._missing()
             return []
 
         cmd = self._build_command()
@@ -257,11 +265,11 @@ class ProwlerScanner:
                 "[Prowler] Scan timed out after %ds; killing process", self._timeout_seconds
             )
             proc.kill()
-            self.errors.append(f"timed out after {self._timeout_seconds}s")
+            self._timed_out(self._timeout_seconds)
             return False
         except Exception as exc:
             logger.error("[Prowler] Failed to run: %s", exc)
-            self.errors.append(f"could not run: {exc}")
+            self._fail(ScannerExecutionError("prowler", f"could not run: {exc}"))
             return False
 
         return True
@@ -271,7 +279,7 @@ class ProwlerScanner:
     passed_checks: frozenset[str] = frozenset()
 
     @classmethod
-    def parse_report(cls, path: str) -> list[Finding]:
+    def parse_report(cls, path: str, *, strict: bool = False) -> list[Finding]:
         """Parse existing Prowler output without running Prowler.
 
         Accepts a single ASFF (``-M json-asff``) or OCSF (``-M json-ocsf``,
@@ -279,11 +287,12 @@ class ProwlerScanner:
         searched recursively for ``*.json`` files (Prowler's ``-o`` output
         directory works as-is). Returns a :class:`~cloudg.normaliser.FindingList`
         of the failing checks whose ``passed_checks`` names the checks that
-        passed.
+        passed. With ``strict=True`` an unreadable or malformed file raises
+        :class:`~cloudg.exceptions.ReportParseError` instead of being skipped.
         """
         import os
 
-        scanner = cls()
+        scanner = cls._report_reader(strict)
         if os.path.isdir(path):
             files = glob.glob(f"{path}/**/*.json", recursive=True)
         else:
@@ -324,6 +333,7 @@ class ProwlerScanner:
 
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Failed to parse Prowler output %s: %s", file_path, exc)
+                self._bad_output(f"could not parse: {exc}", path=str(file_path))
 
         self.passed_checks = frozenset(findings.passed_checks)
         logger.info(

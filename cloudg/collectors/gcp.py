@@ -43,6 +43,7 @@ from cloudg.collectors.gcp_assets import (
 )
 from cloudg.config import GCP_DEFAULT_SKIP_ASSET_TYPES
 from cloudg.coverage import CollectionCoverage, ServiceStatus
+from cloudg.exceptions import CollectionError, ProviderSDKMissingError
 from cloudg.resilience.errors import describe_error
 from cloudg.resilience.gcp import RetryCounter, gcp_retry, gcp_scope, paced
 from cloudg.resilience.governor import get_governor
@@ -186,9 +187,7 @@ class GCPCollector(BaseCollector):
             try:
                 from google.cloud import asset_v1
             except ImportError as exc:
-                raise RuntimeError(
-                    "google-cloud-asset is not installed; install cloudg[gcp] to collect GCP"
-                ) from exc
+                raise ProviderSDKMissingError("gcp", missing="google-cloud-asset") from exc
             self._client = asset_v1.AssetServiceClient(credentials=self._credentials)
         return self._client
 
@@ -301,7 +300,7 @@ class GCPCollector(BaseCollector):
                 error=describe_error(search_error),
                 start=search_start,
             )
-            raise RuntimeError(
+            raise CollectionError(
                 f"GCP asset enumeration failed for {self._scope}: "
                 f"ListAssets: {describe_error(error)}; "
                 f"SearchAllResources: {describe_error(search_error)}"

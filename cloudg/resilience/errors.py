@@ -30,6 +30,8 @@ import time
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
+from cloudg.exceptions import CloudGError
+
 __all__ = [
     "AWS_THROTTLE_CODES",
     "AWS_TRANSIENT_CODES",
@@ -167,7 +169,7 @@ _THROTTLE_TEXT_RE = re.compile(
 _LIMIT_EXCEEDED_RATE_RE = re.compile(r"(rate|throttl|too many|per second|tps)", re.IGNORECASE)
 
 
-class ResilienceError(Exception):
+class ResilienceError(CloudGError):
     """Base of the errors raised by :mod:`cloudg.resilience` itself."""
 
     #: Seconds after which trying again makes sense (None: unknown)
