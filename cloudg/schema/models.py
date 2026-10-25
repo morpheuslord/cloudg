@@ -233,6 +233,11 @@ class AssetType(str, Enum):
     KNOWLEDGE_BASE = "KNOWLEDGE_BASE"
     AI_GUARDRAIL = "AI_GUARDRAIL"
 
+    # Azure parity
+    PLACEMENT_GROUP = "PLACEMENT_GROUP"  # availability set, proximity placement group, host group
+    APP_REGISTRATION = "APP_REGISTRATION"  # Entra application object (app registration)
+    # end Azure parity
+
     # Generic
     OTHER = "OTHER"
 
