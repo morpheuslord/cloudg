@@ -40,6 +40,7 @@ from cloudg.inventory.azure_graph.helpers import (
     _rid,
     _rids,
     host_of,
+    issuer_kind,
     parent_resource_id,
     principal_ref,
     subscription_ref,
@@ -771,15 +772,14 @@ def _x_federated_credential(d: _Draft, b: "AzureAssetBuilder") -> None:
     identity = parent_resource_id(d.id)
     issuer = str(_get(p, "issuer") or "").rstrip("/")
     subject = _get(p, "subject")
-    aks = ".oic.prod-aks.azure.com" in issuer.lower() or "oidc.prod-aks.azure.com" in issuer.lower()
+    kind = issuer_kind(issuer)
+    aks = kind == "aks"
     d.md.update(
         {
             "issuer": issuer,
             "subject": subject,
             "audiences": _list(_get(p, "audiences")),
-            "issuer_kind": "aks"
-            if aks
-            else ("github" if "token.actions.githubusercontent.com" in issuer else "external"),
+            "issuer_kind": kind,
         }
     )
     d.add(

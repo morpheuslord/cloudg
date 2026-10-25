@@ -154,6 +154,22 @@ def host_of(url: Any) -> str | None:
     return host.lower().rstrip(".") if host else None
 
 
+def issuer_kind(issuer: Any) -> str:
+    """What issues a federated credential's tokens: ``aks``, ``github`` or ``external``.
+
+    Decided on the issuer URL's parsed hostname, never on a substring of the
+    URL, so ``https://evil.example/oidc.prod-aks.azure.com`` is external. AKS
+    issuers are ``https://<region>.oic.prod-aks.azure.com/<tenant>/<cluster>/``
+    (and the older ``https://oidc.prod-aks.azure.com/<cluster>/``).
+    """
+    host = host_of(issuer) or ""
+    if host == "oidc.prod-aks.azure.com" or host.endswith(".oic.prod-aks.azure.com"):
+        return "aks"
+    if host == "token.actions.githubusercontent.com":
+        return "github"
+    return "external"
+
+
 def registry_host(image: Any) -> str | None:
     """Registry host of a container image reference (None for Docker Hub)."""
     if not isinstance(image, str) or "/" not in image:

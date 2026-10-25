@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from cloudg.inventory.azure_graph import AzureAssetBuilder
+from cloudg.inventory.azure_graph.helpers import issuer_kind
 from cloudg.inventory.linker import RelationshipLinker
 from cloudg.schema.models import AssetType, EdgeType
 from tests.test_azure_inventory import SUB, _Graph, _row
@@ -923,3 +924,57 @@ def test_subscription_vending_aliases():
         arm_client_factory=lambda c: FakeArm({}, forbidden={"/aliases"}),
     )
     assert not any(a.arn == alias for a in denied) and errors == []
+
+
+class TestFederatedIssuers:
+    """The issuer kind comes from the URL's hostname, never a substring of it."""
+
+    @pytest.mark.parametrize(
+        "issuer, kind",
+        [
+            ("https://westeurope.oic.prod-aks.azure.com/tenant/cluster/", "aks"),
+            ("https://oidc.prod-aks.azure.com/cluster", "aks"),
+            ("HTTPS://EASTUS.OIC.PROD-AKS.AZURE.COM/t/c", "aks"),
+            ("https://token.actions.githubusercontent.com", "github"),
+            # Spoofs: the trusted name in the path, query, userinfo or as a prefix
+            ("https://evil.example/oidc.prod-aks.azure.com", "external"),
+            ("https://evil.example/?x=.oic.prod-aks.azure.com", "external"),
+            ("https://oidc.prod-aks.azure.com@evil.example/", "external"),
+            ("https://oidc.prod-aks.azure.com.evil.example/", "external"),
+            ("https://evilprod-aks.azure.com/c", "external"),
+            ("https://evil.example/token.actions.githubusercontent.com", "external"),
+            ("https://token.actions.githubusercontent.com.evil.example", "external"),
+            ("", "external"),
+            (None, "external"),
+        ],
+    )
+    def test_issuer_kind(self, issuer, kind):
+        assert issuer_kind(issuer) == kind
+
+    def test_spoofed_issuer_is_not_trusted_as_aks(self):
+        uami = f"{P}/Microsoft.ManagedIdentity/userAssignedIdentities/app-id"
+        fic_type = "microsoft.managedidentity/userassignedidentities/federatedidentitycredentials"
+        rows = [
+            _row(uami, "microsoft.managedidentity/userassignedidentities", {"clientId": "c1"}),
+            _row(
+                f"{uami}/federatedIdentityCredentials/real",
+                fic_type,
+                {"issuer": "https://westeurope.oic.prod-aks.azure.com/t/c/", "subject": "s"},
+            ),
+            _row(
+                f"{uami}/federatedIdentityCredentials/spoof",
+                fic_type,
+                {"issuer": "https://evil.example/oidc.prod-aks.azure.com", "subject": "s"},
+            ),
+        ]
+        builder = AzureAssetBuilder(SUB)
+        builder.add_rows(rows)
+        by_arn = {a.arn: a for a in builder.build()}
+
+        def trust(name):
+            meta = by_arn[f"{uami}/federatedIdentityCredentials/{name}"].metadata
+            rels = [r["relationship"] for r in meta["relations"] if r["edge"] == EdgeType.IAM_TRUST]
+            return meta["issuer_kind"], rels
+
+        assert trust("real") == ("aks", ["ROLE_ASSUMES_ROLE"])
+        assert trust("spoof") == ("external", ["CROSS_ACCOUNT_TRUST"])

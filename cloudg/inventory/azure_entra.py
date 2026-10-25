@@ -43,7 +43,7 @@ from cloudg.coverage import CollectionCoverage
 from cloudg.exceptions import CredentialError
 from cloudg.inventory.aws_services._base import rel
 from cloudg.inventory.azure_graph.families import TaskRecorder
-from cloudg.inventory.azure_graph.helpers import principal_ref
+from cloudg.inventory.azure_graph.helpers import issuer_kind, principal_ref
 from cloudg.inventory.azure_graph.rest import AzureRestError, default_msgraph_client_factory
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType
 
@@ -392,7 +392,7 @@ class EntraCollector:
         relations = []
         for c in creds:
             issuer = str(c.get("issuer") or "").rstrip("/")
-            aks = "prod-aks.azure.com" in issuer.lower()
+            aks = issuer_kind(issuer) == "aks"
             relations.append(
                 rel(
                     issuer,
