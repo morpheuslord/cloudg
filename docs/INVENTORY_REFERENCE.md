@@ -184,6 +184,15 @@ Some assets stand for something that was referenced rather than collected:
 | Entra principal | `entra:principal/<objectId>` | `IDENTITY_USER`, `IDENTITY_GROUP` or `SERVICE_PRINCIPAL` | `placeholder: true`, `principal_type`, `discovered_via: "entra-principal-reference"` |
 | GCP principal | `gcp-principal:<member>` or `k8s-gke://…` | `IDENTITY_USER`, `IDENTITY_GROUP`, `SERVICE_PRINCIPAL`, `K8S_SERVICE_ACCOUNT`, ... | `discovered_via: "iam_policy"` or `"workload_reference"` |
 
+<!-- GCP parity -->
+GCP parity placeholders:
+
+| Kind | `arn` | `asset_type` | Distinguishing metadata |
+|---|---|---|---|
+| Security service not enabled (GCP) | `cloudg:gcp:<service>:<parent>:not-enabled`, where `parent` is `projects/<id>`, `folders/<id>` or `organizations/<id>` | the service's type (`SECURITY_HUB`, `THREAT_DETECTOR`, `CONFIG_RECORDER`, `VULNERABILITY_SCANNER`, `DATA_SECURITY_SCANNER`, `CLOUDTRAIL`) | `security_service` (`scc`, `event-threat-detection`, `artifact-analysis`, `dlp-discovery`, `audit-logs`, ...), `enabled: false`, `status: "not enabled"`, alias `gcp-security:<service>:<parent>` |
+| GCP principal named by a deny rule, PAM entitlement or group membership | `gcp-principal:<member>` | as above | `discovered_via: "relation_reference"` |
+<!-- end GCP parity -->
+
 Example, Inspector not enabled:
 
 ```json
@@ -255,6 +264,18 @@ What can appear in `arn`, in `metadata.aliases` and as a relation `target`. The 
 | GCP project node | `//cloudresourcemanager.googleapis.com/projects/<id>` | project `CLOUD_ACCOUNT` / container |
 | GCP service account ref | `serviceAccount:<email>` | alias of every service account; how relations name them |
 | GCP principal | `gcp-principal:user:alice@example.com` | IAM members that are not collected resources |
+
+<!-- GCP parity -->
+GCP parity identifiers:
+
+| Format | Example | Used for |
+|---|---|---|
+| GCP security service | `gcp-security:scc:organizations/999` | Alias of an enabled security service and of its "not enabled" placeholder. SCC notification configs, exports and mute rules target it. |
+| GCP API-only resource | `//dns.googleapis.com/projects/p/managedZones/z/rrsets/www.example.com./A` | Resources read from a service API instead of Cloud Asset Inventory, named in the same `//<service>.googleapis.com/` form |
+| GCP predefined role | `//iam.googleapis.com/roles/storage.admin` | `IAM_ROLE` assets for bound predefined roles (custom roles keep their CAI name) |
+| GCP authorizer | `<API config name>/authorizers/<provider>` | JWT providers of an API Gateway config |
+| GCP instance by number | `gcp-instance-id:<project>/<instance id>`, `//compute.googleapis.com/projects/p/zones/z/instances/<id>` | Aliases of a VM, for Monitoring filters and OS Config reports that name it by number |
+<!-- end GCP parity -->
 | GKE Kubernetes SA | `k8s-gke://<pool project>/<namespace>/<ksa>` | Workload Identity Kubernetes service accounts |
 | Short IDs and names | `vpc-0897edd53e9ac20d7`, `orders-worker`, `sg-…` | indexed for every asset (name, last ARN segment, known `*_id` metadata keys); resolved with account/region scoping |
 | Endpoints | `https://sqs.us-east-1.amazonaws.com/1234…/orders`, `web-alb-1.us-east-1.elb.amazonaws.com`, `orders-uploads.s3.amazonaws.com`, `<repo URI>` | queue URLs, load balancer and CloudFront DNS names, bucket domains, ECR repository URIs |
@@ -669,6 +690,20 @@ Properties: `total_services`, `successful_services`, `failed_services` (`int`) a
 | `management_groups` | Azure discovery | Management group / policy hierarchy. `SKIPPED` when the SDK is not installed. |
 | `gcp_full`, `gcp_iam_policies` | GCP scope | Overall result, and the `searchAllIamPolicies` call (`PARTIAL` when it failed after returning some policies). |
 | `organization_hierarchy` | GCP discovery | Organization / folder / policy hierarchy. |
+
+<!-- GCP parity -->
+GCP parity records (per GCP scope):
+
+| `service` | Meaning |
+|---|---|
+| `gcp_assets_<family>` | Assets of one service family (`compute`, `network`, `data`, `security`, ...) built from the Cloud Asset Inventory listing. The status follows the listing: `PARTIAL` when it was truncated or fell back to summaries. Written for every selected family, also with `asset_count` 0. |
+| `gcp_<source>` (`gcp_scc`, `gcp_dns_records`, `gcp_cloud_identity`, `gcp_monitoring`, ...) | One API-backed source ([INVENTORY_INTERNALS.md 9.6](INVENTORY_INTERNALS.md#96-api-backed-sources-gcp_sources)). `PARTIAL` when some calls failed, `FAILED` when none answered or the source raised, `SKIPPED` when a prerequisite is missing (no credentials, no organization, no Cloud Identity customer) or the API is off everywhere it was asked. |
+| `gcp_derived_<pass>` | `FAILED` when a cross-asset pass raised; absent otherwise. |
+| `gcp_list_assets`, `gcp_search_resources`, `gcp_asset_mapping` | The listing, its `SearchAllResources` fallback (`PARTIAL`), and records that could not be mapped (`PARTIAL`). |
+
+A record that is `FAILED` or `PARTIAL` makes `gcp_full` `PARTIAL`, as before. Families and
+sources left out by `inventory.services` / `exclude_services` get no record, like AWS tasks.
+<!-- end GCP parity -->
 
 The CLI prints the failed entries after a map run ("N collectors failed").
 
