@@ -8,6 +8,8 @@ cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, run
 
 This is the complete reference: every CLI command, the exact input and output formats, the data models, the full Python API with integration examples, configuration, plugins and authentication. Release history lives in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md).
 
+The same material, split into guides, a generated CLI and Python API reference and runnable examples, is on the documentation site at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/). To see what a report looks like before running anything, open the [sample report](https://morpheuslord.github.io/cloudg/sample-report.html): the `report.html` of a synthetic three-cloud estate.
+
 The inventory mapper (`cloudg map`, `cloudg deps`, `cloudg.inventory`) has three deeper companion documents:
 
 - [Inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md): the structure of every return value and exported file, field by field, with annotated examples (`CloudAsset`, `NetworkEdge`, relation objects, `InventoryResult`, `summary`, coverage records, dependency trees, blast radius, security coverage, `inventory-map.json`, `inventory-graph.json`, GraphML, `inventory-organization.json`, `asset-map.json`, `compliance-map.json`, `cloudg deps --json`).

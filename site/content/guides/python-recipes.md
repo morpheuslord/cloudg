@@ -1,18 +1,19 @@
 ---
 title: Python recipes
-lede: "Complete scripts for the integrations people build most often: aggregating reports, feeding a SIEM, running phases on your own schedule, overlaying findings on a map, and gating CI."
-meta:
-  - [Entry point, "`cloudg.CloudGEngine`"]
-  - [Needs credentials, "recipes 3 to 6 only"]
-source: docs/DOCUMENTATION.md
-since: "0.6.0"
+description: 'Complete scripts for the integrations people build most often: aggregating reports, feeding a SIEM, running phases on your own schedule, overlaying findings on a map, and gating CI.'
 ---
 
-The CLI is a thin layer over a public API, so anything `cloudg run` does you can do from Python, in pieces, with your own decisions in between. Each recipe below is one file you can save and run. The ones that only read scanner output work on any machine with `pip install cloudg`; the ones that collect need the provider extra (`pip install "cloudg[aws]"`) and credentials resolved as described in [authentication](/guides/authentication/).
+Complete scripts for the integrations people build most often: aggregating reports, feeding a SIEM, running phases on your own schedule, overlaying findings on a map, and gating CI.
+{ .lede }
 
-The sample inputs used in the offline recipes are ordinary scanner output: a Prowler output directory (OCSF or `-M json-asff`), a `checkov --output json` file and `trivy image` / `trivy fs` JSON. [Ingesting existing output](/guides/ingesting/) lists exactly which fields each parser reads.
+**Entry point** `cloudg.CloudGEngine` &middot; **Needs credentials** recipes 3 to 6 only &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
-```mermaid caption="Where each recipe enters the pipeline"
+The CLI is a thin layer over a public API, so anything `cloudg run` does you can do from Python, in pieces, with your own decisions in between. Each recipe below is one file you can save and run. The ones that only read scanner output work on any machine with `pip install cloudg`; the ones that collect need the provider extra (`pip install "cloudg[aws]"`) and credentials resolved as described in [authentication](authentication.md).
+
+The sample inputs used in the offline recipes are ordinary scanner output: a Prowler output directory (OCSF or `-M json-asff`), a `checkov --output json` file and `trivy image` / `trivy fs` JSON. [Ingesting existing output](ingesting.md) lists exactly which fields each parser reads.
+
+```mermaid
 flowchart LR
   C["collect()"] --> S["scan()"]
   I["ingest_reports()"] --> N["normalise_findings()"]
@@ -23,6 +24,8 @@ flowchart LR
   M["map_inventory()"] --> O["export_merged()"]
   I --> O
 ```
+Where each recipe enters the pipeline
+{ .diagram-caption }
 
 ## 1. Aggregate existing scan results
 
@@ -128,7 +131,7 @@ trivy image only: ['[Trivy] CVE-2024-0001: openssl (alpine)']
 
 `on_finding` is called once per finding, as each scanner finishes during `scan()` (or once the reports are parsed, for ingest), with a copy of the finding. Hooks run inline in the engine and any exception they raise is swallowed, so the shipper below only puts findings on a queue and lets a worker thread batch them to an HTTP collector, keeping a local NDJSON spool either way.
 
-```python title="stream_to_siem.py" hl="35-36,82"
+```python title="stream_to_siem.py" hl_lines="35-36 82"
 """Ship every cloudg finding to a SIEM over HTTP while the pipeline runs."""
 
 import asyncio
@@ -147,7 +150,6 @@ log = logging.getLogger("siem-shipper")
 SIEM_URL = os.environ.get("SIEM_URL")              # e.g. https://siem.example.com/ingest
 SIEM_TOKEN = os.environ.get("SIEM_TOKEN", "")
 SPOOL_FILE = "cloudg-findings.ndjson"              # local copy, also the fallback
-
 
 class FindingShipper:
     """on_finding callback: queue the finding, send batches from a worker thread.
@@ -203,7 +205,6 @@ class FindingShipper:
         except OSError as exc:      # URLError and timeouts; the spool file keeps the batch
             log.warning("SIEM rejected a batch of %d: %s", len(batch), exc)
 
-
 async def main() -> None:
     config = CloudGConfig(providers=["aws"])
     config.aws.regions = ["us-east-1", "eu-west-1"]
@@ -221,7 +222,6 @@ async def main() -> None:
 
     print(f"shipped {shipper.sent} raw findings; {result.total_findings} after normalisation")
     print("summary:", json.dumps(result.to_summary(), default=str))
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -252,7 +252,6 @@ from cloudg.renderers.html_report import HTMLReportGenerator
 from cloudg.renderers.json_export import JSONExporter
 
 OUT = Path("./reports")
-
 
 async def main() -> None:
     config = CloudGConfig(providers=["aws"])
@@ -293,7 +292,6 @@ async def main() -> None:
     print(JSONExporter(output_dir=str(OUT)).export(scan_result))
     print(HTMLReportGenerator(output_dir=str(OUT)).generate(scan_result))
 
-
 asyncio.run(main())
 ```
 
@@ -328,7 +326,6 @@ from cloudg.renderers.json_export import JSONExporter
 
 OUT = Path("./reports")
 
-
 async def main() -> None:
     config = CloudGConfig(providers=["aws"])
     config.aws.regions = ["us-east-1"]
@@ -356,7 +353,6 @@ async def main() -> None:
     print(f"{len(collection.assets)} assets, {analysis.ontology_triples} ontology triples")
     print("findings by tool:", by_tool)
 
-
 asyncio.run(main())
 ```
 
@@ -372,54 +368,60 @@ Passing the ingested findings to `analyze()` puts them into the ontology and the
 
 Inventory mapping needs read credentials and nothing else. Scanners can run elsewhere and on another schedule, and their output merges in whenever it arrives, even in a different process, because the map round-trips through `inventory-map.json`.
 
-```python tab="Map" title="map_inventory.py"
-"""Map the inventory now; no scanners involved."""
+=== "Map"
 
-from cloudg import CloudGConfig, CloudGEngine
+    ```python title="map_inventory.py"
+    """Map the inventory now; no scanners involved."""
 
-config = CloudGConfig(providers=["aws"])
-config.aws.regions = ["us-east-1"]           # or ["ALL"]
+    from cloudg import CloudGConfig, CloudGEngine
 
-inventory = CloudGEngine(config).map_inventory_sync(output_dir="./map-reports")
+    config = CloudGConfig(providers=["aws"])
+    config.aws.regions = ["us-east-1"]           # or ["ALL"]
 
-summary = inventory.summary
-print(summary["total_assets"], "assets,", summary["total_edges"], "edges")
-print("by service:", summary["assets_by_service"])
-print("internet exposed:", summary["internet_exposed"])
-print("unlinked:", summary["unlinked_assets"])
-if inventory.throttling:
-    print("throttled:", inventory.throttling["messages"])
-```
+    inventory = CloudGEngine(config).map_inventory_sync(output_dir="./map-reports")
 
-```python tab="Overlay" title="overlay_findings.py"
-"""Overlay scanner findings on an inventory map written earlier."""
+    summary = inventory.summary
+    print(summary["total_assets"], "assets,", summary["total_edges"], "edges")
+    print("by service:", summary["assets_by_service"])
+    print("internet exposed:", summary["internet_exposed"])
+    print("unlinked:", summary["unlinked_assets"])
+    if inventory.throttling:
+        print("throttled:", inventory.throttling["messages"])
+    ```
 
-import json
+=== "Overlay"
 
-from cloudg import CloudGConfig, CloudGEngine
-from cloudg.inventory import InventoryMapper, InventoryResult
+    ```python title="overlay_findings.py"
+    """Overlay scanner findings on an inventory map written earlier."""
 
-inventory = InventoryResult.load("./map-reports")   # directory or inventory-map.json
-print(len(inventory.assets), "assets in the saved map")
+    import json
 
-engine = CloudGEngine(CloudGConfig())
-findings = engine.ingest_reports({"prowler": ["./prowler-output/"]})
+    from cloudg import CloudGConfig, CloudGEngine
+    from cloudg.inventory import InventoryMapper, InventoryResult
 
-mapper = InventoryMapper(CloudGConfig())
-paths = mapper.export_merged(inventory, findings, "./map-reports")
-print({name: str(path) for name, path in paths.items()})
+    inventory = InventoryResult.load("./map-reports")   # directory or inventory-map.json
+    print(len(inventory.assets), "assets in the saved map")
 
-asset_map = json.loads(paths["asset_map"].read_text())
-for entry in asset_map["assets"]:
-    if entry["finding_count"]:
-        print(entry["name"], entry["type"], entry["severity_breakdown"])
-```
+    engine = CloudGEngine(CloudGConfig())
+    findings = engine.ingest_reports({"prowler": ["./prowler-output/"]})
 
-```bash tab="CLI"
-cloudg map -p aws --regions all -o ./map-reports
-# later, with scanner output that cloudg already normalised:
-cloudg map -p aws --regions all -o ./map-reports --findings ./reports/raw-findings.json
-```
+    mapper = InventoryMapper(CloudGConfig())
+    paths = mapper.export_merged(inventory, findings, "./map-reports")
+    print({name: str(path) for name, path in paths.items()})
+
+    asset_map = json.loads(paths["asset_map"].read_text())
+    for entry in asset_map["assets"]:
+        if entry["finding_count"]:
+            print(entry["name"], entry["type"], entry["severity_breakdown"])
+    ```
+
+=== "CLI"
+
+    ```bash
+    cloudg map -p aws --regions all -o ./map-reports
+    # later, with scanner output that cloudg already normalised:
+    cloudg map -p aws --regions all -o ./map-reports --findings ./reports/raw-findings.json
+    ```
 
 The overlay step needs no credentials. `asset-map.json` lists every asset with `finding_count`, `severity_breakdown` and `finding_ids`, sorted with the worst first; `compliance-map.json` groups affected assets by framework. Both maps match a finding to an asset by asset id, then ARN, then a name or ARN tail that only one asset has, so scanner output that names resources by ARN (Prowler, ScoutSuite) overlays well, and IaC findings keyed by a Terraform address (Checkov) do not match a live asset at all. The CLI variant re-maps the account before merging; the Python one reuses the saved map.
 
@@ -453,7 +455,6 @@ from cloudg.graph.builder import GraphBuilder
 from cloudg.inventory import RelationshipLinker
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
 
-
 def to_asset(row: dict) -> CloudAsset:
     relations = []
     if row.get("role_arn"):
@@ -477,7 +478,6 @@ def to_asset(row: dict) -> CloudAsset:
         account_id=row["arn"].split(":")[4] or None,
         metadata={"relations": relations},
     )
-
 
 with open("cmdb_assets.json") as fh:
     assets = [to_asset(row) for row in json.load(fh)]
@@ -509,7 +509,7 @@ Each relation is `{"target", "edge", "relationship", "reverse", "properties", "d
 
 ## 8. Gate CI on severity
 
-For a CI job that already runs Python, the gate can live next to the aggregation. This version fails on HIGH and CRITICAL, honours suppressions and a list of accepted check IDs, and refuses to pass on partial data. For a gate that only reads `findings.json`, with no cloudg import, see [CI and automation](/guides/ci-automation/#a-severity-gate).
+For a CI job that already runs Python, the gate can live next to the aggregation. This version fails on HIGH and CRITICAL, honours suppressions and a list of accepted check IDs, and refuses to pass on partial data. For a gate that only reads `findings.json`, with no cloudg import, see [CI and automation](ci-automation.md#a-severity-gate).
 
 ```python title="gate_on_severity.py"
 """Aggregate IaC scanner output and fail the build on blocking findings."""
@@ -557,9 +557,22 @@ exit 1
 
 After a cross-scanner merge, `source_finding_id` holds one scanner's check ID and `source_tool` becomes a comma list such as `"prowler, checkov"`, so an allow-list keyed on one tool's ID can miss a merged finding. When that matters, filter on the parsed findings before normalising, as in recipe 2.
 
-:::links
-- [CloudGEngine](/api/cloudgengine/) Every method and its signature.
-- [Event hooks](/api/event-hooks/) When each hook fires.
-- [Result objects](/api/results/) `PipelineResult`, `CollectionResult`, `AnalysisResult`.
-- [RelationshipLinker](/api/relationshiplinker/) Resolution rules for declared relations.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**CloudGEngine**](../api/cloudgengine.md)
+
+    Every method and its signature.
+
+-   [**Event hooks**](../api/event-hooks.md)
+
+    When each hook fires.
+
+-   [**Result objects**](../api/results.md)
+
+    `PipelineResult`, `CollectionResult`, `AnalysisResult`.
+
+-   [**RelationshipLinker**](../api/relationshiplinker.md)
+
+    Resolution rules for declared relations.
+
+</div>

@@ -711,13 +711,16 @@ class TestResourceGraphInventory:
     def test_mode_and_queries(self, graph_inventory):
         assert graph_inventory.collector.collection_mode == "resource-graph"
         tables = {r.query.split("|", 1)[0].strip() for r in graph_inventory.fake.requests}
-        assert tables == {
+        assert tables >= {
             "resources",
             "resourcecontainers",
             "authorizationresources",
             "securityresources",
         }
-        assert all(r.subscriptions == [SUB] for r in graph_inventory.fake.requests)
+        # tenant-wide lookups (management group role assignments, role and
+        # policy definitions) are the only unscoped queries
+        unscoped = [r.query for r in graph_inventory.fake.requests if r.subscriptions != [SUB]]
+        assert all("managementgroups" in q.lower() or "definitions" in q.lower() for q in unscoped)
         assert graph_inventory.collector.service_errors == {}
 
     def test_asset_types_and_metadata(self, graph_inventory):

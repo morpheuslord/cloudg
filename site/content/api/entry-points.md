@@ -1,9 +1,10 @@
 ---
 title: Entry points
-object: cloudg.registry.PluginRegistry
-members: [get_collector, get_scanner, list_collectors, list_scanners]
-lede: Ship a collector or a scanner as its own package, and `PluginRegistry` finds it through Python entry points.
+description: Ship a collector or a scanner as its own package, and PluginRegistry finds it through Python entry points.
 ---
+
+Ship a collector or a scanner as its own package, and `PluginRegistry` finds it through Python entry points.
+{ .lede }
 
 cloudg looks for plugins in two entry point groups, `cloudg.collectors` and `cloudg.scanners`. A package that declares an entry point in one of them becomes visible to `PluginRegistry` as soon as it is installed in the same environment, with no change to cloudg. cloudg registers its own built-ins the same way in its `pyproject.toml`:
 
@@ -27,7 +28,7 @@ Scanner plugins run wherever the built-in scanners run. Name one in `scanners.en
 
 Discovery is lazy and happens once per `PluginRegistry` instance, on the first `get_*` or `list_*` call.
 
-```mermaid caption="What the first get or list call does"
+```mermaid
 flowchart TD
   A["First get_* or list_* call"] --> B["Read entry points in cloudg.collectors"]
   B --> N{"Built-in name?"}
@@ -41,6 +42,8 @@ flowchart TD
   F --> H["Import the built-ins from the table in registry.py"]
   H --> I["Cached for this registry"]
 ```
+What the first get or list call does
+{ .diagram-caption }
 
 The built-ins always come from the table in `cloudg/registry.py`, which maps the same eight names as the entry points above to the same classes, so they load the same way from an installed package and from a source checkout that was never installed. A built-in whose import fails (a missing optional SDK, say) is left out quietly, at debug log level.
 
@@ -121,7 +124,6 @@ from cloudg.collectors.base import BaseCollector
 from cloudg.inventory.linker import RelationshipLinker
 from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, NetworkEdge
 
-
 class CMDBCollector(BaseCollector):
     """Turns a CMDB JSON export into CloudAssets and linked edges."""
 
@@ -174,7 +176,6 @@ from cloudg.schema.models import CloudAsset, Finding, Severity
 
 CHECK_ID = "TAGPOLICY_001"
 
-
 class TagPolicyScanner:
     """Follows the built-in scanners' shape: is_available, run, parse_report."""
 
@@ -213,13 +214,17 @@ class TagPolicyScanner:
 
 Install it into the environment cloudg runs in, editable while you work on it:
 
-```bash tab="pip"
-pip install -e ./cloudg-cmdb
-```
+=== "pip"
 
-```bash tab="uv"
-uv pip install -e ./cloudg-cmdb
-```
+    ```bash
+    pip install -e ./cloudg-cmdb
+    ```
+
+=== "uv"
+
+    ```bash
+    uv pip install -e ./cloudg-cmdb
+    ```
 
 ### Use the plugins
 
@@ -296,15 +301,41 @@ To merge your scanner's findings with an equivalent check from Prowler, Checkov 
 
 - A plugin that fails to import is logged as a warning (`Failed to load scanner plugin ...`) and skipped; the others still load. It goes to the `cloudg.registry` logger, so configure `logging` in your script to see it.
 - `get_collector()` and `get_scanner()` raise `KeyError` for an unknown name, and the message lists the names that are registered.
-- The relation format the linker reads (`target`, `edge`, `relationship`, `reverse`, `properties`) is specified in section 7 of the inventory reference, and the [RelationshipLinker](/api/relationshiplinker/) page shows the linker itself. Unknown `edge` values are linked as `REFERENCES`.
-- Assets from a plugin collector work with everything downstream: [GraphBuilder](/api/graphbuilder/), the reachability analysis, the ontology, and `InventoryResult(assets=..., edges=...).export(dir)` for an `inventory-map.json` that `cloudg deps` can read.
+- The relation format the linker reads (`target`, `edge`, `relationship`, `reverse`, `properties`) is specified in section 7 of the inventory reference, and the [RelationshipLinker](relationshiplinker.md) page shows the linker itself. Unknown `edge` values are linked as `REFERENCES`.
+- Assets from a plugin collector work with everything downstream: [GraphBuilder](graphbuilder.md), the reachability analysis, the ontology, and `InventoryResult(assets=..., edges=...).export(dir)` for an `inventory-map.json` that `cloudg deps` can read.
+
+## Reference
+
+::: cloudg.registry.PluginRegistry
+    options:
+      members:
+        - get_collector
+        - get_scanner
+        - list_collectors
+        - list_scanners
 
 ## Related
 
-:::links
-- [FindingsNormaliser](/api/findingsnormaliser/) Dedupe, scoring and compliance mapping for any findings list.
-- [Data models](/api/models/) `CloudAsset`, `NetworkEdge` and `Finding`, field by field.
-- [RelationshipLinker](/api/relationshiplinker/) How declared relations become edges.
-- [Python recipes](/guides/python-recipes/) More ways to combine the pipeline phases from code.
-- [cloudg report](/cli/report/) Render HTML and SVG from a `findings.json`.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**FindingsNormaliser**](findingsnormaliser.md)
+
+    Dedupe, scoring and compliance mapping for any findings list.
+
+-   [**Data models**](models.md)
+
+    `CloudAsset`, `NetworkEdge` and `Finding`, field by field.
+
+-   [**RelationshipLinker**](relationshiplinker.md)
+
+    How declared relations become edges.
+
+-   [**Python recipes**](../guides/python-recipes.md)
+
+    More ways to combine the pipeline phases from code.
+
+-   [**cloudg report**](../cli/report.md)
+
+    Render HTML and SVG from a `findings.json`.
+
+</div>

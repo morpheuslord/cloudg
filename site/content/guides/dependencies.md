@@ -1,13 +1,15 @@
 ---
 title: Dependencies and blast radius
-lede: "`cloudg deps` asks two questions of any asset on a saved map: what does it need, and what breaks with it?"
-meta:
-  - [Command, "`cloudg deps`"]
-  - [Input, "`inventory-map.json` from `cloudg map`"]
-source: cloudg/inventory/dependencies.py
+description: 'cloudg deps asks two questions of any asset on a saved map: what does it need, and what breaks with it?'
 ---
 
-A map from [`cloudg map`](/guides/inventory-mapping/) records edges the way you would describe them out loud: the queue invokes the function, the function assumes its role, the WAF protects the API. That is the right shape for drawing, but not for impact questions. To ask "what breaks if I rotate this KMS key?" you need every edge turned into one arrow that reads "dependent needs dependency". `cloudg deps` and the `DependencyGraph` class behind it do that conversion and then walk the result.
+`cloudg deps` asks two questions of any asset on a saved map: what does it need, and what breaks with it?
+{ .lede }
+
+**Command** `cloudg deps` &middot; **Input** `inventory-map.json` from `cloudg map`
+{ .page-meta }
+
+A map from [`cloudg map`](inventory-mapping.md) records edges the way you would describe them out loud: the queue invokes the function, the function assumes its role, the WAF protects the API. That is the right shape for drawing, but not for impact questions. To ask "what breaks if I rotate this KMS key?" you need every edge turned into one arrow that reads "dependent needs dependency". `cloudg deps` and the `DependencyGraph` class behind it do that conversion and then walk the result.
 
 `cloudg deps` reads a saved `inventory-map.json` and nothing else. It makes no cloud calls, so you can run it on a laptop against a map someone produced in CI last night.
 
@@ -25,7 +27,7 @@ Two more rules shape the graph. `CONTAINS` edges whose container is an organizat
 
 Here is a small map as `cloudg map` would record it:
 
-```mermaid caption="A slice of a map, with edges in their natural direction"
+```mermaid
 flowchart LR
   WAF["orders-api-acl (WAF)"] -->|PROTECTS| API["orders-api (API Gateway)"]
   API -->|INVOKES| FN["orders-worker (Lambda)"]
@@ -42,10 +44,12 @@ flowchart LR
   TABLE -->|REFERENCES| KEY
   EXT["account 999999999999"] -->|IAM_TRUST| ROLE
 ```
+A slice of a map, with edges in their natural direction
+{ .diagram-caption }
 
 And the same slice after the conversion. Every arrow now points from the asset that needs something to the thing it needs. Note how the `INVOKES` and `PROTECTS` arrows flipped:
 
-```mermaid caption="The same slice as dependency arrows. Walking with the arrows is depends_on (up); walking against them is dependents (down)."
+```mermaid
 flowchart LR
   FN["orders-worker (Lambda)"] --> API["orders-api (API Gateway)"]
   API --> WAF["orders-api-acl (WAF)"]
@@ -62,10 +66,12 @@ flowchart LR
   TABLE --> KEY
   EXT["account 999999999999"] --> ROLE
 ```
+The same slice as dependency arrows. Walking with the arrows is depends_on (up); walking against them is dependents (down).
+{ .diagram-caption }
 
 Upstream of the function sits everything it needs to run, including the API and queue that feed it work. Downstream of the KMS key sits everything that stops working if the key is disabled.
 
-This is an availability and change-impact view. Compromise runs the other way along identity edges: a compromised function exposes its role, not the reverse. For that question, walk the `IAM_TRUST`, `ASSUMES_ROLE` and `GRANTS_ACCESS` edges of the map directly, or use the attack path analysis in [GraphBuilder](/api/graphbuilder/).
+This is an availability and change-impact view. Compromise runs the other way along identity edges: a compromised function exposes its role, not the reverse. For that question, walk the `IAM_TRUST`, `ASSUMES_ROLE` and `GRANTS_ACCESS` edges of the map directly, or use the attack path analysis in [GraphBuilder](../api/graphbuilder.md).
 
 ## Query one asset
 
@@ -311,9 +317,22 @@ for ref in refs:
 
 Against the example map, the ambiguous `orders-worker` stays unresolved in both modes, `function:orders-worker` and `ORDERS-KEY` resolve only with the opt-in tiers, and the other two resolve either way. The opt-in tiers never pick one of several assets that share an exact name. `index.resolve_finding(finding)` tries a finding's `resource_id` and `resource_arn` through the same tiers.
 
-:::links
-- [Inventory mapping](/guides/inventory-mapping/) Produce the map that `cloudg deps` reads.
-- [cloudg deps](/cli/deps/) The command reference.
-- [DependencyGraph](/api/dependencygraph/) Every method and return type.
-- [InventoryResult](/api/inventoryresult/) Loading, analysis and export.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Inventory mapping**](inventory-mapping.md)
+
+    Produce the map that `cloudg deps` reads.
+
+-   [**cloudg deps**](../cli/deps.md)
+
+    The command reference.
+
+-   [**DependencyGraph**](../api/dependencygraph.md)
+
+    Every method and return type.
+
+-   [**InventoryResult**](../api/inventoryresult.md)
+
+    Loading, analysis and export.
+
+</div>

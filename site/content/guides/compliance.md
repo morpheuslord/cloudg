@@ -1,13 +1,13 @@
 ---
 title: Compliance frameworks
-lede: "cloudg doesn't run compliance checks of its own. It takes the findings your scanners produced and tags each one with the framework controls it violates, using rulesets that ship in the package."
-meta:
-  - [Rulesets, "`cloudg/rules/`"]
-  - [Frameworks, "28, with 4,271 controls"]
-  - [Config, "`rulesets.rules_dir`"]
-source: cloudg/normaliser.py
-since: "0.6.0"
+description: cloudg doesn't run compliance checks of its own. It takes the findings your scanners produced and tags each one with the framework controls it violates, using rulesets that ship in the package.
 ---
+
+cloudg doesn't run compliance checks of its own. It takes the findings your scanners produced and tags each one with the framework controls it violates, using rulesets that ship in the package.
+{ .lede }
+
+**Rulesets** `cloudg/rules/` &middot; **Frameworks** 28, with 4,271 controls &middot; **Config** `rulesets.rules_dir` &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 Compliance mapping is the last step of normalisation, so it runs wherever findings are normalised: phase 4 of `cloudg run`, `cloudg ingest`, `cloudg report` on raw findings, `CloudGEngine.normalise_findings()`, `scan()` followed by normalisation, `run_pipeline()`, `run_from_reports()` and the MCP server's dataset loaders. Its output is a list of `ComplianceResult` records in `findings.json` and the Compliance tab of `report.html`.
 
@@ -56,13 +56,13 @@ Loaded together, that is 28 framework names and 4,271 controls. The README's fig
 
 The merged CIS frameworks mix two benchmark versions under one name: the generated controls use CIS 5.0 numbering (`1.4`) and the hand-written ones CIS 3.0 or 2.0 numbering with a prefix (`CIS-1.4`). They don't collide, but don't expect one numbering scheme inside `CIS-AWS`.
 
-`rules/check_equivalence.yaml` sits in the same directory but isn't a ruleset. It tells the deduplicator which checks from different scanners mean the same thing; see [Ingesting existing output](/guides/ingesting/#normalisation-and-deduplication).
+`rules/check_equivalence.yaml` sits in the same directory but isn't a ruleset. It tells the deduplicator which checks from different scanners mean the same thing; see [Ingesting existing output](ingesting.md#normalisation-and-deduplication).
 
 ## How a finding gets its controls
 
 Mapping works in four tiers, most precise first. Each finding carries a list of framework names, `compliance_frameworks`, which the tiers add to.
 
-```mermaid caption="From a finding to framework controls"
+```mermaid
 flowchart TD
   F["Finding"] --> T1["Tier 1: tags set by the scanner parser"]
   T1 --> T2["Tier 2: exact check-ID lookup in ruleset checks"]
@@ -76,6 +76,8 @@ flowchart TD
   G --> CR["ComplianceResult per control: FAIL"]
   P["Prowler passing checks"] --> PC["PASS for ruleset controls no finding fails"]
 ```
+From a finding to framework controls
+{ .diagram-caption }
 
 ### Tier 1: what the scanner said
 
@@ -122,7 +124,7 @@ After tagging, cloudg groups findings by framework and control ID and writes one
 
 `ComplianceStatus` defines four values: `PASS`, `FAIL`, `NOT_APPLICABLE` and `MANUAL`. The normaliser produces `FAIL` and `PASS`. The other two are there for your own code, or for results you build yourself.
 
-A `PASS` result needs an exact match: the passing check's name has to appear in a ruleset control's `checks` list (tier 2), and no finding may map to that control. Its `control_id` and `control_title` come from the ruleset. Passing checks travel from the Prowler parser to the normaliser on the parsed list (see [FindingsNormaliser](/api/findingsnormaliser/)); `cloudg run`, `cloudg ingest`, `CloudGEngine.scan()`, `run_pipeline()`, `run_from_reports()`, `ingest_reports()`, `parse_report()` and the MCP loaders all carry them through.
+A `PASS` result needs an exact match: the passing check's name has to appear in a ruleset control's `checks` list (tier 2), and no finding may map to that control. Its `control_id` and `control_title` come from the ruleset. Passing checks travel from the Prowler parser to the normaliser on the parsed list (see [FindingsNormaliser](../api/findingsnormaliser.md)); `cloudg run`, `cloudg ingest`, `CloudGEngine.scan()`, `run_pipeline()`, `run_from_reports()`, `ingest_reports()`, `parse_report()` and the MCP loaders all carry them through.
 
 The `control_id` depends on how the framework was attached:
 
@@ -167,7 +169,7 @@ for result in controls.get("CIS-AWS", []) + controls.get("NIST-CSF-AWS", []):
         print("   ", f["severity"], f["source_tool"], f["resource_arn"])
 ```
 
-Against the [sample reports from the ingest guide](/guides/ingesting/#try-it-without-any-scanner), the start of the output is:
+Against the [sample reports from the ingest guide](ingesting.md#try-it-without-any-scanner), the start of the output is:
 
 ```console
 $ python compliance_summary.py
@@ -188,7 +190,7 @@ The coarse tier 1 tags and the ruleset frameworks appear side by side: `CIS` nex
 
 ### report.html {#report-html}
 
-The Compliance tab shows one card per framework with Pass and Fail counts and a percentage bar. Fail is the number of distinct controls with findings, and Pass the number of controls that only passing Prowler checks map to. When the input had no passing-check data (no Prowler output, or only failing records), Pass is 0 and the bar reads 0%; treat such a card as a count of affected controls. The Analytics tab charts the same counts, and the detail panel of each finding lists its frameworks. [Reports](/guides/reports/) covers the rest of the page.
+The Compliance tab shows one card per framework with Pass and Fail counts and a percentage bar. Fail is the number of distinct controls with findings, and Pass the number of controls that only passing Prowler checks map to. When the input had no passing-check data (no Prowler output, or only failing records), Pass is 0 and the bar reads 0%; treat such a card as a count of affected controls. The Analytics tab charts the same counts, and the detail panel of each finding lists its frameworks. [Reports](reports.md) covers the rest of the page.
 
 ### compliance-map.json
 
@@ -267,28 +269,32 @@ cp acme_baseline.yaml ./my-rules/
 
 Then point cloudg at it.
 
-```yaml tab="CLI" title="config.yaml"
-rulesets:
-  rules_dir: ./my-rules
-```
+=== "CLI"
 
-```python tab="Python" title="custom_rules.py"
-from cloudg.ingest import ingest_reports
-from cloudg.normaliser import FindingsNormaliser
+    ```yaml title="config.yaml"
+    rulesets:
+      rules_dir: ./my-rules
+    ```
 
-findings = ingest_reports(
-    {
-        "prowler": ["./prowler-output/"],
-        "checkov": ["./results_json.json"],
-        "scoutsuite": ["./scoutsuite-report/"],
-    }
-)
-scan_result = FindingsNormaliser(rules_dir="./my-rules").normalise(findings)
+=== "Python"
 
-for result in scan_result.compliance:
-    if result.framework == "ACME-BASELINE":
-        print(result.control_id, result.control_title, len(result.finding_ids))
-```
+    ```python title="custom_rules.py"
+    from cloudg.ingest import ingest_reports
+    from cloudg.normaliser import FindingsNormaliser
+
+    findings = ingest_reports(
+        {
+            "prowler": ["./prowler-output/"],
+            "checkov": ["./results_json.json"],
+            "scoutsuite": ["./scoutsuite-report/"],
+        }
+    )
+    scan_result = FindingsNormaliser(rules_dir="./my-rules").normalise(findings)
+
+    for result in scan_result.compliance:
+        if result.framework == "ACME-BASELINE":
+            print(result.control_id, result.control_title, len(result.finding_ids))
+    ```
 
 With the CLI, pass the config with `-c`: `cloudg -c config.yaml ingest ...` or `cloudg -c config.yaml run ...`. From `CloudGEngine`, set `config.rulesets.rules_dir`. On the sample reports, the result is:
 
@@ -323,9 +329,22 @@ The list of frameworks it imports is the `FRAMEWORKS` constant at the top of the
 
 ## Next
 
-:::links
-- [Ingesting existing output](/guides/ingesting/) Deduplication and the check-equivalence map.
-- [Reports](/guides/reports/) The Compliance tab and the rest of `report.html`.
-- [Data models](/api/models/) `ComplianceResult`, `ComplianceStatus` and `ScanResult`.
-- [FindingsNormaliser](/api/findingsnormaliser/) The class that does the mapping.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    Deduplication and the check-equivalence map.
+
+-   [**Reports**](reports.md)
+
+    The Compliance tab and the rest of `report.html`.
+
+-   [**Data models**](../api/models.md)
+
+    `ComplianceResult`, `ComplianceStatus` and `ScanResult`.
+
+-   [**FindingsNormaliser**](../api/findingsnormaliser.md)
+
+    The class that does the mapping.
+
+</div>

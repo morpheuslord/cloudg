@@ -1,9 +1,14 @@
 ---
+description: Prints a ready-to-paste MCP client configuration for Claude Desktop, Claude Code, Cursor or VS Code.
 command: mcp config
-lede: Prints a ready-to-paste MCP client configuration for Claude Desktop, Claude Code, Cursor or VS Code.
-intro: |
-  Each client stores MCP servers in a slightly different JSON shape. `cloudg mcp config` writes the right one, with the launch command and arguments filled in, so you don't have to work out paths by hand.
 ---
+
+Prints a ready-to-paste MCP client configuration for Claude Desktop, Claude Code, Cursor or VS Code.
+{ .lede }
+
+Each client stores MCP servers in a slightly different JSON shape. `cloudg mcp config` writes the right one, with the launch command and arguments filled in, so you don't have to work out paths by hand.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
@@ -134,9 +139,22 @@ The command exits 0 after printing. Click returns 2 for an unknown `--client` or
 
 ## Related
 
-:::links
-- [Connect a client](/mcp/connect/) Where each client keeps its configuration, step by step.
-- [cloudg mcp serve](/cli/mcp-serve/) Every option the generated command can take.
-- [Quick start with a desktop client](/mcp/server/quick-start-with-a-desktop-client/) From install to the first question.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) Which `--policy` to put in the launch arguments.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Connect a client**](../mcp/connect.md)
+
+    Where each client keeps its configuration, step by step.
+
+-   [**cloudg mcp serve**](mcp-serve.md)
+
+    Every option the generated command can take.
+
+-   [**Quick start with a desktop client**](../mcp/server/quick-start-with-a-desktop-client.md)
+
+    From install to the first question.
+
+-   [**Built-in profiles**](../mcp/privacy/built-in-profiles.md)
+
+    Which `--policy` to put in the launch arguments.
+
+</div>

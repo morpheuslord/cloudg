@@ -1,8 +1,9 @@
 ---
-object: cloudg.normaliser.FindingsNormaliser
-members: [normalise]
-lede: "Takes findings from any number of scanners and returns one `ScanResult`: duplicates merged, severities adjusted by CVSS, findings sorted, and compliance controls mapped."
+description: 'Takes findings from any number of scanners and returns one ScanResult: duplicates merged, severities adjusted by CVSS, findings sorted, and compliance controls mapped.'
 ---
+
+Takes findings from any number of scanners and returns one `ScanResult`: duplicates merged, severities adjusted by CVSS, findings sorted, and compliance controls mapped.
+{ .lede }
 
 ## What normalise does
 
@@ -10,7 +11,7 @@ lede: "Takes findings from any number of scanners and returns one `ScanResult`: 
 
 `normalise(*finding_lists, assets=None, passed_checks=None)` accepts any number of lists, one per source, and runs them through one pass:
 
-```mermaid caption="FindingsNormaliser.normalise()"
+```mermaid
 flowchart TD
   A["all lists concatenated"] --> B["pass 1: dedupe within a scanner"]
   B --> C["pass 2: merge across scanners"]
@@ -20,6 +21,8 @@ flowchart TD
   F --> G["one ComplianceResult per framework control"]
   G --> H["ScanResult"]
 ```
+FindingsNormaliser.normalise()
+{ .diagram-caption }
 
 ### Deduplication
 
@@ -31,7 +34,7 @@ A merge keeps the finding with the higher severity, joins the tool names into `s
 
 ### Scoring
 
-A `cvss_score` of 9.0 or more sets the severity to `CRITICAL`. A score from 7.0 to 8.9 raises anything below `HIGH` to `HIGH`. Severity never goes down. `risk_score` on the finding is computed from severity and CVSS whenever you read it; see [Data models](/api/models/).
+A `cvss_score` of 9.0 or more sets the severity to `CRITICAL`. A score from 7.0 to 8.9 raises anything below `HIGH` to `HIGH`. Severity never goes down. `risk_score` on the finding is computed from severity and CVSS whenever you read it; see [Data models](models.md).
 
 ### Compliance mapping
 
@@ -53,37 +56,7 @@ These results have status `FAIL`. Passing checks add `PASS` results: a ruleset c
 Five findings about one bucket and one image, constructed by hand so each rule shows. Runs offline.
 
 ```python title="normalise_demo.py"
-from cloudg.normaliser import FindingsNormaliser
-from cloudg.schema.models import Finding, Severity
-
-BUCKET = "arn:aws:s3:::orders-archive"
-
-
-def finding(tool, check, title, severity, **extra):
-    return Finding(resource_id=BUCKET, resource_arn=BUCKET, source_tool=tool,
-                   source_finding_id=check, title=title, description=title,
-                   severity=severity, **extra)
-
-
-prowler = [
-    finding("prowler", "prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-orders-archive",
-            "S3 bucket default encryption", Severity.MEDIUM),
-    # the same check reported twice (two output formats, say): a within-scanner duplicate
-    finding("prowler", "prowler-aws-s3_bucket_default_encryption-123456789012-eu-west-1-orders-archive",
-            "S3 bucket default encryption", Severity.MEDIUM),
-]
-trivy = [
-    # equivalent check (AVD-AWS-0088), same resource, same normalised title
-    finding("trivy", "AVD-AWS-0088", "[Trivy] S3 bucket default encryption", Severity.HIGH),
-    # a CVE with a CVSS score of 9.8 reported as MEDIUM
-    finding("trivy", "CVE-2024-0001", "openssl: buffer overflow", Severity.MEDIUM, cvss_score=9.8),
-]
-untagged = [finding("custom", None, "CloudTrail logging disabled in eu-west-1", Severity.LOW)]
-
-result = FindingsNormaliser().normalise(prowler, trivy, untagged)
-for f in result.findings:
-    print(f"{f.severity.value:8} {f.risk_score:4} {f.source_tool:16} {f.title} {f.compliance_frameworks[:4]}")
-print(len(result.compliance), "compliance results")
+--8<-- "ingest/normalise_demo.py"
 ```
 
 ```console
@@ -171,11 +144,31 @@ Merging across scanners needs the same resource identifier on both sides. Checko
 
 The normaliser keeps the last result on the instance, but nothing reads it back; treat `normalise()` as a function and use its return value. One instance can normalise any number of batches.
 
+## Reference
+
+::: cloudg.normaliser.FindingsNormaliser
+    options:
+      members:
+        - normalise
+
 ## Related
 
-:::links
-- [Compliance frameworks](/guides/compliance/) Which frameworks cloudg maps and how to read the results.
-- [parse_report](/api/parse-report/) Getting findings out of scanner output.
-- [Data models](/api/models/) Finding, ComplianceResult and ScanResult.
-- [Ingesting existing output](/guides/ingesting/) The CLI path through the same normaliser.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Compliance frameworks**](../guides/compliance.md)
+
+    Which frameworks cloudg maps and how to read the results.
+
+-   [**parse_report**](parse-report.md)
+
+    Getting findings out of scanner output.
+
+-   [**Data models**](models.md)
+
+    Finding, ComplianceResult and ScanResult.
+
+-   [**Ingesting existing output**](../guides/ingesting.md)
+
+    The CLI path through the same normaliser.
+
+</div>

@@ -1,9 +1,9 @@
 ---
-object: [cloudg.config.CloudGConfig, cloudg.config.load_config]
-members:
-  cloudg.config.CloudGConfig: []
-lede: "`CloudGConfig` is the pydantic model behind `config.yaml`. Build it in code, load it from a file, or do both and override a few fields."
+description: CloudGConfig is the pydantic model behind config.yaml. Build it in code, load it from a file, or do both and override a few fields.
 ---
+
+`CloudGConfig` is the pydantic model behind `config.yaml`. Build it in code, load it from a file, or do both and override a few fields.
+{ .lede }
 
 ## Two ways to get a config
 
@@ -19,9 +19,9 @@ config.aws.regions = ["eu-west-1", "eu-central-1"]
 config.scanners.enabled = ["prowler", "iam"]
 ```
 
-From a file, `load_config(path)` reads the YAML with `yaml.safe_load` and hands the dict to `CloudGConfig.model_validate()`. The file has the same shape as the model: top-level keys are the attributes below, nested keys are the fields of each section. The generated [config.yaml reference](/reference/config/providers/) documents every key with its default.
+From a file, `load_config(path)` reads the YAML with `yaml.safe_load` and hands the dict to `CloudGConfig.model_validate()`. The file has the same shape as the model: top-level keys are the attributes below, nested keys are the fields of each section. The generated [config.yaml reference](../reference/config/providers.md) documents every key with its default.
 
-```mermaid caption="What load_config does with the path it gets"
+```mermaid
 flowchart TD
   P["load_config(path)"] --> N{"path is None?"}
   N -->|yes| D["CloudGConfig() defaults"]
@@ -33,6 +33,8 @@ flowchart TD
   U --> C["CloudGConfig"]
   V -->|invalid value| X["pydantic ValidationError"]
 ```
+What load_config does with the path it gets
+{ .diagram-caption }
 
 Two branches in that diagram return defaults instead of failing: a `None` path and a path that does not exist. A typo in the file name therefore gives you a run against `us-east-1` with every scanner enabled, and the only sign is a `WARNING cloudg.config: Config file ... not found, using defaults` line. If that matters, check `Path(path).is_file()` before calling, or use the strict loader in the examples. An empty file also gives defaults. The CLI calls the same function with the `-c` value and does not look for a `config.yaml` in the working directory on its own.
 
@@ -77,7 +79,7 @@ Every section ignores keys it does not define, and says so. An unknown key at th
 | every Azure credential | `DefaultAzureCredential` |
 | `gcp.credentials_file` | application default credentials, which read `GOOGLE_APPLICATION_CREDENTIALS` |
 
-Two variables change cloudg behaviour outside the config: `CLOUDG_CATALOG_DIR` overlays the inventory reference catalogs, and `CLOUDG_CACHE_DIR` moves the Cloud Control schema cache (default `~/.cache/cloudg`). [Authentication](/guides/authentication/) covers the full credential order for each provider.
+Two variables change cloudg behaviour outside the config: `CLOUDG_CATALOG_DIR` overlays the inventory reference catalogs, and `CLOUDG_CACHE_DIR` moves the Cloud Control schema cache (default `~/.cache/cloudg`). [Authentication](../guides/authentication.md) covers the full credential order for each provider.
 
 ## Examples
 
@@ -158,7 +160,6 @@ from pydantic import BaseModel
 
 from cloudg import CloudGConfig
 
-
 def unknown_keys(data: object, model: type[BaseModel], path: str = "") -> list[str]:
     """Dotted paths of the keys in `data` that `model` does not define."""
     if not isinstance(data, dict):
@@ -172,7 +173,6 @@ def unknown_keys(data: object, model: type[BaseModel], path: str = "") -> list[s
             found += unknown_keys(value, field.annotation, f"{path}{key}.")
     return found
 
-
 def load_strict(path: str) -> CloudGConfig:
     file = Path(path)
     if not file.is_file():
@@ -182,7 +182,6 @@ def load_strict(path: str) -> CloudGConfig:
     if bad:
         raise ValueError("unknown config keys: " + ", ".join(bad))
     return CloudGConfig.model_validate(data)
-
 
 if __name__ == "__main__":
     try:
@@ -211,12 +210,36 @@ The patterns are enforced at construction: `aws.retry_mode` must be `legacy`, `s
 
 `InventoryMapper` deep-copies the config before a run, so organization discovery (which rewrites `aws.accounts`, `aws.role_name` and possibly `aws.regions`) never changes the object you passed in.
 
+## Reference
+
+::: cloudg.config.CloudGConfig
+    options:
+      members: false
+
+::: cloudg.config.load_config
+
 ## Related
 
-:::links
-- [config.yaml reference](/reference/config/providers/) Every key, its type and default.
-- [Rate limit settings](/reference/config/ratelimit/) The `ratelimit` section in full.
-- [Authentication](/guides/authentication/) Credential order for AWS, Azure and GCP.
-- [CloudGEngine](/api/cloudgengine/) What runs on the config.
-- [Rate limits and throttling](/guides/rate-limits/) When to change the `ratelimit` defaults.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**config.yaml reference**](../reference/config/providers.md)
+
+    Every key, its type and default.
+
+-   [**Rate limit settings**](../reference/config/ratelimit.md)
+
+    The `ratelimit` section in full.
+
+-   [**Authentication**](../guides/authentication.md)
+
+    Credential order for AWS, Azure and GCP.
+
+-   [**CloudGEngine**](cloudgengine.md)
+
+    What runs on the config.
+
+-   [**Rate limits and throttling**](../guides/rate-limits.md)
+
+    When to change the `ratelimit` defaults.
+
+</div>

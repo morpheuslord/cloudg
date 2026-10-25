@@ -1,15 +1,20 @@
 ---
+description: Runs cloudg as a Model Context Protocol server, so an AI assistant can query your inventory, graph, findings and compliance data through tools, resources and prompts.
 command: mcp serve
-lede: Runs cloudg as a Model Context Protocol server, so an AI assistant can query your inventory, graph, findings and compliance data through tools, resources and prompts.
-intro: |
-  Desktop clients (Claude Desktop, Claude Code, Cursor, VS Code) launch `cloudg mcp serve` themselves over stdio, and you rarely type it by hand. You do type it when you serve over HTTP, test a policy, or preload datasets. [cloudg mcp config](/cli/mcp-config/) writes the client snippet for you. The [MCP server](/mcp/) section covers the server in depth.
 ---
+
+Runs cloudg as a Model Context Protocol server, so an AI assistant can query your inventory, graph, findings and compliance data through tools, resources and prompts.
+{ .lede }
+
+Desktop clients (Claude Desktop, Claude Code, Cursor, VS Code) launch `cloudg mcp serve` themselves over stdio, and you rarely type it by hand. You do type it when you serve over HTTP, test a policy, or preload datasets. [cloudg mcp config](mcp-config.md) writes the client snippet for you. The [MCP server](../mcp/index.md) section covers the server in depth.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
 The command builds one MCP layer from its options, picks a server implementation, and serves until the transport closes: end of input on stdio, Ctrl+C on HTTP.
 
-```mermaid caption="From the command line to a running server"
+```mermaid
 flowchart TD
   A["Options and env vars"] --> B["Validate tokens and option combinations"]
   B -->|invalid| X["Error before start"]
@@ -22,6 +27,8 @@ flowchart TD
   G --> I["Stop: save pseudonym vault"]
   H --> I
 ```
+From the command line to a running server
+{ .diagram-caption }
 
 ### Building the layer
 
@@ -29,7 +36,7 @@ These options are shared with `tools`, `resources`, `prompts`, `call` and `read`
 
 The registry is the built-in catalog unless `--registry MODULE:ATTR` names your own. `--read-only` then drops every tool that writes files, calls cloud APIs, runs scanners or is marked destructive. `--include-category`, `--exclude-category`, `--include-tool` and `--exclude-tool` narrow it further, and `--prefix` is put in front of every tool and prompt name (at most 64 characters from `A-Z a-z 0-9 _ . -`).
 
-The policy comes from `--policy`, which accepts a profile name (`open`, `standard`, `strict`, `read_only`, `airgapped`, `audit`, `soc-analyst`), a YAML or JSON file, or inline JSON. Without the option, cloudg reads `CLOUDG_MCP_POLICY`, and without that it uses `standard`. The policy decides which tools each principal sees and which privacy transforms run on results. See [Built-in profiles](/mcp/privacy/built-in-profiles/).
+The policy comes from `--policy`, which accepts a profile name (`open`, `standard`, `strict`, `read_only`, `airgapped`, `audit`, `soc-analyst`), a YAML or JSON file, or inline JSON. Without the option, cloudg reads `CLOUDG_MCP_POLICY`, and without that it uses `standard`. The policy decides which tools each principal sees and which privacy transforms run on results. See [Built-in profiles](../mcp/privacy/built-in-profiles.md).
 
 Middleware is added from the options. A metrics middleware is always on, which is why `cloudg://metrics` is always listed. `--audit-log` (or `CLOUDG_MCP_AUDIT_LOG`) appends a JSONL record per call with argument values hashed. `--max-concurrency` caps parallel tool calls, and `--cache-ttl` caches results of read-only, idempotent tools for that many seconds. `--timeout` is the default per-call limit, 300 seconds; tools with their own limit, such as the live collection tools, keep theirs.
 
@@ -48,7 +55,7 @@ $ cloudg mcp serve --transport sse --flavor fastmcp --json-response
 Error: --json-response / --stateless apply to Streamable HTTP; the fastmcp flavor cannot combine them with --transport sse
 ```
 
-`--page-size` (items per page in list results) only applies to the native flavor. [Flavors](/mcp/server/flavors/) compares them.
+`--page-size` (items per page in list results) only applies to the native flavor. [Flavors](../mcp/server/flavors.md) compares them.
 
 ### stdio
 
@@ -94,9 +101,9 @@ $ cloudg mcp serve --transport http --auth-token env:CLOUDG_MCP_TOKEN
 Error: Invalid value for --auth-token: Environment variable 'CLOUDG_MCP_TOKEN' for an auth token is empty
 ```
 
-:::warning Binding beyond loopback
-Keep `--host 127.0.0.1` unless you also set `--auth-token`. On a non-loopback bind the `Host` header is not checked unless you pass `--allowed-host`, so set that too.
-:::
+!!! warning "Binding beyond loopback"
+
+    Keep `--host 127.0.0.1` unless you also set `--auth-token`. On a non-loopback bind the `Host` header is not checked unless you pass `--allowed-host`, so set that too.
 
 `--cors-origin` grants CORS to a browser origin. Only the native flavor supports it.
 
@@ -172,11 +179,30 @@ cloudg mcp serve --log-level DEBUG 2> ./mcp-server.log
 
 ## Related
 
-:::links
-- [Connect a client](/mcp/connect/) Step-by-step setup for each desktop client.
-- [cloudg mcp config](/cli/mcp-config/) Generate the client configuration snippet.
-- [Transports and protocol versions](/mcp/server/transports-and-protocol-versions/) stdio, Streamable HTTP and SSE in detail.
-- [Security model in brief](/mcp/server/security-model-in-brief/) What the policy, tokens and Origin checks protect.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) What each `--policy` profile shows and hides.
-- [cloudg mcp tools](/cli/mcp-tools/) Check what a policy exposes before you serve it.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Connect a client**](../mcp/connect.md)
+
+    Step-by-step setup for each desktop client.
+
+-   [**cloudg mcp config**](mcp-config.md)
+
+    Generate the client configuration snippet.
+
+-   [**Transports and protocol versions**](../mcp/server/transports-and-protocol-versions.md)
+
+    stdio, Streamable HTTP and SSE in detail.
+
+-   [**Security model in brief**](../mcp/server/security-model-in-brief.md)
+
+    What the policy, tokens and Origin checks protect.
+
+-   [**Built-in profiles**](../mcp/privacy/built-in-profiles.md)
+
+    What each `--policy` profile shows and hides.
+
+-   [**cloudg mcp tools**](mcp-tools.md)
+
+    Check what a policy exposes before you serve it.
+
+</div>

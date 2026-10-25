@@ -8,6 +8,8 @@ import shutil
 import subprocess  # nosec B404 - runs the wrapped scanner CLIs with argv lists, never a shell
 from typing import Any
 
+from cloudg.exceptions import ReportParseError, ScannerExecutionError
+from cloudg.scanners._errors import ScannerErrorLog
 from cloudg.schema.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -21,22 +23,28 @@ _SEVERITY_MAP = {
 }
 
 
-class TrivyScanner:
+class TrivyScanner(ScannerErrorLog):
     """Wraps Trivy CLI for container image CVE and secret scanning.
 
     Scans container images from ECR/ACR/GCR and maps CVEs to findings.
+    With ``strict=True`` a failure raises a :mod:`cloudg.exceptions`
+    ``ScannerError`` instead of being recorded in ``errors``.
     """
+
+    scanner_name = "trivy"
+    executable = "trivy"
+    install_hint = "see https://trivy.dev/"
 
     def __init__(
         self,
         extra_args: list[str] | None = None,
         timeout_seconds: int = 1800,
+        strict: bool = False,
     ) -> None:
         """``timeout_seconds`` applies to each image or directory scan."""
         self._extra_args = extra_args or []
         self._timeout_seconds = timeout_seconds
-        #: Why scans did not finish (timeouts, launch failures); empty on success
-        self.errors: list[str] = []
+        self._init_errors(strict)
 
     @staticmethod
     def is_available() -> bool:
@@ -53,9 +61,7 @@ class TrivyScanner:
             List of Finding objects for discovered CVEs.
         """
         if not self.is_available():
-            logger.warning(
-                "Trivy is not installed. Install from: https://trivy.dev/. Skipping Trivy scan."
-            )
+            self._missing()
             return []
 
         cmd = [
@@ -84,11 +90,13 @@ class TrivyScanner:
             logger.error(
                 "Trivy scan timed out after %ds for image %s", self._timeout_seconds, image
             )
-            self.errors.append(f"timed out after {self._timeout_seconds}s scanning {image}")
+            self._timed_out(self._timeout_seconds, image)
             return []
         except Exception as exc:
             logger.error("Failed to run Trivy for %s: %s", image, exc)
-            self.errors.append(f"could not scan {image}: {exc}")
+            self._fail(
+                ScannerExecutionError("trivy", f"could not scan {image}: {exc}", target=image)
+            )
             return []
 
         return self._parse_output(result.stdout, image)
@@ -120,10 +128,7 @@ class TrivyScanner:
             Combined list of Finding objects.
         """
         if not self.is_available():
-            logger.warning(
-                "Trivy is not installed. Install from: https://trivy.dev/. "
-                "Skipping Trivy filesystem scan."
-            )
+            self._missing()
             return []
 
         all_findings: list[Finding] = []
@@ -158,11 +163,15 @@ class TrivyScanner:
                     self._timeout_seconds,
                     directory,
                 )
-                self.errors.append(f"timed out after {self._timeout_seconds}s scanning {directory}")
+                self._timed_out(self._timeout_seconds, directory)
                 continue
             except Exception as exc:
                 logger.error("Failed to run Trivy fs for %s: %s", directory, exc)
-                self.errors.append(f"could not scan {directory}: {exc}")
+                self._fail(
+                    ScannerExecutionError(
+                        "trivy", f"could not scan {directory}: {exc}", target=directory
+                    )
+                )
                 continue
 
             findings = self._parse_fs_output(result.stdout, directory)
@@ -171,12 +180,14 @@ class TrivyScanner:
         return all_findings
 
     @classmethod
-    def parse_report(cls, path: str) -> list[Finding]:
+    def parse_report(cls, path: str, *, strict: bool = False) -> list[Finding]:
         """Parse existing Trivy JSON output without running Trivy.
 
         Accepts a ``trivy image|fs --format json`` report file or a
         directory of them. Image scans and filesystem/repository scans are
-        told apart by the report's ``ArtifactType`` field.
+        told apart by the report's ``ArtifactType`` field. With
+        ``strict=True`` an unreadable or malformed file raises
+        :class:`~cloudg.exceptions.ReportParseError` instead of being skipped.
         """
         from pathlib import Path
 
@@ -184,21 +195,29 @@ class TrivyScanner:
         if p.is_dir():
             candidates = sorted(p.rglob("*.json"))
             if not candidates:
+                if strict:
+                    raise ReportParseError("trivy", "no JSON results found", path=str(path))
                 logger.warning("No Trivy JSON results found in %s", path)
                 return []
         else:
             candidates = [p]
 
-        scanner = cls()
+        scanner = cls._report_reader(strict)
         findings: list[Finding] = []
         for file_path in candidates:
             try:
                 content = file_path.read_text()
                 data = json.loads(content)
             except (OSError, json.JSONDecodeError) as exc:
+                if strict:
+                    raise ReportParseError(
+                        "trivy", f"could not read: {exc}", path=str(file_path)
+                    ) from exc
                 logger.warning("Failed to read Trivy output %s: %s", file_path, exc)
                 continue
             if not isinstance(data, dict):
+                if strict:
+                    raise ReportParseError("trivy", "not a Trivy JSON report", path=str(file_path))
                 logger.warning("Unrecognised Trivy output structure in %s", file_path)
                 continue
 
@@ -223,6 +242,7 @@ class TrivyScanner:
             data = json.loads(stdout)
         except json.JSONDecodeError as exc:
             logger.warning("Failed to parse Trivy fs JSON: %s", exc)
+            self._bad_output(f"fs output for {directory} is not JSON: {exc}")
             return []
 
         results = data.get("Results", [])
@@ -300,6 +320,7 @@ class TrivyScanner:
             data = json.loads(stdout)
         except json.JSONDecodeError as exc:
             logger.warning("Failed to parse Trivy JSON: %s", exc)
+            self._bad_output(f"output for {image} is not JSON: {exc}")
             return []
 
         results = data.get("Results", [])

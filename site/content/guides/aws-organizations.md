@@ -1,19 +1,21 @@
 ---
 title: AWS Organizations
-lede: "With `--org`, `cloudg map` starts at the management account, finds every member account and maps them all, with the OU tree, SCPs and Control Tower around them."
-meta:
-  - [Command, "`cloudg map --org`"]
-  - [Runs from, "Management account or delegated administrator"]
-source: cloudg/inventory/organization.py
+description: With --org, cloudg map starts at the management account, finds every member account and maps them all, with the OU tree, SCPs and Control Tower around them.
 ---
 
-Mapping one account at a time misses what holds an organization together: which OU an account sits in, which SCPs restrict it, which Control Tower controls apply, and which roles in one account trust another. `cloudg map --org` reads the organization first, picks the accounts you asked for, assumes a role in each one, and maps all of them into a single [inventory map](/guides/inventory-mapping/). Accounts hang under their OUs, SCPs and controls point at what they govern, and cross-account trust becomes an edge you can query with [`cloudg deps`](/guides/dependencies/).
+With `--org`, `cloudg map` starts at the management account, finds every member account and maps them all, with the OU tree, SCPs and Control Tower around them.
+{ .lede }
+
+**Command** `cloudg map --org` &middot; **Runs from** Management account or delegated administrator
+{ .page-meta }
+
+Mapping one account at a time misses what holds an organization together: which OU an account sits in, which SCPs restrict it, which Control Tower controls apply, and which roles in one account trust another. `cloudg map --org` reads the organization first, picks the accounts you asked for, assumes a role in each one, and maps all of them into a single [inventory map](inventory-mapping.md). Accounts hang under their OUs, SCPs and controls point at what they govern, and cross-account trust becomes an edge you can query with [`cloudg deps`](dependencies.md).
 
 Every call cloudg makes here is read-only: `Describe*`, `List*` and `Get*` against Organizations and Control Tower, then the usual read calls inside each member account.
 
 ## What happens during discovery
 
-```mermaid caption="Organization discovery, then one role assumption per member account and region"
+```mermaid
 sequenceDiagram
   participant C as cloudg
   participant S as STS
@@ -33,6 +35,8 @@ sequenceDiagram
     C->>M: Deep collectors (read-only)
   end
 ```
+Organization discovery, then one role assumption per member account and region
+{ .diagram-caption }
 
 In order:
 
@@ -80,13 +84,14 @@ The caller's own account is mapped too, with the caller's credentials and not th
 
 cloudg assumes one role, by name, in every member account. The default is `AWSControlTowerExecution`, because Control Tower creates it in every account it enrolls.
 
-:::warning AWSControlTowerExecution has admin rights
-`AWSControlTowerExecution` carries administrator permissions. cloudg only reads, but anything that can run cloudg with management-account credentials could do more with that role. The read-only role Control Tower creates, `aws-controltower-ReadOnlyExecutionRole`, can't be used instead: it only trusts a role in the audit account. For production, deploy your own read-only role to every account and pass it with `--org-role`.
-:::
+!!! warning "AWSControlTowerExecution has admin rights"
+
+    `AWSControlTowerExecution` carries administrator permissions. cloudg only reads, but anything that can run cloudg with management-account credentials could do more with that role. The read-only role Control Tower creates, `aws-controltower-ReadOnlyExecutionRole`, can't be used instead: it only trusts a role in the audit account. For production, deploy your own read-only role to every account and pass it with `--org-role`.
 
 A service-managed CloudFormation StackSet deploys the role to every account in the OUs you target, and to accounts that join those OUs later.
 
-::::steps
+<div class="steps" markdown>
+
 ### Save the template
 
 ```yaml title="cloudg-readonly-role.yaml"
@@ -157,48 +162,55 @@ aws cloudformation list-stack-instances --stack-set-name cloudg-readonly
 ```
 
 Service-managed StackSets never deploy to the management account itself. cloudg doesn't need them to, since it maps the management account with the caller's own credentials.
-::::
 
-To map Kubernetes workloads inside EKS clusters as well, each cluster needs an access entry for `cloudg-readonly` with the `AmazonEKSViewPolicy`. The [inventory mapping guide](/guides/inventory-mapping/#kubernetes-inside-eks) has the two `aws eks` commands.
+</div>
+
+To map Kubernetes workloads inside EKS clusters as well, each cluster needs an access entry for `cloudg-readonly` with the `AmazonEKSViewPolicy`. The [inventory mapping guide](inventory-mapping.md#kubernetes-inside-eks) has the two `aws eks` commands.
 
 ## Map the organization
 
-```bash tab="CLI"
-cloudg map -p aws --profile management --org --org-role cloudg-readonly --regions all
-```
+=== "CLI"
 
-```python tab="Python" title="map_org.py"
-from cloudg import CloudGConfig
-from cloudg.inventory import InventoryMapper
+    ```bash
+    cloudg map -p aws --profile management --org --org-role cloudg-readonly --regions all
+    ```
 
-config = CloudGConfig(providers=["aws"])
-config.aws.profile = "management"
-config.aws.regions = ["ALL"]
+=== "Python"
 
-org = config.aws.organization
-org.enabled = True
-org.role_name = "cloudg-readonly"
-org.include_ous = ["Workloads"]
-org.exclude_accounts = ["111122223333"]
+    ```python title="map_org.py"
+    from cloudg import CloudGConfig
+    from cloudg.inventory import InventoryMapper
 
-mapper = InventoryMapper(config)
-inventory = mapper.map_inventory_sync()
-paths = inventory.export("./reports")
+    config = CloudGConfig(providers=["aws"])
+    config.aws.profile = "management"
+    config.aws.regions = ["ALL"]
 
-topology = mapper.organization          # None when discovery failed
-if topology is not None:
-    print(topology.organization_id, len(topology.accounts), "accounts")
-    print("Control Tower:", topology.control_tower_enabled, topology.governed_regions)
-print(paths.get("organization"))
-```
+    org = config.aws.organization
+    org.enabled = True
+    org.role_name = "cloudg-readonly"
+    org.include_ous = ["Workloads"]
+    org.exclude_accounts = ["111122223333"]
 
-```bash tab="Docker"
-docker run --rm \
-  -v ~/.aws:/home/cloudg/.aws:ro \
-  -v "$PWD/reports:/app/reports" \
-  ghcr.io/morpheuslord/cloudg:latest \
-  map -p aws --profile management --org --org-role cloudg-readonly --regions all
-```
+    mapper = InventoryMapper(config)
+    inventory = mapper.map_inventory_sync()
+    paths = inventory.export("./reports")
+
+    topology = mapper.organization          # None when discovery failed
+    if topology is not None:
+        print(topology.organization_id, len(topology.accounts), "accounts")
+        print("Control Tower:", topology.control_tower_enabled, topology.governed_regions)
+    print(paths.get("organization"))
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v ~/.aws:/home/cloudg/.aws:ro \
+      -v "$PWD/reports:/app/reports" \
+      ghcr.io/morpheuslord/cloudg:latest \
+      map -p aws --profile management --org --org-role cloudg-readonly --regions all
+    ```
 
 With `--org`, the CLI's configuration panel shows "Organization: discover all accounts" (plus the OU filter, if any) and the member role it will use. After the run an "Organization" table lists the organization ID, the number of accounts and OUs, whether Control Tower was found and the governed regions, ahead of the usual inventory summary.
 
@@ -385,9 +397,22 @@ It raises `RuntimeError` when the caller can't describe or list the organization
 | Far fewer accounts than expected | an `--ou` value matched a different OU of the same name | use OU IDs |
 | Fewer regions than `--regions all` would give | Control Tower governed regions replaced `all` | set `use_governed_regions: false`, or pass the regions explicitly |
 
-:::links
-- [Inventory mapping](/guides/inventory-mapping/) What a mapping run collects in each account.
-- [Dependencies and blast radius](/guides/dependencies/) Query cross-account edges on the finished map.
-- [Authentication](/guides/authentication/) Profiles, OIDC and role assumption for the base credentials.
-- [cloudg map](/cli/map/) Every option of the command.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Inventory mapping**](inventory-mapping.md)
+
+    What a mapping run collects in each account.
+
+-   [**Dependencies and blast radius**](dependencies.md)
+
+    Query cross-account edges on the finished map.
+
+-   [**Authentication**](authentication.md)
+
+    Profiles, OIDC and role assumption for the base credentials.
+
+-   [**cloudg map**](../cli/map.md)
+
+    Every option of the command.
+
+</div>

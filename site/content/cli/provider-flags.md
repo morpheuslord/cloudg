@@ -1,7 +1,10 @@
 ---
 title: Provider and region flags
-lede: "`-p`, `--region`, `--regions`, `--subscription-id`, `--project-id` and `--profile` decide which clouds, accounts and regions a command touches. They look the same on every command but don't behave the same everywhere."
+description: -p, --region, --regions, --subscription-id, --project-id and --profile decide which clouds, accounts and regions a command touches. They look the same on every command but don't behave the same everywhere.
 ---
+
+`-p`, `--region`, `--regions`, `--subscription-id`, `--project-id` and `--profile` decide which clouds, accounts and regions a command touches. They look the same on every command but don't behave the same everywhere.
+{ .lede }
 
 ## Which command takes which flag
 
@@ -43,7 +46,7 @@ Without either flag, `run` and `map` use the config: `aws.regions` defaults to `
 
 ### How discovery works
 
-```mermaid caption="Resolving the AWS region list"
+```mermaid
 flowchart TD
   A["aws.regions after flags"] --> B{"Is it ALL?"}
   B -->|no| C["Use the list as given"]
@@ -53,6 +56,8 @@ flowchart TD
   F -->|ok| G["Enabled regions, sorted"]
   F -->|"fails"| H["The 17 regions enabled by default"]
 ```
+Resolving the AWS region list
+{ .diagram-caption }
 
 | Provider | API | Filter | Fallback |
 |---|---|---|---|
@@ -89,7 +94,7 @@ To cover a whole GCP organization in one Cloud Asset Inventory listing, set `gcp
 
 ## --profile
 
-An AWS CLI profile name, SSO profiles included. On `run` and `map` it sets `aws.profile`, which sits third in the AWS credential order: direct keys and OIDC federation win over it. See [Auth flags](/cli/auth-flags/).
+An AWS CLI profile name, SSO profiles included. On `run` and `map` it sets `aws.profile`, which sits third in the AWS credential order: direct keys and OIDC federation win over it. See [Auth flags](auth-flags.md).
 
 On `run`, `collect` and `scan` it replaces `aws.profile` the same way. `run` and `scan` also hand the profile to the scanners, for AWS only: Prowler gets `-p <profile>` and ScoutSuite gets `--profile <profile>`, unless direct keys or a `role_arn` win, in which case they get the resulting keys instead. On `collect`, with no profile from the flag or the config, `AWS_PROFILE` and then the default chain apply.
 
@@ -127,9 +132,22 @@ cloudg collect -p aws --profile audit --region ap-southeast-2
 
 ## Related
 
-:::links
-- [Auth flags](/cli/auth-flags/) Credentials for each provider and which method wins.
-- [Output flags](/cli/output-flags/) Where results go.
-- [cloudg map](/cli/map/) Organization-wide AWS mapping with `--org`.
-- [Provider settings](/reference/config/providers/) The matching `config.yaml` keys.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Auth flags**](auth-flags.md)
+
+    Credentials for each provider and which method wins.
+
+-   [**Output flags**](output-flags.md)
+
+    Where results go.
+
+-   [**cloudg map**](map.md)
+
+    Organization-wide AWS mapping with `--org`.
+
+-   [**Provider settings**](../reference/config/providers.md)
+
+    The matching `config.yaml` keys.
+
+</div>

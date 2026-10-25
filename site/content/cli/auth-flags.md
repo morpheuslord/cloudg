@@ -1,13 +1,16 @@
 ---
 title: Auth flags
-lede: "Every `--aws-*`, `--azure-*` and `--gcp-*` flag of `cloudg run`, the config key it fills, the environment variable cloudg falls back to, and which method wins when several are set."
+description: Every --aws-*, --azure-* and --gcp-* flag of cloudg run, the config key it fills, the environment variable cloudg falls back to, and which method wins when several are set.
 ---
 
-The credential flags exist on `cloudg run` only. Each one writes a single field of the loaded config and changes nothing else, so you can mix flags with values from `config.yaml`. `cloudg map` takes the same settings from `config.yaml` (it has `--profile` and nothing else). `cloudg collect` uses neither and works from the environment and default chains alone. The [Authentication](/guides/authentication/) guide covers the identities, roles and permissions each method needs; this page is about the flags.
+Every `--aws-*`, `--azure-*` and `--gcp-*` flag of `cloudg run`, the config key it fills, the environment variable cloudg falls back to, and which method wins when several are set.
+{ .lede }
 
-:::warning Secrets on the command line
-Values passed as flags can be seen in your shell history and, while cloudg runs, in the process list of the machine. Prefer the environment variables or a `config.yaml` with tight file permissions for secrets such as `--aws-secret` and `--azure-client-secret`.
-:::
+The credential flags exist on `cloudg run` only. Each one writes a single field of the loaded config and changes nothing else, so you can mix flags with values from `config.yaml`. `cloudg map` takes the same settings from `config.yaml` (it has `--profile` and nothing else). `cloudg collect` uses neither and works from the environment and default chains alone. The [Authentication](../guides/authentication.md) guide covers the identities, roles and permissions each method needs; this page is about the flags.
+
+!!! warning "Secrets on the command line"
+
+    Values passed as flags can be seen in your shell history and, while cloudg runs, in the process list of the machine. Prefer the environment variables or a `config.yaml` with tight file permissions for secrets such as `--aws-secret` and `--azure-client-secret`.
 
 ## AWS
 
@@ -23,7 +26,7 @@ Values passed as flags can be seen in your shell history and, while cloudg runs,
 
 cloudg builds the base session from the first method that is complete, then optionally assumes a role on top:
 
-```mermaid caption="How cloudg picks AWS credentials"
+```mermaid
 flowchart TD
   A{"Key and secret both set?"} -->|yes| K["Direct keys, plus session token if set"]
   A -->|no| B{"Role ARN and token file set?"}
@@ -36,6 +39,8 @@ flowchart TD
   D --> R
   R -->|yes| S["sts:AssumeRole, with ExternalId if set"]
 ```
+How cloudg picks AWS credentials
+{ .diagram-caption }
 
 1. Direct keys need both `--aws-key` and `--aws-secret`. One without the other is ignored and the next method is tried. `--aws-session-token` is added when present, for temporary keys.
 2. Web identity federation needs a role ARN and a token file. The token file comes from `--aws-web-identity-token-file`, or from `AWS_WEB_IDENTITY_TOKEN_FILE` when the flag is absent. This is the pattern for GitHub Actions, GitLab CI and EKS, with no stored keys.
@@ -168,9 +173,22 @@ cloudg -c config.yaml map -p all --regions all
 
 ## Related
 
-:::links
-- [Authentication](/guides/authentication/) Identities, roles and least-privilege permissions per provider.
-- [Provider and region flags](/cli/provider-flags/) `--profile`, `--subscription-id` and `--project-id`.
-- [cloudg run](/cli/run/) The command these flags belong to.
-- [AWS Organizations](/guides/aws-organizations/) Member-account roles for `cloudg map --org`.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Authentication**](../guides/authentication.md)
+
+    Identities, roles and least-privilege permissions per provider.
+
+-   [**Provider and region flags**](provider-flags.md)
+
+    `--profile`, `--subscription-id` and `--project-id`.
+
+-   [**cloudg run**](run.md)
+
+    The command these flags belong to.
+
+-   [**AWS Organizations**](../guides/aws-organizations.md)
+
+    Member-account roles for `cloudg map --org`.
+
+</div>

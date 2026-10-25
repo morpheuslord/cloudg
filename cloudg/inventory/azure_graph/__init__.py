@@ -17,6 +17,10 @@ package holds the provider-neutral half of the Azure inventory:
   parent / resource-group containment, private endpoint connections, PaaS
   exposure) and then the type-specific ones, which live in one module per
   service area and register themselves on import below.
+- Depth beyond ``resources``: more Resource Graph tables (``tables``),
+  ARM REST child resources and subscription listings (``children``), data
+  planes (``dataplane``) and the REST client they share (``rest``); task
+  names, families and ``--services`` filtering live in ``families``.
 
 Identifier conventions are documented in :mod:`.helpers`.
 """
@@ -26,9 +30,15 @@ from __future__ import annotations
 # Importing the extractor modules registers their extractors.
 from cloudg.inventory.azure_graph import (  # noqa: F401
     compute,
+    data_ml,
     data_security,
     edge,
+    governance,
+    hybrid,
+    integration,
     network,
+    ops,
+    security,
     web_containers,
 )
 from cloudg.inventory.azure_graph.arm_types import _ARM_TYPE_MAP, asset_type_from_arm

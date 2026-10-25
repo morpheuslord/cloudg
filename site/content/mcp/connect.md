@@ -1,17 +1,17 @@
 ---
 title: Connect a client
-lede: "`cloudg mcp config` writes the JSON your client needs. This page walks through it for Claude Desktop, Claude Code, Cursor and VS Code, then covers datasets, policies, HTTP with a token, and what to check when the client shows no tools."
-meta:
-  - [Command, "`cloudg mcp config`"]
-  - [Clients, "Claude Desktop, Claude Code, Cursor, VS Code"]
-  - [Transports, "stdio, streamable HTTP"]
-source: docs/MCP.md
-since: "0.6.0"
+description: cloudg mcp config writes the JSON your client needs. This page walks through it for Claude Desktop, Claude Code, Cursor and VS Code, then covers datasets, policies, HTTP with a token, and what to check when the client shows no tools.
 ---
+
+`cloudg mcp config` writes the JSON your client needs. This page walks through it for Claude Desktop, Claude Code, Cursor and VS Code, then covers datasets, policies, HTTP with a token, and what to check when the client shows no tools.
+{ .lede }
+
+**Command** `cloudg mcp config` &middot; **Clients** Claude Desktop, Claude Code, Cursor, VS Code &middot; **Transports** stdio, streamable HTTP &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 Most people run cloudg over stdio: the client starts `cloudg mcp serve` as a child process when it opens and stops it when it closes. You don't keep a server running, and nothing listens on a port. HTTP is for the other cases: a server shared by several people, a client on a different machine, or a gateway in front of it.
 
-```mermaid caption="Which setup to use"
+```mermaid
 flowchart TD
   A{"Does the client run on the machine that holds the reports?"} -->|yes| B{"One user, one client?"}
   A -->|no| E["HTTP: cloudg mcp serve --transport http, with --auth-token"]
@@ -21,26 +21,33 @@ flowchart TD
   F -->|yes| G["Bridge with npx mcp-remote"]
   F -->|no| H["Client connects to the URL directly"]
 ```
+Which setup to use
+{ .diagram-caption }
 
 ## Before you start
 
 You need cloudg 0.6.0 or newer on Python 3.11 or newer. The base install includes the MCP layer and a dependency-free server; the `mcp` extra adds the official SDK, which only matters if you want `--flavor sdk`.
 
-```bash tab="pip"
-pip install cloudg
-```
+=== "pip"
 
-```bash tab="uv"
-uv pip install cloudg
-```
+    ```bash
+    pip install cloudg
+    ```
 
-You also need something to look at: an `inventory-map.json` from [cloudg map](/cli/map/), a `findings.json` from [cloudg run](/cli/run/), or native scanner output that [cloudg ingest](/cli/ingest/) understands. The examples below assume `./reports/inventory-map.json`.
+=== "uv"
+
+    ```bash
+    uv pip install cloudg
+    ```
+
+You also need something to look at: an `inventory-map.json` from [cloudg map](../cli/map.md), a `findings.json` from [cloudg run](../cli/run.md), or native scanner output that [cloudg ingest](../cli/ingest.md) understands. The examples below assume `./reports/inventory-map.json`.
 
 If you installed cloudg in editable mode before 0.6.0, run `pip install -e .` again so the `cloudg-mcp` console script gets created.
 
 ## Set up a stdio client
 
-::::steps
+<div class="steps" markdown>
+
 ### Check that the server loads your data
 
 Run one tool from a terminal before touching any client config. `cloudg mcp call` goes through the same layer, policy and transforms the server uses, so if this works, the server will too.
@@ -57,66 +64,74 @@ The result lists the dataset with its asset, edge and finding counts, and the al
 
 The output below is from an install where `cloudg-mcp` was found on `PATH`; your path will differ.
 
-```json tab="Claude Desktop" title="claude_desktop_config.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "command": "/home/you/.venv/bin/cloudg-mcp",
-      "args": [
-        "serve"
-      ]
-    }
-  }
-}
-```
+=== "Claude Desktop"
 
-```json tab="Claude Code" title=".mcp.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "type": "stdio",
-      "command": "/home/you/.venv/bin/cloudg-mcp",
-      "args": [
-        "serve"
-      ],
-      "env": {}
+    ```json title="claude_desktop_config.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "command": "/home/you/.venv/bin/cloudg-mcp",
+          "args": [
+            "serve"
+          ]
+        }
+      }
     }
-  }
-}
-```
+    ```
 
-```json tab="Cursor" title="~/.cursor/mcp.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "command": "/home/you/.venv/bin/cloudg-mcp",
-      "args": [
-        "serve"
-      ]
-    }
-  }
-}
-```
+=== "Claude Code"
 
-```json tab="VS Code" title=".vscode/mcp.json"
-{
-  "servers": {
-    "cloudg": {
-      "type": "stdio",
-      "command": "/home/you/.venv/bin/cloudg-mcp",
-      "args": [
-        "serve"
-      ]
+    ```json title=".mcp.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "type": "stdio",
+          "command": "/home/you/.venv/bin/cloudg-mcp",
+          "args": [
+            "serve"
+          ],
+          "env": {}
+        }
+      }
     }
-  }
-}
-```
+    ```
+
+=== "Cursor"
+
+    ```json title="~/.cursor/mcp.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "command": "/home/you/.venv/bin/cloudg-mcp",
+          "args": [
+            "serve"
+          ]
+        }
+      }
+    }
+    ```
+
+=== "VS Code"
+
+    ```json title=".vscode/mcp.json"
+    {
+      "servers": {
+        "cloudg": {
+          "type": "stdio",
+          "command": "/home/you/.venv/bin/cloudg-mcp",
+          "args": [
+            "serve"
+          ]
+        }
+      }
+    }
+    ```
 
 The commands that produced them are `cloudg mcp config --client claude-desktop` (the default), `--client claude-code`, `--client cursor` and `--client vscode`. `--name` changes the server key from `cloudg`, and `--command "CMD ARGS"` replaces the detected launch command (it is split with `shlex`).
 
-:::note Interpreter fallback
-In a virtualenv where neither script is on `PATH`, the command is the interpreter and the arguments are `["-m", "cloudg.mcp", "serve"]`. That works just as well; it only looks different.
-:::
+!!! note "Interpreter fallback"
+
+    In a virtualenv where neither script is on `PATH`, the command is the interpreter and the arguments are `["-m", "cloudg.mcp", "serve"]`. That works just as well; it only looks different.
 
 ### Put it where the client reads it
 
@@ -138,7 +153,8 @@ claude mcp add-json cloudg '{"type": "stdio", "command": "/home/you/.venv/bin/cl
 ### Restart the client and start a conversation
 
 The server sends instructions on `initialize` that tell the model to begin with `workspace_status`. If you did not preload a dataset, ask the assistant to load one by absolute path, for example "Load /srv/cloudg/reports/inventory-map.json and show me the internet-exposed assets with HIGH findings." That path has to be inside an allowed root, which the next section explains.
-::::
+
+</div>
 
 ## Load your reports with --dataset
 
@@ -198,7 +214,7 @@ The separator is `os.pathsep`: `:` on macOS and Linux, `;` on Windows. Export to
 
 The counts are what `cloudg mcp tools --policy NAME` lists for the local user in 0.6.0. Run that command with your policy and, for HTTP, with `--role ROLE`, to see exactly what a client will get before you hand it out.
 
-Under `strict`, pseudonyms come from a key that is random per process, so they change every time the client restarts the server and old ones stop resolving. Put `CLOUDG_MCP_VAULT_KEY` in the entry's `env` block if pseudonyms must stay stable across conversations, and keep that value away from the model. The [built-in profiles](/mcp/privacy/built-in-profiles/) page shows the same calls under every profile, and [loading and composing policies](/mcp/privacy/loading-and-composing-policies/) covers writing your own with `extends`.
+Under `strict`, pseudonyms come from a key that is random per process, so they change every time the client restarts the server and old ones stop resolving. Put `CLOUDG_MCP_VAULT_KEY` in the entry's `env` block if pseudonyms must stay stable across conversations, and keep that value away from the model. The [built-in profiles](privacy/built-in-profiles.md) page shows the same calls under every profile, and [loading and composing policies](privacy/loading-and-composing-policies.md) covers writing your own with `extends`.
 
 ## Read-only mode
 
@@ -222,67 +238,75 @@ It listens on `http://127.0.0.1:8765/mcp` (change with `--host`, `--port` and `-
 
 Then generate the client side with `--transport http` and `--token-env`, naming the variable that holds the token on the client's machine. `--policy`, `--dataset` and `--read-only` do nothing in this mode, since the server is already running with its own options. Use `--url` for anything other than the default address.
 
-```json tab="Claude Desktop" title="claude_desktop_config.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "http://127.0.0.1:8765/mcp",
-        "--header",
-        "Authorization:Bearer ${CLOUDG_MCP_TOKEN}"
-      ]
-    }
-  }
-}
-```
+=== "Claude Desktop"
 
-```json tab="Claude Code" title=".mcp.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "type": "http",
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": {
-        "Authorization": "Bearer ${CLOUDG_MCP_TOKEN}"
+    ```json title="claude_desktop_config.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "mcp-remote",
+            "http://127.0.0.1:8765/mcp",
+            "--header",
+            "Authorization:Bearer ${CLOUDG_MCP_TOKEN}"
+          ]
+        }
       }
     }
-  }
-}
-```
+    ```
 
-```json tab="Cursor" title="~/.cursor/mcp.json"
-{
-  "mcpServers": {
-    "cloudg": {
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": {
-        "Authorization": "Bearer ${env:CLOUDG_MCP_TOKEN}"
+=== "Claude Code"
+
+    ```json title=".mcp.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "type": "http",
+          "url": "http://127.0.0.1:8765/mcp",
+          "headers": {
+            "Authorization": "Bearer ${CLOUDG_MCP_TOKEN}"
+          }
+        }
       }
     }
-  }
-}
-```
+    ```
 
-```json tab="VS Code" title=".vscode/mcp.json"
-{
-  "servers": {
-    "cloudg": {
-      "type": "http",
-      "url": "http://127.0.0.1:8765/mcp",
-      "headers": {
-        "Authorization": "Bearer ${env:CLOUDG_MCP_TOKEN}"
+=== "Cursor"
+
+    ```json title="~/.cursor/mcp.json"
+    {
+      "mcpServers": {
+        "cloudg": {
+          "url": "http://127.0.0.1:8765/mcp",
+          "headers": {
+            "Authorization": "Bearer ${env:CLOUDG_MCP_TOKEN}"
+          }
+        }
       }
     }
-  }
-}
-```
+    ```
+
+=== "VS Code"
+
+    ```json title=".vscode/mcp.json"
+    {
+      "servers": {
+        "cloudg": {
+          "type": "http",
+          "url": "http://127.0.0.1:8765/mcp",
+          "headers": {
+            "Authorization": "Bearer ${env:CLOUDG_MCP_TOKEN}"
+          }
+        }
+      }
+    }
+    ```
 
 Each client expands the variable in its own syntax: `${VAR}` in Claude Code, `${env:VAR}` in Cursor and VS Code. The token itself never appears in the file. Claude Desktop's config only launches local commands, so cloudg bridges to the URL with `npx mcp-remote` and passes the header on its command line. That entry has no `env` block, and whether `${CLOUDG_MCP_TOKEN}` gets a value depends on the environment Claude Desktop hands to `npx`, which the cloudg docs have not tested. If the server answers 401, add `"env": {"CLOUDG_MCP_TOKEN": "..."}` to the entry by hand.
 
-To reach the server from another host, bind to a public address and keep the token: `--host 0.0.0.0` together with `--allowed-host 'mcp.internal.example:*'` (and `--allowed-origin` for browser clients). The [CLI reference](/mcp/server/cli-reference/) lists every serve option.
+To reach the server from another host, bind to a public address and keep the token: `--host 0.0.0.0` together with `--allowed-host 'mcp.internal.example:*'` (and `--allowed-origin` for browser clients). The [CLI reference](server/cli-reference.md) lists every serve option.
 
 ## Troubleshooting
 
@@ -317,13 +341,32 @@ The vault key is random per process unless `CLOUDG_MCP_VAULT_KEY` is set. Set it
 
 ### The client complains about a missing outputSchema
 
-Under every profile except `open`, tools don't advertise `outputSchema`, because masking can change a field's type and a client must reject content that doesn't match an advertised schema. The structured content is still sent. This is deliberate; see [troubleshooting and FAQ](/mcp/server/troubleshooting-and-faq/) for this and the other cases (timeouts, large results, "cooling down" from live tools).
+Under every profile except `open`, tools don't advertise `outputSchema`, because masking can change a field's type and a client must reject content that doesn't match an advertised schema. The structured content is still sent. This is deliberate; see [troubleshooting and FAQ](server/troubleshooting-and-faq.md) for this and the other cases (timeouts, large results, "cooling down" from live tools).
 
-:::links
-- [Quick start](/mcp/server/quick-start-with-a-desktop-client/) The same setup with captured output from the sample estate.
-- [cloudg mcp config](/cli/mcp-config/) Every option of the config command.
-- [cloudg mcp serve](/cli/mcp-serve/) Transports, flavors, tokens, Host and Origin checks.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) What each policy changes, call by call.
-- [Principals and roles](/mcp/privacy/principals-and-roles/) Map tokens to roles and give each role its own view.
-- [Troubleshooting and FAQ](/mcp/server/troubleshooting-and-faq/) The full list of known problems.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Quick start**](server/quick-start-with-a-desktop-client.md)
+
+    The same setup with captured output from the sample estate.
+
+-   [**cloudg mcp config**](../cli/mcp-config.md)
+
+    Every option of the config command.
+
+-   [**cloudg mcp serve**](../cli/mcp-serve.md)
+
+    Transports, flavors, tokens, Host and Origin checks.
+
+-   [**Built-in profiles**](privacy/built-in-profiles.md)
+
+    What each policy changes, call by call.
+
+-   [**Principals and roles**](privacy/principals-and-roles.md)
+
+    Map tokens to roles and give each role its own view.
+
+-   [**Troubleshooting and FAQ**](server/troubleshooting-and-faq.md)
+
+    The full list of known problems.
+
+</div>

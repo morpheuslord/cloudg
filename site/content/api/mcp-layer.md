@@ -1,16 +1,13 @@
 ---
 title: CloudGMCPLayer
-object:
-  - cloudg.mcp.CloudGMCPLayer
-  - cloudg.mcp.register_into
-  - cloudg.mcp.build_server
-  - cloudg.mcp.export_definitions
-members:
-  cloudg.mcp.CloudGMCPLayer: [call_tool, read_resource, get_prompt, complete, list_tools, list_resources, list_resource_templates, list_prompts, tools_wire, get_tool, register_into, serve, use, set_prefix, on_change, notify_change, context]
-lede: The whole cloudg MCP catalog as one Python object you can call in-process, mount into your own MCP server, or export as framework-free definitions.
-source: docs/MCP.md
-since: "0.6.0"
+description: The whole cloudg MCP catalog as one Python object you can call in-process, mount into your own MCP server, or export as framework-free definitions.
 ---
+
+The whole cloudg MCP catalog as one Python object you can call in-process, mount into your own MCP server, or export as framework-free definitions.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 `cloudg mcp serve` is a thin wrapper around this class. Everything the server does, from the 74 tools to the policy that hides, redacts and pseudonymises, lives in `CloudGMCPLayer`, so you can embed the same catalog wherever your agent or server already runs. Importing `cloudg.mcp` pulls in nothing beyond cloudg's own dependencies; the official `mcp` SDK (the `cloudg[mcp]` extra) or `fastmcp` is imported only when you mount into one of them.
 
@@ -22,7 +19,7 @@ There are three ways in, and all of them end at the same four methods:
 | An MCP server built on the SDK or fastmcp | `layer.register_into(server)` | cloudg's tools, resources and prompts next to the host's own |
 | A gateway or framework that speaks neither | `export_definitions(layer)` | MCP wire dicts plus async handlers, for one principal |
 
-```mermaid caption="Every route goes through the same layer methods"
+```mermaid
 flowchart LR
   A["Your code"] --> L["layer.call_tool / read_resource / get_prompt / complete"]
   B["SDK or fastmcp server via register_into"] --> L
@@ -35,6 +32,8 @@ flowchart LR
   P --> H["Handler"]
   H --> O["Output transforms"]
 ```
+Every route goes through the same layer methods
+{ .diagram-caption }
 
 A tool the policy hides from the caller is indistinguishable from one that does not exist. Every other failure of a tool call (bad arguments, access denied, a handler exception, a timeout) comes back as a `ToolResult` with `is_error=True` that a model can read and recover from, rather than as an exception. Resources and prompts raise `MCPLayerError` subclasses instead.
 
@@ -78,11 +77,9 @@ from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType,
 
 ACCOUNT = "123456789012"
 
-
 def asset(asset_id: str, asset_type: AssetType, arn: str, **extra) -> CloudAsset:
     return CloudAsset(id=asset_id, name=asset_id, asset_type=asset_type, provider=CloudProvider.AWS,
                       region="eu-west-1", account_id=ACCOUNT, arn=arn, **extra)
-
 
 inventory = InventoryResult(
     assets=[
@@ -98,7 +95,6 @@ inventory = InventoryResult(
     ],
     providers=["aws"],
 )
-
 
 async def main() -> None:
     workspace = Workspace(allowed_roots=["."])
@@ -131,7 +127,6 @@ async def main() -> None:
     audit.close()
     with open("mcp-audit.jsonl") as fh:
         print("audit:", fh.readline().strip())
-
 
 asyncio.run(main())
 ```
@@ -172,12 +167,10 @@ from cloudg.schema.models import AssetType, CloudAsset, CloudProvider
 
 server = MCPServer("platform-tools")
 
-
 @server.tool()
 def ticket_count(team: str) -> int:
     """How many open tickets a team has (the host's own tool)."""
     return 7
-
 
 inventory = InventoryResult(
     assets=[
@@ -192,7 +185,6 @@ workspace.add_inventory(inventory, "demo")
 
 layer = CloudGMCPLayer(policy="standard", workspace=workspace)
 binding = layer.register_into(server, prefix="cloudg_")  # mount after the host's own tools
-
 
 async def main() -> None:
     async with Client(server) as client:
@@ -209,7 +201,6 @@ async def main() -> None:
     reply = await defs.dispatch("tools/call", {"name": "cloudg_count_assets",
                                                "arguments": {"group_by": "type"}})
     print("dispatch:", reply["structuredContent"]["groups"], reply["isError"])
-
 
 asyncio.run(main())
 ```
@@ -240,7 +231,7 @@ layer = CloudGMCPLayer(policy="strict", workspace=workspace, prefix="cloudg_")
 layer.serve("stdio")  # blocks until the client disconnects
 ```
 
-For HTTP, `layer.serve("http", host="127.0.0.1", port=8765, auth_tokens=["env:MCP_TOKEN:analyst:ci"])` takes the same options as the CLI. The token spec format and the other transport settings are on the [cloudg mcp serve](/cli/mcp-serve/) page.
+For HTTP, `layer.serve("http", host="127.0.0.1", port=8765, auth_tokens=["env:MCP_TOKEN:analyst:ci"])` takes the same options as the CLI. The token spec format and the other transport settings are on the [cloudg mcp serve](../cli/mcp-serve.md) page.
 
 ## Notes
 
@@ -252,12 +243,57 @@ For HTTP, `layer.serve("http", host="127.0.0.1", port=8765, auth_tokens=["env:MC
 - Sync tool handlers run in a worker thread, so a slow graph build does not block the event loop. `notify_change()` is safe to call from those threads.
 - A policy with `vault.path` set persists its pseudonym vault: `serve()` saves it when serving ends, and any process saves a changed vault at interpreter exit. Call `layer.policy.save_vault()` to save at a moment you choose, for example before a long-running worker is killed.
 
+## Reference
+
+::: cloudg.mcp.CloudGMCPLayer
+    options:
+      members:
+        - call_tool
+        - read_resource
+        - get_prompt
+        - complete
+        - list_tools
+        - list_resources
+        - list_resource_templates
+        - list_prompts
+        - tools_wire
+        - get_tool
+        - register_into
+        - serve
+        - use
+        - set_prefix
+        - on_change
+        - notify_change
+        - context
+
+::: cloudg.mcp.register_into
+
+::: cloudg.mcp.build_server
+
+::: cloudg.mcp.export_definitions
+
 ## Related
 
-:::links
-- [MCP server overview](/mcp/) What the catalog covers and how clients connect.
-- [In-process use](/mcp/server/in-process-use/) Every layer method and the `ToolContext` handlers receive.
-- [Built-in profiles](/mcp/privacy/built-in-profiles/) What each of the seven policies allows and transforms.
-- [Tool index](/mcp/tools/tool-index/) All 74 tools by category.
-- [cloudg mcp serve](/cli/mcp-serve/) The same layer behind stdio or HTTP.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**MCP server overview**](../mcp/index.md)
+
+    What the catalog covers and how clients connect.
+
+-   [**In-process use**](../mcp/server/in-process-use.md)
+
+    Every layer method and the `ToolContext` handlers receive.
+
+-   [**Built-in profiles**](../mcp/privacy/built-in-profiles.md)
+
+    What each of the seven policies allows and transforms.
+
+-   [**Tool index**](../mcp/tools/tool-index.md)
+
+    All 74 tools by category.
+
+-   [**cloudg mcp serve**](../cli/mcp-serve.md)
+
+    The same layer behind stdio or HTTP.
+
+</div>

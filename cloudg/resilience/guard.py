@@ -52,6 +52,8 @@ from collections.abc import Hashable
 from dataclasses import dataclass, fields, replace
 from typing import Any, Awaitable, Callable, Iterable, Mapping, TypeVar
 
+from cloudg.exceptions import CloudGError
+
 __all__ = [
     "CallerQuotaExceeded",
     "CooldownActive",
@@ -66,7 +68,7 @@ __all__ = [
 T = TypeVar("T")
 
 
-class LiveOperationRejected(Exception):
+class LiveOperationRejected(CloudGError):
     """A live operation was refused; ``retry_after`` says when to try again."""
 
     reason = "rejected"

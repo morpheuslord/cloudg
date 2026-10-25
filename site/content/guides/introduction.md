@@ -1,13 +1,13 @@
 ---
 title: Introduction
-lede: "cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, runs security scanners over the same inventory, and merges what they find into one deduplicated, compliance-mapped result."
-meta:
-  - [Version, "0.6.0"]
-  - [Python, "3.11 or newer"]
-  - [Providers, "AWS, Azure, GCP"]
-  - [License, "MIT"]
-source: README.md
+description: cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, runs security scanners over the same inventory, and merges what they find into one deduplicated, compliance-mapped result.
 ---
+
+cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, runs security scanners over the same inventory, and merges what they find into one deduplicated, compliance-mapped result.
+{ .lede }
+
+**Version** 0.6.0 &middot; **Python** 3.11 or newer &middot; **Providers** AWS, Azure, GCP &middot; **License** MIT
+{ .page-meta }
 
 cloudg is a Python command-line tool and a library. You point it at one or more cloud accounts and it builds an inventory of what is deployed there: instances, buckets, roles, security groups, load balancers, functions, key vaults, projects. Those assets and the network edges between them go into a directed graph. From the graph cloudg works out what the internet can reach, which paths an attacker could take sideways, and how much of the estate each node could touch if it were compromised.
 
@@ -19,16 +19,35 @@ None of that requires the whole pipeline. Each half of cloudg works without the 
 
 Most people arrive with one of three questions, and cloudg has a command for each.
 
-:::cells
-### cloudg run
-"What is wrong with my cloud?" Collects every configured provider, builds the graph, runs the scanners in parallel, normalises the findings and renders the reports. Needs credentials and, for full coverage, the scanner binaries.
-### cloudg ingest
-"I already ran the scanners, can you make sense of the output?" Reads native Prowler, ScoutSuite, Checkov and Trivy files, then deduplicates, maps compliance and renders reports. No cloud credentials and no scanner binaries.
-### cloudg map
-"What do I have, and how is it wired?" A scanner-free inventory mapper: deep collectors, a sweep across every service, typed relationships and dependency analysis. No scanner runs or needs to be installed.
-:::
+<div class="grid cells" markdown>
 
-They are independent but they compose. You can `cloudg map` an account today, run Prowler in CI next week, and merge that output into the map later with `cloudg map --findings`. You can collect live assets from Python and normalise findings you ingested from someone else's pipeline in the same script. The [quickstart](/guides/quickstart/) walks through all three.
+<div class="card" markdown>
+
+### cloudg run
+
+"What is wrong with my cloud?" Collects every configured provider, builds the graph, runs the scanners in parallel, normalises the findings and renders the reports. Needs credentials and, for full coverage, the scanner binaries.
+
+</div>
+
+<div class="card" markdown>
+
+### cloudg ingest
+
+"I already ran the scanners, can you make sense of the output?" Reads native Prowler, ScoutSuite, Checkov and Trivy files, then deduplicates, maps compliance and renders reports. No cloud credentials and no scanner binaries.
+
+</div>
+
+<div class="card" markdown>
+
+### cloudg map
+
+"What do I have, and how is it wired?" A scanner-free inventory mapper: deep collectors, a sweep across every service, typed relationships and dependency analysis. No scanner runs or needs to be installed.
+
+</div>
+
+</div>
+
+They are independent but they compose. You can `cloudg map` an account today, run Prowler in CI next week, and merge that output into the map later with `cloudg map --findings`. You can collect live assets from Python and normalise findings you ingested from someone else's pipeline in the same script. The [quickstart](quickstart.md) walks through all three.
 
 ### Choosing between them
 
@@ -44,7 +63,7 @@ They are independent but they compose. You can `cloudg map` an account today, ru
 
 ## How the pieces fit
 
-```mermaid caption="From cloud APIs to the files and tools you use"
+```mermaid
 flowchart LR
   P["AWS, Azure, GCP APIs"] --> C[Collectors]
   C --> G["Graph (NetworkX)"]
@@ -58,6 +77,8 @@ flowchart LR
   N --> M["MCP server"]
   G --> M
 ```
+From cloud APIs to the files and tools you use
+{ .diagram-caption }
 
 Collectors talk to the provider APIs through a shared rate limiter, so a big account slows down instead of failing. In the NetworkX graph, edge endpoints that are not assets (the `0.0.0.0/0` on a security group rule, for example) become external nodes, and a breadth-first search from the internet sources `0.0.0.0/0` and `::/0` over network-flow edges is how cloudg decides what is internet-reachable. Scanners run as separate processes, each in its own worker thread, and anything not installed is skipped with a warning. The normaliser is the meeting point: scanner findings, the graph's reachability findings and the IAM linter's results all go through the same deduplication and compliance mapping.
 
@@ -71,7 +92,7 @@ The MCP server sits beside all of this. It loads the files a run or a map produc
 | Azure | `cloudg[azure]` (azure-identity and the management SDKs) | Per subscription; every enabled subscription the credential can see when none is set | all locations |
 | GCP | `cloudg[gcp]` (google-cloud-asset, google-auth) | Cloud Asset Inventory, per project or once at organization scope | all regions |
 
-Every provider supports several authentication methods, resolved in a fixed order: direct keys, OIDC federation, profiles and service principals, managed identities, and finally each SDK's default chain. The same configuration works on a laptop, in CI and on cloud compute. [Authentication](/guides/authentication/) has the details.
+Every provider supports several authentication methods, resolved in a fixed order: direct keys, OIDC federation, profiles and service principals, managed identities, and finally each SDK's default chain. The same configuration works on a laptop, in CI and on cloud compute. [Authentication](authentication.md) has the details.
 
 ## Scanners
 
@@ -83,7 +104,7 @@ Every provider supports several authentication methods, resolved in a fixed orde
 | Trivy | Container images, or a filesystem when no images are given | `trivy` |
 | IAM linter | IAM policies on collected roles and policies, using Parliament | built in |
 
-The scanners are executables, not Python dependencies. cloudg checks `PATH` when it runs each one and skips the missing ones. [Installation](/guides/installation/#scanner-binaries) shows how to install each, and [Running scanners](/guides/running-scanners/) covers what cloudg passes to them.
+The scanners are executables, not Python dependencies. cloudg checks `PATH` when it runs each one and skips the missing ones. [Installation](installation.md#scanner-binaries) shows how to install each, and [Running scanners](running-scanners.md) covers what cloudg passes to them.
 
 ## What you get
 
@@ -98,7 +119,7 @@ A `cloudg run` writes everything into `./reports` (change it with `-o`):
 | `rag_chunks.jsonl`, `rag_metadata_index.json` | Retrieval-ready chunks of the infrastructure for LLM pipelines |
 | `terraform/*.tf.json` | Terraform recreation of the live infrastructure, with `--terraform` |
 
-`cloudg ingest` writes `findings.json`, `report.html` and `raw-findings.json`. `cloudg map` writes `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` and `inventory-dependencies.json`, plus `inventory-organization.json` with `--org` and `asset-map.json` and `compliance-map.json` with `--findings`. [Output files](/reference/output-files/) describes each one field by field.
+`cloudg ingest` writes `findings.json`, `report.html` and `raw-findings.json`. `cloudg map` writes `inventory-map.json`, `inventory-map.graphml`, `inventory-graph.json` and `inventory-dependencies.json`, plus `inventory-organization.json` with `--org` and `asset-map.json` and `compliance-map.json` with `--findings`. [Output files](../reference/output-files.md) describes each one field by field.
 
 ## Using it from Python
 
@@ -114,15 +135,34 @@ result = engine.run_pipeline_sync(output_dir="./reports")
 print(result.to_summary())
 ```
 
-The graph builder, ontology, RAG exporter, scanner parsers, normaliser, inventory mapper and MCP layer are all importable on their own. [The pipeline](/guides/pipeline/) shows the phases from both the CLI and Python, and the [Python API](/api/) tab documents every class.
+The graph builder, ontology, RAG exporter, scanner parsers, normaliser, inventory mapper and MCP layer are all importable on their own. [The pipeline](pipeline.md) shows the phases from both the CLI and Python, and the [Python API](../api/index.md) tab documents every class.
 
 ## Where to go next
 
-:::links
-- [Installation](/guides/installation/) pip, uv or Docker, the provider extras, and the scanner binaries.
-- [Quickstart](/guides/quickstart/) A first report in a few minutes, with or without credentials.
-- [The pipeline](/guides/pipeline/) What each phase of cloudg run reads, writes and does when something fails.
-- [Inventory mapping](/guides/inventory-mapping/) The scanner-free map of everything deployed.
-- [Ingesting existing output](/guides/ingesting/) Reports from scanner files you already have.
-- [MCP server](/mcp/) Hand the inventory and findings to an AI assistant.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Installation**](installation.md)
+
+    pip, uv or Docker, the provider extras, and the scanner binaries.
+
+-   [**Quickstart**](quickstart.md)
+
+    A first report in a few minutes, with or without credentials.
+
+-   [**The pipeline**](pipeline.md)
+
+    What each phase of cloudg run reads, writes and does when something fails.
+
+-   [**Inventory mapping**](inventory-mapping.md)
+
+    The scanner-free map of everything deployed.
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    Reports from scanner files you already have.
+
+-   [**MCP server**](../mcp/index.md)
+
+    Hand the inventory and findings to an AI assistant.
+
+</div>

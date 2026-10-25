@@ -1,19 +1,19 @@
 ---
 title: Reports
-lede: "Every path through cloudg ends in the same two files: `findings.json` for machines and `report.html` for people. `cloudg report` rebuilds them from an earlier run without touching the cloud."
-meta:
-  - [Command, "`cloudg report`"]
-  - [Formats, "HTML, JSON, SVG"]
-  - [Python, "`JSONExporter`, `HTMLReportGenerator`, `SVGRenderer`"]
-source: cloudg/renderers/html_report.py
-since: "0.6.0"
+description: 'Every path through cloudg ends in the same two files: findings.json for machines and report.html for people. cloudg report rebuilds them from an earlier run without touching the cloud.'
 ---
+
+Every path through cloudg ends in the same two files: `findings.json` for machines and `report.html` for people. `cloudg report` rebuilds them from an earlier run without touching the cloud.
+{ .lede }
+
+**Command** `cloudg report` &middot; **Formats** HTML, JSON, SVG &middot; **Python** `JSONExporter`, `HTMLReportGenerator`, `SVGRenderer` &middot; **Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 The renderers in `cloudg/renderers/` take a normalised `ScanResult` (assets, findings, compliance results) plus, when there is one, the D3 graph of the collected assets. They don't call any cloud API or scanner, which is why `cloudg report` can re-render an old run anywhere.
 
 ## Which command writes what
 
-```mermaid caption="Report inputs and outputs"
+```mermaid
 flowchart LR
   RUN["cloudg run"] --> SR["ScanResult and graph"]
   ING["cloudg ingest"] --> SR
@@ -23,6 +23,8 @@ flowchart LR
   SR --> SVG["topology.svg"]
   SCAN["cloudg scan, cloudg ingest"] --> RAW["raw-findings.json"]
 ```
+Report inputs and outputs
+{ .diagram-caption }
 
 | Command | `findings.json` | `report.html` | `topology.svg` | `raw-findings.json` |
 |---|---|---|---|---|
@@ -35,7 +37,7 @@ flowchart LR
 
 `cloudg run`, `run_pipeline()` and `run_from_reports()` write the formats listed in `report.formats`, all three by default. `run_from_reports()` never writes `topology.svg`, because it has no collected assets to draw. `cloudg ingest` and `cloudg report` go by `--format` instead.
 
-`cloudg run` writes more than these (GraphML, Cytoscape JSON when `graph.export_cytoscape` is on, the ontology, RAG chunks, Terraform); those come from the graph and analysis phases and are listed on [Output files](/reference/output-files/).
+`cloudg run` writes more than these (GraphML, Cytoscape JSON when `graph.export_cytoscape` is on, the ontology, RAG chunks, Terraform); those come from the graph and analysis phases and are listed on [Output files](../reference/output-files.md).
 
 Those three are the only report formats. There is no CSV, SARIF or PDF writer in 0.6.0. `findings.json` is easy to convert, though; there's a [CSV recipe](#exporting-to-csv) further down.
 
@@ -68,27 +70,44 @@ Those three are the only report formats. There is no CSV, SARIF or PDF writer in
 }
 ```
 
-`assets`, `findings`, `compliance` and `edges` are the Pydantic models from `cloudg.schema.models`, serialised in JSON mode. Assets leave out `raw_data`. Findings include the computed `risk_score`. `edges` holds the collected `NetworkEdge` objects, so `cloudg report` can draw the topology again. `graph` holds D3 nodes and links for `cloudg run`, and is empty for ingest. In the `metadata` block, the normaliser doesn't fill in `provider`, `account_id` or `region` in 0.6.0, so expect `null` there. Both timestamps are ISO 8601 strings set at normalisation time, and a `completed_at` that was never set is `null`. The field-by-field reference is on [Output files](/reference/output-files/), and the models are on [Data models](/api/models/).
+`assets`, `findings`, `compliance` and `edges` are the Pydantic models from `cloudg.schema.models`, serialised in JSON mode. Assets leave out `raw_data`. Findings include the computed `risk_score`. `edges` holds the collected `NetworkEdge` objects, so `cloudg report` can draw the topology again. `graph` holds D3 nodes and links for `cloudg run`, and is empty for ingest. In the `metadata` block, the normaliser doesn't fill in `provider`, `account_id` or `region` in 0.6.0, so expect `null` there. Both timestamps are ISO 8601 strings set at normalisation time, and a `completed_at` that was never set is `null`. The field-by-field reference is on [Output files](../reference/output-files.md), and the models are on [Data models](../api/models.md).
 
 `raw-findings.json` is different: a bare JSON list of `Finding` objects as the parsers produced them, before deduplication, rescoring or compliance mapping. It has no `summary`, `compliance` or `graph`.
 
 ## report.html
 
-The HTML report is one file rendered from the Jinja template `cloudg/templates/report.html.j2`. The data is embedded in the page as JSON, and so are Chart.js 4.4.0 and D3 7.9.0, so the page works offline. You can mail it, attach it to a ticket or archive it next to `findings.json`.
+The HTML report is one file rendered from the Jinja template `cloudg/templates/report.html.j2`. The data is embedded in the page as JSON, and so are Chart.js 4.4.0, D3 7.9.0 and the two engines that draw the map, so the page works offline. You can mail it, attach it to a ticket or archive it next to `findings.json`. The [sample report](../sample-report.md) shows one built from a synthetic three-cloud estate.
 
-The header shows the scan ID, provider and account, a button that downloads the embedded data, and six counters: total assets, total findings, and the CRITICAL, HIGH, MEDIUM and LOW counts. Below it are four tabs.
+The overview at the top gives the scan ID, provider, account and start time, four counters (assets, findings, critical findings and internet-exposed assets) and a bar of findings by severity. Beside it, a ring shows the share of assets with no open findings, and the top risks list holds the six worst findings; clicking one opens it. The top bar switches between the dark and light themes (the choice is remembered in the browser), prints the page, and downloads the findings as CSV or the embedded data as JSON. Below are five tabs.
 
-The Infrastructure Map tab draws a D3 tree of account, region, VPC, subnet and resources, built from each asset's `region` and its `vpc_id` / `subnet_id` metadata. Assets with neither land under "Global / Ungrouped". Nodes with findings get a red ring and internet-exposed ones an orange ring. Toggle Layout switches to a force-directed graph of the collected graph plus one triangle node per finding (linked to its resource by a `FINDING_AFFECTS` edge) and one diamond per compliance framework (linked to its findings by `COMPLIANCE_GOVERNS`). With no assets, as after `cloudg ingest`, the tab goes straight to that force view, which then shows findings and frameworks only.
+### The estate map
 
-The Findings tab lists every finding, sorted by severity, with dropdown filters for severity and source tool and a text search over title, resource and description. Clicking a row, filtered or not, opens a side panel for that finding with the description, evidence, remediation, CVSS score, frameworks and risk score.
+The Estate map tab draws the estate in three dimensions. Each provider is a base plate. Accounts and regions stand on it as platforms, VPCs and VNets as slabs and subnets as tiles, and every asset stands where it was found, as a small solid whose shape says what kind of asset it is. Identity and governance assets (roles, users, policies, organizations, accounts) sit on a control deck held on posts behind and above the plate. An asset with open findings carries a beacon in the colour of its worst one, an internet-exposed asset has a dashed red ring at its foot, and the internet itself is a mast in front of the plates.
 
-Analytics has four Chart.js charts: severity distribution, asset types, findings by source tool, and compliance per framework.
+Placement comes from the collected `CONTAINS` edges first and from each asset's `vpc_id` / `subnet_id` metadata after that. Every other relation is a trace line: it leaves its source from a port of its own on the asset's top face, rises to a lane that no other trace uses, runs along the floor plan and drops onto its own port on the target. Trace lines are coloured by family: internet exposure, network paths, identity and access, data and invocation, and governance and protection. The chips above the map hide or show each family. Parallel edges between the same two assets collapse into one trace that counts them.
 
-Compliance shows one card per framework with Pass and Fail counts. As explained in [Compliance frameworks](/guides/compliance/#report-html), Fail counts the controls that have findings, and Pass counts the controls that only Prowler's passing checks map to. Without passing-check data in the input (no Prowler, or scanners that only report failures), Pass is 0 and the percentage bar reads 0%.
+- Click an asset to light its relations and dim everything else. A dot runs along each lit trace from source to target, and the inspector beside the map lists the asset's details and its relations. Click a relation there to follow that one alone.
+- **Trace from internet** lights every path that starts at the internet mast, hop after hop, and says how many assets it reaches.
+- Drag to pan, scroll to zoom, and use the turn buttons (or `[` and `]`) to turn the map a quarter at a time. Arrow keys step through the assets, `0` fits the map and Escape clears the selection.
+- **Labels** names every asset; without it, names show for the asset under the pointer and the selected asset's neighbours. **Replay** plays the opening animation again, and **Find an asset** jumps to one by name or identifier.
 
-The download button saves a file named `findings.json` that holds only `findings`, `graph` and the tree data. It isn't the same file cloudg writes, but `cloudg report -i` and the viewer both accept it.
+The layout is computed in Python, in `cloudg.renderers.iso_scene.build_scene()`, so it is the same in every browser and is covered by tests. The page projects it with the [Anatomy](https://github.com/wheresryan22/anatomy) iso-kit and animates it. Under reduced motion, nothing moves.
 
-The two libraries come from `cloudg/templates/vendor/` in the package and add about 485 KB to the file. With `report.inline_js: false` the page loads the same pinned builds from `cdn.jsdelivr.net` instead, with Subresource Integrity hashes, which gives a smaller file that needs network access to show the map, charts and compliance cards.
+The **2D** switch shows the earlier views: a D3 tree of account, region, VPC, subnet and resources, and a force-directed graph of the collected graph plus one node per finding (linked to its resource by `FINDING_AFFECTS`) and one per compliance framework (linked to its findings by `COMPLIANCE_GOVERNS`). The report opens on the 2D view by itself when the scan has no assets (as after `cloudg ingest`), when it has more than 2500 assets, or when the map engines are missing from the package.
+
+### The other tabs
+
+The Findings tab lists every finding with dropdown filters for severity and source tool and a text search over title, resource and description. Clicking a row, filtered or not, opens a side panel for that finding with the description, evidence, remediation, CVSS score, frameworks and risk score. A filter that matches nothing shows an empty tray, drawn with [Hairline](https://hairline.lucasmarkes.com).
+
+Assets lists every asset with its type, provider, region, exposure and finding count, with a provider filter and a search. Clicking a row opens it on the map.
+
+Analytics has four Chart.js charts: severity distribution, the twelve most common asset types, findings by source tool, and compliance per framework.
+
+Compliance shows one card per framework with its pass rate and Pass and Fail counts. As explained in [Compliance frameworks](compliance.md#report-html), Fail counts the controls that have findings, and Pass counts the controls that only Prowler's passing checks map to. Without passing-check data in the input (no Prowler, or scanners that only report failures), Pass is 0 and the rate reads 0%.
+
+The JSON download saves a file named `findings.json` that holds `findings`, `assets`, `graph`, the tree data and the map's scene. It isn't the same file cloudg writes, but `cloudg report -i` and the viewer both accept it. The CSV download has one row per finding; a cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe so a spreadsheet does not run it as a formula.
+
+Chart.js and D3 come from `cloudg/templates/vendor/` in the package and add about 485 KB to the file. With `report.inline_js: false` the page loads the same pinned builds from `cdn.jsdelivr.net` instead, with Subresource Integrity hashes, which gives a smaller file that needs network access to show the charts and the 2D views. The map engines (about 64 KB) have no CDN build and are embedded either way.
 
 Everything that comes from scanner output or cloud metadata (titles, descriptions, evidence, resource ids, asset names, framework names) is HTML-escaped before it reaches the page, and the embedded JSON cannot close its `<script>` element early. A report built from someone else's scan files is safe to open.
 
@@ -102,17 +121,21 @@ If the template can't be found or fails to render, cloudg logs a warning and wri
 
 `cloudg report` reads a `findings.json` and renders it again. Use it to regenerate the HTML after upgrading cloudg, to produce just the SVG, or to rebuild a report on a machine that never had cloud access.
 
-```bash tab="CLI"
-cloudg report -i ./reports/findings.json -o ./reports-rerendered
-cloudg report -i ./reports/findings.json -o ./reports-rerendered --format html
-cloudg report -i ./archive/2026-09-30/findings.json -o ./archive/2026-09-30/svg --format svg
-```
+=== "CLI"
 
-```bash tab="Docker"
-docker run --rm \
-  -v "$PWD/reports:/data" \
-  ghcr.io/morpheuslord/cloudg:latest report -i /data/findings.json -o /data/rerendered
-```
+    ```bash
+    cloudg report -i ./reports/findings.json -o ./reports-rerendered
+    cloudg report -i ./reports/findings.json -o ./reports-rerendered --format html
+    cloudg report -i ./archive/2026-09-30/findings.json -o ./archive/2026-09-30/svg --format svg
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v "$PWD/reports:/data" \
+      ghcr.io/morpheuslord/cloudg:latest report -i /data/findings.json -o /data/rerendered
+    ```
 
 | Flag | Meaning |
 |---|---|
@@ -186,7 +209,7 @@ print(len(scan_result.compliance), "compliance results")
 
 ### Your own template
 
-`HTMLReportGenerator(template_dir=...)` renders a `report.html.j2` from that directory instead of the packaged one. Copy `cloudg/templates/report.html.j2`, change it, and pass the directory. The variables available to a template are `scan_id`, `provider`, `account_id`, `started_at`, `completed_at`, `total_assets`, `total_findings`, `severity_counts`, `resource_types`, `source_tools`, `compliance_summary`, `findings` and `assets`, plus JSON-string versions (`severity_counts_json`, `resource_types_json`, `source_tools_json`, `compliance_summary_json`, `findings_json`, `assets_json`, `graph_json`, `hierarchy_json`, `findings_per_resource_json`) for embedding in scripts. The JSON strings are already safe inside a `<script>` element; mark them `|safe` there. For the libraries, `inline_js` says whether to embed them, `vendored_js.chartjs` and `vendored_js.d3` hold their source, and `cdn_js` holds the pinned CDN URLs and integrity hashes. Autoescaping is on, so any other value you print is escaped.
+`HTMLReportGenerator(template_dir=...)` renders a `report.html.j2` from that directory instead of the packaged one. Copy `cloudg/templates/report.html.j2`, change it, and pass the directory. The variables available to a template are `scan_id`, `provider`, `account_id`, `started_at`, `completed_at`, `total_assets`, `total_findings`, `severity_counts`, `resource_types`, `source_tools`, `compliance_summary`, `findings` and `assets`, plus JSON-string versions (`severity_counts_json`, `resource_types_json`, `source_tools_json`, `compliance_summary_json`, `findings_json`, `assets_json`, `graph_json`, `hierarchy_json`, `findings_per_resource_json`) for embedding in scripts. The JSON strings are already safe inside a `<script>` element; mark them `|safe` there. For the libraries, `inline_js` says whether to embed them, `vendored_js.chartjs` and `vendored_js.d3` hold their source, and `cdn_js` holds the pinned CDN URLs and integrity hashes. The map adds `scene_json` (the output of `build_scene()`), `summary` and `summary_json` (providers, accounts, regions, exposed and clean asset counts, edge count and cloudg version) and `top_risks_json` (the indexes of the six worst findings), and `map_js` holds the source of the map engines and the empty-state figure, or nothing when they are missing. Autoescaping is on, so any other value you print is escaped.
 
 ### Exporting to CSV {#exporting-to-csv}
 
@@ -229,13 +252,26 @@ report:
   output_dir: ./reports
 ```
 
-`formats` lists the reports that `cloudg run`, `run_pipeline()` and `run_from_reports()` write; unknown names are dropped with a warning. `cloudg ingest` and `cloudg report` use `--format` instead. `inline_js` embeds Chart.js and D3 in `report.html` (`true`, the default) or loads them from the CDN (`false`); every command that writes the HTML report reads it. `output_dir` is where the `CloudGEngine` methods write when they get no `output_dir`, and the MCP server's default workspace directory. The CLI commands use `-o` (default `./reports`) and ignore it. The keys are listed on the [report config page](/reference/config/report/).
+`formats` lists the reports that `cloudg run`, `run_pipeline()` and `run_from_reports()` write; unknown names are dropped with a warning. `cloudg ingest` and `cloudg report` use `--format` instead. `inline_js` embeds Chart.js and D3 in `report.html` (`true`, the default) or loads them from the CDN (`false`); every command that writes the HTML report reads it. `output_dir` is where the `CloudGEngine` methods write when they get no `output_dir`, and the MCP server's default workspace directory. The CLI commands use `-o` (default `./reports`) and ignore it. The keys are listed on the [report config page](../reference/config/report.md).
 
 ## Next
 
-:::links
-- [cloudg report](/cli/report/) The command reference.
-- [Output files](/reference/output-files/) Every file cloudg writes, field by field.
-- [Compliance frameworks](/guides/compliance/) What the compliance output means.
-- [Ingesting existing output](/guides/ingesting/) Reports from scans that ran elsewhere.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**cloudg report**](../cli/report.md)
+
+    The command reference.
+
+-   [**Output files**](../reference/output-files.md)
+
+    Every file cloudg writes, field by field.
+
+-   [**Compliance frameworks**](compliance.md)
+
+    What the compliance output means.
+
+-   [**Ingesting existing output**](ingesting.md)
+
+    Reports from scans that ran elsewhere.
+
+</div>

@@ -24,6 +24,8 @@ Want an AI agent to work with all of it? `cloudg mcp serve` turns cloudg into an
 
 **Full documentation:** the rendered handbook lives at [morpheuslord.github.io/cloudg](https://morpheuslord.github.io/cloudg/), with the same content as markdown in the [feature reference](https://github.com/morpheuslord/cloudg/blob/main/docs/DOCUMENTATION.md) and release notes in the [changelog](https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md). The inventory mapper has its own deep-dive documents: the [inventory reference](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_REFERENCE.md) (every return structure and output file, field by field), the [inventory catalog](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_CATALOG.md) (all 156 asset types, their metadata and relationships) and the [inventory internals](https://github.com/morpheuslord/cloudg/blob/main/docs/INVENTORY_INTERNALS.md) (how it works and how to extend it). The MCP server is covered by the [MCP guide](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP.md), the [tool reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_TOOLS.md) and the [privacy reference](https://github.com/morpheuslord/cloudg/blob/main/docs/MCP_PRIVACY.md), and throttling by [rate limits and throttling](https://github.com/morpheuslord/cloudg/blob/main/docs/RESILIENCE.md).
 
+**Sample report:** to see what cloudg produces before running anything, [open the sample report](https://morpheuslord.github.io/cloudg/sample-report.html). It is the `report.html` of a synthetic AWS, Azure and GCP estate, so every ID in it is made up, and `scripts/build_sample_report.py` rebuilds it from the test fixtures.
+
 ---
 
 ## Quick start
@@ -375,7 +377,7 @@ Python 3.11 or newer. The moto/aiobotocore incompatibility around async response
 
 ## Credits
 
-cloudg builds on other people's work, and some of it ships inside the package.
+cloudg builds on other people's work, and some of it ships inside the package. The documentation site has the same list on its [credits page](https://morpheuslord.github.io/cloudg/credits/).
 
 [Prowler](https://github.com/prowler-cloud/prowler) (Apache-2.0). The 22 framework files in `cloudg/rules/frameworks/` are generated from Prowler's compliance JSON by `scripts/import_prowler_compliance.py`. That covers the control IDs, the control titles and descriptions, and the mapping from each control to Prowler check names. Every generated file says so in its header and in its `source` field. Prowler check names also appear in `cloudg/rules/check_equivalence.yaml`, and cloudg runs Prowler and parses its ASFF and OCSF output.
 
@@ -384,6 +386,8 @@ Scanners. [Checkov](https://github.com/bridgecrewio/checkov) (Apache-2.0), [Triv
 [Cloud Custodian](https://github.com/cloud-custodian/cloud-custodian) (Apache-2.0). The policy packs in `cloudg/policies/` are written in Cloud Custodian's policy format and run with its `custodian` CLI.
 
 [parliament](https://github.com/duo-labs/parliament) (BSD-3-Clause) from Duo Labs does the IAM policy linting.
+
+Drawing engines. The estate map in report.html is drawn with the iso-kit from [Anatomy](https://github.com/wheresryan22/anatomy) (MIT, by Ryan), and its empty states use the kernel of [Hairline](https://hairline.lucasmarkes.com) 0.5.1 (MIT, by Lucas Marques). Both are copied into `cloudg/templates/vendor/` and embedded in every report, so the map works offline. The iso-kit is wrapped so it can sit inside a script element, and `cloudg/templates/vendor/NOTICE` lists exactly what changed.
 
 [MITRE ATT&CK®](https://attack.mitre.org/). The `mitre_attack_*.yaml` files contain ATT&CK technique IDs and descriptions. © The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. ATT&CK is a registered trademark of The MITRE Corporation.
 

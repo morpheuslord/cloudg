@@ -1,9 +1,14 @@
 ---
+description: Answers dependency questions from a saved inventory map. What does this asset need, what breaks if it goes away, and which assets is everything else leaning on?
 command: deps
-lede: Answers dependency questions from a saved inventory map. What does this asset need, what breaks if it goes away, and which assets is everything else leaning on?
-intro: |
-  `cloudg deps` reads the files `cloudg map` wrote. It never calls a cloud API, so it runs offline and needs no credentials.
 ---
+
+Answers dependency questions from a saved inventory map. What does this asset need, what breaks if it goes away, and which assets is everything else leaning on?
+{ .lede }
+
+`cloudg deps` reads the files `cloudg map` wrote. It never calls a cloud API, so it runs offline and needs no credentials.
+
+<!-- cloudg:cli-reference -->
 
 ## How it works
 
@@ -11,7 +16,7 @@ The command loads `inventory-map.json` from `-m/--map`. You can pass the file it
 
 What happens next depends on whether you name an asset.
 
-```mermaid caption="The two modes of cloudg deps"
+```mermaid
 flowchart TD
   A["Load inventory-map.json"] --> B{"ASSET given?"}
   B -->|yes| C["Resolve the reference"]
@@ -22,6 +27,8 @@ flowchart TD
   D -->|both| G["Both trees"]
   B -->|no| H["Overview: shared deps, blast radius, cross-account edges"]
 ```
+The two modes of cloudg deps
+{ .diagram-caption }
 
 ### With an asset
 
@@ -103,28 +110,32 @@ cloudg deps jobs-queue --direction down --depth 5
 
 Feed a function's dependencies into another tool:
 
-```bash tab="CLI"
-cloudg deps api-handler --direction up --json > api-handler-deps.json
-```
+=== "CLI"
 
-```python tab="Python" title="deps_tree.py"
-import json
+    ```bash
+    cloudg deps api-handler --direction up --json > api-handler-deps.json
+    ```
 
-from cloudg.inventory import InventoryResult
+=== "Python"
 
-result = InventoryResult.load("./reports")
-graph = result.dependency_graph()
+    ```python title="deps_tree.py"
+    import json
 
-asset = graph.find("api-handler")
-if asset is None:
-    raise SystemExit("no unique asset matches 'api-handler'")
+    from cloudg.inventory import InventoryResult
 
-tree = graph.tree(asset.id, direction="up", max_depth=3)
-print(json.dumps(tree, indent=2, default=str))
+    result = InventoryResult.load("./reports")
+    graph = result.dependency_graph()
 
-for row in graph.blast_radius(top=5):
-    print(row["name"], row["transitive_dependents"])
-```
+    asset = graph.find("api-handler")
+    if asset is None:
+        raise SystemExit("no unique asset matches 'api-handler'")
+
+    tree = graph.tree(asset.id, direction="up", max_depth=3)
+    print(json.dumps(tree, indent=2, default=str))
+
+    for row in graph.blast_radius(top=5):
+        print(row["name"], row["transitive_dependents"])
+    ```
 
 ## Exit codes
 
@@ -136,10 +147,26 @@ for row in graph.blast_radius(top=5):
 
 ## Related
 
-:::links
-- [Dependencies and blast radius](/guides/dependencies/) How to read the trees and what the edge types mean.
-- [cloudg map](/cli/map/) Produces the inventory map this command reads.
-- [DependencyGraph](/api/dependencygraph/) The Python class behind `deps`.
-- [InventoryResult](/api/inventoryresult/) Loading and exporting saved maps.
-- [MCP server](/mcp/) Ask the same questions from an AI assistant.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Dependencies and blast radius**](../guides/dependencies.md)
+
+    How to read the trees and what the edge types mean.
+
+-   [**cloudg map**](map.md)
+
+    Produces the inventory map this command reads.
+
+-   [**DependencyGraph**](../api/dependencygraph.md)
+
+    The Python class behind `deps`.
+
+-   [**InventoryResult**](../api/inventoryresult.md)
+
+    Loading and exporting saved maps.
+
+-   [**MCP server**](../mcp/index.md)
+
+    Ask the same questions from an AI assistant.
+
+</div>

@@ -1,10 +1,13 @@
 ---
 title: GraphBuilder
-object: cloudg.graph.builder.GraphBuilder
-members: [build, graph, find_attack_paths, find_lateral_movement_paths, compute_centrality, subgraph, to_d3_json, to_cytoscape_json, to_json_str, save_graphml, load_graphml]
-lede: Turns a list of `CloudAsset` and `NetworkEdge` objects into a NetworkX `DiGraph`, then searches, scores and exports it.
-since: "0.6.0"
+description: Turns a list of CloudAsset and NetworkEdge objects into a NetworkX DiGraph, then searches, scores and exports it.
 ---
+
+Turns a list of `CloudAsset` and `NetworkEdge` objects into a NetworkX `DiGraph`, then searches, scores and exports it.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 `GraphBuilder` is the first thing `cloudg run` does after collection, and `InventoryResult.export()` uses it to write `inventory-map.graphml` and `inventory-graph.json`. It needs no credentials and no network: hand it assets and edges from a collector, a saved `inventory-map.json` or your own code, and it gives you a plain `networkx.DiGraph` you can keep working on with the whole NetworkX library.
 
@@ -14,7 +17,7 @@ Each asset becomes a node keyed by `asset.id`. The node carries `name`, `asset_t
 
 Each edge then joins `source_id` to `target_id`. Collectors write edges whose endpoints are not assets at all: a CIDR such as `0.0.0.0/0`, an Azure service tag or an unresolved reference. For those, `build()` creates a placeholder node with `asset_type` and `provider` set to `EXTERNAL` and `is_external=True`.
 
-```mermaid caption="How build() places one NetworkEdge"
+```mermaid
 flowchart TD
   A["NetworkEdge"] --> B{"Endpoints are nodes?"}
   B -->|no| C["Add EXTERNAL placeholder"] --> D
@@ -24,6 +27,8 @@ flowchart TD
   F -->|yes| G["Merge ports, protocols, descriptions"]
   F -->|no| H["Replace attributes"]
 ```
+How build() places one NetworkEdge
+{ .diagram-caption }
 
 A `DiGraph` holds one edge per ordered pair. Collectors often emit several rules for one pair (two ingress rules from `0.0.0.0/0` to the same security group, for 22 and 443), so since 0.6.0 `SECURITY_GROUP_RULE`, `NACL_RULE` and `INTERNET_EXPOSED` edges on the same pair are merged when their `cidr` and `direction` match:
 
@@ -41,114 +46,10 @@ An empty port list on a TCP, UDP or all-protocol filter rule (GCP writes these) 
 
 ### Build, search and export a small estate
 
-The script builds eight assets and eleven edges by hand, so it runs offline. It also groups the nodes into communities with python-louvain, which cloudg installs; the [RAG exporter](/api/ragexporter/) runs the same `best_partition` call for its community chunks.
+The script builds eight assets and eleven edges by hand, so it runs offline. It also groups the nodes into communities with python-louvain, which cloudg installs; the [RAG exporter](ragexporter.md) runs the same `best_partition` call for its community chunks.
 
 ```python title="build_graph.py"
-"""Build a graph from a hand-made estate and look at it from a few angles."""
-
-import json
-from pathlib import Path
-
-import community as community_louvain  # python-louvain, a cloudg dependency
-
-from cloudg.graph.builder import GraphBuilder
-from cloudg.schema.models import AssetType, CloudAsset, CloudProvider, EdgeType, NetworkEdge
-
-ACCOUNT = "123456789012"
-
-
-def asset(asset_id: str, name: str, asset_type: AssetType, arn_suffix: str, **extra) -> CloudAsset:
-    return CloudAsset(
-        id=asset_id,
-        name=name,
-        asset_type=asset_type,
-        provider=CloudProvider.AWS,
-        region="eu-west-1",
-        account_id=ACCOUNT,
-        arn=f"arn:aws:{arn_suffix}",
-        **extra,
-    )
-
-
-assets = [
-    asset("sg-alb", "sg-alb", AssetType.SECURITY_GROUP, f"ec2:eu-west-1:{ACCOUNT}:security-group/sg-alb"),
-    asset("sg-web", "sg-web", AssetType.SECURITY_GROUP, f"ec2:eu-west-1:{ACCOUNT}:security-group/sg-web"),
-    asset("alb", "web-alb", AssetType.LOAD_BALANCER, f"elasticloadbalancing:eu-west-1:{ACCOUNT}:loadbalancer/app/web-alb/1"),
-    asset("tg", "web-tg", AssetType.TARGET_GROUP, f"elasticloadbalancing:eu-west-1:{ACCOUNT}:targetgroup/web-tg/1"),
-    asset("web-1", "web-1", AssetType.EC2, f"ec2:eu-west-1:{ACCOUNT}:instance/i-0web1", is_internet_exposed=True),
-    asset("web-2", "web-2", AssetType.EC2, f"ec2:eu-west-1:{ACCOUNT}:instance/i-0web2"),
-    asset("app-role", "app-role", AssetType.IAM_ROLE, f"iam::{ACCOUNT}:role/app-role"),
-    asset("orders-db", "orders-db", AssetType.RDS_INSTANCE, f"rds:eu-west-1:{ACCOUNT}:db:orders-db"),
-]
-
-
-def rule(source: str, target: str, port: str, cidr: str = "", description: str = "") -> NetworkEdge:
-    return NetworkEdge(
-        source_id=source,
-        target_id=target,
-        edge_type=EdgeType.SECURITY_GROUP_RULE,
-        port_range=port,
-        protocol="TCP",
-        cidr=cidr or None,
-        direction="ingress",
-        description=description or None,
-    )
-
-
-edges = [
-    # Two rules on the same pair: GraphBuilder merges them into one edge
-    rule("0.0.0.0/0", "sg-alb", "443", "0.0.0.0/0", "HTTPS from anywhere"),
-    rule("0.0.0.0/0", "sg-alb", "80", "0.0.0.0/0", "HTTP redirect"),
-    rule("sg-alb", "sg-web", "8080", description="ALB to web tier"),
-    NetworkEdge(source_id="alb", target_id="sg-alb", edge_type=EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    NetworkEdge(source_id="web-1", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    NetworkEdge(source_id="web-2", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO, relationship="PROTECTED_BY_SG"),
-    NetworkEdge(source_id="alb", target_id="tg", edge_type=EdgeType.LOAD_BALANCER_TARGET),
-    NetworkEdge(source_id="tg", target_id="web-1", edge_type=EdgeType.LOAD_BALANCER_TARGET),
-    NetworkEdge(source_id="tg", target_id="web-2", edge_type=EdgeType.LOAD_BALANCER_TARGET),
-    NetworkEdge(source_id="web-1", target_id="app-role", edge_type=EdgeType.IAM_TRUST),
-    NetworkEdge(source_id="app-role", target_id="orders-db", edge_type=EdgeType.GRANTS_ACCESS),
-]
-
-builder = GraphBuilder()
-graph = builder.build(assets, edges)
-print(f"{graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges from {len(edges)} NetworkEdges")
-
-merged = graph.edges["0.0.0.0/0", "sg-alb"]
-print("merged rule:", merged["port_range"], "|", merged["description"])
-print("placeholder:", graph.nodes["0.0.0.0/0"]["asset_type"], graph.nodes["0.0.0.0/0"]["is_external"])
-
-
-def names(path: list[str]) -> str:
-    return " -> ".join(graph.nodes[n]["name"] for n in path)
-
-
-# Paths follow edges in their stored direction
-for path in builder.find_attack_paths("0.0.0.0/0", "sg-web"):
-    print("internet path:", names(path))
-for path in builder.find_attack_paths("web-1", "orders-db"):
-    print("identity path:", names(path))
-for path in builder.find_lateral_movement_paths():
-    print("lateral path:", names(path))
-
-centrality = builder.compute_centrality()
-top = sorted(centrality.items(), key=lambda kv: kv[1]["betweenness"], reverse=True)[:3]
-for node_id, scores in top:
-    print(f"betweenness {scores['betweenness']:.3f}  {graph.nodes[node_id]['name']}")
-
-# Louvain works on undirected graphs; the RAG exporter does the same
-partition = community_louvain.best_partition(graph.to_undirected(), random_state=42)
-groups: dict[int, list[str]] = {}
-for node_id, community_id in partition.items():
-    groups.setdefault(community_id, []).append(graph.nodes[node_id]["name"])
-for community_id, members in sorted(groups.items()):
-    print(f"community {community_id}: {sorted(members)}")
-
-out = Path("graph-out")
-builder.save_graphml(out / "estate.graphml")
-(out / "estate-d3.json").write_text(builder.to_json_str())
-(out / "estate-cytoscape.json").write_text(json.dumps(builder.to_cytoscape_json(), indent=2))
-print("wrote", sorted(p.name for p in out.iterdir()))
+--8<-- "graph/build_graph.py"
 ```
 
 Output with cloudg 0.6.0 and python-louvain 0.16:
@@ -171,7 +72,7 @@ community 3: ['web-alb', 'web-tg']
 wrote ['estate-cytoscape.json', 'estate-d3.json', 'estate.graphml']
 ```
 
-Eight assets plus the `0.0.0.0/0` placeholder make nine nodes, and the two rules into `sg-alb` became one edge. There is no internet path to `web-1` here even though the load balancer targets it: `alb -> sg-alb` is an `ATTACHED_TO` edge pointing from the resource to its group, and `find_attack_paths` walks edges only in the direction they are stored. The [reachability analysis](/api/reachabilityanalyzer/) knows which way traffic actually moves; walk `network_flow_graph(graph)` instead when you want flow-aware paths.
+Eight assets plus the `0.0.0.0/0` placeholder make nine nodes, and the two rules into `sg-alb` became one edge. There is no internet path to `web-1` here even though the load balancer targets it: `alb -> sg-alb` is an `ATTACHED_TO` edge pointing from the resource to its group, and `find_attack_paths` walks edges only in the direction they are stored. The [reachability analysis](reachabilityanalyzer.md) knows which way traffic actually moves; walk `network_flow_graph(graph)` instead when you want flow-aware paths.
 
 Leave out `random_state` and Louvain may number and split the communities differently from one run to the next.
 
@@ -205,14 +106,47 @@ Edges whose other end lies outside the filter bring that end back as an `EXTERNA
 - `compute_centrality()` returns normalised degree, in-degree, out-degree and betweenness per node. Betweenness is exact (`nx.betweenness_centrality`), so it is slow on graphs of tens of thousands of nodes.
 - `subgraph(node_ids)` returns an independent copy, so changes to it do not touch `builder.graph`.
 - `save_graphml()` creates missing parent directories and writes with `nx.write_graphml_xml` through `graphml_safe()`, a copy of the graph without `None` attributes and with lists and dicts stored as JSON strings. `builder.graph` itself is not changed. `load_graphml()` reads back through `nx.read_graphml`, which returns a `DiGraph` with string attributes; booleans such as `is_internet_exposed` come back as Python booleans because GraphML stores their type.
-- The D3 export (`to_d3_json`, `to_json_str`) has `nodes` and `links`. Cytoscape's has `elements.nodes` and `elements.edges` with a smaller attribute set (no ARN or CIDR). The field reference for the D3 form is [inventory-graph.json](/reference/inventory/inventory-graph-json/).
+- The D3 export (`to_d3_json`, `to_json_str`) has `nodes` and `links`. Cytoscape's has `elements.nodes` and `elements.edges` with a smaller attribute set (no ARN or CIDR). The field reference for the D3 form is [inventory-graph.json](../reference/inventory/inventory-graph-json.md).
+
+## Reference
+
+::: cloudg.graph.builder.GraphBuilder
+    options:
+      members:
+        - build
+        - graph
+        - find_attack_paths
+        - find_lateral_movement_paths
+        - compute_centrality
+        - subgraph
+        - to_d3_json
+        - to_cytoscape_json
+        - to_json_str
+        - save_graphml
+        - load_graphml
 
 ## Related
 
-:::links
-- [ReachabilityAnalyzer](/api/reachabilityanalyzer/) Internet exposure, flow-aware walks and blast radius over this graph.
-- [CloudOntology](/api/cloudontology/) The same assets and edges as RDF triples.
-- [RAGExporter](/api/ragexporter/) Chunks built from the graph's communities.
-- [Graph, ontology and RAG](/guides/graph-ontology-rag/) How the three analyses fit together.
-- [inventory-map.graphml](/reference/inventory/inventory-map-graphml/) Node and edge attributes, field by field.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**ReachabilityAnalyzer**](reachabilityanalyzer.md)
+
+    Internet exposure, flow-aware walks and blast radius over this graph.
+
+-   [**CloudOntology**](cloudontology.md)
+
+    The same assets and edges as RDF triples.
+
+-   [**RAGExporter**](ragexporter.md)
+
+    Chunks built from the graph's communities.
+
+-   [**Graph, ontology and RAG**](../guides/graph-ontology-rag.md)
+
+    How the three analyses fit together.
+
+-   [**inventory-map.graphml**](../reference/inventory/inventory-map-graphml.md)
+
+    Node and edge attributes, field by field.
+
+</div>

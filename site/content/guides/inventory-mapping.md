@@ -1,55 +1,63 @@
 ---
 title: Inventory mapping
-lede: "`cloudg map` asks a different question from `cloudg run`: what exists, and how is it wired together?"
-meta:
-  - [Command, "`cloudg map`"]
-  - [Providers, "AWS, Azure, GCP"]
-source: docs/DOCUMENTATION.md
+description: 'cloudg map asks a different question from cloudg run: what exists, and how is it wired together?'
 ---
+
+`cloudg map` asks a different question from `cloudg run`: what exists, and how is it wired together?
+{ .lede }
+
+**Command** `cloudg map` &middot; **Providers** AWS, Azure, GCP
+{ .page-meta }
 
 `cloudg map` reads your cloud accounts and writes down everything it finds, deployed resources and defaults alike, then links them into one graph of typed relationships. A Lambda function points at the role it runs as, the queue that triggers it, the image it was built from and the KMS key that encrypts its environment. A WAF points at the load balancer it protects. An SCP points at the accounts it restricts.
 
 No scanner runs during a map, and none needs to be installed. The command only needs read access to the cloud APIs.
 
-:::note
-The map doesn't depend on the scanners. You can map today and pull in next week's scan findings with `--findings ./reports/raw-findings.json`. On the CLI that flag belongs to `cloudg map`, so it maps again; to overlay findings onto a map you already saved without calling the cloud, use the Python call in [Overlay scanner findings](#overlay-scanner-findings).
-:::
+!!! note
+
+    The map doesn't depend on the scanners. You can map today and pull in next week's scan findings with `--findings ./reports/raw-findings.json`. On the CLI that flag belongs to `cloudg map`, so it maps again; to overlay findings onto a map you already saved without calling the cloud, use the Python call in [Overlay scanner findings](#overlay-scanner-findings).
 
 ## Map an account
 
 The smallest useful run maps one AWS account in every enabled region:
 
-```bash tab="CLI"
-cloudg map -p aws --profile audit --regions all
-```
+=== "CLI"
 
-```python tab="Python" title="map_account.py"
-from cloudg import CloudGConfig, CloudGEngine
+    ```bash
+    cloudg map -p aws --profile audit --regions all
+    ```
 
-config = CloudGConfig(providers=["aws"])
-config.aws.profile = "audit"
-config.aws.regions = ["ALL"]
+=== "Python"
 
-engine = CloudGEngine(config)
-inventory = engine.map_inventory_sync(output_dir="./reports")
+    ```python title="map_account.py"
+    from cloudg import CloudGConfig, CloudGEngine
 
-summary = inventory.summary
-print(summary["total_assets"], "assets,", summary["total_edges"], "edges")
-print("internet-exposed:", summary["internet_exposed"])
-print("unlinked:", summary["unlinked_assets"])
-```
+    config = CloudGConfig(providers=["aws"])
+    config.aws.profile = "audit"
+    config.aws.regions = ["ALL"]
 
-```bash tab="Docker"
-docker run --rm \
-  -v ~/.aws:/home/cloudg/.aws:ro \
-  -v "$PWD/reports:/app/reports" \
-  ghcr.io/morpheuslord/cloudg:latest \
-  map -p aws --profile audit --regions all
-```
+    engine = CloudGEngine(config)
+    inventory = engine.map_inventory_sync(output_dir="./reports")
+
+    summary = inventory.summary
+    print(summary["total_assets"], "assets,", summary["total_edges"], "edges")
+    print("internet-exposed:", summary["internet_exposed"])
+    print("unlinked:", summary["unlinked_assets"])
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker run --rm \
+      -v ~/.aws:/home/cloudg/.aws:ro \
+      -v "$PWD/reports:/app/reports" \
+      ghcr.io/morpheuslord/cloudg:latest \
+      map -p aws --profile audit --regions all
+    ```
 
 The image runs as the user `cloudg` with its home at `/home/cloudg`, which is why the AWS config directory is mounted there. Reports land in `/app/reports`, the container's `./reports`.
 
-While it runs, the CLI prints a "Map Configuration" panel (providers, regions, selected services, whether the Kubernetes, Cloud Control and catch-all sweeps are on) and then an "Inventory Summary" table: assets, interconnections, accounts, services, internet-exposed assets, cross-account edges, external accounts referenced, security service gaps, unlinked assets and unresolved references. Two ranked tables follow, "Most shared dependencies" and "Largest blast radius", and a warning line for each security service that is not enabled. [Dependencies and blast radius](/guides/dependencies/) explains how to read them.
+While it runs, the CLI prints a "Map Configuration" panel (providers, regions, selected services, whether the Kubernetes, Cloud Control and catch-all sweeps are on) and then an "Inventory Summary" table: assets, interconnections, accounts, services, internet-exposed assets, cross-account edges, external accounts referenced, security service gaps, unlinked assets and unresolved references. Two ranked tables follow, "Most shared dependencies" and "Largest blast radius", and a warning line for each security service that is not enabled. [Dependencies and blast radius](dependencies.md) explains how to read them.
 
 Pass a config file with the group option, before the subcommand: `cloudg -c config.yaml map ...`. Without `-c`, cloudg uses its built-in defaults and does not look for a `config.yaml` on its own.
 
@@ -59,7 +67,7 @@ Pass a config file with the group option, before the subcommand: `cloudg -c conf
 
 With `all`, cloudg discovers the enabled regions first and runs one collection unit per account and region. Account-wide services (IAM, Route 53, ECR Public, Direct Connect gateways and the other global tasks) run once per account, in the primary region: `us-east-1` when it is part of the run, otherwise the first region in the list. So `--regions all` doesn't collect IAM once per region.
 
-With `--org` and Control Tower, `--regions all` is replaced by the landing zone's governed regions. An explicit list is always used as given. The [AWS Organizations](/guides/aws-organizations/) guide covers that case.
+With `--org` and Control Tower, `--regions all` is replaced by the landing zone's governed regions. An explicit list is always used as given. The [AWS Organizations](aws-organizations.md) guide covers that case.
 
 ## Many accounts
 
@@ -69,9 +77,9 @@ With `--org` and Control Tower, `--regions all` is replaced by the landing zone'
 cloudg map -p aws --org --org-role cloudg-readonly --regions all
 ```
 
-:::warning AWSControlTowerExecution has admin rights
-Without `--org-role` (or `--role-name`), cloudg assumes `AWSControlTowerExecution` in every member account. That role exists wherever Control Tower enrolled an account, but it carries administrator permissions. Deploy a read-only role to every account and pass it with `--org-role`. [AWS Organizations](/guides/aws-organizations/) has a StackSet template for it.
-:::
+!!! warning "AWSControlTowerExecution has admin rights"
+
+    Without `--org-role` (or `--role-name`), cloudg assumes `AWSControlTowerExecution` in every member account. That role exists wherever Control Tower enrolled an account, but it carries administrator permissions. Deploy a read-only role to every account and pass it with `--org-role`. [AWS Organizations](aws-organizations.md) has a StackSet template for it.
 
 Always pair `--accounts` with `--role-name`. Without a role name cloudg doesn't assume anything and maps your own account once per listed ID, labelled with each of those IDs.
 
@@ -79,14 +87,33 @@ Always pair `--accounts` with `--role-name`. Without a role name cloudg doesn't 
 
 Coverage comes in layers. Each one catches what the previous one missed.
 
-:::cells
+<div class="grid cells" markdown>
+
+<div class="card" markdown>
+
 ### Deep collectors
+
 131 dedicated AWS collector tasks in 19 service families, each reading one service in depth and declaring what every asset talks to. Azure goes through Resource Graph, GCP through Cloud Asset Inventory.
+
+</div>
+
+<div class="card" markdown>
+
 ### Breadth sweep
+
 On AWS, a Cloud Control sweep lists every CloudFormation resource type that has a list handler, tagged or not, so services without a dedicated collector still show up. The tagging API sweep adds tagged resources on top.
+
+</div>
+
+<div class="card" markdown>
+
 ### Every account
+
 Every account gets a `CLOUD_ACCOUNT` node that contains its top-level resources. With `--org`, accounts hang under the OU tree next to SCPs and Control Tower controls.
-:::
+
+</div>
+
+</div>
 
 When the same resource turns up twice, the copy from a dedicated collector wins over a Cloud Control hit, which wins over a tagging API hit. Their declared relationships and aliases are merged into the copy that is kept.
 
@@ -125,9 +152,9 @@ cloudg map -p aws --regions all --services containers,serverless,sweep
 cloudg map -p aws --regions all --exclude-services data,cloudformation
 ```
 
-:::warning The sweeps are a family too
-The two sweeps belong to the family `sweep`. Once you pass `--services`, only what you listed runs, so `--services containers,serverless` also drops the Cloud Control and tagging API sweeps. Add `sweep` to the list if you want them. A family name that matches nothing (a typo, say) is not an error; it selects no tasks.
-:::
+!!! warning "The sweeps are a family too"
+
+    The two sweeps belong to the family `sweep`. Once you pass `--services`, only what you listed runs, so `--services containers,serverless` also drops the Cloud Control and tagging API sweeps. Add `sweep` to the list if you want them. A family name that matches nothing (a typo, say) is not an error; it selects no tasks.
 
 Narrowing the run has a side effect on the links. A function whose role lives in the `identity` family can't be linked to that role when `identity` is excluded, so the reference shows up under `unresolved_references` instead of as an edge.
 
@@ -158,9 +185,9 @@ Two sweeps catch what no deep collector reads. They are separate flags.
 
 `--sweep / --no-sweep` (on by default) controls the Resource Groups Tagging API sweep. AWS only returns resources that have been tagged at some point, so this sweep mostly enriches; the Cloud Control sweep is the one that finds untagged resources. Hits carry `discovered_via: "tagging-api"`.
 
-:::note
-`cloudg map` always hands the value of `--sweep` to the mapper, and that value defaults to on, so the CLI overrides `inventory.tagging_sweep: false` from your config file even when you don't type the flag. Use `--no-sweep` on the command line to turn the tagging sweep off.
-:::
+!!! note
+
+    `cloudg map` always hands the value of `--sweep` to the mapper, and that value defaults to on, so the CLI overrides `inventory.tagging_sweep: false` from your config file even when you don't type the flag. Use `--no-sweep` on the command line to turn the tagging sweep off.
 
 ## Azure and GCP
 
@@ -178,7 +205,7 @@ cloudg map -p all --regions all
 
 ## How a run fits together
 
-```mermaid caption="One mapping run, from discovery to the files on disk"
+```mermaid
 flowchart TD
   A["Org discovery (--org)"] --> B["Deep collectors, per account and region"]
   B --> C["Cloud Control and tagging sweeps"]
@@ -188,6 +215,8 @@ flowchart TD
   F --> G["Dependency analysis"]
   G --> H["Exports in ./reports"]
 ```
+One mapping run, from discovery to the files on disk
+{ .diagram-caption }
 
 Collectors never create edges across services themselves. They declare what each asset talks to, by any identifier they have (an ARN, a queue URL, an image URI, a bare `sg-` ID), and the relationship linker resolves those identifiers across services, regions and accounts. It runs three passes: declared relations, provider rules for older metadata conventions, and a generic pass that turns any identifier-looking string in an asset's metadata into a `REFERENCES` edge when it resolves to another asset.
 
@@ -240,7 +269,7 @@ if inventory.throttling:
         print("throttled:", line)
 ```
 
-Throttling never fails a map. Calls are paced and retried; a service that is still throttled after its retries is recorded as `FAILED` or `PARTIAL` with an error starting `throttled:`. The run's throttling telemetry is attached as `inventory.throttling` and, when present, written under a top-level `throttling` key in `inventory-map.json`. The [rate limits guide](/guides/rate-limits/) covers tuning.
+Throttling never fails a map. Calls are paced and retried; a service that is still throttled after its retries is recorded as `FAILED` or `PARTIAL` with an error starting `throttled:`. The run's throttling telemetry is attached as `inventory.throttling` and, when present, written under a top-level `throttling` key in `inventory-map.json`. The [rate limits guide](rate-limits.md) covers tuning.
 
 ## Output files
 
@@ -256,7 +285,7 @@ Everything goes to `-o/--output`, `./reports` by default.
 | `asset-map.json` | with `--findings` | per-asset finding counts and severity breakdown, riskiest first |
 | `compliance-map.json` | with `--findings` | framework to findings and affected assets |
 
-`inventory-map.json` is self-contained, and `cloudg deps` reads it back without cloud access. The graph files merge parallel rule edges, so count edges in `inventory-map.json`. The [output files reference](/reference/output-files/) has the field-level detail.
+`inventory-map.json` is self-contained, and `cloudg deps` reads it back without cloud access. The graph files merge parallel rule edges, so count edges in `inventory-map.json`. The [output files reference](../reference/output-files.md) has the field-level detail.
 
 ## Overlay scanner findings
 
@@ -333,11 +362,24 @@ graph = GraphBuilder().build(assets + linker.external_assets, edges)
 print(graph.number_of_nodes(), "nodes,", graph.number_of_edges(), "edges in the graph")
 ```
 
-Your own collectors can declare relationships the same way the built-in ones do, by putting entries such as `{"target": "<any identifier>", "edge": "INVOKES", "relationship": "TRIGGERED_BY"}` in `metadata["relations"]`. The [RelationshipLinker](/api/relationshiplinker/) page has the details.
+Your own collectors can declare relationships the same way the built-in ones do, by putting entries such as `{"target": "<any identifier>", "edge": "INVOKES", "relationship": "TRIGGERED_BY"}` in `metadata["relations"]`. The [RelationshipLinker](../api/relationshiplinker.md) page has the details.
 
-:::links
-- [Dependencies and blast radius](/guides/dependencies/) Query the saved map with `cloudg deps`.
-- [AWS Organizations](/guides/aws-organizations/) Map every account under the management account.
-- [cloudg map](/cli/map/) Every option of the command.
-- [InventoryMapper](/api/inventorymapper/) The Python class behind it.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**Dependencies and blast radius**](dependencies.md)
+
+    Query the saved map with `cloudg deps`.
+
+-   [**AWS Organizations**](aws-organizations.md)
+
+    Map every account under the management account.
+
+-   [**cloudg map**](../cli/map.md)
+
+    Every option of the command.
+
+-   [**InventoryMapper**](../api/inventorymapper.md)
+
+    The Python class behind it.
+
+</div>

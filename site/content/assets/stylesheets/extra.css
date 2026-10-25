@@ -1,0 +1,264 @@
+/* cloudg docs: additions to the Material theme.
+   Colours come from Material's own variables, so both palettes work. */
+
+:root {
+  --cg-brand: #ec3013;
+  --cg-radius: 0.4rem;
+}
+
+/* ---- page lede and the metadata strip under it ---------------------------- */
+
+.md-typeset .lede {
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--md-default-fg-color--light);
+  margin-top: -0.4rem;
+}
+
+.md-typeset .page-meta,
+.md-typeset .release-date {
+  font-size: 0.72rem;
+  color: var(--md-default-fg-color--light);
+  border-left: 0.15rem solid var(--md-accent-fg-color);
+  padding-left: 0.6rem;
+}
+
+.md-typeset .table-note {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .diagram-caption {
+  margin-top: -0.6rem;
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .mermaid {
+  text-align: center;
+}
+
+/* ---- numbered steps --------------------------------------------------------- */
+
+.md-typeset .steps {
+  counter-reset: step;
+  margin-left: 1rem;
+  padding-left: 1.6rem;
+  border-left: 0.1rem solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .steps > h3 {
+  counter-increment: step;
+  position: relative;
+}
+
+.md-typeset .steps > h3::before {
+  content: counter(step);
+  position: absolute;
+  left: -2.75rem;
+  top: -0.1rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  line-height: 1.7rem;
+  border-radius: 50%;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--md-accent-bg-color);
+  background: var(--md-accent-fg-color);
+}
+
+/* ---- cards ------------------------------------------------------------------ */
+
+.md-typeset .grid.cells > .card h3 {
+  margin-top: 0;
+  font-size: 0.85rem;
+}
+
+.md-typeset .grid.cells > .card p:last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset .link-cards > ul > li > p:first-child a {
+  display: block;
+}
+
+.md-typeset .link-cards > ul > li > p:first-child a::after {
+  content: " \2192";
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset .link-cards > ul > li > p:not(:first-child) {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ---- API reference ------------------------------------------------------------ */
+
+.md-typeset .doc-heading .doc-source-link {
+  float: right;
+  margin-left: 0.6rem;
+  padding: 0 0.45rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: var(--cg-radius);
+  font-family: var(--md-text-font-family);
+  font-size: 0.6rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .doc-heading .doc-source-link:hover {
+  color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset .doc-object > .doc-contents {
+  padding-left: 0.2rem;
+}
+
+.md-typeset h2.doc-heading,
+.md-typeset h3.doc-heading {
+  border-top: 0.05rem solid var(--md-default-fg-color--lightest);
+  padding-top: 0.8rem;
+}
+
+.md-typeset h4.doc-heading {
+  margin-top: 1.6rem;
+}
+
+/* ---- config reference ------------------------------------------------------------ */
+
+.md-typeset a.config-key {
+  white-space: nowrap;
+}
+
+.md-typeset a.config-key:target code {
+  outline: 0.1rem solid var(--md-accent-fg-color);
+}
+
+/* ---- home page ------------------------------------------------------------------- */
+
+.md-typeset .cg-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+  margin: 0.5rem 0 2rem;
+}
+
+.md-typeset .cg-hero h1 {
+  margin: 0.4rem 0 0.8rem;
+  font-size: 2.1rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset .cg-kicker {
+  font-family: var(--md-code-font-family);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset .cg-hero .lede {
+  margin-top: 0;
+}
+
+.md-typeset .cg-hero .md-button {
+  margin: 0.3rem 0.4rem 0.3rem 0;
+}
+
+.md-typeset .cg-hero-art {
+  text-align: center;
+}
+
+.md-typeset .cg-hero-art img {
+  width: 100%;
+  max-width: 22rem;
+}
+
+.md-typeset .cg-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0 0 2rem;
+}
+
+.md-typeset .cg-stat {
+  display: block;
+  padding: 0.8rem 1rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: var(--cg-radius);
+  color: inherit;
+}
+
+.md-typeset a.cg-stat:hover {
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset .cg-stat strong {
+  display: block;
+  font-size: 1.4rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset .cg-stat span {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .cards .cg-num {
+  font-family: var(--md-code-font-family);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset .sample-report-frame {
+  width: 100%;
+  height: calc(100vh - 9rem);
+  min-height: 32rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: var(--cg-radius);
+  background: #fff;
+}
+
+@media screen and (max-width: 59.9375em) {
+  .md-typeset .cg-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-typeset .cg-hero-art {
+    display: none;
+  }
+
+  .md-typeset .cg-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .md-typeset .cg-hero h1 {
+    font-size: 1.6rem;
+  }
+}
+
+/* ---- the example map on the home page ------------------------------------------- */
+
+.cg-hero-art .hero-graph { width: 100%; height: auto; }
+.hg-cloud { fill: var(--md-default-bg-color); stroke: var(--md-default-fg-color--lighter); stroke-width: 0.5; }
+.hg-edges line { stroke: var(--md-default-fg-color--light); stroke-width: 1.5; }
+.hg-edges .hg-dash { stroke-dasharray: 4 4; }
+.hg-hot line { stroke: var(--cg-brand); stroke-width: 3; }
+.hg-nodes circle, .hg-nodes rect { fill: var(--md-default-bg-color); stroke: var(--md-default-fg-color); stroke-width: 2.5; }
+.hg-nodes .hg-red { fill: var(--cg-brand); stroke: var(--cg-brand); }
+.hg-labels text { font: 600 13px var(--md-code-font-family); fill: var(--md-default-fg-color); }
+.hg-elabel text { font: 10px var(--md-code-font-family); fill: var(--md-default-fg-color--light); letter-spacing: 0.04em; }
+.hg-elabel .hg-hot-t { fill: var(--cg-brand); font-weight: 600; }
+.md-typeset .cg-hero-art figcaption { font-size: 0.65rem; color: var(--md-default-fg-color--light); }

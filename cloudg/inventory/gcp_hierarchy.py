@@ -129,6 +129,15 @@ def perimeter_assets(results: list[dict[str, Any]]) -> list[CloudAsset]:
             )
             for ref, dry in governed
         ]
+        relations += [
+            rel(
+                full_name(level, "accesscontextmanager"),
+                EdgeType.REFERENCES,
+                "DEPENDS_ON",
+                description="access level the perimeter admits",
+            )
+            for level in md.get("access_levels") or []
+        ]
         md.update(
             gcp_asset_type="accesscontextmanager.googleapis.com/ServicePerimeter",
             access_policy=relative_name(name).split("/servicePerimeters/", 1)[0],
@@ -143,6 +152,46 @@ def perimeter_assets(results: list[dict[str, Any]]) -> list[CloudAsset]:
                 provider=CloudProvider.GCP,
                 region="global",
                 metadata=md,
+            )
+        )
+    return assets
+
+
+def access_level_assets(results: list[dict[str, Any]]) -> list[CloudAsset]:
+    """GUARDRAIL assets for Access Context Manager access levels (``ContentType.ACCESS_POLICY``).
+
+    Perimeters that require a level depend on it (see :func:`perimeter_assets`).
+    """
+    assets: list[CloudAsset] = []
+    for res in results:
+        level = res.get("access_level") or res.get("accessLevel")
+        if not isinstance(level, dict) or not level:
+            continue
+        name = res.get("name") or full_name(level.get("name"), "accesscontextmanager") or ""
+        basic = level.get("basic") or {}
+        conditions = [c for c in basic.get("conditions") or [] if isinstance(c, dict)]
+
+        def values(*keys: str) -> list[str]:
+            return sorted({v for c in conditions for k in keys for v in c.get(k) or []})
+
+        assets.append(
+            CloudAsset(
+                arn=name,
+                name=level.get("title") or name.rsplit("/", 1)[-1],
+                asset_type=AssetType.GUARDRAIL,
+                provider=CloudProvider.GCP,
+                region="global",
+                metadata={
+                    "gcp_asset_type": "accesscontextmanager.googleapis.com/AccessLevel",
+                    "title": level.get("title"),
+                    "access_policy": relative_name(name).split("/accessLevels/", 1)[0],
+                    "combining_function": basic.get("combining_function")
+                    or basic.get("combiningFunction"),
+                    "ip_subnetworks": values("ip_subnetworks", "ipSubnetworks"),
+                    "regions": values("regions"),
+                    "members": values("members"),
+                    "custom": bool(level.get("custom")),
+                },
             )
         )
     return assets
@@ -256,6 +305,7 @@ def discover_gcp_hierarchy(
         results, error = collector._list_assets("ACCESS_POLICY")
         perimeters = perimeter_assets(results)
         assets.extend(perimeters)
+        assets.extend(access_level_assets(results))
         _record_part(
             collector.coverage, "gcp_vpc_service_controls", (results, error), len(perimeters), start
         )

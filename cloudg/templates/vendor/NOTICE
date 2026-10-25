@@ -1,10 +1,11 @@
 Third-party JavaScript bundled with cloudg
 ==========================================
 
-The HTML report (report.html) inlines these two libraries when
+The HTML report (report.html) inlines Chart.js and D3 when
 report.inline_js is true (the default), so the report works without
-network access. The files are the unmodified builds published on npm;
-their own licence headers are kept.
+network access. Those two files are the unmodified builds published on
+npm; their own licence headers are kept. The isometric map's two drawing
+engines below have no CDN build and are always inlined.
 
 chart.umd.js
   Chart.js 4.4.0, file dist/chart.umd.js of the npm package chart.js@4.4.0
@@ -19,6 +20,24 @@ d3.min.js
   Copyright 2010-2023 Mike Bostock
   ISC License, see LICENSE-d3.txt
   sha256 f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539
+
+iso-kit.js
+  Anatomy iso-kit, file kit/iso-kit.mjs of https://github.com/wheresryan22/anatomy
+  Copyright (c) 2026 Ryan
+  MIT License, see LICENSE-anatomy.txt
+  The module is wrapped as IsoKit for a classic script element: its
+  "export" keywords are removed, and the two script tags inside one
+  string are written "\x3cscript" and "<\/script>", which are the same
+  characters at run time. Source sha256
+  6d3ecc725d30c3b0346da309cf61dfa5a65017c23620bbd4093009d4fb104018
+
+hairline-kernel.js
+  Hairline kernel, the src/core build of @lucasmarkes/hairline 0.5.1
+  https://hairline.lucasmarkes.com
+  Copyright (c) 2026 Lucas Marques
+  MIT License, see LICENSE-hairline.txt
+  Unmodified. sha256
+  47ebec7647174e04e4f59c0305277c2a1dab83a763676946b17fa1694e7952fe
 
 To update a library, replace the file with the build from the new npm
 release, update this notice, and update the version, CDN URL and SRI hash

@@ -122,7 +122,7 @@ deep:
   "file.googleapis.com/Instance": FILE_SYSTEM
   "file.googleapis.com/Backup": SNAPSHOT
   "bigquery.googleapis.com/Dataset": DATA_WAREHOUSE
-  "bigquery.googleapis.com/Table": OTHER
+  "bigquery.googleapis.com/Table": DATA_TABLE  # GCP parity (was OTHER)
   "bigtableadmin.googleapis.com/Instance": DYNAMODB_TABLE
   "firestore.googleapis.com/Database": DYNAMODB_TABLE
   "spanner.googleapis.com/Instance": CLOUD_SQL
@@ -155,3 +155,372 @@ deep:
   "logging.googleapis.com/LogSink": LOG_SINK
   "logging.googleapis.com/LogBucket": LOG_GROUP
   "monitoring.googleapis.com/AlertPolicy": ALARM
+
+  # GCP parity: types mapped for depth parity with AWS. Types marked
+  # (API) are not in Cloud Asset Inventory; the deep collector reads them
+  # from the service API and gives them this asset type name.
+  "compute.googleapis.com/PacketMirroring": FLOW_LOG
+  "compute.googleapis.com/NodeGroup": AUTOSCALING_GROUP
+  "compute.googleapis.com/NodeTemplate": LAUNCH_TEMPLATE
+  "networkconnectivity.googleapis.com/RouteTable": ROUTE_TABLE
+  "networkconnectivity.googleapis.com/Group": SERVICE_NETWORK
+  "networkconnectivity.googleapis.com/InternalRange": PREFIX_LIST
+  "networkconnectivity.googleapis.com/PolicyBasedRoute": ROUTE_TABLE
+  "networkconnectivity.googleapis.com/RegionalEndpoint": VPC_ENDPOINT
+  "networksecurity.googleapis.com/FirewallEndpoint": NETWORK_FIREWALL
+  "networksecurity.googleapis.com/FirewallEndpointAssociation": NETWORK_FIREWALL
+  "networksecurity.googleapis.com/SecurityProfile": NETWORK_FIREWALL
+  "networksecurity.googleapis.com/SecurityProfileGroup": NETWORK_FIREWALL
+  "networksecurity.googleapis.com/TlsInspectionPolicy": NETWORK_FIREWALL
+  "networksecurity.googleapis.com/ServerTlsPolicy": CERTIFICATE
+  "networksecurity.googleapis.com/ClientTlsPolicy": CERTIFICATE
+  "networksecurity.googleapis.com/AuthorizationPolicy": WAF_WEB_ACL
+  "networksecurity.googleapis.com/AuthzPolicy": WAF_WEB_ACL
+  "networksecurity.googleapis.com/AddressGroup": PREFIX_LIST
+  "ids.googleapis.com/Endpoint": THREAT_DETECTOR
+  "networkservices.googleapis.com/Gateway": LOAD_BALANCER
+  "networkservices.googleapis.com/Mesh": SERVICE_NETWORK
+  "networkservices.googleapis.com/HttpRoute": LB_LISTENER
+  "networkservices.googleapis.com/GrpcRoute": LB_LISTENER
+  "networkservices.googleapis.com/TcpRoute": LB_LISTENER
+  "networkservices.googleapis.com/TlsRoute": LB_LISTENER
+  "networkservices.googleapis.com/ServiceBinding": SERVICE_REGISTRY
+  "networkservices.googleapis.com/EndpointPolicy": GUARDRAIL
+  "networkservices.googleapis.com/ServiceLbPolicy": LOAD_BALANCER
+  "networkservices.googleapis.com/EdgeCacheService": CDN
+  "networkservices.googleapis.com/EdgeCacheOrigin": CDN
+  "networkservices.googleapis.com/EdgeCacheKeyset": ACCESS_KEY
+  "certificatemanager.googleapis.com/CertificateMap": CERTIFICATE
+  "certificatemanager.googleapis.com/CertificateMapEntry": CERTIFICATE
+  "certificatemanager.googleapis.com/DnsAuthorization": DNS_RECORD
+  "certificatemanager.googleapis.com/CertificateIssuanceConfig": CERTIFICATE
+  "certificatemanager.googleapis.com/TrustConfig": CERTIFICATE
+  "privateca.googleapis.com/CaPool": CERTIFICATE
+  "dns.googleapis.com/ResourceRecordSet": DNS_RECORD  # (API)
+  "identitytoolkit.googleapis.com/Config": USER_POOL
+  "identitytoolkit.googleapis.com/Tenant": USER_POOL
+  "identitytoolkit.googleapis.com/InboundSamlConfig": IDENTITY_PROVIDER
+  "identitytoolkit.googleapis.com/OauthIdpConfig": IDENTITY_PROVIDER
+  "identitytoolkit.googleapis.com/DefaultSupportedIdpConfig": IDENTITY_PROVIDER
+  "apigee.googleapis.com/Organization": API_GATEWAY
+  "apigee.googleapis.com/Instance": API_GATEWAY
+  "apigee.googleapis.com/Environment": API_GATEWAY
+  "apigee.googleapis.com/ApiProxy": API_GATEWAY
+  "apigee.googleapis.com/ApiProxyRevision": API_GATEWAY
+  "apigee.googleapis.com/TargetServer": API_DESTINATION  # (API)
+  "apigateway.googleapis.com/Authorizer": AUTHORIZER  # derived from ApiConfig documents
+  "artifactregistry.googleapis.com/DockerImage": CONTAINER_IMAGE
+  "binaryauthorization.googleapis.com/Policy": GUARDRAIL
+  "binaryauthorization.googleapis.com/Attestor": GUARDRAIL
+  "binaryauthorization.googleapis.com/PlatformPolicy": GUARDRAIL
+  "gkehub.googleapis.com/Fleet": FLEET
+  "gkehub.googleapis.com/Membership": FLEET
+  "gkehub.googleapis.com/Scope": FLEET
+  "gkehub.googleapis.com/MembershipBinding": FLEET
+  "gkehub.googleapis.com/Feature": CLUSTER_ADDON
+  "gkehub.googleapis.com/Namespace": K8S_NAMESPACE
+  "gkehub.googleapis.com/RBACRoleBinding": IAM_POLICY
+  "gkebackup.googleapis.com/BackupPlan": BACKUP_PLAN
+  "gkebackup.googleapis.com/Backup": SNAPSHOT
+  "gkebackup.googleapis.com/RestorePlan": BACKUP_PLAN
+  "containeranalysis.googleapis.com/VulnerabilitySummary": VULNERABILITY_SCANNER  # (API)
+  "cloudscheduler.googleapis.com/Job": SCHEDULE  # (API when not in the listing)
+  "eventarc.googleapis.com/ChannelConnection": EVENT_BUS
+  "eventarc.googleapis.com/MessageBus": EVENT_BUS
+  "eventarc.googleapis.com/GoogleApiSource": EVENT_BUS
+  "eventarc.googleapis.com/Enrollment": EVENT_RULE
+  "eventarc.googleapis.com/Pipeline": EVENT_PIPE
+  "managedkafka.googleapis.com/ConnectCluster": MESSAGE_BROKER
+  "managedkafka.googleapis.com/Connector": EVENT_PIPE
+  "managedkafka.googleapis.com/ConsumerGroup": MESSAGE_QUEUE
+  "pubsub.googleapis.com/Schema": DATA_CATALOG
+  "batch.googleapis.com/Job": JOB_DEFINITION
+  "spanner.googleapis.com/Database": CLOUD_SQL
+  "spanner.googleapis.com/Backup": SNAPSHOT
+  "spanner.googleapis.com/InstancePartition": CLOUD_SQL
+  "bigtableadmin.googleapis.com/Cluster": DYNAMODB_TABLE
+  "bigtableadmin.googleapis.com/Table": DATA_TABLE
+  "bigtableadmin.googleapis.com/AuthorizedView": DATA_TABLE
+  "bigtableadmin.googleapis.com/LogicalView": DATA_TABLE
+  "bigtableadmin.googleapis.com/MaterializedView": DATA_TABLE
+  "bigtableadmin.googleapis.com/Backup": SNAPSHOT
+  "bigtableadmin.googleapis.com/AppProfile": ROUTE_TABLE
+  "firestore.googleapis.com/Backup": SNAPSHOT
+  "firestore.googleapis.com/BackupSchedule": BACKUP_PLAN  # (API)
+  "bigquery.googleapis.com/Routine": JOB_DEFINITION
+  "bigquery.googleapis.com/Model": ML_MODEL
+  "bigquery.googleapis.com/RowAccessPolicy": GUARDRAIL
+  "bigqueryconnection.googleapis.com/Connection": SOURCE_CONNECTION
+  "bigquerydatatransfer.googleapis.com/TransferConfig": DATA_TRANSFER
+  "dataplex.googleapis.com/Zone": DATA_CATALOG
+  "dataplex.googleapis.com/Asset": DATA_CATALOG
+  "dataplex.googleapis.com/Task": ETL_JOB
+  "dataplex.googleapis.com/DataScan": ETL_JOB
+  "dataplex.googleapis.com/EntryGroup": DATA_CATALOG
+  "datacatalog.googleapis.com/EntryGroup": DATA_CATALOG
+  "datacatalog.googleapis.com/TagTemplate": DATA_CATALOG
+  "datacatalog.googleapis.com/Taxonomy": DATA_CATALOG
+  "metastore.googleapis.com/Service": DATA_CATALOG
+  "datafusion.googleapis.com/DnsPeering": DNS_RESOLVER
+  "datastream.googleapis.com/Stream": DATA_STREAM
+  "datastream.googleapis.com/ConnectionProfile": SOURCE_CONNECTION
+  "datastream.googleapis.com/PrivateConnection": PEERING_CONNECTION
+  "storagetransfer.googleapis.com/TransferJob": DATA_TRANSFER
+  "netapp.googleapis.com/StoragePool": FILE_SYSTEM
+  "netapp.googleapis.com/Volume": FILE_SYSTEM
+  "netapp.googleapis.com/Replication": FILE_SYSTEM
+  "netapp.googleapis.com/BackupVault": BACKUP_VAULT
+  "netapp.googleapis.com/BackupPolicy": BACKUP_PLAN
+  "netapp.googleapis.com/Backup": SNAPSHOT
+  "netapp.googleapis.com/Snapshot": SNAPSHOT
+  "netapp.googleapis.com/ActiveDirectory": IDENTITY_PROVIDER
+  "netapp.googleapis.com/KmsConfig": KMS_KEY
+  "parametermanager.googleapis.com/Parameter": PARAMETER
+  "parametermanager.googleapis.com/ParameterVersion": PARAMETER
+  "aiplatform.googleapis.com/ReasoningEngine": AI_AGENT
+  "aiplatform.googleapis.com/Index": KNOWLEDGE_BASE
+  "aiplatform.googleapis.com/IndexEndpoint": ML_ENDPOINT
+  "aiplatform.googleapis.com/CustomJob": JOB_DEFINITION
+  "aiplatform.googleapis.com/HyperparameterTuningJob": JOB_DEFINITION
+  "aiplatform.googleapis.com/NasJob": JOB_DEFINITION
+  "aiplatform.googleapis.com/BatchPredictionJob": JOB_DEFINITION
+  "aiplatform.googleapis.com/TuningJob": JOB_DEFINITION
+  "aiplatform.googleapis.com/TrainingPipeline": ETL_JOB
+  "aiplatform.googleapis.com/PipelineJob": ETL_JOB
+  "aiplatform.googleapis.com/FeatureGroup": DATA_CATALOG
+  "aiplatform.googleapis.com/Featurestore": DATA_CATALOG
+  "aiplatform.googleapis.com/FeatureOnlineStore": ML_ENDPOINT
+  "aiplatform.googleapis.com/Dataset": DATA_CATALOG
+  "aiplatform.googleapis.com/NotebookRuntime": ML_WORKSPACE
+  "aiplatform.googleapis.com/NotebookRuntimeTemplate": LAUNCH_TEMPLATE
+  "discoveryengine.googleapis.com/DataStore": KNOWLEDGE_BASE
+  "discoveryengine.googleapis.com/Collection": KNOWLEDGE_BASE
+  "discoveryengine.googleapis.com/Engine": AI_AGENT
+  "discoveryengine.googleapis.com/Assistant": AI_AGENT
+  "dialogflow.googleapis.com/Agent": AI_AGENT
+  "dialogflow.googleapis.com/KnowledgeBase": KNOWLEDGE_BASE
+  "modelarmor.googleapis.com/Template": AI_GUARDRAIL
+  "cloudresourcemanager.googleapis.com/TagKey": TAG
+  "cloudresourcemanager.googleapis.com/TagValue": TAG
+  "cloudresourcemanager.googleapis.com/TagBinding": TAG
+  "cloudresourcemanager.googleapis.com/Lien": GUARDRAIL
+  "orgpolicy.googleapis.com/CustomConstraint": ORG_POLICY
+  "assuredworkloads.googleapis.com/Workload": LANDING_ZONE
+  "accesscontextmanager.googleapis.com/AuthorizedOrgsDesc": GUARDRAIL
+  "accesscontextmanager.googleapis.com/AccessLevel": GUARDRAIL
+  "config.googleapis.com/Deployment": IAC_STACK
+  "config.googleapis.com/Preview": IAC_STACK
+  "deploymentmanager.googleapis.com/Deployment": IAC_STACK  # (API)
+  "monitoring.googleapis.com/NotificationChannel": NOTIFICATION_TOPIC
+  "monitoring.googleapis.com/UptimeCheckConfig": ALARM
+  "osconfig.googleapis.com/PatchDeployment": SCHEDULE
+  "osconfig.googleapis.com/OSPolicyAssignment": RUNBOOK
+  "osconfig.googleapis.com/VulnerabilityReport": VULNERABILITY_SCANNER
+  "backupdr.googleapis.com/BackupVault": BACKUP_VAULT
+  "backupdr.googleapis.com/BackupPlan": BACKUP_PLAN
+  "backupdr.googleapis.com/BackupPlanAssociation": BACKUP_PLAN
+  "backupdr.googleapis.com/DataSource": BACKUP_VAULT
+  "backupdr.googleapis.com/Backup": SNAPSHOT
+  "backupdr.googleapis.com/ManagementServer": BACKUP_VAULT
+  "securitycenter.googleapis.com/SecurityCenter": SECURITY_HUB  # (API)
+  "securitycenter.googleapis.com/Source": SECURITY_HUB  # (API)
+  "securitycentermanagement.googleapis.com/SecurityCenterService": SECURITY_HUB  # (API)
+  "securitycenter.googleapis.com/NotificationConfig": EVENT_RULE
+  "securitycenter.googleapis.com/BigQueryExport": LOG_SINK
+  "securitycenter.googleapis.com/MuteConfig": SECURITY_HUB
+  "securitycenter.googleapis.com/ResourceValueConfig": SECURITY_HUB
+  "securitycenter.googleapis.com/EventThreatDetectionSettings": THREAT_DETECTOR
+  "securitycenter.googleapis.com/ContainerThreatDetectionSettings": THREAT_DETECTOR
+  "securitycenter.googleapis.com/VirtualMachineThreatDetectionSettings": THREAT_DETECTOR
+  "securitycenter.googleapis.com/SecurityHealthAnalyticsSettings": CONFIG_RECORDER
+  "securitycenter.googleapis.com/WebSecurityScannerSettings": VULNERABILITY_SCANNER
+  "dlp.googleapis.com/DiscoveryConfig": DATA_SECURITY_SCANNER
+  "dlp.googleapis.com/JobTrigger": DATA_SECURITY_SCANNER
+  "dlp.googleapis.com/InspectTemplate": DATA_SECURITY_SCANNER
+  "dlp.googleapis.com/DeidentifyTemplate": DATA_SECURITY_SCANNER
+  "dlp.googleapis.com/StoredInfoType": DATA_SECURITY_SCANNER
+  "logging.googleapis.com/AuditConfig": CLOUDTRAIL  # (API: IAM policy auditConfigs)
+  "recommender.googleapis.com/IamPolicyRecommender": ACCESS_ANALYZER  # (API)
+  "iam.googleapis.com/PolicyV2": IAM_POLICY
+  "iam.googleapis.com/DenyPolicy": IAM_POLICY  # (API)
+  "iam.googleapis.com/PrincipalAccessBoundaryPolicy": IAM_POLICY
+  "iam.googleapis.com/PolicyBinding": IAM_POLICY
+  "iam.googleapis.com/OauthClient": IDENTITY_PROVIDER
+  "iam.googleapis.com/OauthClientCredential": ACCESS_KEY
+  "iam.googleapis.com/WorkloadIdentityPoolNamespace": IDENTITY_PROVIDER
+  "iam.googleapis.com/WorkloadIdentityPoolManagedIdentity": SERVICE_PRINCIPAL
+  "iam.googleapis.com/WorkforcePoolProviderKey": ACCESS_KEY
+  "iam.googleapis.com/WorkloadIdentityPoolProviderKey": ACCESS_KEY
+  "privilegedaccessmanager.googleapis.com/Entitlement": PERMISSION_SET
+  "cloudidentity.googleapis.com/Group": IDENTITY_GROUP  # (API)
+  "cloudbuild.googleapis.com/WorkerPool": CAPACITY_PROVIDER
+  "cloudbuild.googleapis.com/Connection": SOURCE_CONNECTION
+  "cloudbuild.googleapis.com/Repository": SOURCE_CONNECTION
+  "cloudbuild.googleapis.com/GithubEnterpriseConfig": SOURCE_CONNECTION
+  "cloudbuild.googleapis.com/BitbucketServerConfig": SOURCE_CONNECTION
+  "developerconnect.googleapis.com/Connection": SOURCE_CONNECTION
+  "developerconnect.googleapis.com/GitRepositoryLink": SOURCE_CONNECTION
+  # end GCP parity
+
+# GCP parity: service families for inventory.services / --services. Keys
+# are the API service of an asset type (compute.googleapis.com/... ->
+# compute); type_families overrides single types. Anything else is "other".
+families:
+  compute: compute
+  batch: compute
+  appengine: serverless
+  container: containers
+  k8s.io: containers
+  apps.k8s.io: containers
+  batch.k8s.io: containers
+  networking.k8s.io: containers
+  extensions.k8s.io: containers
+  rbac.authorization.k8s.io: containers
+  artifactregistry: containers
+  binaryauthorization: containers
+  gkehub: containers
+  gkebackup: containers
+  containeranalysis: containers
+  vpcaccess: network
+  networkconnectivity: network
+  networkservices: network
+  dns: dns
+  storage: storage
+  file: storage
+  netapp: storage
+  sqladmin: data
+  spanner: data
+  bigtableadmin: data
+  firestore: data
+  alloydb: data
+  redis: data
+  memcache: data
+  bigquery: data
+  bigqueryconnection: data
+  bigquerydatatransfer: data
+  dataplex: data
+  datacatalog: data
+  metastore: data
+  datafusion: data
+  dataproc: data
+  dataflow: data
+  composer: data
+  datastream: data
+  storagetransfer: data
+  iam: identity
+  cloudidentity: identity
+  privilegedaccessmanager: identity
+  apikeys: identity
+  identitytoolkit: identity
+  cloudkms: identity
+  secretmanager: identity
+  parametermanager: identity
+  privateca: identity
+  certificatemanager: identity
+  run: serverless
+  cloudfunctions: serverless
+  workflows: serverless
+  apigateway: serverless
+  apigee: serverless
+  pubsub: integration
+  cloudtasks: integration
+  cloudscheduler: integration
+  eventarc: integration
+  managedkafka: integration
+  securitycenter: security
+  securitycentermanagement: security
+  dlp: security
+  ids: security
+  networksecurity: security
+  recommender: security
+  accesscontextmanager: security
+  logging: logging
+  monitoring: logging
+  config: iac
+  deploymentmanager: iac
+  aiplatform: ml
+  notebooks: ml
+  discoveryengine: ml
+  dialogflow: ml
+  modelarmor: ml
+  backupdr: backup
+  osconfig: ops
+  cloudbuild: cicd
+  clouddeploy: cicd
+  developerconnect: cicd
+  cloudresourcemanager: governance
+  orgpolicy: governance
+  assuredworkloads: governance
+
+type_families:
+  "cloudresourcemanager.googleapis.com/Organization": hierarchy
+  "cloudresourcemanager.googleapis.com/Folder": hierarchy
+  "cloudresourcemanager.googleapis.com/Project": hierarchy
+  "compute.googleapis.com/Network": network
+  "compute.googleapis.com/Subnetwork": network
+  "compute.googleapis.com/Firewall": network
+  "compute.googleapis.com/FirewallPolicy": network
+  "compute.googleapis.com/NetworkFirewallPolicy": network
+  "compute.googleapis.com/RegionNetworkFirewallPolicy": network
+  "compute.googleapis.com/Route": network
+  "compute.googleapis.com/Router": network
+  "compute.googleapis.com/VpnGateway": network
+  "compute.googleapis.com/TargetVpnGateway": network
+  "compute.googleapis.com/VpnTunnel": network
+  "compute.googleapis.com/ExternalVpnGateway": network
+  "compute.googleapis.com/Interconnect": network
+  "compute.googleapis.com/InterconnectAttachment": network
+  "compute.googleapis.com/ServiceAttachment": network
+  "compute.googleapis.com/Address": network
+  "compute.googleapis.com/GlobalAddress": network
+  "compute.googleapis.com/ForwardingRule": network
+  "compute.googleapis.com/GlobalForwardingRule": network
+  "compute.googleapis.com/BackendService": network
+  "compute.googleapis.com/RegionBackendService": network
+  "compute.googleapis.com/BackendBucket": network
+  "compute.googleapis.com/TargetHttpProxy": network
+  "compute.googleapis.com/TargetHttpsProxy": network
+  "compute.googleapis.com/RegionTargetHttpProxy": network
+  "compute.googleapis.com/RegionTargetHttpsProxy": network
+  "compute.googleapis.com/TargetGrpcProxy": network
+  "compute.googleapis.com/TargetSslProxy": network
+  "compute.googleapis.com/TargetTcpProxy": network
+  "compute.googleapis.com/RegionTargetTcpProxy": network
+  "compute.googleapis.com/UrlMap": network
+  "compute.googleapis.com/RegionUrlMap": network
+  "compute.googleapis.com/TargetPool": network
+  "compute.googleapis.com/TargetInstance": network
+  "compute.googleapis.com/NetworkEndpointGroup": network
+  "compute.googleapis.com/GlobalNetworkEndpointGroup": network
+  "compute.googleapis.com/RegionNetworkEndpointGroup": network
+  "compute.googleapis.com/PacketMirroring": network
+  "compute.googleapis.com/SslCertificate": identity
+  "compute.googleapis.com/RegionSslCertificate": identity
+  "compute.googleapis.com/SecurityPolicy": security
+  "compute.googleapis.com/RegionSecurityPolicy": security
+  "compute.googleapis.com/NetworkEdgeSecurityService": security
+  "compute.googleapis.com/Disk": storage
+  "compute.googleapis.com/RegionDisk": storage
+  "compute.googleapis.com/Snapshot": storage
+  "compute.googleapis.com/ResourcePolicy": backup
+  "file.googleapis.com/Backup": backup
+  "netapp.googleapis.com/BackupVault": backup
+  "netapp.googleapis.com/BackupPolicy": backup
+  "netapp.googleapis.com/Backup": backup
+  "firestore.googleapis.com/Backup": backup
+  "firestore.googleapis.com/BackupSchedule": backup
+  "gkebackup.googleapis.com/BackupPlan": backup
+  "gkebackup.googleapis.com/Backup": backup
+  "gkebackup.googleapis.com/RestorePlan": backup
+  "spanner.googleapis.com/Backup": backup
+  "bigtableadmin.googleapis.com/Backup": backup
+  "binaryauthorization.googleapis.com/Policy": security
+  "binaryauthorization.googleapis.com/Attestor": security
+  "binaryauthorization.googleapis.com/PlatformPolicy": security
+  "containeranalysis.googleapis.com/VulnerabilitySummary": security
+  "osconfig.googleapis.com/VulnerabilityReport": security
+  "logging.googleapis.com/AuditConfig": security
+  "accesscontextmanager.googleapis.com/ServicePerimeter": governance
+  "accesscontextmanager.googleapis.com/AccessLevel": governance
+  "accesscontextmanager.googleapis.com/AuthorizedOrgsDesc": governance
+# end GCP parity

@@ -1,4 +1,4 @@
-"""Read-only Kubernetes workload mapping for EKS clusters.
+"""Read-only Kubernetes workload mapping for EKS and AKS clusters.
 
 Authenticates exactly like ``aws eks get-token``: a presigned STS
 ``GetCallerIdentity`` URL carrying the ``x-k8s-aws-id`` header, sent as a
@@ -18,6 +18,11 @@ Mapped objects and relationships:
   ``LoadBalancer`` services -> the AWS load balancer by DNS name (ROUTE)
 - Ingresses -> backend services, and -> the ALB by DNS name
 - ServiceAccounts -> IAM roles through the IRSA annotation (ASSUMES_ROLE)
+
+AKS clusters go through the same mapper (``provider=CloudProvider.AZURE``,
+see :mod:`cloudg.inventory.azure_kubernetes`): service accounts resolve to
+user-assigned identities through the Entra Workload ID client-id
+annotation, and load balancer IPs resolve to public IP assets.
 """
 
 from __future__ import annotations
@@ -43,6 +48,8 @@ _WORKLOAD_KINDS = {
     "CronJob": "/apis/batch/v1/cronjobs",
 }
 _IRSA_ANNOTATION = "eks.amazonaws.com/role-arn"
+_AZURE_WI_ANNOTATION = "azure.workload.identity/client-id"
+_AZURE_WI_TENANT_ANNOTATION = "azure.workload.identity/tenant-id"
 _PAGE_LIMIT = 500
 _MAX_OBJECTS = 5000
 
@@ -139,9 +146,13 @@ def _pod_labels(kind: str, obj: dict[str, Any]) -> dict[str, str]:
     return (tmpl.get("metadata") or {}).get("labels") or {}
 
 
-def _lb_hostnames(obj: dict[str, Any]) -> list[str]:
+def _lb_hostnames(obj: dict[str, Any], with_ips: bool = False) -> list[str]:
+    """Load balancer host names of a Service / Ingress status (plus IPs on AKS)."""
     ingress = ((obj.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []
-    return [i.get("hostname") for i in ingress if i.get("hostname")]
+    out = [i.get("hostname") for i in ingress if i.get("hostname")]
+    if with_ips:
+        out += [i.get("ip") for i in ingress if i.get("ip") and not i.get("hostname")]
+    return out
 
 
 def _ingress_backends(spec: dict[str, Any]) -> set[str]:
@@ -162,12 +173,18 @@ class _ClusterMapper:
     """Maps one cluster's objects into assets, in listing order."""
 
     def __init__(
-        self, reader: KubernetesReader, cluster_arn: str, region: str, account_id: str | None
+        self,
+        reader: KubernetesReader,
+        cluster_arn: str,
+        region: str,
+        account_id: str | None,
+        provider: CloudProvider = CloudProvider.AWS,
     ) -> None:
         self._reader = reader
         self._cluster_arn = cluster_arn
         self._region = region
         self._account_id = account_id
+        self._provider = provider
         self.assets: list[CloudAsset] = []
         # ns, kind, name, pod labels, matched against service selectors
         self._workloads: list[tuple[str, str, str, dict[str, str]]] = []
@@ -193,7 +210,7 @@ class _ClusterMapper:
                 arn=k8s_identifier(self._cluster_arn, namespace, kind, name),
                 name=f"{namespace}/{name}" if namespace else name,
                 asset_type=asset_type,
-                provider=CloudProvider.AWS,
+                provider=self._provider,
                 region=self._region,
                 account_id=self._account_id,
                 tags={k: str(v) for k, v in (labels or {}).items()},
@@ -231,7 +248,11 @@ class _ClusterMapper:
     def map_service_accounts(self) -> None:
         for sa in self._reader.list("/api/v1/serviceaccounts"):
             meta = sa["metadata"]
-            role = (meta.get("annotations") or {}).get(_IRSA_ANNOTATION)
+            annotations = meta.get("annotations") or {}
+            if self._provider == CloudProvider.AZURE:
+                self._map_azure_service_account(meta, annotations)
+                continue
+            role = annotations.get(_IRSA_ANNOTATION)
             self._add(
                 "ServiceAccount",
                 (meta.get("namespace", ""), meta["name"]),
@@ -242,6 +263,22 @@ class _ClusterMapper:
                     rel(role, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="IRSA"),
                 ],
             )
+
+    def _map_azure_service_account(self, meta: dict[str, Any], annotations: dict) -> None:
+        """AKS service account; Entra Workload ID annotations name the identity it uses."""
+        client_id = annotations.get(_AZURE_WI_ANNOTATION)
+        tenant = annotations.get(_AZURE_WI_TENANT_ANNOTATION)
+        ident = f"azure-client-id:{str(client_id).lower()}" if client_id else None
+        self._add(
+            "ServiceAccount",
+            (meta.get("namespace", ""), meta["name"]),
+            AssetType.K8S_SERVICE_ACCOUNT,
+            {"workload_identity_client_id": client_id, "workload_identity_tenant_id": tenant},
+            [
+                self._ns_rel(meta.get("namespace", "")),
+                rel(ident, EdgeType.ASSUMES_ROLE, "RUNS_ON", description="Entra Workload ID"),
+            ],
+        )
 
     def map_workloads(self) -> None:
         for kind, path in _WORKLOAD_KINDS.items():
@@ -320,7 +357,7 @@ class _ClusterMapper:
             relations = [self._ns_rel(ns)]
             if selector:
                 relations += self._selected_workloads(ns, selector)
-            hostnames = _lb_hostnames(svc)
+            hostnames = _lb_hostnames(svc, self._provider == CloudProvider.AZURE)
             relations += [
                 rel(
                     host,
@@ -332,9 +369,10 @@ class _ClusterMapper:
                 for host in hostnames
             ]
             svc_type = spec.get("type", "ClusterIP")
-            scheme = (meta.get("annotations") or {}).get(
-                "service.beta.kubernetes.io/aws-load-balancer-scheme"
-            )
+            annotations = meta.get("annotations") or {}
+            scheme = annotations.get("service.beta.kubernetes.io/aws-load-balancer-scheme")
+            if annotations.get("service.beta.kubernetes.io/azure-load-balancer-internal") == "true":
+                scheme = "internal"
             self._add(
                 "Service",
                 (ns, meta["name"]),
@@ -373,7 +411,7 @@ class _ClusterMapper:
             )
             for b in backends
         ]
-        hostnames = _lb_hostnames(ing)
+        hostnames = _lb_hostnames(ing, self._provider == CloudProvider.AZURE)
         relations += [rel(h, EdgeType.ROUTE, "LOAD_BALANCED_BY", reverse=True) for h in hostnames]
         self._add(
             "Ingress",
@@ -397,9 +435,10 @@ def map_cluster_objects(
     cluster_arn: str,
     region: str,
     account_id: str | None,
+    provider: CloudProvider = CloudProvider.AWS,
 ) -> list[CloudAsset]:
     """Read namespaces, workloads, services, ingresses and service accounts."""
-    mapper = _ClusterMapper(reader, cluster_arn, region, account_id)
+    mapper = _ClusterMapper(reader, cluster_arn, region, account_id, provider)
     mapper.map_namespaces()
     mapper.map_service_accounts()
     mapper.map_workloads()

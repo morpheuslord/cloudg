@@ -116,6 +116,13 @@ Companion documents:
 | `catalogs/` | YAML reference data and its loader ([13](#13-reference-catalogs)). |
 | `_util.py` | `image_repository(image)`, `walk_strings(value, max_depth=12)`. |
 
+GCP parity modules:
+
+| Module | Responsibility |
+|---|---|
+| `gcp_sources/` | API-backed GCP sources (Cloud DNS, SCC, Cloud Identity, deny / boundary policies, PAM, Monitoring, OS Config, Backup and DR ...), `GCPRestClient`, cross-asset passes ([9.6](#96-api-backed-sources-gcp_sources)). |
+| `gcp_tasks.py` | GCP service families and `--services` selection (`gcp_family`, `is_selected`, `type_selected`). |
+
 ### 3.2 Outside the package
 
 | Module | Responsibility for the inventory |
@@ -888,6 +895,253 @@ resources; others become `entra:principal/<id>` placeholders. An AKS kubelet ide
 Defender for Cloud: one `THREAT_DETECTOR` per plan, `security_service: "defender-<plan>"`,
 `enabled` when the tier is Standard, `MONITORS` the subscription when enabled.
 
+<!-- Azure parity -->
+### 8.4 Depth beyond the breadth query
+
+The `resources` query gives breadth. Depth comes from four more sources, each split into named
+tasks the way the AWS deep collector splits its work. Every task writes one `ServiceCoverage`
+record to `AzureDeepInventoryCollector.coverage`, and a failing task never stops the others.
+
+```mermaid
+flowchart LR
+    ARG[Resource Graph: resources] --> B[AzureAssetBuilder]
+    T[Resource Graph tables: policy, security, backup, ...] --> B
+    R[ARM REST: child resources and subscription listings] --> B
+    D[Data planes: AI Search, Synapse] --> B
+    K[Kubernetes API of AKS clusters] --> B
+    B --> A[CloudAssets with declared relations]
+    G[Microsoft Graph: Entra ID, once per tenant] --> M[InventoryMapper]
+    A --> M
+    M --> L[RelationshipLinker]
+```
+
+| Source | Module | Tasks |
+|---|---|---|
+| More Resource Graph tables | `azure_graph/tables.py` | `management_group_role_assignments`, `role_definitions`, `policy`, `policy_states`, `backup_items`, `kubernetes_configuration`, `network_resources`, `guest_configuration`, `maintenance`, `insights`, `security_assessments`, `secure_score`, `security_alerts` |
+| ARM REST | `azure_graph/children.py` | `deny_assignments`, `pim_eligibility`, `lighthouse`, `locks`, `deployments`, `deployment_stacks`, `activity_log`, `managed_identity_credentials`, `key_vault_items`, `apim`, `functions`, `web_apps`, `static_sites`, `service_bus`, `event_hubs`, `stream_analytics`, `data_factory`, `synapse`, `kusto`, `sql`, `cosmos`, `storage`, `dns_records`, `dns_resolver`, `virtual_wan`, `network_manager`, `front_door`, `acr`, `aks`, `cognitive_services`, `machine_learning`, `search`, `automation`, `app_configuration`, `monitor_private_link`, `batch`, `spring_apps`, `data_protection`, `dev_center`, `diagnostic_settings`, `sentinel` |
+| Data planes | `azure_graph/dataplane.py` | `search_data_plane`, `synapse_data_plane` |
+| Kubernetes API | `inventory/azure_kubernetes.py` | `aks_kubernetes`, recorded per cluster as `kubernetes:<cluster name>` |
+| Microsoft Graph | `inventory/azure_entra.py` | `entra`, recorded per listing as `entra_users`, `entra_groups`, ... (see 8.8) |
+
+The Resource Graph tasks run only on the Resource Graph path. On the SDK fallback they are
+recorded `SKIPPED` with "Resource Graph unavailable", and the REST, data-plane and Kubernetes
+tasks still run.
+
+Coverage status of a task:
+
+- `SUCCESS`: every call answered. A 404, 400, 405 or 409 counts as "this parent has none of
+  these" (for example gateways on a Consumption APIM), not as a failure.
+- `PARTIAL`: some calls were refused (403) or failed, the others returned data.
+- `FAILED`: every call failed, or the Resource Graph query raised.
+- `SKIPPED`: not selected by `inventory.services`, turned off in configuration, or the credential
+  could not issue a token for the audience the task needs.
+
+`azure_full` becomes `PARTIAL` when any task record is `FAILED` or `PARTIAL`, the same rule
+`aws_full` follows.
+
+#### Service filtering
+
+`inventory.services` and `inventory.exclude_services` (and `--services` / `--exclude-services`)
+apply to Azure as well. `families.select_azure_tasks()` mirrors `aws_deep_tasks.select_tasks()`:
+a name matches a task or its family, `exclude` wins, and `kubernetes` is a pseudo-family that only
+toggles in-cluster AKS mapping (selected with `containers` too). The families are the AWS names:
+`compute`, `network`, `storage`, `data`, `analytics`, `ml`, `identity`, `containers`, `serverless`,
+`integration`, `security`, `logging`, `operations`, `dns`, `hybrid`, `iac`, `governance`, `backup`,
+`cicd`, `kubernetes`, `sweep`.
+
+`resources` and `resource_containers` always run. With a filter set, the breadth rows are kept
+only for the selected families (`family_of_type()` maps ARM namespaces and a few full types),
+while resource groups and the subscription always stay. `--services network` therefore maps the
+VNets, gateways and load balancers of a subscription and nothing else.
+
+#### Options and configuration keys
+
+```python
+import asyncio
+
+from cloudg.credentials import build_azure_credential
+from cloudg.config import AzureConfig
+from cloudg.inventory.azure_deep import AzureDeepInventoryCollector
+
+credential = build_azure_credential(AzureConfig())
+collector = AzureDeepInventoryCollector(
+    credential,
+    "00000000-0000-0000-0000-000000000000",
+    services=["network", "dns"],
+    exclude_services=["front_door"],
+    max_child_parents=200,
+)
+assets = asyncio.run(collector.collect())
+for record in collector.coverage.services:
+    print(record.service, record.status.value, record.asset_count, record.error or "")
+```
+
+The keyword options are the fields of `AzureDeepOptions`; an unknown one raises `TypeError`.
+`InventoryMapper` builds them from these keys:
+
+| Key | Default | Effect |
+|---|---|---|
+| `inventory.services` / `inventory.exclude_services` | `["all"]` / `[]` | Task and family filter (above). |
+| `inventory.kubernetes`, `inventory.kubernetes_timeout` | `true`, `10` | In-cluster AKS mapping and its API timeout. |
+| `azure.child_resources` | `true` | ARM REST child resources and subscription listings. |
+| `azure.max_child_parents` | `500` | Most parents queried per child kind (APIs per APIM service, ...). |
+| `azure.diagnostic_settings` | `true` | Read diagnostic settings of the logged resource types (`children.DIAGNOSTIC_TYPES`). |
+| `azure.max_diagnostic_settings` | `1000` | Most resources whose diagnostic settings are read. |
+| `azure.data_plane` | `true` | AI Search and Synapse data-plane reads. |
+| `azure.rest_concurrency` | `8` | Concurrent ARM REST calls per subscription. |
+| `azure.map_entra` | `true` | Map Entra ID through Microsoft Graph (the opt-out). |
+| `azure.entra_max_objects` | `10000` | Most objects per Graph listing. |
+| `azure.entra_max_expansions` | `1000` | Most groups / apps / service principals expanded one by one. |
+
+### 8.5 More Resource Graph tables
+
+`tables.collect_tables()` runs after the four original queries. ARM-shaped rows go through
+`add_rows()`, so they meet the extractors registered for their type; the aggregate tables have
+handlers instead, because one asset per row would flood the map.
+
+| Task | Table and types | What it adds |
+|---|---|---|
+| `management_group_role_assignments` | `authorizationresources`, scope a management group or `/`, run tenant-wide | Assignments on the subscription's ancestor groups (from `managementGroupAncestorsChain`) as `GRANTS_ACCESS` grants with `inherited_from: "management group"`. Assignments on other groups are dropped, and so are all group assignments when the chain is unknown. |
+| `role_definitions` | `authorizationresources` role definitions, tenant-wide | `IAM_POLICY` per assigned role and per custom role assignable here, with `actions`, `data_actions`, `privileged`; each principal holding it gets `IAM_POLICY_ATTACHMENT` with `USER_HAS_POLICY`, `GROUP_HAS_POLICY` or `ROLE_HAS_POLICY`. |
+| `policy` | `policyresources` assignments and exemptions, then the definitions they use | `GUARDRAIL` assignments and exemptions (same shape and ID as the tenant hierarchy builds), `ORG_POLICY` definitions and initiatives. A definition whose effective effect is `deny` or `denyAction`, assigned with enforcement on, `GOVERNS / SCP_RESTRICTS` the assignment scope. The effect is resolved through the assignment parameters, then the definition defaults; an initiative restricts when any member does. |
+| `policy_states` | `policyresources` non-compliant `policystates` | Assignment `GOVERNS / FINDING_AFFECTS` each non-compliant resource (500 per assignment), and `non_compliant_resources` on the assignment. |
+| `security_assessments` | `securityresources` assessments and sub-assessments | One `SECURITY_HUB` asset, `cloudg:azure:defender-cspm:<sub>`, `MONITORS` each assessed resource: `FINDING_AFFECTS` with `unhealthy`, `high`, `titles`, `vulnerabilities` and image names when something is unhealthy, `MONITORED_BY` otherwise. |
+| `secure_score` | `securityresources` secure score and controls | `secure_score` and the 30 worst `secure_score_controls` on the same asset. |
+| `security_alerts` | `securityresources` active alerts | `THREAT_DETECTOR` `cloudg:azure:defender-alerts:<sub>` `MONITORS / FINDING_AFFECTS` each resource an alert names. |
+| `backup_items` | `recoveryservicesresources` | Protected items and backup instances: resource `BACKUP_TO` vault, policy (or vault) `MANAGES / BACKUP_TO` resource. Site Recovery items: source `REPLICATES_TO` recovery VM, network or resource group. Backup policies as `BACKUP_PLAN`. |
+| `kubernetes_configuration` | `kubernetesconfigurationresources` | Cluster extensions (`CLUSTER_ADDON`) and Flux configurations (`DEPLOYMENT_GROUP`) contained by their cluster; Flux `READS_FROM` its Git repository and `MANAGES` the cluster. |
+| `network_resources` | `networkresources` | Virtual Network Manager rows (see the REST task `network_manager`). |
+| `guest_configuration` | `guestconfigurationresources` | `GUARDRAIL` per assignment, `GOVERNS` the machine (`FINDING_AFFECTS` when non-compliant). |
+| `maintenance` | `maintenanceresources` assignments | Maintenance configuration `MANAGES / SCHEDULED_BY` the resource. |
+| `insights` | `insightsresources` data collection rule associations | Resource `LOGS_TO` the rule, rule `MONITORS` the resource. |
+
+Defender plans gained two things in the builder. An enabled plan now also `MONITORS / MONITORED_BY`
+every resource of the types it covers (`security.PLAN_RESOURCE_TYPES`), except resources whose own
+resource-level pricing is Free. When the pricing query answered, every plan in
+`security.STANDARD_PLANS` that the subscription does not list gets a "not enabled" placeholder,
+`cloudg:azure:defender-<plan>:<sub>:not-enabled`, built like the AWS `_disabled_asset`.
+
+### 8.6 ARM REST child resources
+
+ARM answers child listings with the same ARM-shaped JSON Resource Graph returns, so the rows feed
+`add_row()` unchanged. `children.CHILD_SPECS` is the plan, one `ChildSpec` per kind:
+
+```python
+ChildSpec(
+    "service_bus",                       # task
+    ("microsoft.servicebus/namespaces",),  # parent types, or SUBSCRIPTION
+    "topics",                            # path under the parent ID
+    "2021-11-01",                        # api-version
+    nested=(ChildSpec("service_bus", (), "subscriptions", "2021-11-01"),),
+)
+```
+
+`fetch_children()` picks the parent drafts (filtered by the spec's `when`, capped at
+`max_child_parents`), issues the GETs in a thread pool and applies the rows on the calling thread,
+then runs nested specs against the children it just created. Rows that only link other assets
+(static members of a network group, Service Bus product APIs, VNet links of a forwarding
+ruleset, job schedules, Stream Analytics inputs and outputs, function site config, ...) are
+registered with `@relation_row(type)`: `add_row()` hands them to the handler and creates no asset.
+
+The REST client (`rest.AzureRestClient`) uses the azure-identity credential cloudg already holds,
+issues only GET (and POST for the read-only `listClusterUserCredential`), follows `nextLink` and
+`@odata.nextLink` only on its own host, retries 429 and 503 after `Retry-After`, and paces every
+call through the shared rate limiter under the `arm`, `msgraph` and `dataplane` buckets. It is
+injected through `arm_client_factory`, so tests never touch the network.
+
+Secrets stay out of the map. Key Vault secret values, APIM backend credentials and named-value
+values, API connection parameters, Data Factory `typeProperties`, AML datastore credentials, AI
+Search data source credentials, storage local-user keys and action group e-mail addresses and
+phone numbers are scanned for endpoints where useful and then dropped from `properties`.
+
+### 8.7 Data planes
+
+`dataplane.fetch_data_planes()` reads AI Search data sources, indexers, indexes and skillsets
+(`https://<service>.search.windows.net`, token audience `https://search.azure.com/.default`) and
+Synapse linked services, datasets, pipelines and triggers (the workspace `dev` endpoint, audience
+`https://dev.azuresynapse.net/.default`). Rows get synthetic ARM-style IDs under their service and
+go through the same extractors as Data Factory. The calls need a data-plane reader role; without
+one the task is `PARTIAL` or `FAILED` and the ARM view of the service is unchanged.
+
+### 8.8 Entra ID
+
+`azure_entra.discover_entra(credential, client_factory=None, *, coverage, max_objects,
+max_expansions)` runs once per mapping run from `InventoryMapper._discover_hierarchies()` when
+`azure.map_entra` is on and the `entra` task is selected. Every listing is its own coverage record:
+
+| Record | Graph call | Mapped as |
+|---|---|---|
+| `entra_tenant` | `/organization` | `ORGANIZATION` `entra:tenant/<id>` |
+| `entra_users` | `/users` | `IDENTITY_USER` `entra:principal/<oid>` (`guest`, `user_principal_name`, ...) |
+| `entra_groups` | `/groups` | `IDENTITY_GROUP`; `role_assignable`, `dynamic` |
+| `entra_group_members` | `/groups/{id}/members` | group `CONTAINS` member |
+| `entra_applications` | `/applications` | `APP_REGISTRATION` `entra:application/<oid>`; secret and certificate counts and latest expiry, requested permissions, `multi_tenant` |
+| `entra_application_owners` | `/applications/{id}/owners` | owner `MANAGES / OWNED_BY` app |
+| `entra_federated_credentials` | `/applications/{id}/federatedIdentityCredentials` | issuer `IAM_TRUST` app: `ROLE_ASSUMES_ROLE` for AKS issuers, `CROSS_ACCOUNT_TRUST` for the rest |
+| `entra_service_principals` | `/servicePrincipals` | `SERVICE_PRINCIPAL` `entra:principal/<oid>`, `external_application` when another tenant owns the app; app `MANAGES / OWNED_BY` its service principal. Managed identities are skipped: the resource or user-assigned identity owning them already carries that principal. |
+| `entra_service_principal_owners` | `/servicePrincipals/{id}/owners` | owner `MANAGES / OWNED_BY` service principal |
+| `entra_app_role_assignments` | `/servicePrincipals/{id}/appRoleAssignedTo`, Microsoft Graph first | principal `GRANTS_ACCESS / POLICY_ALLOWS_ACTION` resource service principal with `role` (for example `RoleManagement.ReadWrite.Directory`) and `privileged` |
+| `entra_oauth2_grants` | `/oauth2PermissionGrants` | client `GRANTS_ACCESS` resource with `delegated`, `scopes`, `consent_type`; `privileged` for admin consent to high scopes |
+| `entra_directory_roles` | `/roleManagement/directory/roleDefinitions`, `roleAssignments` | `IAM_POLICY` `entra:directoryRole/<id>`; principal `IAM_POLICY_ATTACHMENT` role and `GRANTS_ACCESS` tenant |
+| `entra_pim_eligibility` | `/roleManagement/directory/roleEligibilitySchedules` | the same relations with `eligible: true` |
+
+Entra objects carry no `discovered_via`, so in `deduplicate()` they win over the
+`entra:principal/<oid>` placeholders the subscription collectors create for role assignments,
+and the placeholders' grants merge into them. A 403 is recorded as "Graph permission missing";
+no token at all raises `CredentialError` and the `entra` record is `FAILED`.
+
+Subscription vending aliases (`Microsoft.Subscription/aliases`) are read once per run by
+`discover_azure_hierarchy()` through ARM REST: each alias is a `PROVISIONED_PRODUCT` that
+`MANAGES / OWNED_BY` its subscription. A credential without vending rights maps none and
+reports nothing.
+
+Azure RBAC PIM eligibility is a subscription task (`pim_eligibility`): it reads
+`roleEligibilityScheduleInstances` and adds the grants with `eligible: true`.
+
+### 8.9 In-cluster AKS
+
+`azure_kubernetes.collect_aks_workloads()` maps an AKS cluster through the same
+`kubernetes.map_cluster_objects()` EKS uses, with `provider=CloudProvider.AZURE`. The API server
+and CA come from the kubeconfig of `listClusterUserCredential` (only the `clusters` section is
+parsed), and the bearer token is an Entra token for the AKS server application
+(`6dae42f8-4368-4678-94ff-3960e28e3630/.default`), as `kubelogin` gets it. Service accounts with
+the `azure.workload.identity/client-id` annotation `ASSUMES_ROLE / RUNS_ON` the user-assigned
+identity with that client ID (alias `azure-client-id:<id>`), and `LoadBalancer` services resolve
+their ingress IP to the public IP asset.
+
+Clusters without Microsoft Entra integration are `SKIPPED`: their user credentials are secrets.
+Private clusters are tried and come out `FAILED` when cloudg cannot reach the API server. The
+AKS run-command (`az aks command invoke`) is not used, because it starts a pod in the cluster.
+
+Everything AKS exposes through ARM is mapped as well: OIDC issuer (an alias, so federated
+credentials resolve to the cluster), workload identity, Entra admin groups (`GRANTS_ACCESS` with
+`role: "cluster-admin"`), trusted access role bindings, extensions and Flux.
+
+### 8.10 Relations, AWS to Azure
+
+The Azure extractors reuse the relationship names AWS uses for the same idea. No new
+`RelationType` members were needed.
+
+| Concept | AWS source | Azure source | Relation |
+|---|---|---|---|
+| Backup protection | Backup plan, selection | Recovery Services / Backup vault protected items, NetApp backup | `BACKUP_TO` |
+| Replication | RDS global DB, DynamoDB replicas, S3 replication | SQL geo-replicas and failover groups, Cosmos regions, storage object replication, ACR geo-replication, App Configuration replicas, NetApp, Site Recovery | `REPLICATES_TO` |
+| Streaming export | Firehose, log subscription filters | Event Hubs Capture, diagnostic settings to Event Hubs, data collection rules, Defender continuous export | `STREAMS_TO` |
+| Data movement | CodePipeline, Glue | Data Factory and Synapse pipelines, Stream Analytics, function bindings, AML datastores, AI Search indexers | `READS_FROM` / `WRITES_TO` |
+| Secret rotation | Secrets Manager rotation Lambda | Event Grid near-expiry subscription on a vault | `ROTATES_SECRET` |
+| Schedules | SSM associations, maintenance windows | Function timers, Logic Apps recurrence, Automation schedules and update deployments, ADF triggers, maintenance assignments, NetApp snapshot policies | `MANAGES / SCHEDULED_BY` |
+| Org guardrails | SCP | Deny-effect policy definition | `GOVERNS / SCP_RESTRICTS` |
+| Permission limits | Permissions boundary | Deny assignment | `PERMISSION_BOUNDARY_LIMITS` |
+| Policy attachments | IAM managed policies | RBAC role definitions, Entra directory roles | `ROLE_HAS_POLICY`, `USER_HAS_POLICY`, `GROUP_HAS_POLICY` |
+| Cross-tenant trust | Role trust of another account, RAM | Lighthouse, managed application publishers, gallery sharing, external federated credentials, Sentinel AWS connectors | `CROSS_ACCOUNT_TRUST` |
+| Monitoring | CloudWatch alarms | Metric, log and activity log alerts, Defender plans and assessments, Sentinel connectors | `MONITORS / MONITORED_BY` |
+| Findings | (none) | Defender recommendations and alerts, non-compliant policy states, guest configuration | `FINDING_AFFECTS` |
+| Invocation | EventBridge targets, alarm actions | Action groups, alert actions, Logic Apps actions, APIM `send-request`, skillsets | `INVOKES` |
+| Fronting traffic | ALB, CloudFront, API Gateway | APIM APIs and backends, Front Door routes and rules, Application Gateway listeners, Traffic Manager, Static Web App backends | `SERVES_TRAFFIC_TO` |
+| Name resolution | Route 53 records, resolver rules | DNS record sets, Private Resolver forwarding rules and VNet links | `DNS_RESOLVED` |
+| Transit | Transit Gateway, VPN, Direct Connect | Virtual WAN hubs, routing intent, ExpressRoute, VPN sites, Route Server BGP peers, Virtual Network Manager | `TRANSIT_ROUTED` |
+<!-- end Azure parity -->
+
 ## 9. GCP
 
 ### 9.1 Collection
@@ -912,6 +1166,14 @@ Defender for Cloud: one `THREAT_DETECTOR` per plan, `security_service: "defender
 
 `GCPDeepInventoryCollector` adds the deep type map (`gcp_asset_types.yaml` `deep` over `base`)
 and IAM, and does not link locally: the mapper's linker does it for every provider at once.
+
+<!-- GCP parity -->
+The deep collector also takes `GCPDeepOptions`: `services`, `exclude_services`, `rest_client`
+(an injected REST client for tests), `deep_sources`, `rest_timeout`, `max_images_per_repository`
+and `source_options` (`GCPSourceOptions` or a dict of its fields). The mapper binds them from
+`inventory.*` and `gcp.*` with `deep_options_from_config()`. Its `_enrich()` runs the API-backed
+sources and the IAM policy search (9.6), and its `_finalize()` the cross-asset passes (9.7).
+<!-- end GCP parity -->
 
 ### 9.2 The extraction framework (`gcp_relations/context.py`)
 
@@ -968,6 +1230,31 @@ queries can carry tokens.
 
 123 asset types have dedicated extractors; every other type still gets the generic CMEK scan, parent containment and a catalog classification.
 
+<!-- GCP parity -->
+GCP parity modules (added for depth parity with AWS). Several of them register a second
+extractor for a type an older module already handles, and the registry runs both (it keeps a
+list per type):
+
+| Module | Area | Cloud Asset Inventory and API types |
+|---|---|---|
+| `gcp_relations/apis.py` | Apigee organizations, instances, environments, proxies, target servers; API Gateway JWT providers and backends | `apigateway.googleapis.com/ApiConfig`, `apigateway.googleapis.com/Authorizer`, `apigee.googleapis.com/ApiProxy`, `apigee.googleapis.com/ApiProxyRevision`, `apigee.googleapis.com/Environment`, `apigee.googleapis.com/Instance`, `apigee.googleapis.com/Organization`, `apigee.googleapis.com/TargetServer` |
+| `gcp_relations/cicd.py` | Cloud Build worker pools, 2nd gen connections and repositories, Developer Connect, trigger sources and pools | `cloudbuild.googleapis.com/BitbucketServerConfig`, `cloudbuild.googleapis.com/BuildTrigger`, `cloudbuild.googleapis.com/Connection`, `cloudbuild.googleapis.com/GithubEnterpriseConfig`, `cloudbuild.googleapis.com/Repository`, `cloudbuild.googleapis.com/WorkerPool`, `developerconnect.googleapis.com/Connection`, `developerconnect.googleapis.com/GitRepositoryLink`, `developerconnect.googleapis.com/InsightsConfig` |
+| `gcp_relations/containers_ext.py` | Artifact Registry images and upstreams, Binary Authorization, GKE fleets, Backup for GKE, GKE namespaces and RBAC roles | `artifactregistry.googleapis.com/DockerImage`, `artifactregistry.googleapis.com/Repository`, `binaryauthorization.googleapis.com/Attestor`, `binaryauthorization.googleapis.com/PlatformPolicy`, `binaryauthorization.googleapis.com/Policy`, `gkebackup.googleapis.com/Backup`, `gkebackup.googleapis.com/BackupPlan`, `gkebackup.googleapis.com/RestorePlan`, `gkehub.googleapis.com/Feature`, `gkehub.googleapis.com/Fleet`, `gkehub.googleapis.com/Membership`, `gkehub.googleapis.com/MembershipBinding`, `gkehub.googleapis.com/Namespace`, `gkehub.googleapis.com/RBACRoleBinding`, `gkehub.googleapis.com/Scope`, `k8s.io/Namespace`, `rbac.authorization.k8s.io/ClusterRole`, `rbac.authorization.k8s.io/Role` |
+| `gcp_relations/data_ext.py` | Spanner, Bigtable, Firestore, BigQuery tables / routines / connections / transfers, Dataplex, Data Catalog, Metastore, Data Fusion, Datastream, Storage Transfer, NetApp Volumes, Filestore backups, secret rotation, Parameter Manager, key rings | `bigquery.googleapis.com/Model`, `bigquery.googleapis.com/Routine`, `bigquery.googleapis.com/RowAccessPolicy`, `bigquery.googleapis.com/Table`, `bigqueryconnection.googleapis.com/Connection`, `bigquerydatatransfer.googleapis.com/TransferConfig`, `bigtableadmin.googleapis.com/AppProfile`, `bigtableadmin.googleapis.com/AuthorizedView`, `bigtableadmin.googleapis.com/Backup`, `bigtableadmin.googleapis.com/Cluster`, `bigtableadmin.googleapis.com/Instance`, `bigtableadmin.googleapis.com/LogicalView`, `bigtableadmin.googleapis.com/MaterializedView`, `bigtableadmin.googleapis.com/Table`, `cloudkms.googleapis.com/KeyRing`, `datacatalog.googleapis.com/EntryGroup`, `datacatalog.googleapis.com/TagTemplate`, `datacatalog.googleapis.com/Taxonomy`, `datafusion.googleapis.com/DnsPeering`, `datafusion.googleapis.com/Instance`, `dataplex.googleapis.com/Asset`, `dataplex.googleapis.com/DataScan`, `dataplex.googleapis.com/EntryGroup`, `dataplex.googleapis.com/Lake`, `dataplex.googleapis.com/Task`, `dataplex.googleapis.com/Zone`, `datastream.googleapis.com/ConnectionProfile`, `datastream.googleapis.com/PrivateConnection`, `datastream.googleapis.com/Stream`, `file.googleapis.com/Backup`, `firestore.googleapis.com/Backup`, `firestore.googleapis.com/BackupSchedule`, `firestore.googleapis.com/Database`, `metastore.googleapis.com/Service`, `netapp.googleapis.com/ActiveDirectory`, `netapp.googleapis.com/Backup`, `netapp.googleapis.com/BackupPolicy`, `netapp.googleapis.com/BackupVault`, `netapp.googleapis.com/KmsConfig`, `netapp.googleapis.com/Replication`, `netapp.googleapis.com/Snapshot`, `netapp.googleapis.com/StoragePool`, `netapp.googleapis.com/Volume`, `parametermanager.googleapis.com/Parameter`, `parametermanager.googleapis.com/ParameterVersion`, `secretmanager.googleapis.com/Secret`, `spanner.googleapis.com/Backup`, `spanner.googleapis.com/Database`, `spanner.googleapis.com/Instance`, `spanner.googleapis.com/InstancePartition`, `storagetransfer.googleapis.com/TransferJob` |
+| `gcp_relations/edge.py` | Cloud DNS record sets, Certificate Manager, CA Service, Cloud Run domain mappings, Identity Platform | `certificatemanager.googleapis.com/Certificate`, `certificatemanager.googleapis.com/CertificateIssuanceConfig`, `certificatemanager.googleapis.com/CertificateMap`, `certificatemanager.googleapis.com/CertificateMapEntry`, `certificatemanager.googleapis.com/DnsAuthorization`, `certificatemanager.googleapis.com/TrustConfig`, `dns.googleapis.com/ResourceRecordSet`, `identitytoolkit.googleapis.com/Config`, `identitytoolkit.googleapis.com/DefaultSupportedIdpConfig`, `identitytoolkit.googleapis.com/InboundSamlConfig`, `identitytoolkit.googleapis.com/OauthIdpConfig`, `identitytoolkit.googleapis.com/Tenant`, `privateca.googleapis.com/CaPool`, `privateca.googleapis.com/CertificateAuthority`, `run.googleapis.com/DomainMapping` |
+| `gcp_relations/governance.py` | tags and tag bindings, liens, custom constraints, Assured Workloads, authorized orgs, access levels, Infrastructure Manager, Deployment Manager | `accesscontextmanager.googleapis.com/AccessLevel`, `accesscontextmanager.googleapis.com/AuthorizedOrgsDesc`, `accesscontextmanager.googleapis.com/ServicePerimeter`, `assuredworkloads.googleapis.com/Workload`, `cloudresourcemanager.googleapis.com/Lien`, `cloudresourcemanager.googleapis.com/TagBinding`, `cloudresourcemanager.googleapis.com/TagKey`, `cloudresourcemanager.googleapis.com/TagValue`, `config.googleapis.com/Deployment`, `config.googleapis.com/Preview`, `deploymentmanager.googleapis.com/Deployment`, `orgpolicy.googleapis.com/CustomConstraint`, `orgpolicy.googleapis.com/Policy` |
+| `gcp_relations/hybrid.py` | NCC hubs, route tables, groups, internal ranges, policy-based routes, regional endpoints; Interconnect; external VPN gateways; PSC accept lists; packet mirroring; sole-tenant nodes; resource policies | `compute.googleapis.com/Disk`, `compute.googleapis.com/ExternalVpnGateway`, `compute.googleapis.com/Instance`, `compute.googleapis.com/Interconnect`, `compute.googleapis.com/NodeGroup`, `compute.googleapis.com/NodeTemplate`, `compute.googleapis.com/PacketMirroring`, `compute.googleapis.com/RegionDisk`, `compute.googleapis.com/ResourcePolicy`, `compute.googleapis.com/ServiceAttachment`, `compute.googleapis.com/VpnTunnel`, `networkconnectivity.googleapis.com/Group`, `networkconnectivity.googleapis.com/Hub`, `networkconnectivity.googleapis.com/InternalRange`, `networkconnectivity.googleapis.com/PolicyBasedRoute`, `networkconnectivity.googleapis.com/RegionalEndpoint`, `networkconnectivity.googleapis.com/RouteTable` |
+| `gcp_relations/identity_ext.py` | workforce / workload identity pools, OAuth clients, role permissions, deny policies, Principal Access Boundary, policy bindings, PAM entitlements, Cloud Identity groups | `cloudidentity.googleapis.com/Group`, `iam.googleapis.com/DenyPolicy`, `iam.googleapis.com/OauthClient`, `iam.googleapis.com/OauthClientCredential`, `iam.googleapis.com/PolicyBinding`, `iam.googleapis.com/PolicyV2`, `iam.googleapis.com/PrincipalAccessBoundaryPolicy`, `iam.googleapis.com/Role`, `iam.googleapis.com/WorkforcePool`, `iam.googleapis.com/WorkforcePoolProviderKey`, `iam.googleapis.com/WorkloadIdentityPool`, `iam.googleapis.com/WorkloadIdentityPoolManagedIdentity`, `iam.googleapis.com/WorkloadIdentityPoolNamespace`, `iam.googleapis.com/WorkloadIdentityPoolProviderKey`, `privilegedaccessmanager.googleapis.com/Entitlement` |
+| `gcp_relations/integration.py` | Cloud Scheduler, Eventarc channels and Eventarc Advanced, Managed Kafka topics / consumer groups / Connect, Pub/Sub snapshots and schemas, Workflows definitions, Batch | `batch.googleapis.com/Job`, `cloudscheduler.googleapis.com/Job`, `eventarc.googleapis.com/Channel`, `eventarc.googleapis.com/ChannelConnection`, `eventarc.googleapis.com/Enrollment`, `eventarc.googleapis.com/GoogleApiSource`, `eventarc.googleapis.com/MessageBus`, `eventarc.googleapis.com/Pipeline`, `eventarc.googleapis.com/Trigger`, `managedkafka.googleapis.com/ConnectCluster`, `managedkafka.googleapis.com/Connector`, `managedkafka.googleapis.com/ConsumerGroup`, `managedkafka.googleapis.com/Topic`, `pubsub.googleapis.com/Schema`, `pubsub.googleapis.com/Snapshot`, `workflows.googleapis.com/Workflow` |
+| `gcp_relations/ml.py` | Agent Engine, Vector Search, Discovery Engine, Dialogflow CX, Model Armor, pipelines and training jobs, Feature Store, Colab Enterprise runtimes | `aiplatform.googleapis.com/BatchPredictionJob`, `aiplatform.googleapis.com/CustomJob`, `aiplatform.googleapis.com/Dataset`, `aiplatform.googleapis.com/FeatureGroup`, `aiplatform.googleapis.com/FeatureOnlineStore`, `aiplatform.googleapis.com/Featurestore`, `aiplatform.googleapis.com/HyperparameterTuningJob`, `aiplatform.googleapis.com/Index`, `aiplatform.googleapis.com/IndexEndpoint`, `aiplatform.googleapis.com/NasJob`, `aiplatform.googleapis.com/NotebookRuntime`, `aiplatform.googleapis.com/NotebookRuntimeTemplate`, `aiplatform.googleapis.com/PipelineJob`, `aiplatform.googleapis.com/ReasoningEngine`, `aiplatform.googleapis.com/TrainingPipeline`, `aiplatform.googleapis.com/TuningJob`, `dialogflow.googleapis.com/Agent`, `dialogflow.googleapis.com/KnowledgeBase`, `discoveryengine.googleapis.com/Assistant`, `discoveryengine.googleapis.com/Collection`, `discoveryengine.googleapis.com/DataStore`, `discoveryengine.googleapis.com/Engine`, `modelarmor.googleapis.com/Template` |
+| `gcp_relations/netsec.py` | Cloud NGFW, security profiles, TLS policies, authorization policies, address groups, Cloud IDS, Network Services gateways / meshes / routes, Media CDN | `compute.googleapis.com/FirewallPolicy`, `compute.googleapis.com/NetworkEdgeSecurityService`, `compute.googleapis.com/NetworkFirewallPolicy`, `compute.googleapis.com/RegionNetworkFirewallPolicy`, `ids.googleapis.com/Endpoint`, `networksecurity.googleapis.com/AddressGroup`, `networksecurity.googleapis.com/AuthorizationPolicy`, `networksecurity.googleapis.com/AuthzPolicy`, `networksecurity.googleapis.com/ClientTlsPolicy`, `networksecurity.googleapis.com/FirewallEndpoint`, `networksecurity.googleapis.com/FirewallEndpointAssociation`, `networksecurity.googleapis.com/SecurityProfile`, `networksecurity.googleapis.com/SecurityProfileGroup`, `networksecurity.googleapis.com/ServerTlsPolicy`, `networksecurity.googleapis.com/TlsInspectionPolicy`, `networkservices.googleapis.com/EdgeCacheKeyset`, `networkservices.googleapis.com/EdgeCacheOrigin`, `networkservices.googleapis.com/EdgeCacheService`, `networkservices.googleapis.com/EndpointPolicy`, `networkservices.googleapis.com/Gateway`, `networkservices.googleapis.com/GrpcRoute`, `networkservices.googleapis.com/HttpRoute`, `networkservices.googleapis.com/Mesh`, `networkservices.googleapis.com/ServiceBinding`, `networkservices.googleapis.com/ServiceLbPolicy`, `networkservices.googleapis.com/TcpRoute`, `networkservices.googleapis.com/TlsRoute` |
+| `gcp_relations/ops.py` | Monitoring alert policies / channels / uptime checks, OS Config, Backup and DR | `backupdr.googleapis.com/Backup`, `backupdr.googleapis.com/BackupPlan`, `backupdr.googleapis.com/BackupPlanAssociation`, `backupdr.googleapis.com/BackupVault`, `backupdr.googleapis.com/DataSource`, `backupdr.googleapis.com/ManagementServer`, `monitoring.googleapis.com/AlertPolicy`, `monitoring.googleapis.com/NotificationChannel`, `monitoring.googleapis.com/UptimeCheckConfig`, `osconfig.googleapis.com/OSPolicyAssignment`, `osconfig.googleapis.com/PatchDeployment`, `osconfig.googleapis.com/VulnerabilityReport` |
+| `gcp_relations/security_ext.py` | Security Command Center, Sensitive Data Protection, Data Access audit configs, IAM recommender, Artifact Analysis summaries | `containeranalysis.googleapis.com/VulnerabilitySummary`, `dlp.googleapis.com/DeidentifyTemplate`, `dlp.googleapis.com/DiscoveryConfig`, `dlp.googleapis.com/InspectTemplate`, `dlp.googleapis.com/JobTrigger`, `dlp.googleapis.com/StoredInfoType`, `logging.googleapis.com/AuditConfig`, `recommender.googleapis.com/IamPolicyRecommender`, `securitycenter.googleapis.com/BigQueryExport`, `securitycenter.googleapis.com/ContainerThreatDetectionSettings`, `securitycenter.googleapis.com/EventThreatDetectionSettings`, `securitycenter.googleapis.com/MuteConfig`, `securitycenter.googleapis.com/NotificationConfig`, `securitycenter.googleapis.com/ResourceValueConfig`, `securitycenter.googleapis.com/SecurityCenter`, `securitycenter.googleapis.com/SecurityHealthAnalyticsSettings`, `securitycenter.googleapis.com/Source`, `securitycenter.googleapis.com/VirtualMachineThreatDetectionSettings`, `securitycenter.googleapis.com/WebSecurityScannerSettings`, `securitycentermanagement.googleapis.com/SecurityCenterService` |
+
+With them, 350 asset types have dedicated extractors. `test_every_new_catalog_type_has_an_extractor`
+keeps every type in the catalog's `deep` section covered.
+<!-- end GCP parity -->
+
 ### 9.5 IAM bindings and principals (`gcp_relations/iam.py`)
 
 `apply_iam_policies(assets, policies)` turns each binding into relations on the principal:
@@ -986,6 +1273,160 @@ queries can carry tokens.
 `merge_gcp_principals(assets, edges)` runs in the mapper after deduplication: per-project
 placeholders created for a service account referenced before its project was seen are folded
 into the real service-account asset, and edges are re-pointed.
+
+<!-- GCP parity -->
+### 9.6 API-backed sources (`gcp_sources/`)
+
+Cloud Asset Inventory does not return everything the AWS collector maps. `GCPDeepInventoryCollector._enrich()`
+runs the sources in `cloudg/inventory/gcp_sources/` for the rest. Each one is a function
+registered with `@source(name, family, phase=2, needs_rest=True)`; it gets a `SourceContext`
+(the collector, the assets so far, the REST client, `GCPSourceOptions`) and a `SourceRun`
+(call bookkeeping) and returns new assets.
+
+```python
+from cloudg.inventory.gcp_sources.base import SourceContext, SourceRun, source
+
+
+@source("widgets", "compute")
+def widgets(ctx: SourceContext, run: SourceRun) -> list:
+    """Widgets of every project in scope."""
+    out = []
+    for project, _number in ctx.projects():
+        url = f"https://widgets.googleapis.com/v1/projects/{project}/widgets"
+        for item in ctx.items(run, url, "widgets"):
+            out.append(
+                ctx.build(
+                    f"//widgets.googleapis.com/{item['name']}",
+                    "widgets.googleapis.com/Widget",
+                    item,
+                    project=project,
+                    source_name="widgets",
+                )
+            )
+    return [a for a in out if a is not None]
+```
+
+`ctx.build()` runs the resource through the collector's own record pipeline
+(`_build_asset()`): the same scrubbing, aliases, project resolution and `@_extractor` relations
+as a listed resource. It returns `None` when the name (or its project number / ID variant) is
+already in the inventory, so a source never duplicates what the listing found. Asset types that
+only an API returns (`dns.googleapis.com/ResourceRecordSet`, `securitycenter.googleapis.com/Source`, ...)
+are named like CAI types and mapped in `gcp_asset_types.yaml` (`deep`, marked `(API)`).
+
+Phases: 0 runs `cloud_identity` (groups are principals), then the IAM policy search runs (it
+reuses the group assets instead of creating placeholders), then phases 2 and 3 (`iam_roles` and
+`dlp_discovery`, which read what earlier sources built). Inside a phase, sources run concurrently
+in worker threads (`gcp.source_concurrency`).
+
+| Source | Family | API | Maps |
+|---|---|---|---|
+| `cloud_identity` | identity | Cloud Identity `groups`, `memberships` | `IDENTITY_GROUP` per Google group with aliases `group:<email>` and `gcp-principal:group:<email>`; group `CONTAINS` each member |
+| `iam_deny` | identity | IAM v2 `denypolicies` | `IAM_POLICY` that `GOVERNS / POLICY_DENIES_ACTION` its attachment point and every denied principal |
+| `principal_access_boundary` | identity | IAM v3 `principalAccessBoundaryPolicies`, `policyBindings` | `IAM_POLICY` that `GOVERNS / PERMISSION_BOUNDARY_LIMITS` the allowed resources; the bound principal set `REFERENCES / PERMISSION_BOUNDARY_LIMITS` the policy |
+| `pam` | identity | Privileged Access Manager `entitlements` | `PERMISSION_SET`: eligible principals `ASSUMES_ROLE / ROLE_ASSUMES_ROLE` it, it `GRANTS_ACCESS` the resource and `ROLE_HAS_POLICY` each role |
+| `iam_roles` | identity | IAM `roles.get` | `IAM_ROLE` `//iam.googleapis.com/roles/<name>` per bound predefined role, with `included_permissions` |
+| `scc` | security | Security Command Center management `securityCenterServices`, SCC v1 `sources`, `notificationConfigs`, `bigQueryExports`, v1beta2 `subscription` | `SECURITY_HUB` per activated parent (tier), one asset per service (ETD / CTD / VMTD as `THREAT_DETECTOR`, SHA as `CONFIG_RECORDER`, WSS as `VULNERABILITY_SCANNER`) that `MONITORS` the parent; placeholders where SCC is not activated |
+| `artifact_analysis` | security | Service Usage, Container Analysis `occurrences` | `VULNERABILITY_SCANNER` per project that `MONITORS / MONITORED_BY` each image with severity counts; placeholder when scanning is off |
+| `iam_recommender` | security | Recommender `google.iam.policy.Recommender` | `ACCESS_ANALYZER` per project; `MONITORS / FINDING_AFFECTS` each principal with an excess role |
+| `dlp_discovery` | security | none (reads the listing) | Placeholder per project no Sensitive Data Protection discovery config covers |
+| `audit_configs` | logging | Resource Manager v3 `getIamPolicy` | `CLOUDTRAIL` per organization, folder and project with Data Access logging, `MONITORS` it and `LOGS_TO` the `_Default` bucket; placeholder where Data Access logs are off |
+| `monitoring` | logging | Monitoring v3 `alertPolicies`, `notificationChannels`, `uptimeCheckConfigs`; v1 `metricsScopes` | `ALARM` / `NOTIFICATION_TOPIC`; the scoping project `MONITORS` the projects in its metrics scope |
+| `dns_records` | dns | Cloud DNS `rrsets` | `DNS_RECORD` per record set, contained by its zone, `ROUTE / DNS_RESOLVED` to the IPs and hosts it answers |
+| `os_config` | ops | OS Config `patchDeployments`, `osPolicyAssignments`, `vulnerabilityReports` | `SCHEDULE`, `RUNBOOK` and `VULNERABILITY_SCANNER` |
+| `cloud_scheduler` | integration | Cloud Scheduler `jobs` | `SCHEDULE` that `INVOKES / SCHEDULED_BY` its target |
+| `backup_dr` | backup | Backup and DR `backupVaults`, `backupPlans`, `backupPlanAssociations`, `managementServers` | `BACKUP_VAULT` / `BACKUP_PLAN` |
+| `firestore_backups` | backup | Firestore `backupSchedules`, `backups` | schedule `MANAGES / BACKUP_TO` the database |
+| `apigee` | serverless | Apigee `environments`, `targetservers`, `deployments` | `API_DESTINATION` per target server; proxy `ATTACHED_TO` the environments it is deployed to |
+| `infra_manager` | iac | Infrastructure Manager revision `resources` | deployment `MANAGES / OWNED_BY` every resource of its latest revision |
+| `deployment_manager` | iac | Deployment Manager `deployments`, `resources` | `IAC_STACK` that `MANAGES / OWNED_BY` its resources |
+
+Several sources also fill types that Cloud Asset Inventory can return (alert policies, OS Config,
+Backup and DR, PAM, deny and boundary policies, SCC notification configs). For those the
+listing wins and the source only adds what the listing missed.
+
+The REST client is `GCPRestClient(credentials, *, session=None, timeout=60.0, max_retries=4, sleep=time.sleep)`
+in `gcp_sources/rest.py`. It wraps google-auth's `AuthorizedSession`, so it needs nothing beyond the
+`gcp` extra. `get()`, `post()` (read-only RPCs such as `getIamPolicy`) and `list()` (follows
+`nextPageToken`, optional `max_items`) go through the resilience governor under
+`gcp / <parent> / <api host>`, and retry 429 and 5xx answers with backoff (honouring `Retry-After`). Errors are `GCPApiError` (a `CollectionError`) with `status_code`, `error_code`,
+`disabled` (the API is not enabled), `not_found` and `precondition`; HTTP 401 raises
+`CredentialError`. Without credentials and without an injected `rest_client`, the client is not
+built and the sources that need it are `SKIPPED`.
+
+Every source is best effort. `SourceRun.call()` turns every API error into bookkeeping: a disabled API or a
+failed precondition counts as "not in use", 404 as an empty answer, anything else as an error.
+The source's coverage record `gcp_<name>` is then `SUCCESS`, `PARTIAL` (some calls failed),
+`FAILED` (nothing answered, or the source raised) or `SKIPPED` (missing prerequisite, or the API
+is off everywhere it was asked). A failing source never stops the run.
+
+For services that are off, `ctx.placeholder(service, parent, asset_type, label)` builds the GCP
+counterpart of `_disabled_asset()`: `arn = cloudg:gcp:<service>:<parent>:not-enabled`,
+`enabled: false`, and the alias `gcp-security:<service>:<parent>` that the enabled asset of the
+same service also carries (`gcp-security:` is a globally unique scheme for the linker).
+
+### 9.7 Cross-asset passes (`gcp_sources/derived.py`)
+
+`_finalize()` runs these before the base finalization (firewalls, project node, principal merge):
+
+| Pass | Result |
+|---|---|
+| `fold_tag_bindings` | Each `TagBinding` becomes a `REFERENCES / TAGGED_WITH` relation from the bound resource to the tag value, plus `resource_manager_tags` metadata; the binding asset is dropped |
+| `link_instance_policies` | Instance resource policies by kind: instance schedules `MANAGES / SCHEDULED_BY` the VM, snapshot schedules `MANAGES / BACKUP_TO`, placement policies are a `DEPENDS_ON` |
+| `link_secret_rotation` | A secret with a rotation period `INVOKES / ROTATES_SECRET` every function, service or push endpoint that consumes one of its rotation topics |
+| `link_managed_labels` | `goog-dm=<deployment>` labels: the Deployment Manager deployment `MANAGES / OWNED_BY` the resource; `managed-by-cnrm=true`: the project's one Config Connector cluster does |
+| `fold_policy_bindings` | Principal Access Boundary bindings: the principal set `REFERENCES / PERMISSION_BOUNDARY_LIMITS` the policy |
+| `link_os_config_filters` | Patch deployments and OS policy assignments `MANAGES / SCHEDULED_BY` the VMs their label, zone and name-prefix filters select |
+| `authorizer_assets` | An `AUTHORIZER` per JWT provider in an API Gateway config (OpenAPI `x-google-issuer`, gRPC `authentication.providers`), contained by the config, `DEPENDS_ON` its issuer |
+| `ensure_principal_placeholders` | Placeholders for `gcp-principal:<member>` relation targets (deny rules, PAM, group members) that are not assets |
+
+`cap_images` keeps the newest `inventory.max_images_per_repository` Docker images per repository
+before the records are built.
+
+### 9.8 Service families and coverage
+
+`gcp_tasks.py` gives every asset type a family: `type_families` in `gcp_asset_types.yaml` first,
+then the API service in `families` (`compute.googleapis.com/...` is `compute`), else `other`.
+`inventory.services` / `inventory.exclude_services` (`--services` / `--exclude-services`) accept
+families, API services (`pubsub`), full asset types and source names, with the AWS rules:
+`include` defaults to `all`, `exclude` always wins. Listed records are filtered in `_keep()`;
+sources and the IAM policy search (`iam_policies`, family `identity`) by `is_selected()`. The
+`hierarchy` family (organization, folders, projects) is kept unless it is excluded by name.
+
+Coverage per run, besides `gcp_list_assets` and `gcp_full`:
+
+| Record | Meaning |
+|---|---|
+| `gcp_assets_<family>` | Assets of the family built from the listing; status follows the listing (`PARTIAL` when it was truncated or fell back to `SearchAllResources`). One record per selected family, also when empty |
+| `gcp_<source>` | One per selected API-backed source (see 9.6) |
+| `gcp_iam_policies` | `SearchAllIamPolicies` |
+| `gcp_derived_<pass>` | Only when a cross-asset pass raised (`FAILED`) |
+
+### 9.9 Configuration
+
+| Key | Default | Effect |
+|---|---|---|
+| `gcp.deep_sources` | `true` | Run the API-backed sources at all |
+| `gcp.rest_timeout_seconds` | `60` | Per-request timeout of the REST client |
+| `gcp.cloud_identity_customer_id` | none | Cloud Identity customer (`C0xxxxx`); otherwise read from the organization |
+| `gcp.max_dns_records_per_zone` | `5000` | Record sets read per managed zone |
+| `gcp.max_vulnerability_occurrences` | `5000` | Artifact Analysis occurrences read per project |
+| `gcp.max_groups`, `gcp.max_group_members` | `2000`, `5000` | Cloud Identity groups, and members per group |
+| `gcp.expand_predefined_roles`, `gcp.max_role_expansions` | `true`, `500` | Read the permissions of bound predefined roles |
+| `gcp.max_scheduler_locations` | `25` | Regions asked for Cloud Scheduler jobs (where the project has resources, plus the App Engine location) |
+| `gcp.source_concurrency` | `4` | Sources run at the same time |
+| `inventory.services`, `inventory.exclude_services` | all, none | Families, services, types and sources to map or skip |
+| `inventory.max_images_per_repository` | `20` | Newest Docker images kept per Artifact Registry repository |
+
+Permissions the sources need, read-only: `roles/securitycenter.adminViewer`,
+`roles/cloudidentity.groups.viewer` (or a Workspace groups reader), `roles/iam.denyReviewer`,
+`roles/iam.principalAccessBoundaryViewer`, `roles/privilegedaccessmanager.viewer`,
+`roles/monitoring.viewer`, `roles/dns.reader`, `roles/osconfig.viewer`,
+`roles/containeranalysis.occurrences.viewer`, `roles/backupdr.viewer`,
+`roles/cloudscheduler.viewer`, `roles/apigee.readOnlyAdmin`, `roles/config.viewer`,
+`roles/deploymentmanager.viewer`, `roles/recommender.iamViewer` and
+`roles/resourcemanager.organizationViewer` / `folderViewer`. A missing one shows as that
+source's `FAILED` record.
+<!-- end GCP parity -->
 
 ## 10. Hierarchies beyond AWS
 
@@ -1179,6 +1620,34 @@ Put it in the module for its area (the module must be imported by `azure_graph/_
 add the ARM type to `azure_arm_types.yaml`, and test it with a recorded Resource Graph row passed
 through `build_assets(rows, subscription_id)`.
 
+<!-- Azure parity -->
+#### Add an Azure child resource kind
+
+When the type is not in Resource Graph (a proxy resource under another one), add a `ChildSpec`
+to `azure_graph/children.py` and give it a task name in `families.AZURE_TASK_FAMILIES`:
+
+```python
+ChildSpec("widgets", ("microsoft.widgets/factories",), "widgets", "2024-01-01")
+```
+
+The rows come back ARM-shaped, so the `@extractor("microsoft.widgets/factories/widgets")` above
+applies to them unchanged. If the rows only link other assets and should not become assets
+themselves, register a handler instead:
+
+```python
+from cloudg.inventory.azure_graph.registry import relation_row
+
+
+@relation_row("microsoft.widgets/factories/links")
+def _widget_link(row, b) -> None:
+    b.defer(parent_resource_id(row["id"]), rel(_get(row["properties"], "targetId"), EdgeType.REFERENCES, "DEPENDS_ON"))
+```
+
+Test it with `tests/azure_fakes.py`: `collect_linked(tables, arm_routes)` runs the collector
+against a `TypedFakeGraph` and a `FakeArm` keyed by request path, and returns the linked graph and
+the coverage records.
+<!-- end Azure parity -->
+
 ### 15.4 Add a GCP extractor
 
 ```python
@@ -1196,6 +1665,14 @@ def _widget(ctx: GCPContext, out: Extracted) -> None:
 ```
 
 Add the type to `gcp_asset_types.yaml` (`deep`), and test with a recorded `list_assets` record.
+
+<!-- GCP parity -->
+Registering a second extractor for a type that already has one is fine: both run, in import
+order, on the same `Extracted`, and a failing one does not stop the other. A type that only a
+service API returns gets a source in `gcp_sources/` (9.6) that hands its records to
+`ctx.build()`, plus an entry marked `(API)` in the catalog. Put the type's family in
+`families` or `type_families` so `--services` can select it.
+<!-- end GCP parity -->
 
 ### 15.5 Add an asset type
 
@@ -1339,6 +1816,31 @@ No live cloud is needed: Azure tests feed Resource Graph rows (dicts shaped like
 into `build_assets()` or inject a `graph_client_factory`; GCP tests inject a fake
 `AssetServiceClient` through the `client` option returning recorded `list_assets` /
 `search_all_iam_policies` pages.
+
+<!-- GCP parity -->
+The API-backed sources get a `GCPRestClient(session=FakeSession(routes))` through the
+`rest_client` option (`tests/gcp_fakes.py`): routes map a URL to a JSON body, an error response
+or a list of pages. `tests/test_gcp_parity_extractors.py` asserts one linked edge per new
+extractor; `tests/test_gcp_sources.py` covers every source, the coverage records, service
+filtering and the REST client.
+<!-- end GCP parity -->
+
+<!-- Azure parity -->
+The Azure depth tests share `tests/azure_fakes.py`:
+
+- `TypedFakeGraph(tables)` answers Resource Graph queries by table and applies the `type =~`,
+  `type in~` and `subscriptionId =~` clauses, as ARG does, so one table can hold rows for several
+  queries. `fail={...}` makes tables raise.
+- `FakeArm(routes, forbidden=...)` answers ARM REST, Microsoft Graph and data-plane calls by path,
+  with 404 for unknown paths and 403 for paths ending in a `forbidden` suffix.
+- `collect_linked(tables, arm_routes, dataplane=..., **options)` runs `AzureDeepInventoryCollector`
+  against both and returns the linked `_Graph` and the coverage records.
+
+`test_azure_parity_graph.py` covers the Resource Graph tables, coverage and filtering,
+`test_azure_parity_rest.py` the REST children, `test_azure_parity_extractors.py` the row
+extractors through `AzureAssetBuilder`, `test_azure_entra.py` Microsoft Graph,
+`test_azure_kubernetes.py` in-cluster AKS and `test_azure_rest.py` the REST client.
+<!-- end Azure parity -->
 
 ### 18.4 Capturing real shapes
 

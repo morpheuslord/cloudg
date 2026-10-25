@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from cloudg.exceptions import ReportParseError, ScannerExecutionError
+from cloudg.scanners._errors import ScannerErrorLog
 from cloudg.schema.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
@@ -44,13 +46,18 @@ def _compliance_frameworks(finding_data: dict[str, Any]) -> list[str]:
     return frameworks
 
 
-class ScoutSuiteScanner:
+class ScoutSuiteScanner(ScannerErrorLog):
     """Wraps ScoutSuite CLI: runs `scout` and parses the results JS file.
 
     ScoutSuite produces a `scoutsuite_results.js` file containing a JSON
     object assigned to a JS variable. We strip the variable assignment
-    and parse the JSON.
+    and parse the JSON. With ``strict=True`` a failure raises a
+    :mod:`cloudg.exceptions` ``ScannerError`` instead of being recorded.
     """
+
+    scanner_name = "scoutsuite"
+    executable = "scout"
+    install_hint = "pip install scoutsuite"
 
     def __init__(
         self,
@@ -61,6 +68,7 @@ class ScoutSuiteScanner:
         timeout_seconds: int = 3600,
         env: dict[str, str] | None = None,
         regions: list[str] | None = None,
+        strict: bool = False,
     ) -> None:
         """``timeout_seconds`` is how long ScoutSuite may run; ``env`` adds
         environment variables (for example resolved AWS credentials) to the
@@ -76,8 +84,7 @@ class ScoutSuiteScanner:
         self._regions = [
             r for r in (regions or []) if r and r.strip() and r.strip().upper() != "ALL"
         ]
-        #: Why the last run did not finish (timeout, launch failure); empty on success
-        self.errors: list[str] = []
+        self._init_errors(strict)
 
     def _build_env(self) -> dict[str, str] | None:
         """Process environment: the parent's plus ``env`` (None when unchanged)."""
@@ -119,10 +126,7 @@ class ScoutSuiteScanner:
     def run(self) -> list[Finding]:
         """Execute ScoutSuite scan and return normalised findings."""
         if not self.is_available():
-            logger.warning(
-                "ScoutSuite is not installed. Install with: pip install scoutsuite. "
-                "Skipping ScoutSuite scan."
-            )
+            self._missing()
             return []
 
         cmd = self._build_command()
@@ -148,31 +152,35 @@ class ScoutSuiteScanner:
                 )
         except subprocess.TimeoutExpired:
             logger.error("ScoutSuite scan timed out after %ds", self._timeout_seconds)
-            self.errors.append(f"timed out after {self._timeout_seconds}s")
+            self._timed_out(self._timeout_seconds)
             return []
         except Exception as exc:
             logger.error("Failed to run ScoutSuite: %s", exc)
-            self.errors.append(f"could not run: {exc}")
+            self._fail(ScannerExecutionError("scoutsuite", f"could not run: {exc}"))
             return []
 
         return self._parse_output()
 
     @classmethod
-    def parse_report(cls, path: str) -> list[Finding]:
+    def parse_report(cls, path: str, *, strict: bool = False) -> list[Finding]:
         """Parse existing ScoutSuite results without running ScoutSuite.
 
         Accepts the ``scoutsuite_results_*.js`` file itself or a report
         directory that is searched recursively for it (ScoutSuite's
-        ``--report-dir`` output directory works as-is).
+        ``--report-dir`` output directory works as-is). With ``strict=True``
+        an unreadable or malformed file raises
+        :class:`~cloudg.exceptions.ReportParseError` instead of being skipped.
         """
         p = Path(path)
         if p.is_dir():
             files = list(p.rglob("scoutsuite_results*.js"))
             if not files:
+                if strict:
+                    raise ReportParseError("scoutsuite", "no results file found", path=str(path))
                 logger.warning("No ScoutSuite results found in %s", path)
         else:
             files = [p]
-        return cls()._parse_files(files)
+        return cls._report_reader(strict)._parse_files(files)
 
     def _parse_output(self) -> list[Finding]:
         """Parse ScoutSuite results JS file."""
@@ -182,6 +190,7 @@ class ScoutSuiteScanner:
 
         if not results_files:
             logger.warning("No ScoutSuite results found in %s", self._report_dir)
+            self._bad_output("produced no results file", path=self._report_dir)
             return []
 
         return self._parse_files(results_files)
@@ -199,6 +208,7 @@ class ScoutSuiteScanner:
                 match = re.search(r"=\s*({.*})\s*;?\s*$", content, re.DOTALL)
                 if not match:
                     logger.warning("Could not extract JSON from %s", results_file)
+                    self._bad_output("no JSON object in the results file", path=str(results_file))
                     continue
 
                 data = json.loads(match.group(1))
@@ -206,6 +216,7 @@ class ScoutSuiteScanner:
 
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Failed to parse ScoutSuite results: %s", exc)
+                self._bad_output(f"could not parse: {exc}", path=str(results_file))
 
         logger.info("Parsed %d findings from ScoutSuite", len(findings))
         return findings

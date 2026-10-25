@@ -1,10 +1,13 @@
 ---
 title: RAGExporter
-object: cloudg.graph.rag_export.RAGExporter
-members: [export_all, export_entity_chunks, export_community_chunks, export_relation_chunks]
-lede: Cuts an inventory into text chunks with metadata, ready to embed for retrieval-augmented generation.
-since: "0.6.0"
+description: Cuts an inventory into text chunks with metadata, ready to embed for retrieval-augmented generation.
 ---
+
+Cuts an inventory into text chunks with metadata, ready to embed for retrieval-augmented generation.
+{ .lede }
+
+**Last changed** [v0.6.0](../changelog.md#0.6.0)
+{ .page-meta }
 
 A language model answering questions about your cloud needs the right slice of the inventory in its context window, not the whole `inventory-map.json`. `RAGExporter` writes three kinds of chunk, each aimed at a different kind of question, as one JSON object per line. Embed the `content` field, keep `metadata` for filtering, and you have a retrieval corpus. Nothing in the exporter calls a model or an embedding API.
 
@@ -26,7 +29,7 @@ Every chunk has the same five keys: `chunk_id`, `chunk_type`, `content` (the tex
 
 `severity_max` is the worst severity among the matched findings, or `"NONE"`. `compliance_frameworks` lists the frameworks of every matched finding, including findings cut from the chunk's text. A community's `risk_score` is `0.3` per member plus `0.5` per finding plus `2.0` per internet-exposed member, capped at 10.
 
-The relations are the ones the [ontology](/api/cloudontology/) uses: `infer_relations()` on each edge (so a security group rule from `0.0.0.0/0` on port 443 becomes `INGRESS_ALLOWED`, `INTERNET_REACHABLE` and `ONLY_HTTPS`), plus the asset-level relations from metadata (`ENCRYPTED_BY_KMS`, VPC containment from `vpc_id`, tag ownership, key rotation, EC2 security group membership). Relation-group chunks carry both; entity chunks carry the edge relations only.
+The relations are the ones the [ontology](cloudontology.md) uses: `infer_relations()` on each edge (so a security group rule from `0.0.0.0/0` on port 443 becomes `INGRESS_ALLOWED`, `INTERNET_REACHABLE` and `ONLY_HTTPS`), plus the asset-level relations from metadata (`ENCRYPTED_BY_KMS`, VPC containment from `vpc_id`, tag ownership, key rotation, EC2 security group membership). Relation-group chunks carry both; entity chunks carry the edge relations only.
 
 Findings attach to assets through `AssetIndex`, so a finding whose `resource_id` is an ARN or a unique name still counts toward the right entity and community.
 
@@ -39,7 +42,7 @@ Findings attach to assets through `AssetIndex`, so a finding whose `resource_id`
 | `rag_chunks.jsonl` | one chunk per line: entity chunks first, then community, then relation-group |
 | `rag_metadata_index.json` | `total_chunks`, `entity_chunks`, `community_chunks`, `relation_group_chunks`, `chunk_ids` (in file order) and `chunk_types` |
 
-```mermaid caption="What export_all() does"
+```mermaid
 flowchart LR
   A["assets, edges"] --> E["export_entity_chunks"]
   G["graph"] --> L["Louvain communities"] --> C["export_community_chunks"]
@@ -51,6 +54,8 @@ flowchart LR
   R --> J
   J --> I["rag_metadata_index.json"]
 ```
+What export_all() does
+{ .diagram-caption }
 
 `cloudg run` writes these files twice. Phase 2c exports right after the graph is built, when the only findings are the reachability ones. After the scanners finish, a silent second pass rewrites both files with every finding. If that second pass fails, the files from phase 2c stay, with only reachability findings in them. `--no-rag-export` or `rag.enabled: false` turns the export off.
 
@@ -61,120 +66,7 @@ flowchart LR
 The script needs nothing beyond cloudg. It exports the chunks, then turns every chunk into an `{id, text, metadata}` record with plain-text content and scalar metadata, which is the shape most vector stores accept.
 
 ```python title="rag_demo.py"
-"""Export RAG chunks for a small estate and reshape them for a vector store."""
-
-import json
-from pathlib import Path
-
-from cloudg.graph.builder import GraphBuilder
-from cloudg.graph.rag_export import RAGExporter
-from cloudg.schema.models import (
-    AssetType,
-    CloudAsset,
-    CloudProvider,
-    EdgeType,
-    Finding,
-    NetworkEdge,
-    Severity,
-)
-
-ACCOUNT = "123456789012"
-REGION = "eu-west-1"
-
-
-def asset(asset_id: str, asset_type: AssetType, arn: str, **extra) -> CloudAsset:
-    return CloudAsset(
-        id=asset_id,
-        name=asset_id,
-        asset_type=asset_type,
-        provider=CloudProvider.AWS,
-        region=REGION,
-        account_id=ACCOUNT,
-        arn=arn,
-        **extra,
-    )
-
-
-assets = [
-    asset("sg-web", AssetType.SECURITY_GROUP, f"arn:aws:ec2:{REGION}:{ACCOUNT}:security-group/sg-web"),
-    asset("web-1", AssetType.EC2, f"arn:aws:ec2:{REGION}:{ACCOUNT}:instance/i-0web1",
-          is_internet_exposed=True),
-    asset("web-2", AssetType.EC2, f"arn:aws:ec2:{REGION}:{ACCOUNT}:instance/i-0web2"),
-    asset("app-role", AssetType.IAM_ROLE, f"arn:aws:iam::{ACCOUNT}:role/app-role"),
-    asset("orders-db", AssetType.RDS_INSTANCE, f"arn:aws:rds:{REGION}:{ACCOUNT}:db:orders-db"),
-]
-edges = [
-    NetworkEdge(source_id="0.0.0.0/0", target_id="sg-web", edge_type=EdgeType.SECURITY_GROUP_RULE,
-                port_range="443", protocol="TCP", cidr="0.0.0.0/0", direction="ingress"),
-    NetworkEdge(source_id="web-1", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO),
-    NetworkEdge(source_id="web-2", target_id="sg-web", edge_type=EdgeType.ATTACHED_TO),
-    NetworkEdge(source_id="web-1", target_id="app-role", edge_type=EdgeType.ASSUMES_ROLE),
-    NetworkEdge(source_id="app-role", target_id="orders-db", edge_type=EdgeType.GRANTS_ACCESS),
-]
-findings = [
-    Finding(
-        resource_id="web-1",
-        severity=Severity.HIGH,
-        title="Instance metadata service v1 enabled",
-        description="IMDSv2 is not enforced.",
-        source_tool="prowler",
-        compliance_frameworks=["CIS"],
-    )
-]
-
-graph = GraphBuilder().build(assets, edges)
-paths = RAGExporter().export_all(assets, edges, graph, findings, output_dir="rag-out")
-print({kind: path.name for kind, path in paths.items()})
-
-index = json.loads(paths["index"].read_text())
-print({k: v for k, v in index.items() if k.endswith("chunks")})
-
-chunks = [json.loads(line) for line in paths["chunks"].read_text().splitlines()]
-
-# The content uses a few symbols; plain words embed and display more reliably
-MARKERS = {
-    "\N{WARNING SIGN}": "WARNING:",
-    "\N{RIGHTWARDS ARROW}": "->",
-    "\N{LEFTWARDS ARROW}": "<-",
-    "\N{BULLET}": "-",
-}
-
-
-def clean(text: str) -> str:
-    for symbol, word in MARKERS.items():
-        text = text.replace(symbol, word)
-    return text
-
-
-def scalar(value):
-    """Most vector stores accept only str, int, float and bool metadata."""
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, list):
-        return ",".join(map(str, value))
-    return json.dumps(value, sort_keys=True)
-
-
-records = [
-    {
-        "id": c["chunk_id"],
-        "text": clean(c["content"]),
-        "metadata": {"chunk_type": c["chunk_type"],
-                     **{k: scalar(v) for k, v in c["metadata"].items()}},
-    }
-    for c in chunks
-]
-out = Path("rag-out") / "vector-records.jsonl"
-out.write_text("".join(json.dumps(r) + "\n" for r in records))
-print(len(records), "records ->", out)
-
-web_1 = next(r for r in records if r["id"] == "entity::web-1")
-print(web_1["text"])
-print(web_1["metadata"])
-
-# Pre-filter on metadata before any similarity search
-urgent = [r["id"] for r in records if r["metadata"].get("severity_max") in ("CRITICAL", "HIGH")]
-print("high or critical:", urgent)
+--8<-- "graph/rag_demo.py"
 ```
 
 ```console
@@ -239,12 +131,38 @@ for chunk in RAGExporter().export_relation_chunks(result.edges, assets_by_id):
 - `content` uses four non-ASCII symbols: a warning sign (U+26A0) before exposure lines, arrows (U+2192, U+2190) before outgoing and incoming relations, and a bullet (U+2022) before community members. `rag_chunks.jsonl` stores them as `\u` escapes, and they come back as the symbols when parsed. The example swaps them for words before embedding.
 - `chunk_types` in the index comes from a set, so its order varies between runs.
 
+## Reference
+
+::: cloudg.graph.rag_export.RAGExporter
+    options:
+      members:
+        - export_all
+        - export_entity_chunks
+        - export_community_chunks
+        - export_relation_chunks
+
 ## Related
 
-:::links
-- [CloudOntology](/api/cloudontology/) The same relations as RDF.
-- [GraphBuilder](/api/graphbuilder/) Builds the graph the community chunks are cut from.
-- [Graph, ontology and RAG](/guides/graph-ontology-rag/) The analysis phase end to end.
-- [cloudg run](/cli/run/) The `--rag-export` switch.
-- [Output files](/reference/output-files/) Where `rag_chunks.jsonl` sits among the other outputs.
-:::
+<div class="grid cards link-cards" markdown>
+
+-   [**CloudOntology**](cloudontology.md)
+
+    The same relations as RDF.
+
+-   [**GraphBuilder**](graphbuilder.md)
+
+    Builds the graph the community chunks are cut from.
+
+-   [**Graph, ontology and RAG**](../guides/graph-ontology-rag.md)
+
+    The analysis phase end to end.
+
+-   [**cloudg run**](../cli/run.md)
+
+    The `--rag-export` switch.
+
+-   [**Output files**](../reference/output-files.md)
+
+    Where `rag_chunks.jsonl` sits among the other outputs.
+
+</div>

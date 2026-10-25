@@ -233,6 +233,17 @@ class AssetType(str, Enum):
     KNOWLEDGE_BASE = "KNOWLEDGE_BASE"
     AI_GUARDRAIL = "AI_GUARDRAIL"
 
+    # GCP parity: types the GCP depth mapping needs and no existing member fits
+    CONTAINER_IMAGE = "CONTAINER_IMAGE"  # Artifact Registry Docker image
+    DATA_TABLE = "DATA_TABLE"  # BigQuery table / view, Bigtable table
+    TAG = "TAG"  # Resource Manager tag key / tag value
+    FLEET = "FLEET"  # GKE fleet, fleet membership, fleet scope
+    # end GCP parity
+    # Azure parity
+    PLACEMENT_GROUP = "PLACEMENT_GROUP"  # availability set, proximity placement group, host group
+    APP_REGISTRATION = "APP_REGISTRATION"  # Entra application object (app registration)
+    # end Azure parity
+
     # Generic
     OTHER = "OTHER"
 
