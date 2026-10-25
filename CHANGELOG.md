@@ -2,6 +2,24 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## Unreleased
+
+Azure and GCP are mapped as deeply as AWS, scanner and collector failures raise exceptions you can import and catch, report.html opens on an animated isometric map of the estate, and the docs site moves to MkDocs Material.
+
+Added:
+
+- Azure depth. Besides the Resource Graph breadth query, cloudg reads the `policyresources`, `securityresources`, `recoveryservicesresources`, `networkresources`, `maintenanceresources`, `insightsresources` and `kubernetesconfigurationresources` tables, management-group and tenant-scope role assignments, ARM child resources (APIM, Service Bus, Event Hubs, DNS record sets, Front Door, Virtual WAN, Data Factory and Synapse pipelines, AI Search, Azure OpenAI deployments and more), diagnostic settings, Entra ID through Microsoft Graph (users, groups, app registrations, service principals, app-role assignments, OAuth2 grants, directory roles, PIM eligibility) and the objects inside AKS clusters. The ARM type catalog grows from 125 to 278 types. `azure.map_entra`, `azure.child_resources`, `azure.diagnostic_settings` and `azure.data_plane` turn the extra sources off.
+- GCP depth. 350 Cloud Asset Inventory types now have extractors (123 before), and API sources fill what the inventory does not return: Cloud DNS records, Security Command Center, Cloud Identity groups, IAM deny policies and principal access boundaries, PAM, audit configs, Cloud Monitoring, OS Config, Artifact Analysis, Backup and DR, Apigee, Cloud Scheduler and others. `gcp.deep_sources` picks which ones run.
+- Azure and GCP record coverage per task family, as AWS does, show "not enabled" placeholders for Defender plans, Sentinel and Security Command Center services, and follow `--services` / `inventory.exclude_services`.
+- `cloudg.exceptions`: `CloudGError` and its subclasses (`ScannerError`, `ScannerTimeoutError`, `ScannerNotInstalledError`, `ScannerExecutionError`, `ScannerOutputError`, `ReportParseError`, `ScannerFailed`, `CollectionError`, `CredentialError`, `ProviderSDKMissingError`, `ConfigurationError`), also exported from `cloudg`. Every scanner wrapper takes `strict=True` to raise on the first failure, records each failure in `.failures`, and has `raise_for_errors()`. `parse_report(path, strict=True)` raises `ReportParseError` for an unreadable report.
+- report.html: an estate map in 3D (provider plates, account and region platforms, network slabs, subnet tiles, a control deck for identity and governance), with every relation drawn as a trace line on a lane of its own, asset selection, tracing from the internet, turning, zoom and pan. The D3 tree and force views stay one toggle away. The page also gains a posture overview, a top-risks list, an Assets tab, CSV export, light and dark themes and print styles. The Anatomy iso-kit and the Hairline kernel (both MIT) ship in `cloudg/templates/vendor/` and are always embedded.
+- The docs site is built with MkDocs Material, with API pages generated from the docstrings, tabbed examples, an Examples section, an Exceptions page, a Credits page and a sample report at `/sample-report.html`.
+
+Changed:
+
+- Credential, SDK and collection failures raise `CredentialError`, `ProviderSDKMissingError` and `CollectionError`. They keep their old bases (`RuntimeError`, `ImportError`), so existing `except` clauses still match. `ResilienceError` and `LiveOperationRejected` now derive from `CloudGError`.
+- The PyPI project page is a short overview (`docs/PYPI.md`) that links into the docs site. `docs/DOCUMENTATION.md` stays the full reference that the MCP server serves.
+
 ## 0.6.1 (2026-10-10)
 
 A security fix for report.html, a round of fixes found while documenting every command and API, and the new docs site. Upgrade if you open reports built from scanner output you did not produce yourself. Several commands now behave the way their help text always said, so check the Changed list if you script `cloudg report`, `cloudg scan` or the exit codes.
