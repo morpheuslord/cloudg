@@ -272,6 +272,33 @@ cloudg report -i ./reports/findings.json --format html
 
 `--format` takes `html`, `json`, `svg` or `all`. The run is restored as written: metadata, assets, findings, compliance results, edges and graph. A `raw-findings.json` from `cloudg scan` or `cloudg ingest` is normalised first. The command refuses to write `findings.json` over its own input (exit status 1); pick another `-o`, render `--format html` or `svg` only, or pass `--overwrite`.
 
+### cloudg gate
+
+Fail a CI job on findings at or above a severity. It reads a `findings.json` (or the directory holding it) and needs no cloud access.
+
+```bash
+cloudg gate -i ./reports --fail-on high
+cloudg gate -i ./reports --fail-on critical --min-assets 1 --sarif ./reports/cloudg.sarif --summary "$GITHUB_STEP_SUMMARY"
+```
+
+`--fail-on` takes `critical`, `high` (the default), `medium`, `low`, `info` or `never`. Suppressed findings never count. The gate fails when more than `--max` findings (0 by default) are at the threshold or above, or when fewer than `--min-assets` assets were collected, and then exits with status 4. A missing or unreadable input exits 1. `--sarif` writes SARIF 2.1.0 for GitHub code scanning, with one rule per scanner check and a stable location per cloud resource; `--summary` appends a Markdown summary to a file; `--json` prints the verdict on stdout and sends the tables to stderr.
+
+The repository root is also a GitHub Action that runs `cloudg run` and this gate, uploads the SARIF and keeps the reports as an artifact:
+
+```yaml
+- uses: aws-actions/configure-aws-credentials@v6
+  with:
+    role-to-assume: arn:aws:iam::123456789012:role/cloudg-github
+    aws-region: us-east-1
+- uses: morpheuslord/cloudg@v0.7.1
+  with:
+    provider: aws
+    fail-on: critical
+    min-assets: "1"
+```
+
+The job needs `id-token: write` for the cloud login and `security-events: write` for the SARIF upload. The CI and automation guide on the docs site lists every input, with GitLab CI and plain shell versions.
+
 ## Input requirements
 
 This section pins down exactly what each ingest path expects, and the command that produces it.
@@ -740,6 +767,8 @@ Modules the pipeline uses internally that are equally useful standalone:
 | `cloudg.renderers.terraform_export` | `TerraformExporter` | `export(assets, edges)` recreates live infrastructure as `.tf.json` plus an `import_commands.sh`; `preview(assets)` reports mappable coverage first |
 | `cloudg.normaliser` | `FindingsNormaliser` | the full dedupe / cross-scanner merge / CVSS rescore / compliance mapping pass, on any `list[Finding]` |
 | `cloudg.ingest` | `parse_report`, `ingest_reports` | every scanner's parser, standalone; no engine, no credentials |
+| `cloudg.gate` | `evaluate_gate`, `GateResult`, `summary_markdown` | the CI severity gate behind `cloudg gate`: blocking findings at a threshold, suppressions, `max_blocking`, `min_assets`, a Markdown job summary |
+| `cloudg.renderers.sarif` | `build_sarif`, `write_sarif` | a `ScanResult` as SARIF 2.1.0 for code scanning: one rule per scanner check, a `security-severity` per rule, suppressed findings kept and marked |
 | `cloudg.coverage` | `CollectionCoverage` | per-service success/failure/asset-count records every collector produces |
 | `cloudg.inventory.dependencies` | `DependencyGraph`, `cross_account_edges`, `security_coverage` | dependency walks, shared dependencies, blast radius, cross-account edges and security service coverage over any assets and edges |
 | `cloudg.inventory.linker` | `RelationshipLinker` | resolve declared relations and identifiers across services, regions and accounts into typed edges |

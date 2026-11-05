@@ -17,6 +17,7 @@ from rich.logging import RichHandler
 
 from cloudg import __version__, ui
 from cloudg.cli_commands import run
+from cloudg.cli_gate import gate
 from cloudg.cli_helpers import (
     _gather_ingest_reports,
     _load_scan_assets,
@@ -643,6 +644,7 @@ def ingest(
 # ─────────────────────────────────────────────────────────────────────
 
 cli.add_command(run)
+cli.add_command(gate)
 cli.add_command(map_inventory)
 cli.add_command(deps)
 cli.add_command(mcp_group)

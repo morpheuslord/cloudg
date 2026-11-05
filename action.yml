@@ -1,0 +1,187 @@
+name: cloudg cloud security scan
+description: >-
+  Map AWS, Azure and GCP, run cloud security scanners, and fail the job on
+  findings at or above a severity. Writes SARIF for code scanning, a job
+  summary and the cloudg reports as an artifact.
+author: morpheuslord
+branding:
+  icon: cloud
+  color: blue
+
+inputs:
+  provider:
+    description: "Cloud providers to scan: aws, azure, gcp or all. Several are comma-separated (aws,gcp)."
+    required: true
+  regions:
+    description: "Regions to scan: all, or a comma-separated list. Empty: the config's regions."
+    required: false
+    default: ""
+  scanners:
+    description: "Scanners to run, comma-separated (prowler, scoutsuite, checkov, trivy, iam). Empty: the config's scanners.enabled."
+    required: false
+    default: "prowler,iam"
+  install-scanners:
+    description: "Install the requested Python scanners (Prowler, Checkov, ScoutSuite) that are not already on PATH. Trivy must be set up by the workflow."
+    required: false
+    default: "true"
+  config:
+    description: "Path to a cloudg config.yaml in the repository."
+    required: false
+    default: ""
+  subscription-id:
+    description: "Azure subscription ID."
+    required: false
+    default: ""
+  project-id:
+    description: "GCP project ID."
+    required: false
+    default: ""
+  iac-dir:
+    description: "Directory of infrastructure as code for Checkov."
+    required: false
+    default: ""
+  images:
+    description: "Container images for Trivy, comma-separated."
+    required: false
+    default: ""
+  extra-args:
+    description: "More arguments for cloudg run, split on spaces (for example --no-rag-export --no-ontology)."
+    required: false
+    default: ""
+  findings:
+    description: "Gate this findings.json instead of running cloudg run (for example one written by cloudg ingest)."
+    required: false
+    default: ""
+  output:
+    description: "Directory for the reports."
+    required: false
+    default: "cloudg-reports"
+  fail-on:
+    description: "Lowest severity that fails the job: critical, high, medium, low, info, or never to only report."
+    required: false
+    default: "high"
+  max-findings:
+    description: "Blocking findings tolerated before the job fails."
+    required: false
+    default: "0"
+  min-assets:
+    description: "Fail when fewer assets were collected. 1 or more catches a run whose credentials did not work."
+    required: false
+    default: "0"
+  sarif:
+    description: "Write the findings as SARIF (cloudg.sarif in the output directory)."
+    required: false
+    default: "true"
+  upload-sarif:
+    description: "Upload the SARIF to GitHub code scanning. Needs permissions security-events: write."
+    required: false
+    default: "true"
+  sarif-category:
+    description: "Code scanning category, to keep several cloudg jobs apart (one per account or provider)."
+    required: false
+    default: "cloudg"
+  upload-artifact:
+    description: "Upload the output directory as a workflow artifact."
+    required: false
+    default: "true"
+  artifact-name:
+    description: "Name of the uploaded artifact. Make it unique per job in a matrix."
+    required: false
+    default: "cloudg-reports"
+  retention-days:
+    description: "Days to keep the artifact. The reports describe your estate in detail, so keep this short."
+    required: false
+    default: "14"
+  version:
+    description: "cloudg release to install from PyPI (0.7.1). Empty: the release this action was pinned to."
+    required: false
+    default: ""
+  python-version:
+    description: "Python for cloudg and the scanners."
+    required: false
+    default: "3.12"
+
+outputs:
+  passed:
+    description: "true when the gate passed."
+    value: ${{ steps.cloudg.outputs.passed }}
+  blocking:
+    description: "Number of findings at fail-on or above (suppressed ones excluded)."
+    value: ${{ steps.cloudg.outputs.blocking }}
+  total-findings:
+    description: "Number of findings that are not suppressed."
+    value: ${{ steps.cloudg.outputs.total-findings }}
+  report-dir:
+    description: "Directory holding findings.json, report.html and the other reports."
+    value: ${{ steps.cloudg.outputs.report-dir }}
+  sarif-file:
+    description: "Path of the SARIF file, when one was written."
+    value: ${{ steps.cloudg.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      with:
+        enable-cache: false
+
+    - name: Install cloudg and scanners
+      shell: bash
+      env:
+        CGA_ACTION_PATH: ${{ github.action_path }}
+        CGA_PROVIDER: ${{ inputs.provider }}
+        CGA_SCANNERS: ${{ inputs.scanners }}
+        CGA_INSTALL_SCANNERS: ${{ inputs.install-scanners }}
+        CGA_FINDINGS: ${{ inputs.findings }}
+        CGA_VERSION: ${{ inputs.version }}
+        CGA_PYTHON: ${{ inputs.python-version }}
+      run: bash "${CGA_ACTION_PATH}/action/install.sh"
+
+    - name: Run cloudg and the gate
+      id: cloudg
+      shell: bash
+      env:
+        CGA_ACTION_PATH: ${{ github.action_path }}
+        CGA_PROVIDER: ${{ inputs.provider }}
+        CGA_REGIONS: ${{ inputs.regions }}
+        CGA_SCANNERS: ${{ inputs.scanners }}
+        CGA_CONFIG: ${{ inputs.config }}
+        CGA_SUBSCRIPTION_ID: ${{ inputs.subscription-id }}
+        CGA_PROJECT_ID: ${{ inputs.project-id }}
+        CGA_IAC_DIR: ${{ inputs.iac-dir }}
+        CGA_IMAGES: ${{ inputs.images }}
+        CGA_EXTRA_ARGS: ${{ inputs.extra-args }}
+        CGA_FINDINGS: ${{ inputs.findings }}
+        CGA_OUTPUT: ${{ inputs.output }}
+        CGA_FAIL_ON: ${{ inputs.fail-on }}
+        CGA_MAX_FINDINGS: ${{ inputs.max-findings }}
+        CGA_MIN_ASSETS: ${{ inputs.min-assets }}
+        CGA_SARIF: ${{ inputs.sarif }}
+      run: bash "${CGA_ACTION_PATH}/action/run.sh"
+
+    - name: Upload SARIF to code scanning
+      if: inputs.upload-sarif == 'true' && steps.cloudg.outputs.sarif-file != ''
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      with:
+        sarif_file: ${{ steps.cloudg.outputs.sarif-file }}
+        category: ${{ inputs.sarif-category }}
+
+    - name: Upload reports
+      if: inputs.upload-artifact == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output }}
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: warn
+
+    - name: Verdict
+      shell: bash
+      env:
+        CGA_ACTION_PATH: ${{ github.action_path }}
+        CGA_RUN_EXIT: ${{ steps.cloudg.outputs.run-exit-code }}
+        CGA_GATE_EXIT: ${{ steps.cloudg.outputs.gate-exit-code }}
+        CGA_REASON: ${{ steps.cloudg.outputs.reason }}
+      run: bash "${CGA_ACTION_PATH}/action/verdict.sh"

@@ -2,6 +2,25 @@
 
 Notable changes per release. Patch releases are folded into the major entry they belong to.
 
+## 0.7.1 (2026-11-05)
+
+A security release for the publishing pipeline and the dependency floors, and cloudg in CI: a severity gate, SARIF output and a GitHub Action. Upgrade with the extras you use, for example `pip install -U "cloudg[aws,gcp]==0.7.1"`, so pip lifts the dependencies below as well.
+
+Security:
+
+- The release workflow publishes to PyPI with `pypa/gh-action-pypi-publish` v1.14.3. It was pinned to v1.14.2, whose bundled trust store still held the compromised emSign root CAs (GHSA-5xjx-3w67-w9x9). The action uses that trust store for Trusted Publishing and the PEP 740 attestations. This is release tooling and is not part of the package.
+- The extras now require versions of their transitive dependencies with the published advisories fixed. `aws`: aiohttp 3.14.4 (through aioboto3). `azure`: certifi 2026.10.18, which drops the emSign root CAs (PYSEC-2026-4320). `gcp`: certifi 2026.10.18, opentelemetry-api 1.45.1 (CVE-2026-114603) and pyasn1 0.6.5, which fixes four denial-of-service bugs in the BER/DER decoder (CVE-2026-119194 to CVE-2026-119197). `mcp`: opentelemetry-api 1.45.1. `dev`: werkzeug 3.1.9 (through moto, PYSEC-2026-4312). A fresh install already resolved to these versions; the floors stop an upgrade from keeping an older copy that is already installed.
+
+Added:
+
+- `cloudg gate` fails a CI job on findings at or above a severity (`--fail-on`, `high` by default). Suppressed findings never count, `--max` tolerates a number of blocking findings, and `--min-assets` fails a live run that collected too little. It exits 4 when the gate fails and 1 when the input is missing or unreadable. `--sarif` writes the findings as SARIF 2.1.0 for GitHub code scanning, `--summary` appends a Markdown summary to a file such as `$GITHUB_STEP_SUMMARY`, and `--json` prints the verdict on stdout. From Python, the same gate is `cloudg.gate.evaluate_gate` and the SARIF writer is `cloudg.renderers.sarif.write_sarif`.
+- A GitHub Action at the repository root: `uses: morpheuslord/cloudg@v0.7.1`. It installs cloudg and the requested scanners with uv, runs `cloudg run` (or gates a `findings.json` you pass it), uploads SARIF to code scanning and the reports as an artifact, and fails the job on the gate. Credentials come from `aws-actions/configure-aws-credentials`, `azure/login` or `google-github-actions/auth`. cloudg's own CI runs the action against a fixture on every push.
+- The CI and automation guide covers the action, `cloudg gate` on GitLab CI and on any other runner, and Azure and GCP through OIDC.
+
+Fixed:
+
+- The Docker image copies `docs/PYPI.md`, the package readme, so the image builds again after 0.7.0 moved the readme.
+
 ## 0.7.0 (2026-10-25)
 
 Azure and GCP are mapped as deeply as AWS, scanner and collector failures raise exceptions you can import and catch, report.html opens on an animated isometric map of the estate, and the docs site moves to MkDocs Material.
