@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "scan_id": "ci-fixture",
+    "provider": "AWS",
+    "account_id": "111111111111",
+    "region": "us-east-1",
+    "started_at": "2026-11-01T06:00:00+00:00",
+    "completed_at": "2026-11-01T06:00:00+00:00"
+  },
+  "summary": {
+    "total_assets": 2,
+    "total_findings": 4,
+    "total_edges": 0,
+    "severity_breakdown": {
+      "CRITICAL": 1,
+      "HIGH": 2,
+      "LOW": 1
+    },
+    "compliance_frameworks": []
+  },
+  "assets": [
+    {
+      "id": "sg-admin",
+      "arn": "arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin",
+      "name": "admin-sg",
+      "asset_type": "SECURITY_GROUP",
+      "provider": "AWS",
+      "region": "us-east-1",
+      "account_id": "111111111111",
+      "tags": {},
+      "metadata": {},
+      "collected_at": "2026-11-01T06:00:00Z",
+      "is_internet_exposed": false,
+      "display_id": "arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin"
+    },
+    {
+      "id": "prod-logs",
+      "arn": "arn:aws:s3:::prod-logs",
+      "name": "prod-logs",
+      "asset_type": "S3_BUCKET",
+      "provider": "AWS",
+      "region": "us-east-1",
+      "account_id": "111111111111",
+      "tags": {},
+      "metadata": {},
+      "collected_at": "2026-11-01T06:00:00Z",
+      "is_internet_exposed": false,
+      "display_id": "arn:aws:s3:::prod-logs"
+    }
+  ],
+  "findings": [
+    {
+      "id": "f-1",
+      "resource_id": "sg-admin",
+      "resource_arn": "arn:aws:ec2:us-east-1:111111111111:security-group/sg-0admin",
+      "severity": "CRITICAL",
+      "title": "Security group allows SSH (22) from 0.0.0.0/0",
+      "description": "Security group allows SSH (22) from 0.0.0.0/0.",
+      "evidence": null,
+      "remediation": "See the scanner's guidance.",
+      "source_tool": "prowler",
+      "source_finding_id": "prowler-aws-ec2_securitygroup_allow_ingress_from_internet_to_tcp_port_22-111111111111-us-east-1-sg0admin",
+      "compliance_frameworks": [
+        "CIS-AWS"
+      ],
+      "cvss_score": null,
+      "detected_at": "2026-11-01T06:00:00Z",
+      "is_suppressed": false,
+      "risk_score": 9.5
+    },
+    {
+      "id": "f-2",
+      "resource_id": "prod-logs",
+      "resource_arn": "arn:aws:s3:::prod-logs",
+      "severity": "HIGH",
+      "title": "S3 bucket allows public read",
+      "description": "S3 bucket allows public read.",
+      "evidence": null,
+      "remediation": "See the scanner's guidance.",
+      "source_tool": "scoutsuite",
+      "source_finding_id": "s3-bucket-AllUsers-read",
+      "compliance_frameworks": [
+        "CIS-AWS"
+      ],
+      "cvss_score": null,
+      "detected_at": "2026-11-01T06:00:00Z",
+      "is_suppressed": false,
+      "risk_score": 7.5
+    },
+    {
+      "id": "f-3",
+      "resource_id": "prod-logs",
+      "resource_arn": "arn:aws:s3:::prod-logs",
+      "severity": "LOW",
+      "title": "S3 bucket has no lifecycle policy",
+      "description": "S3 bucket has no lifecycle policy.",
+      "evidence": null,
+      "remediation": "See the scanner's guidance.",
+      "source_tool": "checkov",
+      "source_finding_id": "CKV2_AWS_61",
+      "compliance_frameworks": [
+        "CIS-AWS"
+      ],
+      "cvss_score": null,
+      "detected_at": "2026-11-01T06:00:00Z",
+      "is_suppressed": false,
+      "risk_score": 2.5
+    },
+    {
+      "id": "f-4",
+      "resource_id": "prod-logs",
+      "resource_arn": "arn:aws:s3:::prod-logs",
+      "severity": "HIGH",
+      "title": "S3 bucket access logging is disabled",
+      "description": "S3 bucket access logging is disabled.",
+      "evidence": null,
+      "remediation": "See the scanner's guidance.",
+      "source_tool": "checkov",
+      "source_finding_id": "CKV_AWS_18",
+      "compliance_frameworks": [
+        "CIS-AWS"
+      ],
+      "cvss_score": null,
+      "detected_at": "2026-11-01T06:00:00Z",
+      "is_suppressed": true,
+      "risk_score": 7.5
+    }
+  ],
+  "compliance": [],
+  "edges": [],
+  "graph": {
+    "nodes": [],
+    "links": []
+  }
+}
