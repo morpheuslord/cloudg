@@ -1,7 +1,6 @@
 name: cloudg cloud security scan
-description: >-
-  Map AWS, Azure and GCP, run cloud security scanners. Writes SARIF for code scanning, a job
-  summary and the cloudg reports as an artifact.
+# The Marketplace rejects descriptions of 125 characters or more
+description: "Map AWS, Azure and GCP, run security scanners, fail the job on severity and upload SARIF to code scanning."
 author: morpheuslord
 branding:
   icon: cloud
