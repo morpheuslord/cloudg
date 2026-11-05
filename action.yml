@@ -1,7 +1,6 @@
 name: cloudg cloud security scan
 description: >-
-  Map AWS, Azure and GCP, run cloud security scanners, and fail the job on
-  findings at or above a severity. Writes SARIF for code scanning, a job
+  Map AWS, Azure and GCP, run cloud security scanners. Writes SARIF for code scanning, a job
   summary and the cloudg reports as an artifact.
 author: morpheuslord
 branding:
