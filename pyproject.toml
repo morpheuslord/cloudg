@@ -1,6 +1,6 @@
 [project]
 name = "cloudg"
-version = "0.7.0"
+version = "0.7.1"
 description = "cloudg (cloud graphing) - multi-cloud infrastructure mapping, knowledge graphs and security intelligence for AWS, Azure and GCP"
 # The PyPI project page: a short overview that links into the docs site.
 # docs/DOCUMENTATION.md stays the full reference (the MCP layer serves it).
@@ -49,6 +49,8 @@ Changelog = "https://github.com/morpheuslord/cloudg/blob/main/CHANGELOG.md"
 aws = [
     "aioboto3>=12.0",
     "boto3>=1.28",
+    # Security floors for transitive dependencies (0.7.1): versions with known advisories
+    "aiohttp>=3.14.4",
 ]
 azure = [
     "azure-identity>=1.14",
@@ -59,15 +61,23 @@ azure = [
     "azure-mgmt-sql>=3.0",
     "azure-mgmt-keyvault>=10.0",
     "azure-mgmt-resourcegraph>=8.0.0",
+    # Security floors for transitive dependencies (0.7.1): versions with known advisories
+    "certifi>=2026.10.18",
 ]
 gcp = [
     "google-cloud-asset>=3.0",
     "google-auth>=2.22",
+    # Security floors for transitive dependencies (0.7.1): versions with known advisories
+    "certifi>=2026.10.18",
+    "opentelemetry-api>=1.45.1",
+    "pyasn1>=0.6.5",
 ]
 # MCP layer: the official SDK adapters and the SDK-backed HTTP transports.
 # The layer itself (and its native stdio/HTTP server) needs no extra deps.
 mcp = [
     "mcp>=1.30,<3",
+    # Security floors for transitive dependencies (0.7.1): versions with known advisories
+    "opentelemetry-api>=1.45.1",
 ]
 all = [
     "cloudg[aws,azure,gcp,mcp]",
@@ -77,6 +87,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "moto[all]>=5.0",
+    "werkzeug>=3.1.9",  # via moto; security floor
     "ruff>=0.1",
 ]
 full = [

@@ -21,6 +21,7 @@ cloudg (cloud graphing) maps AWS, Azure and GCP infrastructure into a graph, run
 - **Map.** `cloudg map` collects everything deployed (or default) in an account, down to the network fabric, sweeps every service for the rest, and links it all into typed relationships: S3 `INVOKES` Lambda, function `ASSUMES_ROLE` role, WAF `PROTECTS` ALB. No scanner runs and none has to be installed.
 - **Scan.** `cloudg run` fans out to Prowler, ScoutSuite, Checkov and Trivy against the same accounts, then normalises, deduplicates and maps every finding against 28 compliance frameworks.
 - **Merge.** `cloudg ingest` does the same for scanner output produced elsewhere, with no cloud credentials and no scanner binaries.
+- **Gate.** `cloudg gate` fails a CI job on findings at or above a severity and writes SARIF for code scanning. On GitHub, `uses: morpheuslord/cloudg@v0.7.1` runs the whole pipeline and the gate as an action.
 - **Use it.** The results leave as an interactive HTML report, JSON, GraphML, an RDF ontology, RAG chunks for LLM pipelines and Terraform files, and `cloudg mcp serve` turns all of it into an MCP server for AI assistants.
 
 ## Install

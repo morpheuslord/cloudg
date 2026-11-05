@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/version-0.6.0-4c1.svg" alt="Version 0.6.0">
+  <img src="https://img.shields.io/badge/version-0.7.1-4c1.svg" alt="Version 0.7.1">
   <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
 </p>
 
@@ -58,6 +58,28 @@ cloudg ingest --prowler ./prowler-output/ --checkov ./results_json.json --trivy 
 ```
 
 Any combination of Prowler, ScoutSuite, Checkov and Trivy outputs works; cloudg normalises, deduplicates across scanners via the check-equivalence rulesets, maps compliance frameworks, and renders the reports.
+
+In CI, `cloudg gate` fails the job on findings at or above a severity and writes SARIF for code scanning. On GitHub the repository doubles as an action that installs cloudg and the scanners, runs the pipeline and gates it:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write          # OIDC login to the cloud
+  security-events: write   # SARIF upload
+
+steps:
+  - uses: aws-actions/configure-aws-credentials@v6
+    with:
+      role-to-assume: arn:aws:iam::123456789012:role/cloudg-github
+      aws-region: us-east-1
+  - uses: morpheuslord/cloudg@v0.7.1
+    with:
+      provider: aws
+      fail-on: critical
+      min-assets: "1"
+```
+
+The [CI and automation guide](https://morpheuslord.github.io/cloudg/guides/ci-automation/) has every input, Azure and GCP logins, GitLab CI and a plain shell version.
 
 <details>
 <summary><b>Other install options (pip, Docker, installer scripts)</b></summary>
@@ -276,7 +298,7 @@ controls:
 | `--terraform/--no-terraform` | Terraform recreation (off by default) |
 | `-o, --output` | output directory, `./reports` by default |
 
-`cloudg collect` and `cloudg scan` run the individual phases; `cloudg map` builds the scanner-independent inventory map (`--findings` merges existing findings into asset/compliance maps, `--no-sweep` skips the catch-all sweep); `cloudg ingest` aggregates scanner outputs you already have (`--prowler`, `--scoutsuite`, `--checkov`, `--trivy`, each taking a file or directory and repeatable); `cloudg report -i findings.json` re-renders reports from a previous run.
+`cloudg collect` and `cloudg scan` run the individual phases; `cloudg map` builds the scanner-independent inventory map (`--findings` merges existing findings into asset/compliance maps, `--no-sweep` skips the catch-all sweep); `cloudg ingest` aggregates scanner outputs you already have (`--prowler`, `--scoutsuite`, `--checkov`, `--trivy`, each taking a file or directory and repeatable); `cloudg report -i findings.json` re-renders reports from a previous run. `cloudg gate -i reports --fail-on high` fails a CI job on findings at or above a severity, and writes SARIF for code scanning with `--sarif`.
 
 </details>
 

@@ -81,6 +81,7 @@ nav:
           - cloudg collect: cli/collect.md
           - cloudg scan: cli/scan.md
           - cloudg report: cli/report.md
+          - cloudg gate: cli/gate.md
       - Inventory:
           - cloudg map: cli/map.md
           - cloudg deps: cli/deps.md
